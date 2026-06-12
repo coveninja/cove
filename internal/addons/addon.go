@@ -23,12 +23,19 @@ type Manifest struct {
 	Types       []string           `json:"types"`
 }
 
+type Subtitle struct {
+	ID   string `json:"id"`
+	URL  string `json:"url"`
+	Lang string `json:"lang"`
+}
+
 type Stream struct {
-	Name      string `json:"name"`
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	InfoHash  string `json:"infoHash"`
-	AddonName string `json:"addonName"`
+	Name      string     `json:"name"`
+	Title     string     `json:"title"`
+	URL       string     `json:"url"`
+	InfoHash  string     `json:"infoHash"`
+	AddonName string     `json:"addonName"`
+	Subtitles []Subtitle `json:"subtitles,omitempty"`
 }
 
 type Addon struct {
@@ -37,6 +44,23 @@ type Addon struct {
 }
 
 var httpClient = &http.Client{}
+
+func (r *ManifestResource) UnmarshalJSON(data []byte) error {
+	// Try string first
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		r.Name = name
+		return nil
+	}
+	// Fall back to object form
+	type Alias ManifestResource
+	var obj Alias
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	*r = ManifestResource(obj)
+	return nil
+}
 
 func addonRequest(url string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -90,4 +114,21 @@ func FetchStreams(addonURL string, mediaType string, imdbID string) ([]Stream, e
 		return nil, err
 	}
 	return data.Streams, nil
+}
+
+func FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, error) {
+	url := fmt.Sprintf("%s/subtitles/%s/%s.json", addonURL, mediaType, id)
+	res, err := addonRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	var data struct {
+		Subtitles []Subtitle `json:"subtitles"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data.Subtitles, nil
 }

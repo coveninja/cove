@@ -43,6 +43,8 @@
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
 
+  let hoverTimeout: ReturnType<typeof setTimeout>;
+
   $effect(() => {
     if (initialExpanded) {
       expanded = true;
@@ -91,7 +93,14 @@
       translateX = "-50%";
     }
 
-    hoverCardStyle = `position: fixed; top: ${centerY}px; left: ${left}px; translate: ${translateX} -50%; width: ${cardWidth}px;`;
+    hoverCardStyle = `
+      position: fixed;
+      top: ${centerY}px;
+      left: ${left}px;
+      translate: ${translateX} -50%;
+      width: ${cardWidth}px;
+      pointer-events: auto; /* Ensure it stays interactive */
+    `;
   }
 
   $effect(() => {
@@ -209,12 +218,16 @@
 
   function onHover(): void {
     if (expanded) return;
-    computeHoverStyle();
-    hovered = true;
-    fetchData();
+    // Delay the hover to prevent triggering on quick mouse movements
+    hoverTimeout = setTimeout(() => {
+      computeHoverStyle();
+      hovered = true;
+      fetchData();
+    }, 400);
   }
 
   function onLeave(): void {
+    clearTimeout(hoverTimeout); // Cancel if user leaves quickly
     if (expanded) return;
     if (cardEl) {
       animate(cardEl, {
@@ -340,12 +353,12 @@
     <span
       bind:this={cardEl}
       role="presentation"
+      class="pointer-events-auto z-50 flex min-w-75 cursor-default flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
       onclick={(e) => expanded && e.stopPropagation()}
       onkeydown={(e) => expanded && e.stopPropagation()}
       style="opacity: 0; transform: scale(0.85); {expanded
-        ? 'position: fixed; top: 50%; left: 50%; translate: -50% -50%; width: min(860px, 92vw); max-height: 90vh; overflow-y: auto;'
-        : hoverCardStyle}"
-      class="z-50 flex min-w-75 cursor-default flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
+    ? 'position: fixed; top: 50%; left: 50%; translate: -50% -50%; width: min(860px, 92vw); max-height: 90vh; overflow-y: auto;'
+    : hoverCardStyle}"
     >
       {#if videoUrl}
         <iframe

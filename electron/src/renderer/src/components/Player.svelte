@@ -3,8 +3,15 @@
   import { Spinner } from "$lib/components/ui/spinner";
   import VideoControls from "./VideoControls.svelte";
 
-  let { src, media }: { src: string; media?: Media; imdbId?: string } =
-    $props();
+  let {
+    src,
+    media,
+    externalSubtitles = [],
+  }: {
+    src: string;
+    media?: Media;
+    externalSubtitles?: { id: string; url: string; lang: string }[];
+  } = $props();
 
   const isHash = $derived(!src.startsWith("http"));
   const streamURL = $derived(
@@ -22,6 +29,10 @@
 
   let logoUrl = $state<string | null>(null);
 
+  let pipSupported = $derived(
+    typeof document !== "undefined" && "pictureInPictureEnabled" in document,
+  );
+
   let playing = $state(false);
   let currentTime = $state(0);
   let duration = $state(0);
@@ -32,6 +43,66 @@
   let showControls = $state(false);
   let waiting = $state(false);
   let canPlay = $state(false);
+  let error = $state<string | null>(null);
+
+  let playbackRate = $state(1);
+
+  let subtitleTracks = $state<TextTrack[]>([]);
+  let activeSubtitle = $state<string>("-1"); // -1 = off
+
+  function setPlaybackRate(rate: number): void {
+    if (!videoEl) return;
+    playbackRate = rate;
+    videoEl.playbackRate = rate;
+  }
+
+  async function togglePip(): Promise<void> {
+    if (!videoEl) return;
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+    } else {
+      await videoEl.requestPictureInPicture();
+    }
+  }
+
+  $effect(() => {
+    if (!videoEl) return () => {};
+
+    const onTracksChange = (): void => {
+      subtitleTracks = Array.from(videoEl!.textTracks).filter(
+        (t) => t.kind === "subtitles" || t.kind === "captions",
+      );
+    };
+    videoEl.textTracks.addEventListener("change", onTracksChange);
+    videoEl.textTracks.addEventListener("addtrack", onTracksChange);
+    return () => {
+      videoEl?.textTracks.removeEventListener("change", onTracksChange);
+      videoEl?.textTracks.removeEventListener("addtrack", onTracksChange);
+    };
+  });
+
+  function adjustCuePositions(track: TextTrack): void {
+    const apply = (): void => {
+      if (!track.cues) return;
+      Array.from(track.cues).forEach((cue) => {
+        const v = cue as VTTCue;
+        v.snapToLines = false;
+        v.line = 85; // 85% from top, clearing the controls bar
+      });
+    };
+    apply();
+    // Cues load asynchronously from the proxy, run again after they arrive
+    setTimeout(apply, 500);
+  }
+
+  $effect(() => {
+    if (!videoEl) return;
+    const idx = Number(activeSubtitle);
+    subtitleTracks.forEach((track, i) => {
+      track.mode = i === idx ? "showing" : "disabled";
+      if (i === idx) adjustCuePositions(track);
+    });
+  });
 
   let torrentProgress = $state(0);
   let peers = $state(0);
@@ -155,6 +226,68 @@
     }, 2000);
     return () => clearInterval(interval);
   });
+
+  $effect(() => {
+    const onFullscreenChange = (): void => {
+      fullscreen = !!document.fullscreenElement;
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () =>
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+  });
+
+  function adjustVolume(delta: number): void {
+    if (!videoEl) return;
+    volume = Math.max(0, Math.min(1, volume + delta));
+    videoEl.volume = volume;
+    muted = volume === 0;
+  }
+
+  function handleKeydown(e: KeyboardEvent): void {
+    if (!canPlay) return;
+    switch (e.key) {
+      case " ":
+      case "k":
+        e.preventDefault();
+        togglePlay();
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        skip(10);
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        skip(-10);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        adjustVolume(0.1);
+        break;
+      case "ArrowDown":
+        e.preventDefault();
+        adjustVolume(-0.1);
+        break;
+      case "f":
+      case "F":
+        e.preventDefault();
+        toggleFullscreen();
+        break;
+      case "m":
+      case "M":
+        e.preventDefault();
+        toggleMute();
+        break;
+    }
+  }
+
+  $effect(() => {
+    if (!src) {
+      return;
+    }
+    error = null;
+    canPlay = false;
+    fakeProgress = 0;
+  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -163,10 +296,11 @@
   class="group relative h-full w-full overflow-hidden bg-black"
   onmousemove={resetControlsTimer}
   onclick={canPlay ? togglePlay : undefined}
-  onkeydown={(e) => canPlay && e.key === " " && togglePlay()}
+  onkeydown={handleKeydown}
   role="button"
   tabindex="0"
 >
+  <!-- svelte-ignore a11y_media_has_caption -->
   <video
     bind:this={videoEl}
     src={streamURL}
@@ -176,6 +310,10 @@
     autoplay
     onplay={() => (playing = true)}
     onpause={() => (playing = false)}
+    onerror={() => {
+      error = "Failed to load stream.";
+      canPlay = false;
+    }}
     ontimeupdate={onTimeUpdate}
     onloadedmetadata={() => {
       if (videoEl) duration = videoEl.duration;
@@ -186,8 +324,21 @@
       canPlay = true;
     }}
   >
-    <track kind="captions" src="" />
+    {#each externalSubtitles as sub (sub.id)}
+      <track
+        kind="subtitles"
+        src={`http://localhost:6969/api/subtitle-proxy?url=${encodeURIComponent(sub.url)}`}
+        srclang={sub.lang}
+        label={sub.lang.toUpperCase()}
+      />
+    {/each}
   </video>
+
+  {#if error}
+    <div class="absolute inset-0 flex items-center justify-center">
+      <p class="text-sm text-red-400">{error}</p>
+    </div>
+  {/if}
 
   <!-- Loading screen -->
   {#if !canPlay}
@@ -283,5 +434,11 @@
     onSetVolume={setVolume}
     onToggleFullscreen={toggleFullscreen}
     onResetControlsTimer={resetControlsTimer}
+    {subtitleTracks}
+    bind:activeSubtitle
+    {playbackRate}
+    onSetPlaybackRate={setPlaybackRate}
+    {pipSupported}
+    onTogglePip={togglePip}
   />
 </div>

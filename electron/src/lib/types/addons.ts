@@ -16,14 +16,24 @@ export interface Manifest {
   resources: ManifestResource[];
   types: string[];
 }
+export interface Subtitle {
+  id: string;
+  url: string;
+  lang: string;
+}
 export interface Stream {
   name: string;
   title: string;
   url: string;
   infoHash: string;
   addonName: string;
+  subtitles?: Subtitle[];
 }
 export interface Addon {
   URL: string;
   Manifest: Manifest;
 }
+/**
+ * Fall back to object form
+ */
+export type Alias = ManifestResource;

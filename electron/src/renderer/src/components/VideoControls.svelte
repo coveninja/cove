@@ -8,10 +8,16 @@
     Minimize,
     SkipBack,
     SkipForward,
+    SubtitlesIcon,
+    ChevronLeft,
+    ChevronRight,
+    PictureInPicture2,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Popover from "$lib/components/ui/popover";
+  import { SvelteMap } from "svelte/reactivity";
+  import { ScrollArea } from "$lib/components/ui/scroll-area";
 
   let {
     playing,
@@ -33,6 +39,12 @@
     onSetVolume,
     onToggleFullscreen,
     onResetControlsTimer,
+    subtitleTracks,
+    activeSubtitle = $bindable<string>(),
+    playbackRate,
+    onSetPlaybackRate,
+    pipSupported,
+    onTogglePip,
   }: {
     playing: boolean;
     currentTime: number;
@@ -53,6 +65,12 @@
     onSetVolume: (e: MouseEvent) => void;
     onToggleFullscreen: () => void;
     onResetControlsTimer: () => void;
+    subtitleTracks: TextTrack[];
+    activeSubtitle: string;
+    playbackRate: number;
+    onSetPlaybackRate: (rate: number) => void;
+    pipSupported: boolean;
+    onTogglePip: () => Promise<void>;
   } = $props();
 
   function formatTime(s: number): string {
@@ -62,6 +80,40 @@
     if (h > 0)
       return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
     return `${m}:${String(sec).padStart(2, "0")}`;
+  }
+
+  // group tracks by language for the two-level menu
+  const tracksByLang = $derived.by(() => {
+    const map = new SvelteMap<string, { track: TextTrack; index: number }[]>();
+    subtitleTracks.forEach((track, i) => {
+      const lang = track.language || track.label || "unknown";
+      if (!map.has(lang)) map.set(lang, []);
+      map.get(lang)!.push({ track, index: i });
+    });
+    return map;
+  });
+
+  let subtitleOpen = $state(false);
+  let selectedLang = $state<string | null>(null);
+
+  function langName(code: string): string {
+    try {
+      return (
+        new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code
+      );
+    } catch {
+      return code;
+    }
+  }
+
+  let hoverTime = $state<number | null>(null);
+  let hoverPct = $state(0);
+
+  function onSeekHover(e: MouseEvent): void {
+    const bar = e.currentTarget as HTMLElement;
+    const rect = bar.getBoundingClientRect();
+    hoverPct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    hoverTime = hoverPct * duration;
   }
 </script>
 
@@ -74,11 +126,13 @@
   <!-- Seek bar -->
   <div class="pointer-events-auto px-4 pb-2">
     <button
-      class="relative block h-1 w-full cursor-pointer rounded-full bg-white/20 transition-all hover:h-2"
+      class="group/seek relative block h-1 w-full cursor-pointer rounded-full bg-white/20 transition-all hover:h-2"
       onclick={(e) => {
         e.stopPropagation();
         onSeek(e);
       }}
+      onmousemove={onSeekHover}
+      onmouseleave={() => (hoverTime = null)}
       aria-label="Seek"
     >
       <span
@@ -89,6 +143,14 @@
         class="absolute inset-y-0 left-0 rounded-full bg-white"
         style="width: {duration ? (currentTime / duration) * 100 : 0}%"
       ></span>
+      {#if hoverTime !== null}
+        <span
+          class="pointer-events-none absolute -top-7 -translate-x-1/2 rounded bg-black/80 px-1.5 py-0.5 text-xs text-white"
+          style="left: {hoverPct * 100}%"
+        >
+          {formatTime(hoverTime)}
+        </span>
+      {/if}
     </button>
   </div>
 
@@ -197,6 +259,149 @@
             {#if peers > 0}<span>{peers} peers</span>{/if}
           </div>
           <div class="mt-1 text-xs text-muted-foreground">↓ {speed}</div>
+        </Popover.Content>
+      </Popover.Root>
+    {/if}
+
+    {#if pipSupported}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="text-white hover:bg-white/10 hover:text-white"
+            onclick={(e) => {
+              e.stopPropagation();
+              onTogglePip();
+            }}
+          >
+            <PictureInPicture2 class="size-5" />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>Picture in picture</Tooltip.Content>
+      </Tooltip.Root>
+    {/if}
+
+    <Popover.Root>
+      <Popover.Trigger
+        onclick={(e) => e.stopPropagation()}
+        class="flex items-center justify-center rounded-md px-2 py-1 text-xs font-medium transition-colors hover:bg-white/10 {playbackRate !==
+        1
+          ? 'text-white'
+          : 'text-white/50'}"
+      >
+        {playbackRate}x
+      </Popover.Trigger>
+      <Popover.Content side="top" class="w-24 p-1">
+        {#each [0.5, 0.75, 1, 1.25, 1.5, 2] as rate (rate)}
+          <button
+            onclick={(e) => {
+              e.stopPropagation();
+              onSetPlaybackRate(rate);
+            }}
+            class="flex w-full items-center rounded px-3 py-1.5 text-sm transition-colors hover:bg-secondary {playbackRate ===
+            rate
+              ? 'font-semibold'
+              : ''}"
+          >
+            {rate}x
+          </button>
+        {/each}
+      </Popover.Content>
+    </Popover.Root>
+
+    {#if subtitleTracks.length > 0}
+      <Popover.Root
+        bind:open={subtitleOpen}
+        onOpenChange={() => (selectedLang = null)}
+      >
+        <Popover.Trigger
+          onclick={(e) => e.stopPropagation()}
+          class="flex items-center justify-center rounded-md p-2 transition-colors hover:bg-white/10"
+        >
+          <SubtitlesIcon
+            class="size-5 {activeSubtitle !== '-1'
+              ? 'text-white'
+              : 'text-white/50'}"
+          />
+        </Popover.Trigger>
+
+        <Popover.Content side="top" class="w-48 p-1">
+          <ScrollArea class="h-64">
+            <div class="p-1">
+              {#if selectedLang === null}
+                <!-- Level 1: language list -->
+                <button
+                  onclick={() => {
+                    activeSubtitle = "-1";
+                    subtitleOpen = false;
+                  }}
+                  class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {activeSubtitle ===
+                  '-1'
+                    ? 'font-semibold'
+                    : ''}"
+                >
+                  Off
+                </button>
+                {#each [...tracksByLang] as [lang, tracks] (lang)}
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      if (tracks.length === 1) {
+                        activeSubtitle = tracks[0].index.toString();
+                        subtitleOpen = false;
+                      } else {
+                        selectedLang = lang;
+                      }
+                    }}
+                    class="flex w-full items-center justify-between rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {tracks.some(
+                      (t) => t.index.toString() === activeSubtitle,
+                    )
+                      ? 'font-semibold'
+                      : ''}"
+                  >
+                    <span>{langName(lang)}</span>
+                    {#if tracks.length > 1}
+                      <span
+                        class="flex items-center gap-1 text-xs text-muted-foreground"
+                      >
+                        {tracks.length}
+                        <ChevronRight class="size-3.5" />
+                      </span>
+                    {/if}
+                  </button>
+                {/each}
+              {:else}
+                <!-- Level 2: tracks for selected language -->
+                <button
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    selectedLang = null;
+                  }}
+                  class="flex w-full items-center gap-1.5 rounded px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary"
+                >
+                  <ChevronLeft class="size-3.5" />
+                  {langName(selectedLang)}
+                </button>
+                <div class="my-1 h-px bg-border"></div>
+                {#each tracksByLang.get(selectedLang) ?? [] as { index }, i (index)}
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      activeSubtitle = index.toString();
+                      subtitleOpen = false;
+                    }}
+                    class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {activeSubtitle ===
+                    index.toString()
+                      ? 'font-semibold'
+                      : ''}"
+                  >
+                    Track {i + 1}
+                  </button>
+                {/each}
+              {/if}
+            </div>
+          </ScrollArea>
         </Popover.Content>
       </Popover.Root>
     {/if}

@@ -43,7 +43,7 @@
       <Input
         type="search"
         placeholder="Search..."
-        class="h-8 pl-8"
+        class="h-8 bg-transparent pl-8"
         bind:value={query}
       />
     </div>

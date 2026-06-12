@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -43,6 +44,55 @@ func main() {
 		log.Fatal(err)
 		return
 	}
+	_, err = addons.AddAddon("https://opensubtitles-v3.strem.io")
+	if err != nil {
+		log.Println("opensubtitles addon unavailable:", err)
+	}
+
+	http.HandleFunc("/api/subtitles", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		id := 0
+		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		var imdbID string
+		var err error
+		if mediaType == "tv" {
+			imdbID, err = tmdb.GetTVIMDBId(id, apiKey)
+		} else {
+			imdbID, err = tmdb.GetIMDBId(id, apiKey)
+		}
+		if err != nil || imdbID == "" {
+			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
+			return
+		}
+
+		stremioID := imdbID
+		if mediaType == "tv" {
+			season := r.URL.Query().Get("season")
+			episode := r.URL.Query().Get("episode")
+			if season != "" && episode != "" {
+				stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
+			}
+		}
+
+		var allSubs []addons.Subtitle
+		for _, addon := range addons.GetAddons() {
+			subs, err := addons.FetchSubtitles(addon.URL, mediaType, stremioID)
+			if err != nil {
+				continue
+			}
+			allSubs = append(allSubs, subs...)
+		}
+		if allSubs == nil {
+			allSubs = []addons.Subtitle{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(allSubs)
+	}))
 
 	http.HandleFunc("/api/debug", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		configured := addons.GetAddons()
@@ -476,6 +526,42 @@ func main() {
 		}
 	}))
 
+	http.HandleFunc("/api/subtitle-proxy", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		rawURL := r.URL.Query().Get("url")
+		if rawURL == "" {
+			http.Error(w, "missing url", http.StatusBadRequest)
+			return
+		}
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
+		content := string(body)
+		if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
+			content = SrtToVTT(content)
+		}
+		fmt.Fprint(w, content)
+	}))
+
 	log.Println("Server Running on: 6969")
 	log.Fatal(http.ListenAndServe(":6969", nil))
+}
+
+func SrtToVTT(srt string) string {
+	// SRT timestamps use commas; VTT uses dots. That's the only difference.
+	vtt := strings.ReplaceAll(srt, ",", ".")
+	return "WEBVTT\n\n" + vtt
 }

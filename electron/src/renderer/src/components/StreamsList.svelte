@@ -210,7 +210,7 @@
 </script>
 
 <div
-  class="flex h-full w-[35%] flex-col border-l border-border bg-background/60 backdrop-blur-xl"
+  class="flex h-full w-full flex-col rounded-2xl border border-border bg-background/60 backdrop-blur-xl"
 >
   <!-- TV: episode browser -->
   {#if isTV && !selectedEpisode}
