@@ -4,9 +4,17 @@
   import { api } from "$lib/api";
   import Player from "./Player.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { ChevronLeft, Play, Star } from "lucide-svelte";
+  import {
+    ChevronLeft,
+    ListFilter,
+    Play,
+    Settings2,
+    Star,
+  } from "lucide-svelte";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
+  import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
 
   let {
     media,
@@ -17,6 +25,26 @@
     onsimilar?: (m: Media) => void;
     onBack?: () => void;
   } = $props();
+
+  const availableQualities = $derived.by(() => {
+    const qualities = [
+      ...new Set(streams.map((s) => inferQuality(s)).filter(Boolean)),
+    ];
+
+    qualities.sort((a, b) => {
+      const order = ["4k dv", "4k hdr", "4k", "1080p", "720p"];
+
+      return order.indexOf(a!) - order.indexOf(b!);
+    });
+
+    return ["all", ...qualities];
+  });
+
+  type StreamView = Stream & {
+    seeders: number;
+    sizeBytes: number;
+    quality: string | null;
+  };
 
   let streams: Stream[] = $state([]);
   let loadingStreams = $state(false);
@@ -31,7 +59,85 @@
   let trailer: string | null = $state(null);
   let similar: Media[] = $state([]);
 
-  // Fetch streams
+  let sortMode = $state<"seeders" | "size">("seeders");
+  let qualityFilter = $state("all");
+
+  function getSeeders(stream: Stream): number {
+    const match = stream.title.match(/👤\s*(\d+)/);
+    return match ? Number(match[1]) : 0;
+  }
+
+  function getSizeBytes(stream: Stream): number {
+    const match = stream.title.match(/💾\s*([\d.]+)\s*(TB|GB|MB)/i);
+    if (!match) return 0;
+
+    const value = Number(match[1]);
+    const unit = match[2].toUpperCase();
+
+    switch (unit) {
+      case "TB":
+        return value * 1024 ** 4;
+      case "GB":
+        return value * 1024 ** 3;
+      case "MB":
+        return value * 1024 ** 2;
+      default:
+        return 0;
+    }
+  }
+
+  function inferQuality(stream: Stream): string | null {
+    const qualityLine = stream.name.split("\n")[1]?.trim();
+
+    if (qualityLine) {
+      return qualityLine.toLowerCase();
+    }
+
+    const text = `${stream.name} ${stream.title}`.toLowerCase();
+
+    if (text.includes("dolby vision") || text.includes("4k dv")) {
+      return "4k dv";
+    }
+
+    if (text.includes("hdr")) {
+      return "4k hdr";
+    }
+
+    if (text.includes("2160") || text.includes("4k")) {
+      return "4k";
+    }
+
+    if (text.includes("1080")) {
+      return "1080p";
+    }
+
+    return null;
+  }
+
+  const filteredStreams = $derived.by(() => {
+    const list: StreamView[] = streams.map((stream) => ({
+      ...stream,
+      seeders: getSeeders(stream),
+      sizeBytes: getSizeBytes(stream),
+      quality: inferQuality(stream),
+    }));
+
+    const filtered = list.filter((stream) => {
+      if (qualityFilter === "all") return true;
+      return stream.quality === qualityFilter;
+    });
+
+    filtered.sort((a, b) => {
+      if (sortMode === "seeders") {
+        return b.seeders - a.seeders;
+      }
+
+      return b.sizeBytes - a.sizeBytes;
+    });
+
+    return filtered;
+  });
+
   $effect(() => {
     loadingStreams = true;
     api.getStreams(media.id).then((res) => {
@@ -40,7 +146,6 @@
     });
   });
 
-  // Fetch details (trailer, similar, etc.)
   $effect(() => {
     detailsLoading = true;
     const type = media.media_type;
@@ -63,16 +168,19 @@
         genres =
           details.genres?.map((g: { name: string }) => g.name).slice(0, 3) ??
           [];
+
         runtime =
           details.runtime > 0
             ? `${Math.floor(details.runtime / 60)}h ${details.runtime % 60}m`
             : details.episode_run_time?.[0]
               ? `${details.episode_run_time[0]}m / ep`
               : "";
+
         cast =
           details.credits?.cast
             ?.slice(0, 5)
             .map((c: { name: string }) => c.name) ?? [];
+
         ageRating = (() => {
           for (const r of details.release_dates?.results ?? []) {
             if (r.iso_3166_1 === "US") {
@@ -81,11 +189,14 @@
               }
             }
           }
+
           for (const r of details.content_ratings?.results ?? []) {
             if (r.iso_3166_1 === "US" && r.rating) return r.rating;
           }
+
           return "";
         })();
+
         keywords =
           (type === "movie"
             ? details.keywords?.keywords
@@ -112,6 +223,7 @@
       : media.release_date
     )?.slice(0, 4),
   );
+
   const overviewParagraphs = $derived(
     media.overview
       ?.split(". ")
@@ -141,210 +253,271 @@
   <div
     class="relative flex h-full w-full overflow-hidden rounded-xl border border-border bg-background"
   >
-    <!-- Background blur -->
     <div
       class="absolute inset-0 scale-110 bg-cover bg-center opacity-30 blur-sm"
       style="background-image: url('{media.poster_path}')"
     ></div>
 
-    <div class="relative z-10 flex h-full w-full">
-      <!-- Left side: Details (scrollable) -->
-      <div class="flex-1 overflow-y-auto p-6 pr-4">
-        {#if detailsLoading}
-          <div class="flex h-full items-center justify-center">
-            <span class="animate-pulse text-sm text-muted-foreground"
-              >Loading details...</span
-            >
-          </div>
-        {:else}
-          <div class="space-y-4">
-            <!-- Back button + title row -->
-            <div class="flex items-center gap-3">
-              {#if onBack}
-                <Button
-                  variant="outline"
-                  size="icon-lg"
-                  onclick={onBack}
-                  title="Go back"
-                >
-                  <ChevronLeft />
-                </Button>
-              {/if}
-              <div class="flex flex-wrap items-center gap-2">
-                <h2
-                  class="text-3xl font-bold tracking-tight text-foreground drop-shadow-lg"
-                >
-                  {title}
-                </h2>
-                {#if year}
-                  <Badge variant="default">{year}</Badge>
-                {/if}
-              </div>
-            </div>
-
-            <!-- Rating row -->
-            <div class="flex items-center gap-3 text-sm">
-              <span class="flex items-center gap-1 text-yellow-400">
-                <Star class="size-4 fill-current" />
-                {media.vote_average?.toFixed(1)}
+    <div class="relative z-10 flex h-full w-full justify-stretch">
+      <ScrollArea class="h-full w-[65%]">
+        <div class="p-6 pr-4">
+          {#if detailsLoading}
+            <div class="flex h-full items-center justify-center">
+              <span class="animate-pulse text-sm text-muted-foreground">
+                Loading details...
               </span>
-              {#if ageRating}
-                <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-                  >{ageRating}</span
-                >
-              {/if}
-              {#if runtime}
-                <span class="text-muted-foreground">{runtime}</span>
-              {/if}
-            </div>
-
-            <!-- Genres -->
-            {#if genres.length}
-              <div class="flex flex-wrap gap-1.5">
-                {#each genres as genre (genre)}
-                  <span
-                    class="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"
-                  >
-                    {genre}
-                  </span>
-                {/each}
-              </div>
-            {/if}
-
-            <Separator />
-
-            <!-- Trailer -->
-            {#if trailerUrl}
-              <div class="space-y-2">
-                <div
-                  class="relative aspect-video w-full overflow-hidden rounded-lg border border-border"
-                >
-                  <iframe
-                    src={trailerUrl}
-                    title={`${title} trailer`}
-                    class="absolute inset-0 h-full w-full"
-                    allow="autoplay; encrypted-media"
-                  ></iframe>
-                </div>
-              </div>
-            {/if}
-
-            <!-- Overview -->
-            <div class="space-y-2">
-              <h3 class="text-sm font-semibold">Overview</h3>
-              <div class="space-y-2 text-sm text-muted-foreground">
-                {#each overviewParagraphs as paragraph, i (i)}
-                  <p>{paragraph}</p>
-                {/each}
-              </div>
-            </div>
-
-            <!-- Cast -->
-            {#if cast.length}
-              <div>
-                <h3 class="mb-2 text-sm font-semibold">Cast</h3>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each cast as person (person)}
-                    <span
-                      class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
-                    >
-                      {person}
-                    </span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            <!-- Keywords -->
-            {#if keywords.length}
-              <div>
-                <h3 class="mb-2 text-sm font-semibold">
-                  This {media.media_type === "tv" ? "show" : "film"} is
-                </h3>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each keywords as keyword (keyword)}
-                    <span
-                      class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
-                    >
-                      {keyword}
-                    </span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            <!-- Similar Items -->
-            {#if similar.length}
-              <div class="space-y-2">
-                <h3 class="text-sm font-semibold">More like this</h3>
-                <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                  {#each similar as item (item.id)}
-                    <div
-                      role="button"
-                      tabindex="0"
-                      class="cursor-pointer overflow-hidden rounded-md transition-opacity hover:opacity-75"
-                      onclick={() => onsimilar?.(item)}
-                      onkeydown={(e) => e.key === "Enter" && onsimilar?.(item)}
-                    >
-                      <img
-                        src={item.poster_path}
-                        alt={item.media_type === "tv" ? item.name : item.title}
-                        class="aspect-2/3 w-full object-cover"
-                      />
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/if}
-      </div>
-
-      <!-- Right side: Streams list -->
-      <div
-        class="flex h-full w-96 flex-col border-l border-border bg-background/60 backdrop-blur-xl"
-      >
-        <div class="flex-none border-b border-border p-5">
-          <h3 class="text-lg font-semibold">Available Streams</h3>
-        </div>
-
-        <div class="flex-1 overflow-y-auto p-4">
-          {#if loadingStreams}
-            <div class="flex h-full items-center justify-center">
-              <span class="animate-pulse text-sm text-muted-foreground"
-                >Finding streams...</span
-              >
-            </div>
-          {:else if streams.length === 0}
-            <div class="flex h-full items-center justify-center">
-              <span class="text-sm text-muted-foreground"
-                >No streams found.</span
-              >
             </div>
           {:else}
-            <div class="flex flex-col gap-3">
-              {#each streams as stream (stream)}
-                <button
-                  class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
-                  onclick={() => playStream(stream)}
-                >
-                  <span class="flex items-center justify-between">
-                    <span class="text-sm font-medium text-foreground"
-                      >{stream.name}</span
-                    >
-                    <Play
-                      class="size-3 text-foreground opacity-0 transition-opacity group-hover:opacity-100"
-                    />
-                  </span>
-                  <span class="line-clamp-2 text-xs text-muted-foreground"
-                    >{stream.title}</span
+            <div class="space-y-4">
+              <div class="flex items-center gap-3">
+                {#if onBack}
+                  <Button
+                    variant="outline"
+                    size="icon-lg"
+                    onclick={onBack}
+                    title="Go back"
                   >
-                </button>
-              {/each}
+                    <ChevronLeft />
+                  </Button>
+                {/if}
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <h2
+                    class="text-3xl font-bold tracking-tight text-foreground drop-shadow-lg"
+                  >
+                    {title}
+                  </h2>
+                  {#if year}
+                    <Badge variant="default">{year}</Badge>
+                  {/if}
+                </div>
+              </div>
+
+              <div class="flex items-center gap-3 text-sm">
+                <span class="flex items-center gap-1 text-yellow-400">
+                  <Star class="size-4 fill-current" />
+                  {media.vote_average?.toFixed(1)}
+                </span>
+                {#if ageRating}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {ageRating}
+                  </span>
+                {/if}
+                {#if runtime}
+                  <span class="text-muted-foreground">{runtime}</span>
+                {/if}
+              </div>
+
+              {#if genres.length}
+                <div class="flex flex-wrap gap-1.5">
+                  {#each genres as genre (genre)}
+                    <span
+                      class="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"
+                    >
+                      {genre}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+
+              <Separator />
+
+              {#if trailerUrl}
+                <div class="space-y-2">
+                  <div
+                    class="relative aspect-video w-full overflow-hidden rounded-lg border border-border"
+                  >
+                    <iframe
+                      src={trailerUrl}
+                      title={`${title} trailer`}
+                      class="absolute inset-0 h-full w-full"
+                      allow="autoplay; encrypted-media"
+                    ></iframe>
+                  </div>
+                </div>
+              {/if}
+
+              <div class="space-y-2">
+                <h3 class="text-sm font-semibold">Overview</h3>
+                <div class="space-y-2 text-sm text-muted-foreground">
+                  {#each overviewParagraphs as paragraph, i (i)}
+                    <p>{paragraph}</p>
+                  {/each}
+                </div>
+              </div>
+
+              {#if cast.length}
+                <div>
+                  <h3 class="mb-2 text-sm font-semibold">Cast</h3>
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each cast as person (person)}
+                      <span
+                        class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
+                      >
+                        {person}
+                      </span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if keywords.length}
+                <div>
+                  <h3 class="mb-2 text-sm font-semibold">
+                    This {media.media_type === "tv" ? "show" : "film"} is
+                  </h3>
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each keywords as keyword (keyword)}
+                      <span
+                        class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
+                      >
+                        {keyword}
+                      </span>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if similar.length}
+                <div class="space-y-2">
+                  <h3 class="text-sm font-semibold">More like this</h3>
+                  <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
+                    {#each similar as item (item.id)}
+                      <div
+                        role="button"
+                        tabindex="0"
+                        class="cursor-pointer overflow-hidden rounded-md transition-opacity hover:opacity-75"
+                        onclick={() => onsimilar?.(item)}
+                        onkeydown={(e) =>
+                          e.key === "Enter" && onsimilar?.(item)}
+                      >
+                        <img
+                          src={item.poster_path}
+                          alt={item.media_type === "tv"
+                            ? item.name
+                            : item.title}
+                          class="aspect-2/3 w-full object-cover"
+                        />
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
-      </div>
+      </ScrollArea>
+
+      <ScrollArea
+        class="h-full w-[35%] border-l border-border bg-background/60 backdrop-blur-xl"
+      >
+        <div class="flex h-full flex-col">
+          <div class="flex-none space-y-3 border-b border-border p-5">
+            <h3 class="text-lg font-semibold">Available Streams</h3>
+
+            <div class="grid grid-cols-2 gap-2">
+              <!-- Quality -->
+              <Select.Root type="single" bind:value={qualityFilter}>
+                <Select.Trigger class="flex w-full">
+                  <span class="flex flex-row items-center justify-center gap-1">
+                    <Settings2 />
+                    {qualityFilter.toUpperCase()}
+                  </span>
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Group>
+                    {#each availableQualities as quality (quality)}
+                      <Select.Item
+                        value={quality}
+                        label={quality.toUpperCase()}
+                      />
+                    {/each}
+                  </Select.Group>
+                </Select.Content>
+              </Select.Root>
+              <!-- Sort -->
+              <Select.Root type="single" bind:value={sortMode}>
+                <Select.Trigger class="flex w-full">
+                  <span class="flex flex-row items-center justify-center gap-1">
+                    <ListFilter />
+                    {sortMode.toUpperCase()}
+                  </span>
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Group>
+                    <Select.Item value="seeders" label="Seeders" />
+                    <Select.Item value="size" label="Size" />
+                  </Select.Group>
+                </Select.Content>
+              </Select.Root>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-4">
+            {#if loadingStreams}
+              <div class="flex h-full items-center justify-center">
+                <span class="animate-pulse text-sm text-muted-foreground">
+                  Finding streams...
+                </span>
+              </div>
+            {:else if streams.length === 0}
+              <div class="flex h-full items-center justify-center">
+                <span class="text-sm text-muted-foreground">
+                  No streams found.
+                </span>
+              </div>
+            {:else if filteredStreams.length === 0}
+              <div class="flex h-full items-center justify-center">
+                <span class="text-sm text-muted-foreground">
+                  No streams match this filter.
+                </span>
+              </div>
+            {:else}
+              <div class="flex flex-col gap-3">
+                {#each filteredStreams as stream (stream.infoHash || `${stream.name}-${stream.title}`)}
+                  <button
+                    class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
+                    onclick={() => playStream(stream)}
+                  >
+                    <span class="flex items-center justify-between gap-2">
+                      <span class="text-sm font-medium text-foreground">
+                        {stream.name}
+                      </span>
+                      <Play
+                        class="size-3 text-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                      />
+                    </span>
+
+                    <span
+                      class="line-clamp-2 text-xs whitespace-pre-line text-muted-foreground"
+                    >
+                      {stream.title}
+                    </span>
+
+                    <span
+                      class="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"
+                    >
+                      <span class="rounded bg-background/70 px-1.5 py-0.5">
+                        👤 {getSeeders(stream)}
+                      </span>
+                      <span class="rounded bg-background/70 px-1.5 py-0.5">
+                        💾 {getSizeBytes(stream) / 1024 ** 3 >= 1
+                          ? `${(getSizeBytes(stream) / 1024 ** 3).toFixed(2)} GB`
+                          : `${(getSizeBytes(stream) / 1024 ** 2).toFixed(0)} MB`}
+                      </span>
+                      <span class="rounded bg-background/70 px-1.5 py-0.5">
+                        {inferQuality(stream)}
+                      </span>
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      </ScrollArea>
     </div>
   </div>
 {/if}
