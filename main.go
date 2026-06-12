@@ -236,7 +236,11 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(results)
+		err = json.NewEncoder(w).Encode(results)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 	}))
 
 	http.HandleFunc("/api/progress", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -270,13 +274,21 @@ func main() {
 	http.HandleFunc("/api/imdb", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		id := 0
-		fmt.Sscanf(tmdbID, "%d", &id)
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 		imdbID, err := tmdb.GetIMDBId(id, apiKey)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"imdb_id": imdbID})
+		err = json.NewEncoder(w).Encode(map[string]string{"imdb_id": imdbID})
+		if err != nil {
+			log.Println(err)
+			return
+		}
 	}))
 
 	log.Println("Server Running on: 6969")

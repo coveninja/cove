@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -131,7 +132,12 @@ func GetTrailer(tmdbID int, mediaType string, apiKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var data struct {
 		Results []struct {
@@ -157,7 +163,12 @@ func GetImages(tmdbID int, mediaType string, apiKey string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var data struct {
 		Backdrops []struct {
@@ -199,7 +210,12 @@ func GetDetails(tmdbID int, mediaType string, apiKey string) (*Details, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var details Details
 	if err := json.NewDecoder(res.Body).Decode(&details); err != nil {
@@ -257,7 +273,12 @@ func GetSimilar(tmdbID int, mediaType string, apiKey string) ([]Media, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var data searchResponse
 	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
@@ -289,7 +310,12 @@ func GetLogos(tmdbID int, mediaType string, apiKey string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var data struct {
 		Logos []struct {
