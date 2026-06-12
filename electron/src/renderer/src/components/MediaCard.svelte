@@ -2,7 +2,7 @@
   import type { Media } from "$lib/types/tmdb";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { animate } from "animejs";
-  import { Star, ChevronDown, X, Play } from "lucide-svelte";
+  import { ChevronDown, Play, Star, X } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
@@ -24,6 +24,7 @@
     onsimilar?: (m: Media) => void;
   } = $props();
 
+  let clips = $state<string[] | null>(null);
   let trailer = $state<string | null>(null);
   let hovered = $state(false);
   let expanded = $state(false);
@@ -110,10 +111,50 @@
     fetched = true;
 
     fetch(
+      `http://localhost:6969/api/clips?id=${media.id}&type=${media.media_type}`,
+    )
+      .then((r) => r.json())
+      .then((d) => {
+        let urls: string[] = [];
+        if (Array.isArray(d.urls)) {
+          urls = d.urls
+            .map((item: unknown) => {
+              if (
+                typeof item === "object" &&
+                item !== null &&
+                "url" in item &&
+                typeof item.url === "string"
+              ) {
+                return item.url;
+              }
+              if (typeof item === "string") return item;
+              return null;
+            })
+            .filter((url): url is string => url !== null && url.trim() !== "");
+        }
+        clips = urls; // will be empty array if none found
+      })
+      .catch((err) => console.error("Error fetching clips:", err));
+
+    // Fetch trailer
+    fetch(
       `http://localhost:6969/api/trailer?id=${media.id}&type=${media.media_type}`,
     )
       .then((r) => r.json())
-      .then((d) => (trailer = d.url));
+      .then((d) => {
+        let url: string | null = null;
+        if (typeof d === "string" && d.trim() !== "") {
+          url = d;
+        } else if (
+          d &&
+          typeof d === "object" &&
+          typeof d.url === "string" &&
+          d.url.trim() !== ""
+        ) {
+          url = d.url;
+        }
+        trailer = url;
+      });
 
     fetch(
       `http://localhost:6969/api/similar?id=${media.id}&type=${media.media_type}`,
@@ -231,11 +272,21 @@
       : media.release_date
     )?.slice(0, 4),
   );
-  const trailerUrl = $derived(
-    trailer
-      ? `${trailer}?autoplay=1&controls=0&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=1`
-      : null,
-  );
+  const videoUrl = $derived.by(() => {
+    // Clips: only if array exists AND has at least one item
+    if (clips && clips.length > 0) {
+      const randomIndex = Math.floor(Math.random() * clips.length);
+      const clipUrl = clips[randomIndex];
+      if (clipUrl && typeof clipUrl === "string" && clipUrl.trim() !== "") {
+        return `${clipUrl}?autoplay=1&controls=0&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=1`;
+      }
+    }
+    // Trailer: only if it's a non‑empty string
+    if (trailer && typeof trailer === "string" && trailer.trim() !== "") {
+      return `${trailer}?autoplay=1&controls=0&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=1`;
+    }
+    return null;
+  });
 </script>
 
 {#if expanded}
@@ -296,13 +347,14 @@
         : hoverCardStyle}"
       class="z-50 flex min-w-75 cursor-default flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
     >
-      {#if trailerUrl}
+      {#if videoUrl}
         <iframe
-          src={trailerUrl}
+          src={videoUrl}
           title="{title} trailer"
           class="aspect-video w-full"
           allow="autoplay; encrypted-media"
-        ></iframe>
+        >
+        </iframe>
       {:else}
         <img
           src={media.poster_path}

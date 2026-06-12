@@ -26,6 +26,7 @@ type Media struct {
 	Rating     float64  `json:"vote_average"`
 	MediaType  string   `json:"media_type"`
 	TrailerURL string   `json:"trailer_url"`
+	ClipURLs   string   `json:"clip_urls"`
 	Images     []string `json:"images"`
 	Popularity float64  `json:"popularity"`
 }
@@ -119,7 +120,12 @@ func SearchByKeywords(query string, apiKey string) ([]Media, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var kwData struct {
 		Results []struct {
@@ -148,8 +154,16 @@ func SearchByKeywords(query string, apiKey string) ([]Media, error) {
 			continue
 		}
 		var data searchResponse
-		json.NewDecoder(r.Body).Decode(&data)
-		r.Body.Close()
+		err = json.NewDecoder(r.Body).Decode(&data)
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
+		err = r.Body.Close()
+		if err != nil {
+			log.Println(err)
+			return nil, err
+		}
 
 		for i := range data.Results {
 			data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
@@ -218,8 +232,16 @@ func Search(query string, apiKey string) ([]Media, error) {
 				continue
 			}
 			var data searchResponse
-			json.NewDecoder(res.Body).Decode(&data)
-			res.Body.Close()
+			err = json.NewDecoder(res.Body).Decode(&data)
+			if err != nil {
+				log.Println(err)
+				return nil, err
+			}
+			err = res.Body.Close()
+			if err != nil {
+				log.Println(err)
+				return nil, err
+			}
 
 			for i := range data.Results {
 				data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
@@ -387,6 +409,38 @@ func GetTrailer(tmdbID int, mediaType string, apiKey string) (string, error) {
 	return "", nil
 }
 
+func GetClips(tmdbID int, mediaType string, apiKey string) ([]string, error) {
+	url := fmt.Sprintf("%s/%s/%d/videos?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	var data struct {
+		Results []struct {
+			Key  string `json:"key"`
+			Type string `json:"type"`
+			Site string `json:"site"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	var featurettes []string
+	for _, v := range data.Results {
+		if v.Type == "Clip" && v.Site == "YouTube" {
+			featurettes = append(featurettes, fmt.Sprintf("https://www.youtube.com/embed/%s", v.Key))
+		}
+	}
+	return featurettes, nil
+}
+
 func GetImages(tmdbID int, mediaType string, apiKey string) ([]string, error) {
 	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
 	res, err := http.Get(url)
@@ -498,7 +552,7 @@ func (d *Details) KeywordNames() []string {
 }
 
 func GetSimilar(tmdbID int, mediaType string, apiKey string) ([]Media, error) {
-	url := fmt.Sprintf("%s/%s/%d/similar?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+	url := fmt.Sprintf("%s/%s/%d/recommendations?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
 	res, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -573,7 +627,12 @@ func SuggestKeywords(query string, apiKey string) ([]Keyword, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var data struct {
 		Results []Keyword `json:"results"`

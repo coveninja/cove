@@ -14,6 +14,7 @@ export interface Media {
   vote_average: number /* float64 */;
   media_type: string;
   trailer_url: string;
+  clip_urls: string;
   images: string[];
   popularity: number /* float64 */;
 }

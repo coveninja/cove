@@ -297,6 +297,35 @@ func main() {
 		}
 	}))
 
+	http.HandleFunc("/api/clips", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbIDStr := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+
+		id, err := strconv.Atoi(tmdbIDStr)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		if mediaType == "" {
+			http.Error(w, "missing media type", http.StatusBadRequest)
+			return
+		}
+
+		clips, err := tmdb.GetClips(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, "failed to fetch data", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(map[string][]string{"urls": clips})
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
 	http.HandleFunc("/api/images", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
