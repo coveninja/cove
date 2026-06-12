@@ -147,7 +147,9 @@
 </script>
 
 {#if activeStream}
-  <div class="relative h-full w-full overflow-hidden rounded-xl bg-black">
+  <div
+    class="h-full w-full overflow-hidden rounded-xl bg-black"
+  >
     <Player
       src={activeStream.infoHash || activeStream.url}
       {media}
@@ -156,7 +158,7 @@
     <Button
       variant="outline"
       size="sm"
-      class="absolute top-6 left-6 z-50 bg-background/50 backdrop-blur-md"
+      class="absolute top-5 left-6 z-50 bg-background/50 backdrop-blur-md"
       onclick={() => (activeStream = null)}
     >
       <ChevronLeft class="mr-1 size-4" /> Back
