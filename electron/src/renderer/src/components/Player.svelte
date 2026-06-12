@@ -8,12 +8,12 @@
     Minimize,
     SkipBack,
     SkipForward,
-    Loader,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Popover from "$lib/components/ui/popover";
   import type { Media } from "$lib/types/tmdb";
+  import { Spinner } from "$lib/components/ui/spinner";
 
   let { src, media }: { src: string; media?: Media; imdbId?: string } =
     $props();
@@ -41,7 +41,7 @@
   let muted = $state(false);
   let buffered = $state(0);
   let fullscreen = $state(false);
-  let showControls = $state(true);
+  let showControls = $state(false);
   let waiting = $state(false);
   let canPlay = $state(false);
 
@@ -53,13 +53,26 @@
   let fakeProgress = $state(0);
 
   $effect(() => {
-    const progressReady = isHash
-      ? torrentProgress >= 0.5
-      : loadingProgress >= 100;
-    if (canPlay && progressReady) {
-      fakeProgress = 100; // make sure bar fills before transitioning
+    if (canPlay) {
+      fakeProgress = 100;
+      showControls = true;
+      return () => {};
     }
+
+    showControls = false;
+
+    const interval = setInterval(() => {
+      const target = 85;
+      const distance = target - fakeProgress;
+      const speed = fakeProgress < 40 ? 0.03 : 0.01;
+
+      fakeProgress += distance * speed;
+    }, 100);
+
+    return () => clearInterval(interval);
   });
+
+  const loadingProgress = $derived(fakeProgress);
 
   $effect(() => {
     if (!media) return;
@@ -72,11 +85,12 @@
       });
   });
 
-  const loadingProgress = $derived(isHash ? torrentProgress : fakeProgress);
-
   let controlsTimeout: ReturnType<typeof setTimeout>;
 
   function resetControlsTimer(): void {
+    if (!canPlay) {
+      return;
+    }
     showControls = true;
     clearTimeout(controlsTimeout);
     controlsTimeout = setTimeout(() => {
@@ -202,7 +216,6 @@
       class="absolute inset-0 flex flex-col items-center justify-center transition-opacity duration-700"
       style="opacity: 1"
     >
-      <!-- Blurred poster background -->
       {#if media?.poster_path}
         <div
           class="absolute inset-0 scale-110 bg-cover bg-center"
@@ -211,43 +224,43 @@
       {/if}
       <div class="absolute inset-0 bg-black/60"></div>
 
-      <!-- Title as progress bar -->
       {#if logoUrl}
-        <div class="relative z-10 px-8 select-none">
-          <!-- Grey unfilled logo -->
+        <div class="relative z-10 grid place-items-center px-8 select-none">
           <img
             src={logoUrl}
             alt={title}
-            class="max-h-32 max-w-sm object-contain opacity-20"
+            class="col-start-1 row-start-1 max-h-32 max-w-sm object-contain opacity-20"
           />
-          <!-- Colored filled logo clipped left-to-right -->
           <img
             src={logoUrl}
             alt={title}
-            class="absolute inset-0 max-h-32 max-w-sm object-contain transition-all duration-500"
+            class="col-start-1 row-start-1 max-h-32 max-w-sm object-contain transition-all duration-500 {fakeProgress >
+              40 && !canPlay
+              ? 'animate-pulse'
+              : ''}"
             style="clip-path: inset(0 {100 - loadingProgress}% 0 0)"
           />
         </div>
       {:else if title}
-        <!-- fallback to text if no logo found -->
-        <div class="relative z-10 px-8 text-center select-none">
+        <div
+          class="relative z-10 grid place-items-center px-8 text-center select-none"
+        >
           <span
-            class="block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
+            class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
           >
             {title}
           </span>
           <span
-            class="absolute inset-0 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"
+            class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"
             style="clip-path: inset(0 {100 - loadingProgress}% 0 0)"
           >
             {title}
           </span>
         </div>
       {:else}
-        <Loader class="relative z-10 size-12 animate-spin text-white/70" />
+        <Spinner class="size-14" />
       {/if}
 
-      <!-- Status text -->
       <div class="relative z-10 mt-6 text-sm text-white/50">
         {#if isHash}
           {#if peers > 0}
@@ -261,13 +274,12 @@
       </div>
     </div>
   {/if}
-
   <!-- Buffering spinner (shown after initial load, when seeking etc) -->
   {#if waiting}
     <div
       class="pointer-events-none absolute inset-0 flex items-center justify-center"
     >
-      <Loader class="size-12 animate-spin text-white/70" />
+      <Spinner class="size-14" />
     </div>
   {/if}
 

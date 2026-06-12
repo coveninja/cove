@@ -8,7 +8,7 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 
-  import {countryName, qualityClass} from "$lib/utils";
+  import { countryName, qualityClass } from "$lib/utils";
   import StreamsList from "./StreamsList.svelte";
 
   let {
@@ -33,6 +33,8 @@
   let similar: Media[] = $state([]);
   let originCountry: string[] = $state([]);
   let maxQuality = $state<string | null>();
+  let numberOfSeasons = $state<number | null>(null);
+  let numberOfEpisodes = $state<number | null>(null);
 
   $effect(() => {
     detailsLoading = true;
@@ -77,11 +79,9 @@
               }
             }
           }
-
           for (const r of details.content_ratings?.results ?? []) {
             if (r.iso_3166_1 === "US" && r.rating) return r.rating;
           }
-
           return "";
         })();
 
@@ -94,6 +94,11 @@
             .map((k: { name: string }) => k.name) ?? [];
 
         originCountry = details.origin_country ?? [];
+
+        if (type === "tv") {
+          numberOfSeasons = details.number_of_seasons ?? null;
+          numberOfEpisodes = details.number_of_episodes ?? null;
+        }
 
         detailsLoading = false;
       })
@@ -183,7 +188,7 @@
                 </div>
               </div>
 
-              <div class="flex items-center gap-3 text-sm">
+              <div class="flex flex-wrap items-center gap-3 text-sm">
                 <span class="flex items-center gap-1 text-yellow-400">
                   <Star class="size-4 fill-current" />
                   {media.vote_average?.toFixed(1)}
@@ -206,8 +211,25 @@
                   <span
                     class="rounded border border-border px-1.5 py-0.5 text-xs"
                   >
-                    {runtime}</span
+                    {runtime}
+                  </span>
+                {/if}
+                <!-- Seasons + episodes count for TV shows -->
+                {#if media.media_type === "tv" && numberOfSeasons !== null}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
                   >
+                    {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
+                  </span>
+                {/if}
+                {#if media.media_type === "tv" && numberOfEpisodes !== null}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {numberOfEpisodes} episode{numberOfEpisodes !== 1
+                      ? "s"
+                      : ""}
+                  </span>
                 {/if}
                 {#if maxQuality}
                   <span

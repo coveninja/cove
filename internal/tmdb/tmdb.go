@@ -34,6 +34,27 @@ type MediaDetails struct {
 	ImdbID string `json:"imdb_id"`
 }
 
+type TVExternalIds struct {
+	ImdbID string `json:"imdb_id"`
+}
+
+// TVSeason is a season summary returned by /tv/{id}.
+type TVSeason struct {
+	SeasonNumber int    `json:"season_number"`
+	EpisodeCount int    `json:"episode_count"`
+	Name         string `json:"name"`
+	PosterPath   string `json:"poster_path"`
+}
+
+// TVEpisode is a single episode returned by /tv/{id}/season/{n}.
+type TVEpisode struct {
+	EpisodeNumber int    `json:"episode_number"`
+	Name          string `json:"name"`
+	Overview      string `json:"overview"`
+	StillPath     string `json:"still_path"`
+	AirDate       string `json:"air_date"`
+}
+
 type Details struct {
 	Genres []struct {
 		Name string `json:"name"`
@@ -67,7 +88,10 @@ type Details struct {
 			Name string `json:"name"`
 		} `json:"results"` // tv shows
 	} `json:"keywords"`
-	OriginCountry []string `json:"origin_country"`
+	OriginCountry    []string   `json:"origin_country"`
+	NumberOfSeasons  int        `json:"number_of_seasons"`
+	NumberOfEpisodes int        `json:"number_of_episodes"`
+	Seasons          []TVSeason `json:"seasons"`
 }
 
 type searchResponse struct {
@@ -86,6 +110,7 @@ type scoredMedia struct {
 
 const baseURL = "https://api.themoviedb.org/3"
 const imageBase = "https://image.tmdb.org/t/p/w500"
+const stillBase = "https://image.tmdb.org/t/p/w300"
 
 func SearchByKeywords(query string, apiKey string) ([]Media, error) {
 	normalized := normalizeQuery(query)
@@ -108,7 +133,6 @@ func SearchByKeywords(query string, apiKey string) ([]Media, error) {
 		return nil, nil
 	}
 
-	// Use up to 3 keyword IDs with OR logic
 	ids := make([]string, 0, 3)
 	for i := 0; i < len(kwData.Results) && i < 3; i++ {
 		ids = append(ids, strconv.Itoa(kwData.Results[i].ID))
@@ -141,20 +165,14 @@ func SearchByKeywords(query string, apiKey string) ([]Media, error) {
 }
 
 func normalizeQuery(q string) string {
-	// Normalize unicode (WALL·E -> WALL·E stays, but composed chars get decomposed)
 	q = norm.NFC.String(q)
-
-	// Replace hyphens, dots, middle dots with spaces
 	q = strings.Map(func(r rune) rune {
 		if r == '-' || r == '.' || r == '·' || r == '_' {
 			return ' '
 		}
 		return r
 	}, q)
-
-	// Collapse multiple spaces
 	q = strings.Join(strings.FieldsFunc(q, unicode.IsSpace), " ")
-
 	return strings.TrimSpace(q)
 }
 
@@ -162,14 +180,12 @@ func queryVariants(q string) []string {
 	seen := map[string]bool{q: true}
 	variants := []string{q}
 
-	// "wall e" - spaces instead of punctuation
 	normalized := normalizeQuery(q)
 	if !seen[normalized] {
 		seen[normalized] = true
 		variants = append(variants, normalized)
 	}
 
-	// "walle" - letters/digits only, no spaces
 	var b strings.Builder
 	for _, r := range strings.ToLower(q) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
@@ -186,7 +202,6 @@ func queryVariants(q string) []string {
 }
 
 func Search(query string, apiKey string) ([]Media, error) {
-	// Weight by variant: exact query > normalized > stripped
 	variantBoost := []float64{3.0, 1.5, 1.0}
 
 	seen := make(map[int]bool)
@@ -234,6 +249,7 @@ func Search(query string, apiKey string) ([]Media, error) {
 	return merged, nil
 }
 
+// GetIMDBId returns the IMDB ID for a movie by TMDB ID.
 func GetIMDBId(tmdbID int, apiKey string) (string, error) {
 	url := fmt.Sprintf("%s/movie/%d?api_key=%s", baseURL, tmdbID, apiKey)
 	res, err := http.Get(url)
@@ -254,6 +270,90 @@ func GetIMDBId(tmdbID int, apiKey string) (string, error) {
 		return "", err
 	}
 	return details.ImdbID, nil
+}
+
+// GetTVIMDBId returns the IMDB ID for a TV show by TMDB ID.
+func GetTVIMDBId(tmdbID int, apiKey string) (string, error) {
+	url := fmt.Sprintf("%s/tv/%d/external_ids?api_key=%s", baseURL, tmdbID, apiKey)
+	res, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	var ext TVExternalIds
+	if err := json.NewDecoder(res.Body).Decode(&ext); err != nil {
+		return "", err
+	}
+	return ext.ImdbID, nil
+}
+
+// GetSeasons returns the season list for a TV show (skipping specials season 0).
+func GetSeasons(tmdbID int, apiKey string) ([]TVSeason, error) {
+	url := fmt.Sprintf("%s/tv/%d?api_key=%s", baseURL, tmdbID, apiKey)
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	var data struct {
+		Seasons []TVSeason `json:"seasons"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	// Filter out season 0 (specials) unless it's the only one
+	var filtered []TVSeason
+	for _, s := range data.Seasons {
+		if s.SeasonNumber > 0 {
+			if s.PosterPath != "" {
+				s.PosterPath = imageBase + s.PosterPath
+			}
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered, nil
+}
+
+// GetEpisodes returns the episodes for a specific season of a TV show.
+func GetEpisodes(tmdbID int, seasonNumber int, apiKey string) ([]TVEpisode, error) {
+	url := fmt.Sprintf("%s/tv/%d/season/%d?api_key=%s", baseURL, tmdbID, seasonNumber, apiKey)
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	var data struct {
+		Episodes []TVEpisode `json:"episodes"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	for i := range data.Episodes {
+		if data.Episodes[i].StillPath != "" {
+			data.Episodes[i].StillPath = stillBase + data.Episodes[i].StillPath
+		}
+	}
+	return data.Episodes, nil
 }
 
 func GetTrailer(tmdbID int, mediaType string, apiKey string) (string, error) {
@@ -313,7 +413,7 @@ func GetImages(tmdbID int, mediaType string, apiKey string) ([]string, error) {
 	for i, b := range data.Backdrops {
 		if i >= 5 {
 			break
-		} // limit to 5
+		}
 		urls = append(urls, imageBase+b.FilePath)
 	}
 	return urls, nil
@@ -334,7 +434,7 @@ func (m *Media) DisplayDate() string {
 }
 
 func GetDetails(tmdbID int, mediaType string, apiKey string) (*Details, error) {
-	url := fmt.Sprintf("%s/%s/%d?api_key=%s&append_to_response=credits,release_dates,content_ratings,keywords, origin_country",
+	url := fmt.Sprintf("%s/%s/%d?api_key=%s&append_to_response=credits,release_dates,content_ratings,keywords,origin_country",
 		baseURL, mediaType, tmdbID, apiKey)
 	res, err := http.Get(url)
 	if err != nil {
@@ -420,7 +520,6 @@ func GetSimilar(tmdbID int, mediaType string, apiKey string) ([]Media, error) {
 		data.Results[i].MediaType = mediaType
 	}
 
-	// filter out results without posters
 	var filtered []Media
 	for _, m := range data.Results {
 		if m.PosterURL == imageBase {

@@ -39,6 +39,8 @@
   let runtime = $state<string>("");
   let cast = $state<string[]>([]);
   let ageRating = $state<string>("");
+  let numberOfSeasons = $state<number | null>(null);
+  let numberOfEpisodes = $state<number | null>(null);
 
   $effect(() => {
     if (initialExpanded) {
@@ -48,16 +50,13 @@
     }
   });
 
-  // Click-outside handler to close expanded card
   $effect(() => {
     if (!expanded) return () => {};
-
     function handleClickOutside(e: MouseEvent): void {
       if (cardEl && !cardEl.contains(e.target as Node)) {
         closeExpanded();
       }
     }
-
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   });
@@ -159,6 +158,11 @@
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
         originCountry = d.origin_country ?? [];
+
+        if (media.media_type === "tv") {
+          numberOfSeasons = d.number_of_seasons ?? null;
+          numberOfEpisodes = d.number_of_episodes ?? null;
+        }
       });
   }
 
@@ -170,8 +174,7 @@
   }
 
   function onLeave(): void {
-    if (expanded) return; // Don't close if expanded
-
+    if (expanded) return;
     if (cardEl) {
       animate(cardEl, {
         scale: [1, 0.85],
@@ -191,7 +194,6 @@
     e.stopPropagation();
     expanded = true;
     fetchData();
-
     if (cardEl) {
       animate(cardEl, {
         scale: [1, 1.02, 1],
@@ -236,7 +238,6 @@
   );
 </script>
 
-<!-- Dim backdrop when expanded -->
 {#if expanded}
   <div
     role="presentation"
@@ -271,6 +272,14 @@
           )}"
         >
           {quality.toUpperCase()}
+        </span>
+      {/if}
+      <!-- Season count badge for TV -->
+      {#if media.media_type === "tv" && numberOfSeasons !== null}
+        <span
+          class="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
+        >
+          {numberOfSeasons}S
         </span>
       {/if}
     </div>
@@ -327,9 +336,9 @@
 
         <Separator />
 
-        <!-- Rating + runtime -->
+        <!-- Rating + runtime + seasons/episodes -->
         <span class="flex flex-col gap-2 pr-3">
-          <span class="flex items-center gap-2">
+          <span class="flex flex-wrap items-center gap-2">
             {#if ageRating}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs">
                 {ageRating}
@@ -343,6 +352,16 @@
             {#if runtime}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs">
                 {runtime}
+              </span>
+            {/if}
+            {#if media.media_type === "tv" && numberOfSeasons !== null}
+              <span class="rounded border border-border px-1.5 py-0.5 text-xs">
+                {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
+              </span>
+            {/if}
+            {#if media.media_type === "tv" && numberOfEpisodes !== null}
+              <span class="rounded border border-border px-1.5 py-0.5 text-xs">
+                {numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}
               </span>
             {/if}
             {#if quality}
@@ -372,7 +391,7 @@
         <!-- Overview -->
         {#if expanded}
           <div class="grid grid-cols-[1fr_auto] gap-x-3 gap-y-3">
-            <!-- Left: overview -->
+            <!-- Left: overview + similar -->
             <div class="flex flex-col justify-between gap-3 rounded-lg">
               {#each overviewParagraphs as paragraph, i (i)}
                 <p class="text-sm leading-relaxed text-muted-foreground">
@@ -464,7 +483,7 @@
           >
         {/if}
 
-        <!-- Watch - Expand / close button -->
+        <!-- Watch / expand buttons -->
         <span class="flex w-full pt-0.5">
           <ButtonGroup.Root class="flex w-full">
             <Button

@@ -45,12 +45,8 @@ func main() {
 	}
 
 	http.HandleFunc("/api/debug", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		// check addons
 		configured := addons.GetAddons()
-
-		// check IMDB lookup
 		imdbID, err := tmdb.GetIMDBId(27205, apiKey)
-
 		err = json.NewEncoder(w).Encode(map[string]interface{}{
 			"addons":   configured,
 			"imdb_id":  imdbID,
@@ -62,7 +58,6 @@ func main() {
 		}
 	}))
 
-	// get all configured addons
 	http.HandleFunc("/api/addons", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		err := json.NewEncoder(w).Encode(addons.GetAddons())
@@ -72,7 +67,6 @@ func main() {
 		}
 	}))
 
-	// add a new addon by URL
 	http.HandleFunc("/api/addons/add", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		url := r.URL.Query().Get("url")
@@ -88,9 +82,14 @@ func main() {
 		}
 	}))
 
-	// replace the old /api/streams endpoint
+	// /api/streams?id=<tmdbID>&type=movie|tv[&season=N&episode=N]
 	http.HandleFunc("/api/streams", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		if mediaType == "" {
+			mediaType = "movie"
+		}
+
 		id := 0
 		_, err := fmt.Sscanf(tmdbID, "%d", &id)
 		if err != nil {
@@ -98,13 +97,31 @@ func main() {
 			return
 		}
 
-		imdbID, err := tmdb.GetIMDBId(id, apiKey)
+		// Resolve IMDB ID based on media type
+		var imdbID string
+		if mediaType == "tv" {
+			imdbID, err = tmdb.GetTVIMDBId(id, apiKey)
+		} else {
+			imdbID, err = tmdb.GetIMDBId(id, apiKey)
+		}
 		if err != nil || imdbID == "" {
 			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
 			return
 		}
 
-		streams, err := addons.GetAllStreams("movie", imdbID)
+		// For TV, append season:episode to build the Stremio stream ID
+		stremioID := imdbID
+		if mediaType == "tv" {
+			season := r.URL.Query().Get("season")
+			episode := r.URL.Query().Get("episode")
+			if season == "" || episode == "" {
+				http.Error(w, "season and episode are required for tv streams", http.StatusBadRequest)
+				return
+			}
+			stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
+		}
+
+		streams, err := addons.GetAllStreams(mediaType, stremioID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -216,9 +233,8 @@ func main() {
 			return
 		}
 
-		byKeyword, _ := tmdb.SearchByKeywords(query, apiKey) // non-fatal if it fails
+		byKeyword, _ := tmdb.SearchByKeywords(query, apiKey)
 
-		// Deduplicate: regular results take priority
 		seen := make(map[string]bool)
 		merged := make([]tmdb.Media, 0, len(regular)+len(byKeyword))
 		for _, m := range regular {
@@ -249,7 +265,6 @@ func main() {
 		streamURL := r.URL.Query().Get("url")
 
 		if streamURL != "" {
-			// direct HTTP stream — just redirect to it
 			http.Redirect(w, r, streamURL, http.StatusTemporaryRedirect)
 			return
 		}
@@ -383,6 +398,52 @@ func main() {
 		if err != nil {
 			log.Println(err)
 			return
+		}
+	}))
+
+	// GET /api/tv/seasons?id=<tmdbID>
+	// Returns the list of seasons for a TV show.
+	http.HandleFunc("/api/tv/seasons", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		id := 0
+		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		seasons, err := tmdb.GetSeasons(id, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(seasons); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	// GET /api/tv/episodes?id=<tmdbID>&season=<seasonNumber>
+	// Returns the episodes for a given season of a TV show.
+	http.HandleFunc("/api/tv/episodes", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		seasonStr := r.URL.Query().Get("season")
+		id := 0
+		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		season, err := strconv.Atoi(seasonStr)
+		if err != nil || season < 1 {
+			http.Error(w, "invalid season", http.StatusBadRequest)
+			return
+		}
+		episodes, err := tmdb.GetEpisodes(id, season, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(episodes); err != nil {
+			log.Println(err)
 		}
 	}))
 

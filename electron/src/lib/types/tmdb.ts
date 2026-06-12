@@ -20,6 +20,28 @@ export interface Media {
 export interface MediaDetails {
   imdb_id: string;
 }
+export interface TVExternalIds {
+  imdb_id: string;
+}
+/**
+ * TVSeason is a season summary returned by /tv/{id}.
+ */
+export interface TVSeason {
+  season_number: number /* int */;
+  episode_count: number /* int */;
+  name: string;
+  poster_path: string;
+}
+/**
+ * TVEpisode is a single episode returned by /tv/{id}/season/{n}.
+ */
+export interface TVEpisode {
+  episode_number: number /* int */;
+  name: string;
+  overview: string;
+  still_path: string;
+  air_date: string;
+}
 export interface Details {
   genres: {
     name: string;
@@ -54,6 +76,9 @@ export interface Details {
     }[]; // tv shows
   };
   origin_country: string[];
+  number_of_seasons: number /* int */;
+  number_of_episodes: number /* int */;
+  seasons: TVSeason[];
 }
 export interface Keyword {
   id: number /* int */;
