@@ -581,8 +581,8 @@ func GetSimilar(tmdbID int, mediaType string, apiKey string) ([]Media, error) {
 		}
 		filtered = append(filtered, m)
 	}
-	if len(filtered) > 6 {
-		filtered = filtered[:6]
+	if len(filtered) > 12 {
+		filtered = filtered[:12]
 	}
 	return filtered, nil
 }
