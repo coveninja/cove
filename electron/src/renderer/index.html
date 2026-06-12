@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Electron</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="
+        default-src 'self';
+        connect-src 'self' http://localhost:6969;
+        img-src 'self' https://image.tmdb.org data: https://i.ytimg.com;
+        media-src 'self' http://localhost:6969 blob:;
+        script-src 'self' 'unsafe-inline';
+        style-src 'self' 'unsafe-inline';
+        frame-src https://www.youtube.com;
+      "
+  />
+</head>
+
+<body>
+<div id="app"></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

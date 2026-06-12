@@ -1,0 +1,5 @@
+packages:
+  - path: "github.com/Arcadyi/cove/internal/tmdb"
+    output_path: "electron/src/lib/types/tmdb.ts"
+  - path: "github.com/Arcadyi/cove/internal/addons"
+    output_path: "electron/src/lib/types/addons.ts"
