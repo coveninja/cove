@@ -15,7 +15,7 @@
   import * as Popover from "$lib/components/ui/popover";
   import type { Media } from "$lib/types/tmdb";
 
-  let { src, media, imdbId }: { src: string; media?: Media; imdbId?: string } =
+  let { src, media }: { src: string; media?: Media; imdbId?: string } =
     $props();
 
   const isHash = $derived(!src.startsWith("http"));
@@ -43,34 +43,21 @@
   let fullscreen = $state(false);
   let showControls = $state(true);
   let waiting = $state(false);
-  let hasStarted = $state(false); // goes true once video has enough data to play
   let canPlay = $state(false);
 
   let torrentProgress = $state(0);
   let peers = $state(0);
   let speed = $state("0 B/s");
 
-  $effect(() => {
-    if (!imdbId) return;
-    fetch(`http://localhost:6969/api/subtitles?imdb_id=${imdbId}`)
-      .then((r) => r.json())
-      .then(() => {})
-      .catch((e) => console.error("Subtitles API error:", e));
-  });
-
   // For HTTP streams, simulate a fake loading progress so the bar animates
   let fakeProgress = $state(0);
 
   $effect(() => {
-    if (hasStarted) return;
     const progressReady = isHash
       ? torrentProgress >= 0.5
       : loadingProgress >= 100;
     if (canPlay && progressReady) {
       fakeProgress = 100; // make sure bar fills before transitioning
-      setTimeout(() => {
-        hasStarted = true;
-      }, 800);
     }
   });
 
@@ -182,8 +169,8 @@
   bind:this={containerEl}
   class="group relative h-full w-full overflow-hidden bg-black"
   onmousemove={resetControlsTimer}
-  onclick={hasStarted ? togglePlay : undefined}
-  onkeydown={(e) => hasStarted && e.key === " " && togglePlay()}
+  onclick={canPlay ? togglePlay : undefined}
+  onkeydown={(e) => canPlay && e.key === " " && togglePlay()}
   role="button"
   tabindex="0"
 >
@@ -192,7 +179,7 @@
     src={streamURL}
     crossorigin="anonymous"
     class="h-full w-full object-contain transition-opacity duration-700"
-    style="opacity: {hasStarted ? 1 : 0}"
+    style="opacity: {canPlay ? 1 : 0}"
     autoplay
     onplay={() => (playing = true)}
     onpause={() => (playing = false)}
@@ -210,10 +197,10 @@
   </video>
 
   <!-- Loading screen -->
-  {#if !hasStarted}
+  {#if !canPlay}
     <div
       class="absolute inset-0 flex flex-col items-center justify-center transition-opacity duration-700"
-      style="opacity: {hasStarted ? 0 : 1}"
+      style="opacity: 1"
     >
       <!-- Blurred poster background -->
       {#if media?.poster_path}
@@ -276,7 +263,7 @@
   {/if}
 
   <!-- Buffering spinner (shown after initial load, when seeking etc) -->
-  {#if waiting && hasStarted}
+  {#if waiting}
     <div
       class="pointer-events-none absolute inset-0 flex items-center justify-center"
     >
@@ -287,7 +274,7 @@
   <!-- Controls overlay -->
   <div
     class="pointer-events-none absolute inset-0 flex flex-col justify-end bg-linear-to-t from-black/80 via-transparent to-transparent transition-opacity duration-300"
-    style="opacity: {showControls && hasStarted ? 1 : 0}"
+    style="opacity: {showControls ? 1 : 0}"
   >
     <!-- Seek bar -->
     <div class="pointer-events-auto px-4 pb-2">

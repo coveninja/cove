@@ -30,7 +30,6 @@
   let keywords: string[] = $state([]);
   let trailer: string | null = $state(null);
   let similar: Media[] = $state([]);
-  let imdbId = $state<string>("");
 
   // Fetch streams
   $effect(() => {
@@ -56,9 +55,6 @@
       fetch(`http://localhost:6969/api/details?id=${media.id}&type=${type}`)
         .then((r) => r.json())
         .then((d) => d),
-      fetch(`http://localhost:6969/api/imdb?id=${media.id}`)
-        .then((r) => r.json())
-        .then((d) => (imdbId = d.imdb_id ?? "")),
     ])
       .then(([trailerUrl, similarList, details]) => {
         trailer = trailerUrl;
@@ -131,7 +127,7 @@
 
 {#if activeStream}
   <div class="relative h-full w-full overflow-hidden rounded-xl bg-black">
-    <Player src={activeStream.infoHash || activeStream.url} {media} {imdbId} />
+    <Player src={activeStream.infoHash || activeStream.url} {media} />
     <Button
       variant="outline"
       size="sm"
@@ -220,7 +216,6 @@
             <!-- Trailer -->
             {#if trailerUrl}
               <div class="space-y-2">
-                <h3 class="text-sm font-semibold">Trailer</h3>
                 <div
                   class="relative aspect-video w-full overflow-hidden rounded-lg border border-border"
                 >
@@ -328,7 +323,7 @@
             </div>
           {:else}
             <div class="flex flex-col gap-3">
-              {#each streams as stream (stream.infoHash || stream.url)}
+              {#each streams as stream (stream)}
                 <button
                   class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
                   onclick={() => playStream(stream)}
