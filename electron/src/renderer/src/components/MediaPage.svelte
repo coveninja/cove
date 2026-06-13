@@ -10,6 +10,7 @@
 
   import { countryName, qualityClass } from "$lib/utils";
   import StreamsList from "./StreamsList.svelte";
+  import PlayerSimple from "./PlayerSimple.svelte";
 
   let {
     media,
@@ -147,9 +148,7 @@
 </script>
 
 {#if activeStream}
-  <div
-    class="h-full w-full overflow-hidden rounded-xl bg-black"
-  >
+  <div class="h-full w-full overflow-hidden rounded-xl bg-black">
     <Player
       src={activeStream.infoHash || activeStream.url}
       {media}
@@ -280,16 +279,15 @@
                 <Separator />
 
                 {#if trailerUrl}
-                  <div class="space-y-2">
+                  <div class="pointer-events-auto space-y-2">
                     <div
-                      class="relative aspect-video w-full overflow-hidden rounded-lg border border-border"
+                      class="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-black"
                     >
-                      <iframe
+                      <PlayerSimple
                         src={trailerUrl}
-                        title={`${title} trailer`}
-                        class="absolute inset-0 h-full w-full"
-                        allow="autoplay; encrypted-media"
-                      ></iframe>
+                        controls={true}
+                        bg={media.poster_path}
+                      />
                     </div>
                   </div>
                 {/if}
@@ -365,7 +363,9 @@
           </div>
         </ScrollArea>
       </div>
-      <div class="w-[35%] min-w-0 flex-none flex flex-col h-full overflow-hidden">
+      <div
+        class="flex h-full w-[35%] min-w-0 flex-none flex-col overflow-hidden"
+      >
         <StreamsList
           {media}
           onPlayStream={(s: Stream) => playStream(s)}

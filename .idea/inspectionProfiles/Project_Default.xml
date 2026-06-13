@@ -3,5 +3,29 @@
     <option name="myName" value="Project Default" />
     <inspection_tool class="CssUnusedSymbol" enabled="false" level="WARNING" enabled_by_default="false" />
     <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="HtmlUnknownTag" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="myValues">
+        <value>
+          <list size="15">
+            <item index="0" class="java.lang.String" itemvalue="nobr" />
+            <item index="1" class="java.lang.String" itemvalue="noembed" />
+            <item index="2" class="java.lang.String" itemvalue="comment" />
+            <item index="3" class="java.lang.String" itemvalue="noscript" />
+            <item index="4" class="java.lang.String" itemvalue="embed" />
+            <item index="5" class="java.lang.String" itemvalue="script" />
+            <item index="6" class="java.lang.String" itemvalue="media-player" />
+            <item index="7" class="java.lang.String" itemvalue="media-provider" />
+            <item index="8" class="java.lang.String" itemvalue="media-controls" />
+            <item index="9" class="java.lang.String" itemvalue="media-mute-button" />
+            <item index="10" class="java.lang.String" itemvalue="media-play-button" />
+            <item index="11" class="java.lang.String" itemvalue="media-time-slider" />
+            <item index="12" class="java.lang.String" itemvalue="media-fullscreen-button" />
+            <item index="13" class="java.lang.String" itemvalue="media-time" />
+            <item index="14" class="java.lang.String" itemvalue="media-volume-slider" />
+          </list>
+        </value>
+      </option>
+      <option name="myCustomValuesEnabled" value="true" />
+    </inspection_tool>
   </profile>
 </component>

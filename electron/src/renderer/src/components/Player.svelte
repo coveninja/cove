@@ -1,14 +1,25 @@
 <script lang="ts">
-  import * as PlyrModule from "plyr";
   import type { Media } from "$lib/types/tmdb";
   import { Spinner } from "$lib/components/ui/spinner";
   import * as Popover from "$lib/components/ui/popover";
-  import { Settings, Headphones } from "lucide-svelte";
-  import { SvelteMap } from "svelte/reactivity";
-  const Plyr = (PlyrModule as any).default || PlyrModule;
-  import { untrack } from "svelte";
+  import {
+    Settings,
+    Headphones,
+    ChevronLeft,
+    Play,
+    Pause,
+    Volume2,
+    VolumeOff,
+    Maximize,
+    Minimize,
+  } from "lucide-svelte";
+  import "vidstack/bundle";
+  import "vidstack/player/styles/base.css";
+  import "vidstack/player/styles/default/theme.css";
+  import "vidstack/player/styles/default/layouts/video.css";
+  import Hls from "hls.js";
 
-  // ─── Types ────────────────────────────────────────────────────────────────
+  // ─── Types ─────────────────────────────────────────────────────────────────
 
   type AudioTrackInfo = {
     index: number;
@@ -17,11 +28,11 @@
     codec: string;
   };
 
-  export type SubtitleSettings = {
-    size: number; // 50–200 (font size %)
-    line: number; // 5–95  (vertical position % from top)
+  type SubtitleSettings = {
+    size: number;
+    line: number;
     background: boolean;
-    offset: number; // seconds, can be negative
+    offset: number;
   };
 
   const UNSUPPORTED_AUDIO_CODECS = new Set([
@@ -32,7 +43,7 @@
     "mlp",
   ]);
 
-  // ─── Props ────────────────────────────────────────────────────────────────
+  // ─── Props ──────────────────────────────────────────────────────────────────
 
   let {
     src,
@@ -44,47 +55,60 @@
     externalSubtitles?: { id: string; url: string; lang: string }[];
   } = $props();
 
-  // ─── URL derivations ──────────────────────────────────────────────────────
+  // ─── Audio tracks (from probe, used to decide HLS vs direct) ────────────────
+
+  let audioTracks = $state<AudioTrackInfo[]>([]);
+
+  // ─── Vidstack audio track list (populated from HLS manifest) ────────────────
+
+  let vidstackAudioTracks = $state<
+    { id: string; label: string; language: string; selected: boolean }[]
+  >([]);
+
+  // ─── DOM refs ───────────────────────────────────────────────────────────────
+
+  let playerEl = $state<any>(null);
+
+  // ─── Source derivations ─────────────────────────────────────────────────────
 
   const isHash = $derived(!src.startsWith("http"));
 
-  const baseStreamURL = $derived(
-    isHash
-      ? `http://localhost:6969/api/play?hash=${src}`
-      : `http://localhost:6969/api/play?url=${encodeURIComponent(src)}`,
+  const baseInput = $derived(
+    isHash ? `http://localhost:6969/api/play?hash=${src}` : src,
   );
 
-  // ─── DOM refs ─────────────────────────────────────────────────────────────
-
-  let videoEl = $state<HTMLVideoElement | null>(null);
-  let plyr = $state<Plyr | null>(null);
-
-  // ─── Playback state (fed by Plyr events) ─────────────────────────────────
-
-  let canPlay = $state(false);
-  let waiting = $state(false);
-  let playing = $state(false);
-  let fakeProgress = $state(0);
-  let error = $state<string | null>(null);
-  let controlsVisible = $state(false);
-
-  // ─── Audio tracks (backend URL-based, custom UI) ──────────────────────────
-
-  let audioTracks = $state<AudioTrackInfo[]>([]);
-  let activeAudioTrack = $state(0);
-
-  const needsFFmpeg = $derived(
+  const needsHLS = $derived(
     audioTracks.length > 1 ||
       audioTracks.some((t) =>
         UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
       ),
   );
 
-  const activeStreamURL = $derived(
-    needsFFmpeg ? `${baseStreamURL}&audio=${activeAudioTrack}` : baseStreamURL,
-  );
+  // ─── Playback state (driven by Vidstack events) ─────────────────────────────
 
-  // ─── Subtitle fine-tuning (custom panel; Plyr owns track selection) ───────
+  let canPlay = $state(false);
+  let waiting = $state(false);
+  let error = $state<string | null>(null);
+  let fakeProgress = $state(0);
+  let probedDuration = $state<number | null>(null);
+
+  // ─── HLS session ────────────────────────────────────────────────────────────
+
+  let hlsSessionID = $state<string | null>(null);
+  let hlsLoading = $state(false); // true while waiting for POST /api/hls/start
+
+  const activeStreamURL = $derived.by(() => {
+    if (needsHLS && hlsSessionID) {
+      return `http://localhost:6969/api/hls/${hlsSessionID}/master.m3u8`;
+    }
+    if (!needsHLS && audioTracks.length > 0) {
+      // No ffmpeg needed, stream directly
+      return isHash ? `http://localhost:6969/api/play?hash=${src}` : src;
+    }
+    return null; // not ready yet (probe still running)
+  });
+
+  // ─── Subtitle fine-tuning ───────────────────────────────────────────────────
 
   let subtitleSettings = $state<SubtitleSettings>({
     size: 100,
@@ -93,10 +117,9 @@
     offset: 0,
   });
   let subtitleSettingsOpen = $state(false);
-  let subtitleView = $state<"languages" | "tracks" | "settings">("languages");
-  let selectedLang = $state<string | null>(null);
+  let subtitleView = $state<"tracks" | "settings">("tracks");
 
-  // ─── Other state ──────────────────────────────────────────────────────────
+  // ─── Other state ────────────────────────────────────────────────────────────
 
   let logoUrl = $state<string | null>(null);
   let torrentProgress = $state(0);
@@ -107,32 +130,224 @@
     media ? (media.media_type === "tv" ? media.name : media.title) : "",
   );
 
-  const loadingProgress = $derived(fakeProgress);
+  // ─── Probe audio tracks ─────────────────────────────────────────────────────
 
-  let customControlsEl = $state<HTMLElement | null>(null);
-  let audioMenuOpen = $state(false);
-  let torrentMenuOpen = $state(false);
+  $effect(() => {
+    if (!src) return () => {};
+    audioTracks = [];
+    hlsSessionID = null;
+    canPlay = false;
+    error = null;
 
-  const showCustomControls = $derived(
-    canPlay &&
-      (controlsVisible ||
-        subtitleSettingsOpen ||
-        audioMenuOpen ||
-        torrentMenuOpen),
-  );
+    const probeURL = isHash
+      ? `http://localhost:6969/api/probe?hash=${src}`
+      : `http://localhost:6969/api/probe?url=${encodeURIComponent(src)}`;
 
-  // ─── Subtitle cue adjustments ─────────────────────────────────────────────
+    const controller = new AbortController();
+    fetch(probeURL, { signal: controller.signal })
+      .then((r) => r.json())
+      .then((data: { tracks: AudioTrackInfo[]; duration: number }) => {
+        audioTracks = data.tracks ?? [];
+        probedDuration = data.duration ?? null;
+        console.log(probedDuration);
+      })
+      .catch(() => {
+        audioTracks = [];
+        probedDuration = null;
+      });
 
-  const cueOriginalTimes = new WeakMap<
-    TextTrackCue,
-    { start: number; end: number }
-  >();
+    return () => controller.abort();
+  });
 
-  function applySubtitleAdjustments(track: TextTrack): void {
-    const run = (): void => {
-      if (!track.cues) return;
-      Array.from(track.cues).forEach((cue) => {
-        const v = cue as VTTCue;
+  // ─── Start HLS session when needed ──────────────────────────────────────────
+
+  $effect(() => {
+    if (!needsHLS || audioTracks.length === 0) return;
+
+    hlsLoading = true;
+    hlsSessionID = null;
+
+    fetch("http://localhost:6969/api/hls/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input: baseInput,
+        tracks: audioTracks,
+        duration: probedDuration,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d: { sessionID: string }) => {
+        hlsSessionID = d.sessionID;
+      })
+      .catch((e) => {
+        error = "Failed to start HLS session.";
+        console.error(e);
+      })
+      .finally(() => {
+        hlsLoading = false;
+      });
+  });
+
+  // ─── Update Vidstack source when activeStreamURL changes ────────────────────
+
+  $effect(() => {
+    if (!playerEl) return () => {};
+
+    function onProviderChange(e: any): void {
+      if (e.detail?.type === "hls") {
+        e.detail.library = Hls;
+        e.detail.config = {
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          maxBufferSize: 60000000,
+          appendErrorMaxRetry: 10,
+          fragLoadingMaxRetry: 10,
+          fragLoadingTimeOut: 60000,
+          manifestLoadingTimeOut: 60000,
+          levelLoadingTimeOut: 60000,
+        };
+
+        setTimeout(() => {
+          const hls = (e.detail as any).instance;
+          if (!hls) return;
+
+          // Only error handling is required now.
+          hls.on(Hls.Events.ERROR, (_: any, data: any) => {
+            if (data.fatal) {
+              if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                hls.recoverMediaError();
+              } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                hls.startLoad();
+              } else {
+                hls.destroy();
+              }
+            }
+
+            console.error(
+              "RAW HLS ERROR",
+              JSON.stringify(
+                {
+                  type: data.type,
+                  details: data.details,
+                  fatal: data.fatal,
+                  url: data.url ?? data.frag?.url,
+                },
+                null,
+                2,
+              ),
+            );
+          });
+        }, 500);
+      }
+    }
+
+    playerEl.addEventListener("provider-change", onProviderChange);
+    playerEl.addEventListener("can-play", onCanPlay);
+    playerEl.addEventListener("waiting", onWaiting);
+    playerEl.addEventListener("playing", onPlaying);
+    playerEl.addEventListener("media-error", onError);
+    playerEl.addEventListener("audio-track-change", onAudioTrackChange);
+    playerEl.addEventListener("text-track-change", syncTextTracks);
+
+    return () => {
+      playerEl.removeEventListener("provider-change", onProviderChange);
+      playerEl.removeEventListener("can-play", onCanPlay);
+      playerEl.removeEventListener("waiting", onWaiting);
+      playerEl.removeEventListener("playing", onPlaying);
+      playerEl.removeEventListener("media-error", onError);
+      playerEl.removeEventListener("audio-track-change", onAudioTrackChange);
+      playerEl.removeEventListener("text-track-change", syncTextTracks);
+    };
+  });
+
+  $effect(() => {
+    if (!playerEl || !activeStreamURL) return;
+    canPlay = false;
+    fakeProgress = 0;
+    error = null;
+
+    playerEl.src = activeStreamURL;
+
+    // Inject external subtitle tracks once the player has a source
+    if (externalSubtitles.length > 0) {
+      playerEl.textTracks.clear?.();
+      for (const sub of externalSubtitles) {
+        playerEl.textTracks.add({
+          kind: "subtitles",
+          src: `http://localhost:6969/api/subtitle-proxy?url=${encodeURIComponent(sub.url)}`,
+          srclang: sub.lang,
+          label: sub.lang.toUpperCase(),
+        });
+      }
+    }
+  });
+
+  // ─── Vidstack event handlers ─────────────────────────────────────────────────
+
+  function onCanPlay(): void {
+    canPlay = true;
+    waiting = false;
+    fakeProgress = 100;
+    syncAudioTracks();
+    syncTextTracks(); // add this
+  }
+
+  function onWaiting(): void {
+    if (canPlay) waiting = true;
+  }
+
+  function onPlaying(): void {
+    waiting = false;
+    canPlay = true;
+  }
+
+  function onError(e: CustomEvent): void {
+    error = e.detail?.message ?? "Failed to load stream.";
+    canPlay = false;
+    console.error("Vidstack error:", e.detail);
+  }
+
+  function onAudioTrackChange(): void {
+    syncAudioTracks();
+  }
+
+  function syncAudioTracks(): void {
+    if (!playerEl) return;
+    const tracks = playerEl.audioTracks as any[];
+    if (!tracks) return;
+    vidstackAudioTracks = Array.from(tracks).map((t: any) => ({
+      id: t.id,
+      label: t.label,
+      language: t.language,
+      selected: t.selected,
+    }));
+  }
+
+  function switchAudioTrack(id: string): void {
+    if (!playerEl) return;
+    const tracks = playerEl.audioTracks as any[];
+    if (!tracks) return;
+    for (const t of Array.from(tracks)) {
+      if ((t as any).id === id) (t as any).selected = true;
+    }
+    syncAudioTracks();
+  }
+
+  // ─── Subtitle cue adjustments ────────────────────────────────────────────────
+
+  const cueOriginalTimes = new WeakMap<any, { start: number; end: number }>();
+
+  function applySubtitleAdjustments(): void {
+    if (!playerEl) return;
+    const video = playerEl.querySelector?.("video");
+    if (!video) return;
+    for (const track of Array.from(video.textTracks as TextTrackList)) {
+      if ((track as TextTrack).mode !== "showing") continue;
+      const cues = (track as TextTrack).cues;
+      if (!cues) continue;
+      for (const cue of Array.from(cues)) {
+        const v = cue as any;
         v.snapToLines = false;
         v.line = subtitleSettings.line;
         if (!cueOriginalTimes.has(cue)) {
@@ -141,20 +356,15 @@
         const orig = cueOriginalTimes.get(cue)!;
         v.startTime = Math.max(0, orig.start + subtitleSettings.offset);
         v.endTime = Math.max(0, orig.end + subtitleSettings.offset);
-      });
-    };
-    run();
-    setTimeout(run, 600);
+      }
+    }
   }
 
-  function applyAdjustmentsToActiveTrack(): void {
-    if (!videoEl) return;
-    Array.from(videoEl.textTracks)
-      .filter((t) => t.mode === "showing")
-      .forEach(applySubtitleAdjustments);
-  }
+  $effect(() => {
+    const { line, offset, size, background } = subtitleSettings;
+    applySubtitleAdjustments();
+  });
 
-  // ::cue styles (font size + background)
   $effect(() => {
     const el = document.createElement("style");
     el.textContent = `::cue {
@@ -165,148 +375,7 @@
     return () => el.remove();
   });
 
-  // Re-apply whenever settings change
-  $effect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { line, offset } = subtitleSettings;
-    applyAdjustmentsToActiveTrack();
-  });
-
-  // ─── Plyr initialisation ──────────────────────────────────────────────────
-
-  $effect(() => {
-    if (!videoEl) return () => {};
-
-    const p = new Plyr(videoEl, {
-      controls: [
-        "play",
-        "rewind",
-        "fast-forward",
-        "progress",
-        "current-time",
-        "mute",
-        "volume",
-        "captions",
-        "settings",
-        "pip",
-        "fullscreen",
-      ],
-      settings: ["captions", "speed"],
-      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-      invertTime: false,
-      toggleInvert: false,
-      keyboard: { focused: true, global: true },
-      tooltips: { controls: true, seek: true },
-      displayDuration: true,
-      autoplay: true,
-      clickToPlay: true,
-    });
-
-    if (customControlsEl && p.elements.container) {
-      p.elements.container.appendChild(customControlsEl);
-    }
-
-    p.on("canplay", () => {
-      canPlay = true;
-      waiting = false;
-      fakeProgress = 100;
-    });
-    p.on("waiting", () => {
-      if (canPlay) waiting = true;
-    });
-    p.on("playing", () => {
-      playing = true;
-      canPlay = true;
-      waiting = false;
-    });
-    p.on("pause", () => {
-      playing = false;
-    });
-    p.on("error", () => {
-      error = "Failed to load stream.";
-      canPlay = false;
-    });
-    p.on("controlsshown", () => {
-      controlsVisible = true;
-    });
-    p.on("controlshidden", () => {
-      controlsVisible = false;
-    });
-    p.on("captionsenabled", applyAdjustmentsToActiveTrack);
-    p.on("languagechange", applyAdjustmentsToActiveTrack);
-
-    plyr = p;
-    return () => {
-      p.destroy();
-      plyr = null;
-    };
-  });
-
-  // ─── Source update (reacts to activeStreamURL or externalSubtitles) ───────
-
-  $effect(() => {
-    if (!plyr) return;
-
-    // We want this to re-run if activeStreamURL or externalSubtitles change
-    const url = activeStreamURL;
-    const subs = externalSubtitles;
-
-    canPlay = false;
-    fakeProgress = 0;
-    error = null;
-
-    plyr.source = {
-      type: "video",
-      sources: [{ src: url, type: "video/mp4" }],
-      tracks: subs.map((sub) => ({
-        kind: "subtitles" as const,
-        src: `http://localhost:6969/api/subtitle-proxy?url=${encodeURIComponent(sub.url)}`,
-        srclang: sub.lang,
-        label: sub.lang.toUpperCase(),
-        default: false,
-      })),
-    };
-
-    // Force play after source is loaded
-    plyr.once("canplay", () => {
-      plyr?.play();
-    });
-  });
-
-  // ─── Audio probe ──────────────────────────────────────────────────────────
-
-  $effect(() => {
-    if (!src) return () => {};
-    audioTracks = [];
-    activeAudioTrack = 0;
-
-    const probeURL = isHash
-      ? `http://localhost:6969/api/probe?hash=${src}`
-      : `http://localhost:6969/api/probe?url=${encodeURIComponent(src)}`;
-
-    const controller = new AbortController();
-    fetch(probeURL, { signal: controller.signal })
-      .then((r) => r.json())
-      .then((tracks: AudioTrackInfo[]) => {
-        audioTracks = tracks;
-      })
-      .catch(() => {
-        audioTracks = [];
-      });
-
-    return () => controller.abort();
-  });
-
-  function setAudioTrack(index: number): void {
-    if (index === activeAudioTrack || !plyr) return;
-    const savedTime = plyr.currentTime;
-    activeAudioTrack = index;
-    plyr.once("canplay", () => {
-      if (plyr) plyr.currentTime = savedTime;
-    });
-  }
-
-  // ─── Logo fetch ───────────────────────────────────────────────────────────
+  // ─── Logo fetch ──────────────────────────────────────────────────────────────
 
   $effect(() => {
     if (!media) return;
@@ -319,7 +388,7 @@
       });
   });
 
-  // ─── Fake loading progress animation ─────────────────────────────────────
+  // ─── Fake loading bar animation ───────────────────────────────────────────────
 
   $effect(() => {
     if (canPlay) {
@@ -327,48 +396,30 @@
       return () => {};
     }
     fakeProgress = 0;
-    const interval = setInterval(() => {
-      const target = 85;
-      const step = fakeProgress < 40 ? 0.03 : 0.01;
-      fakeProgress += (target - fakeProgress) * step;
+    const id = setInterval(() => {
+      fakeProgress += (85 - fakeProgress) * (fakeProgress < 40 ? 0.03 : 0.01);
     }, 100);
-    return () => clearInterval(interval);
+    return () => clearInterval(id);
   });
 
-  // ─── Torrent progress polling ─────────────────────────────────────────────
+  // ─── Torrent progress polling ────────────────────────────────────────────────
 
   $effect(() => {
     if (!isHash) return () => {};
-    const interval = setInterval(async () => {
-      const res = await fetch(`http://localhost:6969/api/progress?hash=${src}`);
-      const d = await res.json();
+    const id = setInterval(async () => {
+      const d = await fetch(
+        `http://localhost:6969/api/progress?hash=${src}`,
+      ).then((r) => r.json());
       if (d.found) {
         torrentProgress = d.progress ?? 0;
         peers = d.peers ?? 0;
         torrentSpeed = d.speed ?? "0 B/s";
       }
     }, 2000);
-    return () => clearInterval(interval);
+    return () => clearInterval(id);
   });
 
-  // ─── Subtitle panel helpers ───────────────────────────────────────────────
-
-  const subtitleTracks = $derived.by(() => {
-    if (!videoEl) return [] as TextTrack[];
-    return Array.from(videoEl.textTracks).filter(
-      (t) => t.kind === "subtitles" || t.kind === "captions",
-    );
-  });
-
-  const tracksByLang = $derived.by(() => {
-    const map = new SvelteMap<string, { track: TextTrack; index: number }[]>();
-    subtitleTracks.forEach((track, i) => {
-      const lang = track.language || track.label || "unknown";
-      if (!map.has(lang)) map.set(lang, []);
-      map.get(lang)!.push({ track, index: i });
-    });
-    return map;
-  });
+  // ─── Helpers ──────────────────────────────────────────────────────────────────
 
   function langName(code: string): string {
     try {
@@ -380,48 +431,438 @@
     }
   }
 
-  function audioTrackLabel(track: AudioTrackInfo, index: number): string {
-    if (track.title) return track.title;
-    if (track.language) return langName(track.language);
-    return `Track ${index + 1}`;
+  const loadingMessage = $derived.by(() => {
+    if (hlsLoading) return "Preparing tracks…";
+    if (needsHLS && !hlsSessionID) return "Starting stream…";
+    if (isHash)
+      return peers > 0
+        ? `Connecting · ${peers} peers · ${torrentSpeed}`
+        : "Connecting to peers…";
+    return "Buffering…";
+  });
+
+  let textTracks = $state<
+    { id: string; label: string; language: string; mode: string }[]
+  >([]);
+
+  function syncTextTracks(): void {
+    if (!playerEl) return;
+    const tracks = Array.from(playerEl.textTracks as TextTrackList);
+    textTracks = tracks.map((t: any) => ({
+      id: t.id,
+      label: t.label || t.language || "Unknown",
+      language: t.language,
+      mode: t.mode,
+    }));
+  }
+
+  function selectTextTrack(id: string): void {
+    if (!playerEl) return;
+    for (const t of Array.from(playerEl.textTracks as TextTrackList) as any[]) {
+      t.mode = t.id === id ? "showing" : "disabled";
+    }
+    syncTextTracks();
   }
 </script>
 
-<!-- ─── Template ──────────────────────────────────────────────────────────── -->
+<!-- ─── Template ──────────────────────────────────────────────────────────────── -->
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="plyr-wrap relative h-full w-full bg-black">
-  <!-- Plyr wraps this element and builds its control bar around it -->
-  <!-- svelte-ignore a11y_media_has_caption -->
-  <video
-    bind:this={videoEl}
-    crossorigin="anonymous"
-    playsinline
-    class="h-full w-full"
-  >
-  </video>
+<div class="relative h-full w-full bg-black">
+  <!-- Vidstack player — only mounted once we have a URL to give it -->
+  {#if activeStreamURL}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <media-player
+      bind:this={playerEl}
+      autoplay
+      playsinline
+      streamType="on-demand"
+      class="h-full w-full"
+    >
+      <media-provider class="h-full w-full"></media-provider>
 
-  <!-- ── Error ──────────────────────────────────────────────────────────── -->
+      <media-controls
+        class="absolute inset-0 z-10 flex flex-col justify-end bg-linear-to-t from-black/80 via-black/10 to-transparent opacity-0 transition-opacity duration-200 data-visible:opacity-100"
+      >
+        <div
+          class="pointer-events-auto flex w-full items-center gap-2 px-3 pb-3 text-white"
+        >
+          <media-play-button
+            class="group flex size-8 shrink-0 cursor-pointer items-center justify-center rounded transition hover:bg-white/20"
+          >
+            <Pause class="block size-4 group-data-paused:hidden" />
+            <Play class="hidden size-4 group-data-paused:block" />
+          </media-play-button>
+
+          <media-mute-button
+            class="group flex size-8 shrink-0 cursor-pointer items-center justify-center rounded transition hover:bg-white/20"
+          >
+            <VolumeOff class="hidden size-4 group-data-muted:block" />
+            <Volume2 class="block size-4 group-data-muted:hidden" />
+          </media-mute-button>
+
+          <media-volume-slider
+            class="group relative flex h-6 w-20 cursor-pointer touch-none items-center outline-none select-none"
+          >
+            <div
+              class="relative h-1 w-full rounded-sm bg-white/30 transition-[height] group-data-focus:h-1.5"
+            >
+              <div
+                class="absolute h-full w-(--slider-fill) rounded-sm bg-white"
+              ></div>
+            </div>
+          </media-volume-slider>
+
+          <media-time class="text-sm tabular-nums" type="current"></media-time>
+          <span class="text-sm text-white/50">/</span>
+          <media-time class="text-sm text-white/70 tabular-nums" type="duration"
+          ></media-time>
+
+          <media-time-slider
+            class="group relative flex h-6 flex-1 cursor-pointer touch-none items-center outline-none select-none"
+          >
+            <div
+              class="relative h-1 w-full rounded-sm bg-white/30 transition-[height] group-data-focus:h-1.5"
+            >
+              <div
+                class="absolute h-full w-(--slider-fill) rounded-sm bg-white"
+              ></div>
+              <div
+                class="absolute h-full w-(--slider-buffered) rounded-sm bg-white/40"
+              ></div>
+            </div>
+          </media-time-slider>
+
+          <!-- ── Custom: audio track selector ── -->
+          {#if vidstackAudioTracks.length > 1}
+            <Popover.Root>
+              <Popover.Trigger
+                onclick={(e) => e.stopPropagation()}
+                class="flex items-center gap-1.5 rounded-md px-2 py-1 text-white/70 transition hover:bg-white/10 hover:text-white"
+              >
+                <Headphones class="size-4" />
+                <span class="text-xs">
+                  {vidstackAudioTracks.find((t) => t.selected)?.label ??
+                    "Audio"}
+                </span>
+              </Popover.Trigger>
+              <Popover.Content side="top" class="w-52 p-0">
+                <div class="border-b border-border px-3 py-2">
+                  <span class="text-xs font-medium text-muted-foreground"
+                    >Audio Track</span
+                  >
+                </div>
+                <div class="p-1">
+                  {#each vidstackAudioTracks as track (track.id)}
+                    <button
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        switchAudioTrack(track.id);
+                      }}
+                      class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {track.selected
+                        ? 'font-semibold'
+                        : ''}"
+                    >
+                      <span class="flex-1 truncate">
+                        {track.label || langName(track.language) || "Unknown"}
+                      </span>
+                      {#if track.selected}
+                        <span class="size-1.5 shrink-0 rounded-full bg-white"
+                        ></span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              </Popover.Content>
+            </Popover.Root>
+          {/if}
+
+          <!-- ── Custom: subtitle fine-tuning ── -->
+          <Popover.Root
+            bind:open={subtitleSettingsOpen}
+            onOpenChange={() => (subtitleView = "tracks")}
+          >
+            <Popover.Trigger
+              onclick={(e) => e.stopPropagation()}
+              class="flex size-8 items-center justify-center rounded transition hover:bg-white/10 {subtitleSettingsOpen
+                ? 'text-white'
+                : 'text-white/50'}"
+              aria-label="Subtitle settings"
+            >
+              <Settings class="size-4" />
+            </Popover.Trigger>
+
+            <Popover.Content side="top" class="w-52 p-0">
+              <div
+                class="flex items-center justify-between border-b border-border px-3 py-2"
+              >
+                <span class="text-xs font-medium text-muted-foreground">
+                  {subtitleView === "settings"
+                    ? "Subtitle Settings"
+                    : "Subtitles"}
+                </span>
+                {#if subtitleView === "tracks"}
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      subtitleView = "settings";
+                    }}
+                    class="rounded p-0.5 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+                  >
+                    <Settings class="size-3.5" />
+                  </button>
+                {:else}
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      subtitleView = "tracks";
+                    }}
+                    class="rounded p-0.5 text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+                  >
+                    <ChevronLeft class="size-3.5" />
+                  </button>
+                {/if}
+              </div>
+
+              {#if subtitleView === "settings"}
+                <div class="space-y-4 p-3">
+                  <!-- Font size -->
+                  <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                      <span class="text-muted-foreground">Font size</span>
+                      <span>{subtitleSettings.size}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="50"
+                      max="200"
+                      step="10"
+                      bind:value={subtitleSettings.size}
+                      onclick={(e) => e.stopPropagation()}
+                      class="w-full accent-white"
+                    />
+                  </div>
+                  <!-- Position -->
+                  <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                      <span class="text-muted-foreground">Position</span>
+                      <span>{subtitleSettings.line}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="95"
+                      step="5"
+                      bind:value={subtitleSettings.line}
+                      onclick={(e) => e.stopPropagation()}
+                      class="w-full accent-white"
+                    />
+                  </div>
+                  <!-- Background -->
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-muted-foreground">Background</span>
+                    <button
+                      aria-label="bg"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        subtitleSettings.background =
+                          !subtitleSettings.background;
+                      }}
+                      class="h-5 w-9 rounded-full transition-colors {subtitleSettings.background
+                        ? 'bg-white'
+                        : 'bg-white/20'}"
+                    >
+                      <span
+                        class="block size-4 translate-x-0.5 rounded-full bg-black transition-transform {subtitleSettings.background
+                          ? 'translate-x-4'
+                          : ''}"
+                      ></span>
+                    </button>
+                  </div>
+                  <!-- Offset -->
+                  <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs">
+                      <span class="text-muted-foreground">Time offset</span>
+                      <span
+                        class={subtitleSettings.offset !== 0
+                          ? "text-yellow-400"
+                          : ""}
+                      >
+                        {subtitleSettings.offset > 0
+                          ? "+"
+                          : ""}{subtitleSettings.offset.toFixed(1)}s
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          subtitleSettings.offset = Math.max(
+                            -30,
+                            +(subtitleSettings.offset - 0.5).toFixed(1),
+                          );
+                        }}
+                        class="flex h-6 w-6 items-center justify-center rounded bg-secondary hover:bg-secondary/80"
+                        >−</button
+                      >
+                      <div class="h-1 flex-1 rounded-full bg-white/20">
+                        <div
+                          class="h-full rounded-full bg-yellow-400 transition-all"
+                          style="width: {((subtitleSettings.offset + 30) / 60) *
+                            100}%"
+                        ></div>
+                      </div>
+                      <button
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          subtitleSettings.offset = Math.min(
+                            30,
+                            +(subtitleSettings.offset + 0.5).toFixed(1),
+                          );
+                        }}
+                        class="flex h-6 w-6 items-center justify-center rounded bg-secondary hover:bg-secondary/80"
+                        >+</button
+                      >
+                    </div>
+                    {#if subtitleSettings.offset !== 0}
+                      <button
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          subtitleSettings.offset = 0;
+                        }}
+                        class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
+                        >Reset</button
+                      >
+                    {/if}
+                  </div>
+                </div>
+              {:else}
+                <div class="p-1">
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      selectTextTrack("");
+                    }}
+                    class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {textTracks.every(
+                      (t) => t.mode !== 'showing',
+                    )
+                      ? 'font-semibold'
+                      : ''}"
+                  >
+                    Off
+                  </button>
+                  {#each textTracks as track (track.id)}
+                    <button
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        selectTextTrack(track.id);
+                        subtitleSettingsOpen = false;
+                      }}
+                      class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {track.mode ===
+                      'showing'
+                        ? 'font-semibold'
+                        : ''}"
+                    >
+                      <span class="flex-1 truncate">{track.label}</span>
+                      {#if track.mode === "showing"}
+                        <span class="size-1.5 shrink-0 rounded-full bg-white"
+                        ></span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </Popover.Content>
+          </Popover.Root>
+
+          <!-- Torrent progress indicator -->
+          {#if isHash && torrentProgress > 0 && torrentProgress < 100}
+            <Popover.Root>
+              <Popover.Trigger
+                onclick={(e) => e.stopPropagation()}
+                class="flex items-center gap-1.5 rounded-md px-2 py-1 text-white/70 transition hover:bg-white/10 hover:text-white"
+              >
+                <svg viewBox="0 0 12 12" class="size-3.5">
+                  <circle
+                    cx="6"
+                    cy="6"
+                    r="5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    class="text-white/20"
+                  />
+                  <circle
+                    cx="6"
+                    cy="6"
+                    r="5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-dasharray="{(torrentProgress / 100) * 31.4} 31.4"
+                    stroke-linecap="round"
+                    transform="rotate(-90 6 6)"
+                    class="text-green-400 transition-all duration-500"
+                  />
+                </svg>
+                <span class="text-xs">{torrentProgress.toFixed(0)}%</span>
+              </Popover.Trigger>
+              <Popover.Content class="w-52" side="top">
+                <p class="mb-2 text-sm font-medium">Download Progress</p>
+                <div class="mb-1 h-1.5 w-full rounded-full bg-secondary">
+                  <div
+                    class="h-full rounded-full bg-green-500 transition-all"
+                    style="width: {torrentProgress}%"
+                  ></div>
+                </div>
+                <div class="flex justify-between text-xs text-muted-foreground">
+                  <span>{torrentProgress.toFixed(1)}%</span>
+                  {#if peers > 0}<span>{peers} peers</span>{/if}
+                </div>
+                <div class="mt-1 text-xs text-muted-foreground">
+                  ↓ {torrentSpeed}
+                </div>
+              </Popover.Content>
+            </Popover.Root>
+          {/if}
+
+          <media-fullscreen-button
+            class="group flex size-8 shrink-0 cursor-pointer items-center justify-center rounded transition hover:bg-white/20"
+          >
+            <Minimize class="hidden size-4 group-data-active:block" />
+            <Maximize class="block size-4 group-data-active:hidden" />
+          </media-fullscreen-button>
+        </div>
+      </media-controls>
+    </media-player>
+  {/if}
+
+  <!-- ── Error ─────────────────────────────────────────────────────────────── -->
   {#if error}
     <div
       class="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
     >
-      <p class="text-sm text-red-400">{error}</p>
+      <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">{error}</p>
     </div>
   {/if}
 
-  <!-- ── Loading screen (covers Plyr entirely until canPlay) ────────────── -->
-  {#if !canPlay || waiting}
+  <!-- ── Buffering spinner (mid-playback) ──────────────────────────────────── -->
+  {#if waiting && canPlay}
     <div
-      class="absolute inset-0 z-20 flex flex-col items-center justify-center transition-opacity duration-700 {canPlay &&
-      !waiting
-        ? 'pointer-events-none opacity-0'
-        : ''}"
+      class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"
+    >
+      <Spinner class="size-14" />
+    </div>
+  {/if}
+
+  <!-- ── Loading screen ────────────────────────────────────────────────────── -->
+  {#if !canPlay}
+    <div
+      class="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center transition-opacity duration-700"
     >
       {#if media?.poster_path}
         <div
           class="absolute inset-0 scale-110 bg-cover bg-center"
-          style="background-image: url('{media.poster_path}'); filter: blur(40px); opacity: 1;"
+          style="background-image: url('{media.poster_path}'); filter: blur(40px); opacity: 0.4;"
         ></div>
       {/if}
       <div class="absolute inset-0 bg-black/60"></div>
@@ -436,11 +877,8 @@
           <img
             src={logoUrl}
             alt={title}
-            class="col-start-1 row-start-1 max-h-32 max-w-sm object-contain transition-all duration-500 {fakeProgress >
-            40
-              ? 'animate-pulse'
-              : ''}"
-            style="clip-path: inset(0 {100 - loadingProgress}% 0 0)"
+            class="col-start-1 row-start-1 max-h-32 max-w-sm object-contain transition-all duration-500"
+            style="clip-path: inset(0 {100 - fakeProgress}% 0 0)"
           />
         </div>
       {:else if title}
@@ -449,229 +887,18 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
+            >{title}</span
           >
-            {title}
-          </span>
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"
-            style="clip-path: inset(0 {100 - loadingProgress}% 0 0)"
+            style="clip-path: inset(0 {100 - fakeProgress}% 0 0)">{title}</span
           >
-            {title}
-          </span>
         </div>
       {:else}
         <Spinner class="relative z-10 size-14" />
       {/if}
 
-      <div class="relative z-10 mt-6 text-sm text-white/50">
-        {#if needsFFmpeg && fakeProgress < 5}
-          Preparing audio track...
-        {:else if isHash}
-          {#if peers > 0}
-            Connecting · {peers} peers · {torrentSpeed}
-          {:else}
-            Connecting to peers...
-          {/if}
-        {:else}
-          Buffering...
-        {/if}
-      </div>
+      <p class="relative z-10 mt-6 text-sm text-white/50">{loadingMessage}</p>
     </div>
   {/if}
-
-  <!-- ── Buffering spinner (shown mid-playback while seeking etc.) ─────── -->
-  {#if waiting && canPlay}
-    <div
-      class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
-    >
-      <Spinner class="size-14" />
-    </div>
-  {/if}
-
-  <!-- ── Custom overlay: audio track + subtitle fine-tuning ────────────── -->
-  <!--
-    Positioned at bottom-[52px] so it sits just above Plyr's 44px control bar.
-    Visibility synced with Plyr's own controlsshown / controlshidden events.
-  -->
-  <div
-    bind:this={customControlsEl}
-    class="absolute right-3 bottom-13 z-30 flex items-center gap-1 transition-opacity duration-200 {showCustomControls
-      ? 'pointer-events-auto'
-      : 'pointer-events-none'}"
-    style="opacity: {showCustomControls ? 1 : 0}"
-  >
-    {#if audioTracks.length > 1}
-      <div>
-        <Popover.Root bind:open={audioMenuOpen}>
-          <Popover.Trigger
-            onclick={(e) => e.stopPropagation()}
-            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-          >
-            <Headphones class="size-4" />
-            <span class="text-xs">
-              {audioTrackLabel(audioTracks[activeAudioTrack], activeAudioTrack)}
-            </span>
-          </Popover.Trigger>
-          <Popover.Content side="top" class="w-52 p-0">
-            <div class="border-b border-border px-3 py-2">
-              <span class="text-xs font-medium text-muted-foreground"
-                >Audio Track</span
-              >
-            </div>
-            <div class="py-1">
-              {#each audioTracks as track, i (i)}
-                <button
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    setAudioTrack(i);
-                  }}
-                  class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {activeAudioTrack ===
-                  i
-                    ? 'font-semibold'
-                    : ''}"
-                >
-                  <span class="flex-1 truncate"
-                    >{audioTrackLabel(track, i)}</span
-                  >
-                  <span class="text-xs text-muted-foreground uppercase"
-                    >{track.codec}</span
-                  >
-                  {#if activeAudioTrack === i}
-                    <span class="size-1.5 shrink-0 rounded-full bg-white"
-                    ></span>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-          </Popover.Content>
-        </Popover.Root>
-      </div>
-    {/if}
-
-    {#if subtitleTracks.length > 0}
-      <div>
-        <Popover.Root
-          bind:open={subtitleSettingsOpen}
-          onOpenChange={() => {
-            subtitleView = "languages";
-            selectedLang = null;
-          }}
-        >
-          <Popover.Trigger
-            onclick={(e) => e.stopPropagation()}
-            class="flex items-center justify-center rounded-md p-1.5 transition-colors hover:bg-white/10 {subtitleSettingsOpen
-              ? 'text-white'
-              : 'text-white/50'}"
-            aria-label="Subtitle settings"
-          >
-            <Settings class="size-4" />
-          </Popover.Trigger>
-        </Popover.Root>
-      </div>
-    {/if}
-
-    {#if isHash && torrentProgress > 0 && torrentProgress < 100}
-      <div>
-        <Popover.Root bind:open={torrentMenuOpen}>
-          <Popover.Trigger
-            onclick={(e) => e.stopPropagation()}
-            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-          >
-            <svg viewBox="0 0 12 12" class="size-3.5">
-              <circle
-                cx="6"
-                cy="6"
-                r="5"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                class="text-white/20"
-              />
-              <circle
-                cx="6"
-                cy="6"
-                r="5"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-dasharray="{(torrentProgress / 100) * 31.4} 31.4"
-                stroke-linecap="round"
-                transform="rotate(-90 6 6)"
-                class="text-green-400 transition-all duration-500"
-              />
-            </svg>
-            <span class="text-xs">{torrentProgress.toFixed(0)}%</span>
-          </Popover.Trigger>
-          <Popover.Content class="w-52" side="top">
-            <p class="mb-2 text-sm font-medium">Download Progress</p>
-            <div class="mb-1 h-1.5 w-full rounded-full bg-secondary">
-              <div
-                class="h-full rounded-full bg-green-500 transition-all duration-500"
-                style="width: {torrentProgress}%"
-              ></div>
-            </div>
-            <div class="flex justify-between text-xs text-muted-foreground">
-              <span>{torrentProgress.toFixed(1)}%</span>
-              {#if peers > 0}<span>{peers} peers</span>{/if}
-            </div>
-            <div class="mt-1 text-xs text-muted-foreground">
-              ↓ {torrentSpeed}
-            </div>
-          </Popover.Content>
-        </Popover.Root>
-      </div>
-    {/if}
-  </div>
 </div>
-
-<style>
-  /*
-   * Make Plyr fill the parent container.
-   * Plyr wraps <video> in .plyr > .plyr__video-wrapper, so we need these to
-   * inherit dimensions rather than size to the video's intrinsic size.
-   */
-  .plyr-wrap :global(.plyr) {
-    height: 100%;
-    width: 100%;
-  }
-
-  .plyr-wrap :global(.plyr__caption) {
-    font-family: "Open Sans", sans-serif;
-    font-weight: 500;
-    font-size: var(--text-2xl);
-    letter-spacing: -0.01em;
-    border-radius: 4px;
-    padding: 4px 12px;
-  }
-
-  /* ── Plyr theme overrides ── */
-  .plyr-wrap :global(.plyr--video) {
-    --plyr-color-main: rgba(255, 255, 255, 0.9);
-    --plyr-video-background: transparent;
-    --plyr-font-family: inherit;
-
-    /* Progress / volume fill */
-    --plyr-range-fill-background: rgba(255, 255, 255, 0.9);
-
-    /* Control bar gradient — matches the existing design */
-    --plyr-video-controls-background: linear-gradient(
-      rgba(0, 0, 0, 0),
-      rgba(0, 0, 0, 0.75)
-    );
-
-    /* Tooltips */
-    --plyr-tooltip-background: rgba(0, 0, 0, 0.9);
-    --plyr-tooltip-color: #fff;
-    --plyr-tooltip-radius: 6px;
-
-    /* Control sizing */
-    --plyr-control-icon-size: 17px;
-    --plyr-control-spacing: 10px;
-  }
-
-  /* Keep the loading overlay above Plyr's built-in loading spinner */
-  .plyr-wrap :global(.plyr__poster),
-  .plyr-wrap :global(.plyr__preview-thumb) {
-    display: none;
-  }
-</style>

@@ -2,11 +2,15 @@
   import type { Media } from "$lib/types/tmdb";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { animate } from "animejs";
+  import "vidstack/bundle";
+  import "vidstack/svelte";
+  import "vidstack/player/styles/base.css";
   import { ChevronDown, Play, Star, X } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import { countryName, qualityClass } from "$lib/utils";
+  import PlayerSimple from "./PlayerSimple.svelte";
 
   let {
     media,
@@ -99,7 +103,7 @@
       left: ${left}px;
       translate: ${translateX} -50%;
       width: ${cardWidth}px;
-      pointer-events: auto; /* Ensure it stays interactive */
+      pointer-events: auto;
     `;
   }
 
@@ -141,11 +145,10 @@
             })
             .filter((url): url is string => url !== null && url.trim() !== "");
         }
-        clips = urls; // will be empty array if none found
+        clips = urls;
       })
       .catch((err) => console.error("Error fetching clips:", err));
 
-    // Fetch trailer
     fetch(
       `http://localhost:6969/api/trailer?id=${media.id}&type=${media.media_type}`,
     )
@@ -218,7 +221,6 @@
 
   function onHover(): void {
     if (expanded) return;
-    // Delay the hover to prevent triggering on quick mouse movements
     hoverTimeout = setTimeout(() => {
       computeHoverStyle();
       hovered = true;
@@ -227,7 +229,7 @@
   }
 
   function onLeave(): void {
-    clearTimeout(hoverTimeout); // Cancel if user leaves quickly
+    clearTimeout(hoverTimeout);
     if (expanded) return;
     if (cardEl) {
       animate(cardEl, {
@@ -285,18 +287,17 @@
       : media.release_date
     )?.slice(0, 4),
   );
+
   const videoUrl = $derived.by(() => {
-    // Clips: only if array exists AND has at least one item
     if (clips && clips.length > 0) {
       const randomIndex = Math.floor(Math.random() * clips.length);
       const clipUrl = clips[randomIndex];
       if (clipUrl && typeof clipUrl === "string" && clipUrl.trim() !== "") {
-        return `${clipUrl}?autoplay=1&controls=0&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=1`;
+        return clipUrl;
       }
     }
-    // Trailer: only if it's a non‑empty string
     if (trailer && typeof trailer === "string" && trailer.trim() !== "") {
-      return `${trailer}?autoplay=1&controls=0&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=1`;
+      return trailer;
     }
     return null;
   });
@@ -338,7 +339,6 @@
           {quality.toUpperCase()}
         </span>
       {/if}
-      <!-- Season count badge for TV -->
       {#if media.media_type === "tv" && numberOfSeasons !== null}
         <span
           class="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
@@ -357,17 +357,15 @@
       onclick={(e) => expanded && e.stopPropagation()}
       onkeydown={(e) => expanded && e.stopPropagation()}
       style="opacity: 0; transform: scale(0.85); {expanded
-    ? 'position: fixed; top: 50%; left: 50%; translate: -50% -50%; width: min(860px, 92vw); max-height: 90vh; overflow-y: auto;'
-    : hoverCardStyle}"
+        ? 'position: fixed; top: 50%; left: 50%; translate: -50% -50%; width: min(860px, 92vw); max-height: 90vh; overflow-y: auto;'
+        : hoverCardStyle}"
     >
       {#if videoUrl}
-        <iframe
+        <PlayerSimple
           src={videoUrl}
-          title="{title} trailer"
-          class="aspect-video w-full"
-          allow="autoplay; encrypted-media"
-        >
-        </iframe>
+          controls={expanded}
+          bg={media.poster_path}
+        />
       {:else}
         <img
           src={media.poster_path}
@@ -377,7 +375,6 @@
       {/if}
 
       <span class="flex flex-col gap-2 {expanded ? 'p-5' : 'p-3'}">
-        <!-- Title row -->
         <span
           class="flex w-full items-baseline justify-between {expanded
             ? 'pb-3'
@@ -401,7 +398,6 @@
 
         <Separator />
 
-        <!-- Rating + runtime + seasons/episodes -->
         <span class="flex flex-col gap-2 pr-3">
           <span class="flex flex-wrap items-center gap-2">
             {#if ageRating}
@@ -453,10 +449,8 @@
           {/if}
         </span>
 
-        <!-- Overview -->
         {#if expanded}
           <div class="grid grid-cols-[1fr_auto] gap-x-3 gap-y-3">
-            <!-- Left: overview + similar -->
             <div class="flex flex-col justify-between gap-3 rounded-lg">
               {#each overviewParagraphs as paragraph, i (i)}
                 <p class="text-sm leading-relaxed text-muted-foreground">
@@ -497,7 +491,6 @@
               {/if}
             </div>
 
-            <!-- Right: cast + keywords -->
             <div class="flex w-48 flex-col gap-3">
               {#if cast.length}
                 <div class="rounded-lg border border-border">
@@ -548,7 +541,6 @@
           >
         {/if}
 
-        <!-- Watch / expand buttons -->
         <span class="flex w-full pt-0.5">
           <ButtonGroup.Root class="flex w-full">
             <Button

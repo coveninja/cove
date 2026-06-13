@@ -7,8 +7,8 @@
     http-equiv="Content-Security-Policy"
     content="
       default-src 'self';
-      connect-src 'self' http://localhost:6969 https://cdn.plyr.io;
-      img-src 'self' https://image.tmdb.org data: https://i.ytimg.com;
+      connect-src 'self' http://localhost:6969 https://cdn.plyr.io https://*.ytimg.com https://*.youtube.com https://api.iconify.design https://api.unisvg.com https://api.simplesvg.com;
+      img-src 'self' https://image.tmdb.org data: https://*.ytimg.com https://*.youtube.com;
       media-src 'self' http://localhost:6969 blob: https://cdn.plyr.io;
       script-src 'self' 'unsafe-inline';
       style-src 'self' 'unsafe-inline';

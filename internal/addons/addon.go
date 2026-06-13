@@ -122,7 +122,12 @@ func FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, e
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
 
 	var data struct {
 		Subtitles []Subtitle `json:"subtitles"`

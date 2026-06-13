@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Arcadyi/cove/internal/addons"
 	"github.com/Arcadyi/cove/internal/player"
@@ -21,6 +22,15 @@ import (
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// Answer preflight and stop — don't call next
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		next(w, r)
 	}
 }
@@ -91,7 +101,11 @@ func main() {
 			allSubs = []addons.Subtitle{}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(allSubs)
+		err = json.NewEncoder(w).Encode(allSubs)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 	}))
 
 	http.HandleFunc("/api/debug", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +273,10 @@ func main() {
 					return
 				}
 				mu.Lock()
-				enc.Encode(entry{ID: strconv.Itoa(tmdbID), Quality: q})
+				err = enc.Encode(entry{ID: strconv.Itoa(tmdbID), Quality: q})
+				if err != nil {
+					log.Println(err)
+				}
 				if canFlush {
 					flusher.Flush()
 				}
@@ -309,6 +326,13 @@ func main() {
 	if err := player.Init(); err != nil {
 		log.Fatal("could not init torrent client:", err)
 	}
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			player.CleanupHLSSessions()
+		}
+	}()
 
 	http.HandleFunc("/api/probe", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
@@ -326,15 +350,16 @@ func main() {
 			return
 		}
 
-		tracks, err := player.ProbeAudioTracks(probeInput)
+		result, err := player.ProbeAudioTracks(probeInput)
 		if err != nil {
-			log.Println("probe error:", err)
-			tracks = []player.AudioTrackInfo{} // return empty rather than erroring
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(tracks); err != nil {
+		err = json.NewEncoder(w).Encode(result)
+		if err != nil {
 			log.Println(err)
+			return
 		}
 	}))
 
@@ -342,6 +367,7 @@ func main() {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
 		audioStr := r.URL.Query().Get("audio")
+		audioCodec := r.URL.Query().Get("codec")
 
 		if audioStr != "" {
 			audioIndex, err := strconv.Atoi(audioStr)
@@ -357,7 +383,7 @@ func main() {
 					http.Error(w, "missing hash or url", http.StatusBadRequest)
 					return
 				}
-				player.StreamWithAudio(input, audioIndex, w, r)
+				player.StreamWithAudio(input, audioIndex, audioCodec, w, r)
 				return
 			}
 		}
@@ -442,6 +468,40 @@ func main() {
 		if err != nil {
 			log.Println(err)
 		}
+	}))
+
+	// POST /api/hls/start — starts an HLS session, returns the session ID
+	http.HandleFunc("/api/hls/start", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input    string                  `json:"input"`
+			Tracks   []player.AudioTrackInfo `json:"tracks"`
+			Duration float64                 `json:"duration"` // Added duration
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		sessionID, err := player.StartHLSSession(body.Input, body.Tracks, body.Duration)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(map[string]string{"sessionID": sessionID})
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	// GET /api/hls/{sessionID}/{file} — serves master playlist, sub-playlists, and segments
+	http.HandleFunc("/api/hls/", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/hls/"), "/", 2)
+		if len(parts) != 2 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		player.ServeHLSFile(parts[0], parts[1], w, r)
 	}))
 
 	http.HandleFunc("/api/details", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -585,7 +645,12 @@ func main() {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func(Body io.ReadCloser) {
+			err := Body.Close()
+			if err != nil {
+				log.Println(err)
+			}
+		}(resp.Body)
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -601,7 +666,11 @@ func main() {
 		if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
 			content = SrtToVTT(content)
 		}
-		fmt.Fprint(w, content)
+		_, err = fmt.Fprint(w, content)
+		if err != nil {
+			log.Println(err)
+			return
+		}
 	}))
 
 	log.Println("Server Running on: 6969")

@@ -13,6 +13,7 @@
     "paths": {
       "$lib": ["./src/lib"],
       "$lib/*": ["./src/lib/*"]
-    }
+    },
+    "types": ["vidstack/svelte"]
   }
 }
