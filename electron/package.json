@@ -26,7 +26,8 @@
     "animejs": "^4.4.1",
     "electron-updater": "^6.3.9",
     "lucide-svelte": "^1.0.1",
-    "mode-watcher": "^1.1.0"
+    "mode-watcher": "^1.1.0",
+    "plyr": "^3.8.4"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

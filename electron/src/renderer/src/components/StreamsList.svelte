@@ -3,12 +3,7 @@
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import type { Stream } from "$lib/types/addons";
   import * as Select from "$lib/components/ui/select/index.js";
-  import {
-    ListFilter,
-    Play,
-    Settings2,
-    ChevronLeft,
-  } from "lucide-svelte";
+  import { ListFilter, Play, Settings2, ChevronLeft } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner";
 
@@ -401,7 +396,7 @@
     </div>
 
     <!-- Stream rows -->
-    <ScrollArea class="flex-1">
+    <ScrollArea class="min-h-0 flex-1">
       <div class="p-4">
         {#if loadingStreams}
           <div class="flex flex-col items-center justify-center gap-2 py-12">

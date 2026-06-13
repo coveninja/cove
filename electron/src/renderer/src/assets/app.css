@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
 @import "shadcn-svelte/tailwind.css";
-
+@import 'plyr/dist/plyr.css';
 @source "../**/*.{svelte,html,ts,js}";
 @source "../../../../src/lib/**/*.{svelte,html,ts,js}";
 @plugin "@tailwindcss/forms";

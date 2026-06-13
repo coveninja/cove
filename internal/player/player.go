@@ -1,8 +1,12 @@
 package player
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -23,6 +27,14 @@ type torrentState struct {
 	speedByteSec int64
 }
 
+// AudioTrackInfo describes a single audio track returned by ffprobe.
+type AudioTrackInfo struct {
+	Index    int    `json:"index"`
+	Language string `json:"language"`
+	Title    string `json:"title"`
+	Codec    string `json:"codec"`
+}
+
 func Init() error {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = "/tmp/cove-torrents"
@@ -31,7 +43,7 @@ func Init() error {
 	return err
 }
 
-func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
+func getLargestTorrentFile(infoHash string) (*torrent.File, error) {
 	t, _ := client.AddMagnet("magnet:?xt=urn:btih:" + infoHash)
 	<-t.GotInfo()
 
@@ -49,10 +61,89 @@ func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if largest == nil {
-		http.Error(w, "no files found", http.StatusNotFound)
+		return nil, fmt.Errorf("no files found in torrent")
+	}
+	return largest, nil
+}
+
+func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
+	largest, err := getLargestTorrentFile(infoHash)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	http.ServeContent(w, r, largest.DisplayPath(), time.Time{}, largest.NewReader())
+}
+
+// ProbeAudioTracks runs ffprobe on the given URL and returns all audio tracks found.
+func ProbeAudioTracks(mediaURL string) ([]AudioTrackInfo, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_streams",
+		"-select_streams", "a",
+		mediaURL,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe: %w", err)
+	}
+
+	var result struct {
+		Streams []struct {
+			Tags struct {
+				Language string `json:"language"`
+				Title    string `json:"title"`
+			} `json:"tags"`
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, err
+	}
+
+	tracks := make([]AudioTrackInfo, len(result.Streams))
+	for i, s := range result.Streams {
+		tracks[i] = AudioTrackInfo{
+			Index:    i,
+			Language: s.Tags.Language,
+			Title:    s.Tags.Title,
+			Codec:    s.CodecName,
+		}
+	}
+	return tracks, nil
+}
+
+// StreamWithAudio uses ffmpeg to select a specific audio track, transcode it to AAC,
+// and serve the result as a seekable MP4 with correct duration.
+// It writes to a temp file with -movflags +faststart so the moov atom (which carries
+// duration) is placed at the front of the file, enabling seeking and correct timeline display.
+func StreamWithAudio(input string, audioIndex int, w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-i", input,
+		"-map", "0:v:0",
+		"-map", fmt.Sprintf("0:a:%d", audioIndex),
+		"-c:v", "copy",
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+		"-f", "mp4",
+		"pipe:1",
+	)
+
+	w.Header().Set("Content-Type", "video/mp4")
+	cmd.Stdout = w
+
+	var ffmpegErr bytes.Buffer
+	cmd.Stderr = &ffmpegErr
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return // client disconnected, normal
+		}
+		log.Printf("ffmpeg error: %v\n%s", err, ffmpegErr.String())
+	}
 }
 
 func GetProgress(infoHash string) map[string]interface{} {

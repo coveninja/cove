@@ -5,6 +5,8 @@
     { "path": "./tsconfig.web.json" }
   ],
   "compilerOptions": {
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "baseUrl": ".",
     "lib": ["dom", "dom.iterable", "esnext"],
     "target": "ES2020",

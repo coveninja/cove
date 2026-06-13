@@ -365,7 +365,7 @@
           </div>
         </ScrollArea>
       </div>
-      <div class="w-[35%] min-w-0 flex-none">
+      <div class="w-[35%] min-w-0 flex-none flex flex-col h-full overflow-hidden">
         <StreamsList
           {media}
           onPlayStream={(s: Stream) => playStream(s)}

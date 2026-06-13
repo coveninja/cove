@@ -310,9 +310,57 @@ func main() {
 		log.Fatal("could not init torrent client:", err)
 	}
 
+	http.HandleFunc("/api/probe", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		streamURL := r.URL.Query().Get("url")
+
+		var probeInput string
+		switch {
+		case hash != "":
+			// Point ffprobe at the local torrent stream — it supports range requests so ffprobe can seek
+			probeInput = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", hash)
+		case streamURL != "":
+			probeInput = streamURL
+		default:
+			http.Error(w, "missing hash or url", http.StatusBadRequest)
+			return
+		}
+
+		tracks, err := player.ProbeAudioTracks(probeInput)
+		if err != nil {
+			log.Println("probe error:", err)
+			tracks = []player.AudioTrackInfo{} // return empty rather than erroring
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(tracks); err != nil {
+			log.Println(err)
+		}
+	}))
+
 	http.HandleFunc("/api/play", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
+		audioStr := r.URL.Query().Get("audio")
+
+		if audioStr != "" {
+			audioIndex, err := strconv.Atoi(audioStr)
+			if err == nil {
+				// For torrents, point ffmpeg at the local stream endpoint so it can seek via range requests.
+				// For direct URLs, pass the URL straight through.
+				var input string
+				if streamURL != "" {
+					input = streamURL
+				} else if infoHash != "" {
+					input = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", infoHash)
+				} else {
+					http.Error(w, "missing hash or url", http.StatusBadRequest)
+					return
+				}
+				player.StreamWithAudio(input, audioIndex, w, r)
+				return
+			}
+		}
 
 		if streamURL != "" {
 			http.Redirect(w, r, streamURL, http.StatusTemporaryRedirect)
