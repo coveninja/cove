@@ -3,3 +3,5 @@ packages:
     output_path: "electron/src/lib/types/tmdb.ts"
   - path: "github.com/Arcadyi/cove/internal/addons"
     output_path: "electron/src/lib/types/addons.ts"
+  - path: "github.com/Arcadyi/cove/internal/player"
+    output_path: "electron/src/lib/types/player.ts"

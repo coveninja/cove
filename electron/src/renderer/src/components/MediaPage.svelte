@@ -8,9 +8,16 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 
-  import { countryName, qualityClass } from "$lib/utils";
+  import {
+    countryName,
+    formatRating,
+    formatRuntime,
+    qualityClass,
+  } from "$lib/utils";
+
   import StreamsList from "./StreamsList.svelte";
   import PlayerSimple from "./PlayerSimple.svelte";
+  import { api } from "$lib/api";
 
   let {
     media,
@@ -42,15 +49,9 @@
     const type = media.media_type;
 
     Promise.all([
-      fetch(`http://localhost:6969/api/trailer?id=${media.id}&type=${type}`)
-        .then((r) => r.json())
-        .then((d) => d.url),
-      fetch(`http://localhost:6969/api/similar?id=${media.id}&type=${type}`)
-        .then((r) => r.json())
-        .then((d) => d ?? []),
-      fetch(`http://localhost:6969/api/details?id=${media.id}&type=${type}`)
-        .then((r) => r.json())
-        .then((d) => d),
+      api.getTrailer(media),
+      api.getSimilar(media),
+      api.getDetails(media),
     ])
       .then(([trailerUrl, similarList, details]) => {
         trailer = trailerUrl;
@@ -60,31 +61,14 @@
           details.genres?.map((g: { name: string }) => g.name).slice(0, 3) ??
           [];
 
-        runtime =
-          details.runtime > 0
-            ? `${Math.floor(details.runtime / 60)}h ${details.runtime % 60}m`
-            : details.episode_run_time?.[0]
-              ? `${details.episode_run_time[0]}m / ep`
-              : "";
+        runtime = formatRuntime(details);
 
         cast =
           details.credits?.cast
             ?.slice(0, 5)
             .map((c: { name: string }) => c.name) ?? [];
 
-        ageRating = (() => {
-          for (const r of details.release_dates?.results ?? []) {
-            if (r.iso_3166_1 === "US") {
-              for (const rd of r.release_dates ?? []) {
-                if (rd.certification) return rd.certification;
-              }
-            }
-          }
-          for (const r of details.content_ratings?.results ?? []) {
-            if (r.iso_3166_1 === "US" && r.rating) return r.rating;
-          }
-          return "";
-        })();
+        ageRating = formatRating(details);
 
         keywords =
           (type === "movie"
@@ -117,6 +101,7 @@
       type: media.media_type,
     });
 
+    //TODO: Add this to api.ts
     fetch(`http://localhost:6969/api/subtitles?${params}`)
       .then((r) => r.json())
       .then((subs) => {

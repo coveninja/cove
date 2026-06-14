@@ -57,9 +57,7 @@
       loading = true;
       const [searchResults, kwResults] = await Promise.all([
         api.search(q),
-        fetch(`http://localhost:6969/api/keywords?q=${encodeURIComponent(q)}`)
-          .then((r) => r.json())
-          .catch(() => []),
+        api.getKeywords(q),
       ]);
       results = searchResults;
       keywords = kwResults ?? [];

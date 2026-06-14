@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { Stream } from "$lib/types/addons";
+import { Details } from "$lib/types/tmdb";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -83,4 +84,26 @@ export function qualityClass(quality: string): string {
   if (quality === "ts") return "border-red-500/40 bg-red-500/35 text-red-400";
   if (quality === "cam") return "border-red-700/40 bg-red-700/35 text-red-500";
   return "border-border bg-secondary text-secondary-foreground";
+}
+
+export function formatRuntime(d: Details): string {
+  return d.runtime > 0
+    ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`
+    : d.episode_run_time?.[0]
+      ? `${d.episode_run_time[0]}m / ep`
+      : "";
+}
+
+export function formatRating(d: Details): string {
+  for (const r of d.release_dates?.results ?? []) {
+    if (r.iso_3166_1 === "US") {
+      for (const rd of r.release_dates ?? []) {
+        if (rd.certification) return rd.certification;
+      }
+    }
+  }
+  for (const r of d.content_ratings?.results ?? []) {
+    if (r.iso_3166_1 === "US" && r.rating) return r.rating;
+  }
+  return "";
 }

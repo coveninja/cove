@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Media } from "$lib/types/tmdb";
+  import type { Details, Media } from "$lib/types/tmdb";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { animate } from "animejs";
   import "vidstack/bundle";
@@ -9,8 +9,14 @@
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
-  import { countryName, qualityClass } from "$lib/utils";
+  import {
+    countryName,
+    formatRating,
+    formatRuntime,
+    qualityClass,
+  } from "$lib/utils";
   import PlayerSimple from "./PlayerSimple.svelte";
+  import { api } from "$lib/api";
 
   let {
     media,
@@ -123,100 +129,30 @@
     if (fetched) return;
     fetched = true;
 
-    fetch(
-      `http://localhost:6969/api/clips?id=${media.id}&type=${media.media_type}`,
-    )
-      .then((r) => r.json())
-      .then((d) => {
-        let urls: string[] = [];
-        if (Array.isArray(d.urls)) {
-          urls = d.urls
-            .map((item: unknown) => {
-              if (
-                typeof item === "object" &&
-                item !== null &&
-                "url" in item &&
-                typeof item.url === "string"
-              ) {
-                return item.url;
-              }
-              if (typeof item === "string") return item;
-              return null;
-            })
-            .filter((url): url is string => url !== null && url.trim() !== "");
-        }
-        clips = urls;
-      })
-      .catch((err) => console.error("Error fetching clips:", err));
+    api.getClips(media).then((urls: string[]) => (clips = urls));
+    api.getTrailer(media).then((url: string) => (trailer = url));
+    api.getSimilar(media).then((d) => (similar = d));
 
-    fetch(
-      `http://localhost:6969/api/trailer?id=${media.id}&type=${media.media_type}`,
-    )
-      .then((r) => r.json())
-      .then((d) => {
-        let url: string | null = null;
-        if (typeof d === "string" && d.trim() !== "") {
-          url = d;
-        } else if (
-          d &&
-          typeof d === "object" &&
-          typeof d.url === "string" &&
-          d.url.trim() !== ""
-        ) {
-          url = d.url;
-        }
-        trailer = url;
-      });
+    api.getDetails(media).then((d: Details) => {
+      genres = d.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];
+      runtime = formatRuntime(d);
+      cast =
+        d.credits?.cast?.slice(0, 5).map((c: { name: string }) => c.name) ?? [];
+      ageRating = formatRating(d);
+      keywords =
+        (media.media_type === "movie"
+          ? d.keywords?.keywords
+          : d.keywords?.results
+        )
+          ?.slice(0, 4)
+          .map((k: { name: string }) => k.name) ?? [];
+      originCountry = d.origin_country;
 
-    fetch(
-      `http://localhost:6969/api/similar?id=${media.id}&type=${media.media_type}`,
-    )
-      .then((r) => r.json())
-      .then((d) => (similar = d ?? []));
-
-    fetch(
-      `http://localhost:6969/api/details?id=${media.id}&type=${media.media_type}`,
-    )
-      .then((r) => r.json())
-      .then((d) => {
-        genres =
-          d.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];
-        runtime =
-          d.runtime > 0
-            ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`
-            : d.episode_run_time?.[0]
-              ? `${d.episode_run_time[0]}m / ep`
-              : "";
-        cast =
-          d.credits?.cast?.slice(0, 5).map((c: { name: string }) => c.name) ??
-          [];
-        ageRating = (() => {
-          for (const r of d.release_dates?.results ?? []) {
-            if (r.iso_3166_1 === "US") {
-              for (const rd of r.release_dates ?? []) {
-                if (rd.certification) return rd.certification;
-              }
-            }
-          }
-          for (const r of d.content_ratings?.results ?? []) {
-            if (r.iso_3166_1 === "US" && r.rating) return r.rating;
-          }
-          return "";
-        })();
-        keywords =
-          (media.media_type === "movie"
-            ? d.keywords?.keywords
-            : d.keywords?.results
-          )
-            ?.slice(0, 4)
-            .map((k: { name: string }) => k.name) ?? [];
-        originCountry = d.origin_country ?? [];
-
-        if (media.media_type === "tv") {
-          numberOfSeasons = d.number_of_seasons ?? null;
-          numberOfEpisodes = d.number_of_episodes ?? null;
-        }
-      });
+      if (media.media_type === "tv") {
+        numberOfSeasons = d.number_of_seasons ?? null;
+        numberOfEpisodes = d.number_of_episodes ?? null;
+      }
+    });
   }
 
   function onHover(): void {
