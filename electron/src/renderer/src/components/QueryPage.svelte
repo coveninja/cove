@@ -4,11 +4,15 @@
   import MediaCard from "./MediaCard.svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { api } from "$lib/api";
+  import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import { Button } from "$lib/components/ui/button";
+  import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
 
   let {
     query = $bindable(""),
     loading = $bindable(true),
     onSelectMedia,
+    onSuggested,
   } = $props();
 
   let results: Media[] = $state([]);
@@ -69,46 +73,64 @@
   });
 </script>
 
-<div class="h-full p-6 pt-18">
-  {#if keywords.length > 1}
-    <div class="mb-4 flex flex-col items-start gap-2">
-      <span class="shrink-0 text-xs font-medium text-muted-foreground">
-        More to explore:
-      </span>
-      <ScrollArea
-        orientation="horizontal"
-        class="flex-1 overflow-clip rounded-sm"
-      >
-        <div class="flex gap-2 pb-3">
-          {#each keywords as kw (kw.id)}
-            <button
-              class="shrink-0 rounded-full border border-border bg-secondary px-3 py-1 text-xs text-secondary-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
-              onclick={() => (query = kw.name)}
-            >
-              {kw.name}
-            </button>
-          {/each}
+<div class="h-full gap-2.5 p-6 pt-18">
+  <span class="mb-2 flex text-center text-2xl font-semibold">
+    Results for
+    <span class="size-1.5"></span>
+    <span class="text-accent">{query}</span>
+  </span>
+  {#if loading}
+    <div class="flex h-full w-full flex-col items-center justify-center">
+      <Spinner class="size-52" />
+      <span class="font-bold"> Searching...</span>
+    </div>
+  {:else}
+    <ScrollArea class="h-full">
+      {#if keywords.length > 1}
+        <div class="flex flex-col gap-2 align-middle">
+        <span
+          class="flex shrink-0 text-center text-xs font-medium text-muted-foreground"
+        >
+          More to Explore:
+        </span>
+          <ScrollArea
+            orientation="horizontal"
+            class="flex-1 overflow-clip rounded-sm"
+          >
+            <div class="flex gap-2 pb-3">
+              {#each keywords as kw (kw.id)}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  class="text-muted-foreground"
+                  onclick={() => {
+                  onSuggested(kw.name);
+                }}
+                >
+                  {kw.name}
+                </Button>
+              {/each}
+            </div>
+          </ScrollArea>
         </div>
-      </ScrollArea>
-    </div>
+      {/if}
+      <div
+        class="grid gap-4 pr-4"
+        style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
+      >
+        {#each results as media (media.id)}
+          <MediaCard
+            {media}
+            onclick={() => {
+              onSelectMedia(media);
+            }}
+            quality={qualityMap.get(media.id) ?? null}
+            onsimilar={(m) => {
+              onSelectMedia(m);
+            }}
+          />
+        {/each}
+      </div>
+    </ScrollArea>
   {/if}
-  <ScrollArea class="h-full">
-    <div
-      class="mt-4 grid gap-4 pr-4"
-      style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
-    >
-      {#each results as media (media.id)}
-        <MediaCard
-          {media}
-          onclick={() => {
-            onSelectMedia(media);
-          }}
-          quality={qualityMap.get(media.id) ?? null}
-          onsimilar={(m) => {
-            onSelectMedia(m);
-          }}
-        />
-      {/each}
-    </div>
-  </ScrollArea>
 </div>

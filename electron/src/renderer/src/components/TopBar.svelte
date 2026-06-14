@@ -1,11 +1,21 @@
 <script lang="ts">
-  import { Minus, Square, X, Search, House, CirclePlus } from "lucide-svelte";
+  import {
+    Minus,
+    Square,
+    X,
+    Search,
+    House,
+    CirclePlus,
+    ArrowLeft,
+    Flame,
+  } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import CoveIcon from "../assets/CoveIcon.svelte";
   import { animate } from "animejs";
   import type { Page } from "$lib/types/types";
+  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
   function minimize(): void {
     window.electron.ipcRenderer.send("window-minimize");
@@ -24,12 +34,15 @@
     loading = $bindable(false),
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     onSelectPage = (p: Page) => {},
+    pageHistory = $bindable([]),
+    onGoBack,
   } = $props();
 
   let searchOuter = $state<HTMLDivElement>();
   let searchState = $state<"active" | "hidden">("hidden");
   let searchFocused = $state<boolean>(false);
   let topbarHovered = $state<boolean>(false);
+  let debounceTimer: ReturnType<typeof setTimeout>;
 
   async function toggleSearch(show: boolean): Promise<void> {
     if (show === (searchState === "active")) return;
@@ -49,7 +62,12 @@
     onSelectPage({ type: page });
   }
   function openQuery(): void {
-    onSelectPage({ type: "query", query });
+    clearTimeout(debounceTimer);
+
+    // Start a new timer
+    debounceTimer = setTimeout(() => {
+      onSelectPage({ type: "query", query });
+    }, 500); // 500ms delay
   }
 </script>
 
@@ -71,28 +89,78 @@
     </span>
   </div>
 
-  <div class="flex items-center gap-0 p-5 [webkit-app-region:no-drag]">
+  <div class="flex items-center [webkit-app-region:no-drag]">
     <div class="flex items-center">
-      <Button
-        variant="outline"
-        size="icon"
-        class="rounded-l-full rounded-r-none"
-        onclick={() => {
-          selectPage("home");
-        }}
-      >
-        <House />
-      </Button>
-      <Button
-        variant="outline"
-        size="icon"
-        class="rounded-none"
-        onclick={() => {
-          selectPage("myList");
-        }}
-      >
-        <CirclePlus />
-      </Button>
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="outline"
+            size="icon"
+            class="rounded-l-full rounded-r-none"
+            disabled={pageHistory.length < 1}
+            onclick={onGoBack}
+          >
+            <ArrowLeft />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <div class="flex flex-col">
+            <p>Back</p>
+          </div>
+        </Tooltip.Content>
+      </Tooltip.Root>
+
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="outline"
+            size="icon"
+            class="rounded-none"
+            onclick={() => {
+              selectPage("home");
+            }}
+          >
+            <House />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>Home</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="outline"
+            size="icon"
+            class="rounded-none"
+            onclick={() => {
+              selectPage("myList");
+            }}
+          >
+            <CirclePlus />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>My List</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="outline"
+            size="icon"
+            class="rounded-none"
+            onclick={() => {
+              selectPage("explore");
+            }}
+          >
+            <Flame />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>Explore</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
     </div>
     <div
       bind:this={searchOuter}

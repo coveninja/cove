@@ -48,7 +48,13 @@
 </script>
 
 <Tooltip.Provider>
-  <TopBar bind:query bind:loading onSelectPage={changePage} />
+  <TopBar
+    bind:query
+    bind:loading
+    onSelectPage={changePage}
+    bind:pageHistory
+    onGoBack={goBack}
+  />
   {#if selectedSimilar}
     {#key selectedSimilar.id}
       <MediaCard
@@ -68,10 +74,17 @@
           onsimilar={(m) => {
             selectMedia(m);
           }}
-          onBack={() => goBack()}
         />
       {:else if currentPage.type === "query"}
-        <QueryPage bind:query bind:loading onSelectMedia={selectMedia} />
+        <QueryPage
+          bind:query
+          bind:loading
+          onSelectMedia={selectMedia}
+          onSuggested={(name: string) => {
+            query = name;
+            changePage({ type: "query", query: name });
+          }}
+        />
       {/if}
     </main>
   </div>

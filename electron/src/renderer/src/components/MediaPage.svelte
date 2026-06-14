@@ -15,7 +15,6 @@
   let {
     media,
     onsimilar,
-    onBack,
   }: {
     media: Media;
     onsimilar?: (m: Media) => void;
@@ -185,17 +184,6 @@
             {:else}
               <div class="space-y-4">
                 <div class="flex items-center gap-3">
-                  {#if onBack}
-                    <Button
-                      variant="outline"
-                      size="icon-lg"
-                      onclick={onBack}
-                      title="Go back"
-                    >
-                      <ChevronLeft />
-                    </Button>
-                  {/if}
-
                   <div class="flex flex-wrap items-center gap-2">
                     <h2
                       class="text-3xl font-bold tracking-tight text-foreground drop-shadow-lg"
