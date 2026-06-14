@@ -74,11 +74,13 @@
 </script>
 
 <div class="h-full gap-2.5 p-6 pt-18">
-  <span class="mb-2 flex text-center text-2xl font-semibold">
-    Results for
-    <span class="size-1.5"></span>
-    <span class="text-accent">{query}</span>
-  </span>
+  {#if query.length > 0}
+    <span class="mb-2 flex text-center text-2xl font-semibold">
+      Results for
+      <span class="size-1.5"></span>
+      <span class="text-accent">{query}</span>
+    </span>
+  {/if}
   {#if loading}
     <div class="flex h-full w-full flex-col items-center justify-center">
       <Spinner class="size-52" />
@@ -88,11 +90,11 @@
     <ScrollArea class="h-full">
       {#if keywords.length > 1}
         <div class="flex flex-col gap-2 align-middle">
-        <span
-          class="flex shrink-0 text-center text-xs font-medium text-muted-foreground"
-        >
-          More to Explore:
-        </span>
+          <span
+            class="flex shrink-0 text-center text-xs font-medium text-muted-foreground"
+          >
+            More to Explore:
+          </span>
           <ScrollArea
             orientation="horizontal"
             class="flex-1 overflow-clip rounded-sm"
@@ -104,8 +106,8 @@
                   size="xs"
                   class="text-muted-foreground"
                   onclick={() => {
-                  onSuggested(kw.name);
-                }}
+                    onSuggested(kw.name);
+                  }}
                 >
                   {kw.name}
                 </Button>

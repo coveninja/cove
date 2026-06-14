@@ -195,7 +195,9 @@
         disabled={searchState === "hidden"}
         onfocus={() => {
           searchFocused = true;
-          openQuery();
+          if (query.length > 0) {
+            openQuery();
+          }
         }}
         onfocusout={() => {
           searchFocused = false;

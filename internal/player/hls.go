@@ -23,6 +23,8 @@ type hlsSession struct {
 	duration float64
 	dir      string
 	cmd      *exec.Cmd
+	running  bool // true while ffmpeg is actively writing segments
+	startSeg int
 	lastUsed time.Time
 	mu       sync.Mutex
 }
@@ -47,15 +49,20 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 	defer s.mu.Unlock()
 
 	if s.cmd != nil && s.cmd.Process != nil {
-		err := s.cmd.Process.Kill()
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-		err = s.cmd.Wait()
-		if err != nil {
-			log.Println(err)
-			return err
+		// Ignore errors here — the process may have already exited naturally.
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
+	}
+	s.running = false
+	s.startSeg = startSeg
+
+	// Clear segments from the previous run so seek detection
+	// reflects only what the current run has written.
+	if entries, err := os.ReadDir(s.dir); err == nil {
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".ts") {
+				os.Remove(filepath.Join(s.dir, entry.Name()))
+			}
 		}
 	}
 
@@ -120,12 +127,17 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 	if err := s.cmd.Start(); err != nil {
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
+	s.running = true
 
-	go func(cmd *exec.Cmd, id string) {
-		if err := cmd.Wait(); err != nil && !strings.Contains(err.Error(), "signal: killed") {
-			log.Printf("HLS session %s ffmpeg: %v\n%s", id, err, ffmpegStderr.String())
+	go func(cmd *exec.Cmd, sess *hlsSession) {
+		err := cmd.Wait()
+		sess.mu.Lock()
+		sess.running = false
+		sess.mu.Unlock()
+		if err != nil && !strings.Contains(err.Error(), "signal: killed") {
+			log.Printf("HLS session %s ffmpeg: %v\n%s", sess.id, err, ffmpegStderr.String())
 		}
-	}(s.cmd, s.id)
+	}(s.cmd, s)
 
 	return nil
 }
@@ -179,6 +191,15 @@ func StartHLSSession(input string, tracks []AudioTrackInfo, duration float64) (s
 	hlsMu.Lock()
 	hlsSessions[id] = session
 	hlsMu.Unlock()
+
+	firstSeg := filepath.Join(dir, "v000.ts")
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(firstSeg); err == nil {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 
 	return id, nil
 }
@@ -317,11 +338,24 @@ func ServeHLSFile(sessionID, file string, w http.ResponseWriter, r *http.Request
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			highestDisk := getHighestSegmentOnDisk(session.dir, file)
 
-			// If the requested segment is far ahead of what's written, restart FFmpeg
-			if requestedSeg > highestDisk+1 || highestDisk == -1 {
+			session.mu.Lock()
+			running := session.running
+			session.mu.Unlock()
+
+			needsRestart := false
+			if highestDisk == -1 {
+				needsRestart = !running
+			} else if requestedSeg > highestDisk+2 {
+				// forward seek past what ffmpeg has written
+				needsRestart = true
+			} else if requestedSeg < session.startSeg {
+				// backward seek before where the current ffmpeg run started
+				needsRestart = true
+			}
+
+			if needsRestart {
 				log.Printf("Seek detected for %s: requested %d, highest %d. Restarting ffmpeg.", file, requestedSeg, highestDisk)
-				err := session.startFfmpeg(requestedSeg)
-				if err != nil {
+				if err := session.startFfmpeg(requestedSeg); err != nil {
 					log.Println(err)
 					return
 				}
