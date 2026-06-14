@@ -6,7 +6,8 @@
   import { api } from "$lib/api";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Button } from "$lib/components/ui/button";
-  import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
+  import { animate, splitText, stagger } from "animejs";
+  import { onMount, tick } from "svelte";
 
   let {
     query = $bindable(""),
@@ -20,6 +21,29 @@
   // svelte-ignore non_reactive_update
   let qualityMap = new SvelteMap<number, string>();
 
+  let resultsTextEl = $state<HTMLElement>();
+  let displayQuery = $state("");
+  let hasAnimated = $state(false);
+
+  async function animateText(text: string): Promise<void> {
+    if (!resultsTextEl) return;
+
+    displayQuery = text;
+    await tick();
+
+    const { chars } = splitText(resultsTextEl, {
+      chars: { wrap: "clip" },
+    });
+
+    animate(chars, {
+      y: [{ to: ["100%", "0%"] }],
+      duration: 750,
+      ease: "out(3)",
+      delay: stagger(50),
+    });
+
+    hasAnimated = true; // ← flip after animation kicks off
+  }
   $effect(() => {
     const q = query.trim();
     const timeout = setTimeout(async () => {
@@ -29,6 +53,7 @@
         qualityMap = new SvelteMap();
         return;
       }
+      await animateText(query);
       loading = true;
       const [searchResults, kwResults] = await Promise.all([
         api.search(q),
@@ -39,7 +64,6 @@
       results = searchResults;
       keywords = kwResults ?? [];
       loading = false;
-
       // Batch fetch quality for all results
       if (searchResults.length > 0) {
         const ids = searchResults.map((m) => m.id).join(",");
@@ -75,10 +99,16 @@
 
 <div class="h-full gap-2.5 p-6 pt-18">
   {#if query.length > 0}
-    <span class="mb-2 flex text-center text-2xl font-semibold">
+    <span
+      class="mb-2 flex text-center text-2xl font-semibold"
+      class:invisible={!hasAnimated}
+    >
       Results for
       <span class="size-1.5"></span>
-      <span class="text-accent">{query}</span>
+      {#key displayQuery}
+        <span class="text-accent" bind:this={resultsTextEl}>{displayQuery}</span
+        >
+      {/key}
     </span>
   {/if}
   {#if loading}
