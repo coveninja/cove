@@ -341,7 +341,6 @@ func main() {
 		var probeInput string
 		switch {
 		case hash != "":
-			// Point ffprobe at the local torrent stream — it supports range requests so ffprobe can seek
 			probeInput = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", hash)
 		case streamURL != "":
 			probeInput = streamURL
@@ -350,24 +349,56 @@ func main() {
 			return
 		}
 
-		result, err := player.ProbeAudioTracks(probeInput)
+		audioTracks, err := player.ProbeAudioTracks(probeInput)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			log.Println("probe audio error:", err)
+			audioTracks = []player.AudioTrackInfo{}
 		}
+
+		subtitleTracks, err := player.ProbeSubtitleTracks(probeInput)
+		if err != nil {
+			log.Println("probe subtitle error:", err)
+			subtitleTracks = []player.SubtitleTrackInfo{}
+		}
+
+		duration, err := player.ProbeDuration(probeInput)
+		if err != nil {
+			log.Println("probe duration error:", err)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(map[string]any{
+			"audio":     audioTracks,
+			"subtitles": subtitleTracks,
+			"duration":  duration,
+		})
+	}))
+
+	http.HandleFunc("/api/subtitle/extract", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		streamURL := r.URL.Query().Get("url")
+		index, err := strconv.Atoi(r.URL.Query().Get("index"))
 		if err != nil {
-			log.Println(err)
+			http.Error(w, "invalid index", http.StatusBadRequest)
 			return
 		}
+		var input string
+		switch {
+		case hash != "":
+			input = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", hash)
+		case streamURL != "":
+			input = streamURL
+		default:
+			http.Error(w, "missing hash or url", http.StatusBadRequest)
+			return
+		}
+		player.ExtractSubtitle(input, index, w)
 	}))
 
 	http.HandleFunc("/api/play", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
 		audioStr := r.URL.Query().Get("audio")
-		audioCodec := r.URL.Query().Get("codec")
 
 		if audioStr != "" {
 			audioIndex, err := strconv.Atoi(audioStr)
@@ -383,7 +414,7 @@ func main() {
 					http.Error(w, "missing hash or url", http.StatusBadRequest)
 					return
 				}
-				player.StreamWithAudio(input, audioIndex, audioCodec, w, r)
+				player.StreamWithAudio(input, audioIndex, w, r)
 				return
 			}
 		}

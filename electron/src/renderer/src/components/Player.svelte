@@ -28,6 +28,13 @@
     codec: string;
   };
 
+  type SubtitleTrackInfo = {
+    index: number;
+    language: string;
+    title: string;
+    codec: string;
+  };
+
   type SubtitleSettings = {
     size: number;
     line: number;
@@ -58,6 +65,12 @@
   // ─── Audio tracks (from probe, used to decide HLS vs direct) ────────────────
 
   let audioTracks = $state<AudioTrackInfo[]>([]);
+
+  // ─── Built-in subtitle tracks (from probe) ───────────────────────────────────
+
+  let builtInSubtitles = $state<
+    { id: string; url: string; lang: string; label: string }[]
+  >([]);
 
   // ─── Vidstack audio track list (populated from HLS manifest) ────────────────
 
@@ -135,6 +148,7 @@
   $effect(() => {
     if (!src) return () => {};
     audioTracks = [];
+    builtInSubtitles = [];
     hlsSessionID = null;
     canPlay = false;
     error = null;
@@ -146,13 +160,32 @@
     const controller = new AbortController();
     fetch(probeURL, { signal: controller.signal })
       .then((r) => r.json())
-      .then((data: { tracks: AudioTrackInfo[]; duration: number }) => {
-        audioTracks = data.tracks ?? [];
-        probedDuration = data.duration ?? null;
-        console.log(probedDuration);
-      })
+      .then(
+        (data: {
+          audio: AudioTrackInfo[];
+          subtitles: SubtitleTrackInfo[];
+          duration: number;
+        }) => {
+          audioTracks = data.audio ?? [];
+          probedDuration = data.duration ?? null;
+
+          const base = isHash
+            ? `http://localhost:6969/api/subtitle/extract?hash=${src}`
+            : `http://localhost:6969/api/subtitle/extract?url=${encodeURIComponent(src)}`;
+
+          builtInSubtitles = (data.subtitles ?? []).map((t) => ({
+            id: `builtin-${t.index}`,
+            url: `${base}&index=${t.index}`,
+            lang: t.language || `track${t.index}`,
+            label:
+              t.title ||
+              (t.language ? langName(t.language) : `Track ${t.index + 1}`),
+          }));
+        },
+      )
       .catch(() => {
         audioTracks = [];
+        builtInSubtitles = [];
         probedDuration = null;
       });
 
@@ -162,7 +195,7 @@
   // ─── Start HLS session when needed ──────────────────────────────────────────
 
   $effect(() => {
-    if (!needsHLS || audioTracks.length === 0) return;
+    if (!needsHLS || audioTracks.length === 0 || probedDuration === null) return;
 
     hlsLoading = true;
     hlsSessionID = null;
@@ -208,37 +241,10 @@
           levelLoadingTimeOut: 60000,
         };
 
-        setTimeout(() => {
-          const hls = (e.detail as any).instance;
-          if (!hls) return;
-
-          // Only error handling is required now.
-          hls.on(Hls.Events.ERROR, (_: any, data: any) => {
-            if (data.fatal) {
-              if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                hls.recoverMediaError();
-              } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                hls.startLoad();
-              } else {
-                hls.destroy();
-              }
-            }
-
-            console.error(
-              "RAW HLS ERROR",
-              JSON.stringify(
-                {
-                  type: data.type,
-                  details: data.details,
-                  fatal: data.fatal,
-                  url: data.url ?? data.frag?.url,
-                },
-                null,
-                2,
-              ),
-            );
-          });
-        }, 500);
+        e.detail.addEventListener?.("hls-instance", (ev: any) => {
+          const hls = ev.detail;
+          hls.on(Hls.Events.ERROR, (_, data) => { /* recovery */ });
+        });
       }
     }
 
@@ -269,17 +275,25 @@
 
     playerEl.src = activeStreamURL;
 
-    // Inject external subtitle tracks once the player has a source
-    if (externalSubtitles.length > 0) {
-      playerEl.textTracks.clear?.();
-      for (const sub of externalSubtitles) {
-        playerEl.textTracks.add({
-          kind: "subtitles",
-          src: `http://localhost:6969/api/subtitle-proxy?url=${encodeURIComponent(sub.url)}`,
-          srclang: sub.lang,
-          label: sub.lang.toUpperCase(),
-        });
-      }
+    // Inject built-in and external subtitle tracks
+    playerEl.textTracks.clear?.();
+    for (const sub of builtInSubtitles) {
+      // built-in subtitles are served directly from /api/subtitle/extract (already VTT)
+      playerEl.textTracks.add({
+        kind: "subtitles",
+        src: sub.url,
+        srclang: sub.lang,
+        label: sub.label,
+      });
+    }
+    for (const sub of externalSubtitles) {
+      // external subtitles go through the proxy for SRT→VTT conversion
+      playerEl.textTracks.add({
+        kind: "subtitles",
+        src: `http://localhost:6969/api/subtitle-proxy?url=${encodeURIComponent(sub.url)}`,
+        srclang: sub.lang,
+        label: sub.lang.toUpperCase(),
+      });
     }
   });
 

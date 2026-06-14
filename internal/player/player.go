@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
@@ -36,32 +37,21 @@ type AudioTrackInfo struct {
 	Codec    string `json:"codec"`
 }
 
-// browserSafeAudioCodecs are codecs the browser can play natively.
-// For these we only remux (copy streams) rather than transcode — takes seconds, not minutes.
-var browserSafeAudioCodecs = map[string]bool{
-	"aac": true, "mp3": true, "opus": true, "vorbis": true, "flac": true,
+// SubtitleTrackInfo describes a single subtitle track returned by ffprobe.
+type SubtitleTrackInfo struct {
+	Index    int    `json:"index"`
+	Language string `json:"language"`
+	Title    string `json:"title"`
+	Codec    string `json:"codec"`
 }
 
-// ── Transcode/remux cache ────────────────────────────────────────────────────
-//
-// First request for a (input, audioIndex) pair starts processing in the
-// background and blocks until done.  All subsequent requests (including every
-// range/seek request the browser fires) are served instantly from the cached
-// file, giving correct Content-Length, duration, and full seek support.
-
-type transcodeEntry struct {
-	done chan struct{} // closed when processing finishes
-	path string        // temp file path, set after done is closed
-	err  error
-}
-
-var (
-	transcodeMu    sync.Mutex
-	transcodeCache = map[string]*transcodeEntry{}
-)
-
-func transcodeKey(input string, audioIndex int) string {
-	return fmt.Sprintf("%s::%d", input, audioIndex)
+// imageBasedSubtitleCodecs cannot be converted to WebVTT by ffmpeg without OCR.
+var imageBasedSubtitleCodecs = map[string]bool{
+	"hdmv_pgs_subtitle": true,
+	"pgssub":            true,
+	"dvd_subtitle":      true,
+	"dvdsub":            true,
+	"xsub":              true,
 }
 
 func Init() error {
@@ -104,19 +94,35 @@ func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, largest.DisplayPath(), time.Time{}, largest.NewReader())
 }
 
-// ProbeResult contains audio tracks and total duration.
-type ProbeResult struct {
-	Tracks   []AudioTrackInfo `json:"tracks"`
-	Duration float64          `json:"duration"`
+func ProbeDuration(mediaURL string) (float64, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_entries", "format=duration",
+		mediaURL,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe duration: %w", err)
+	}
+	var result struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return 0, err
+	}
+	return strconv.ParseFloat(result.Format.Duration, 64)
 }
 
-// ProbeAudioTracks runs ffprobe on the given URL and returns all audio tracks and duration.
-func ProbeAudioTracks(mediaURL string) (*ProbeResult, error) {
+// ProbeAudioTracks runs ffprobe on the given URL and returns all audio tracks found.
+func ProbeAudioTracks(mediaURL string) ([]AudioTrackInfo, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",
-		"-show_format", // ← adds format.duration
+		"-select_streams", "a",
 		mediaURL,
 	)
 	out, err := cmd.Output()
@@ -126,151 +132,159 @@ func ProbeAudioTracks(mediaURL string) (*ProbeResult, error) {
 
 	var result struct {
 		Streams []struct {
-			CodecType string `json:"codec_type"`
-			Tags      struct {
+			Tags struct {
 				Language string `json:"language"`
 				Title    string `json:"title"`
 			} `json:"tags"`
 			CodecName string `json:"codec_name"`
 		} `json:"streams"`
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
 		return nil, err
 	}
 
-	var tracks []AudioTrackInfo
-	audioIndex := 0
-	for _, s := range result.Streams {
-		if s.CodecType != "audio" {
+	tracks := make([]AudioTrackInfo, len(result.Streams))
+	for i, s := range result.Streams {
+		tracks[i] = AudioTrackInfo{
+			Index:    i,
+			Language: s.Tags.Language,
+			Title:    s.Tags.Title,
+			Codec:    s.CodecName,
+		}
+	}
+	return tracks, nil
+}
+
+// ProbeSubtitleTracks runs ffprobe on the given URL and returns all
+// text-based subtitle tracks (image-based PGS/DVDSUB are excluded).
+func ProbeSubtitleTracks(mediaURL string) ([]SubtitleTrackInfo, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_streams",
+		"-select_streams", "s",
+		mediaURL,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe subtitles: %w", err)
+	}
+
+	var result struct {
+		Streams []struct {
+			Tags struct {
+				Language string `json:"language"`
+				Title    string `json:"title"`
+			} `json:"tags"`
+			CodecName string `json:"codec_name"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, err
+	}
+
+	var tracks []SubtitleTrackInfo
+	for i, s := range result.Streams {
+		if imageBasedSubtitleCodecs[s.CodecName] {
 			continue
 		}
-		tracks = append(tracks, AudioTrackInfo{
-			Index:    audioIndex,
+		tracks = append(tracks, SubtitleTrackInfo{
+			Index:    i,
 			Language: s.Tags.Language,
 			Title:    s.Tags.Title,
 			Codec:    s.CodecName,
 		})
-		audioIndex++
 	}
-
-	var duration float64
-	_, err = fmt.Sscanf(result.Format.Duration, "%f", &duration)
-	if err != nil {
-		log.Println(err)
-	}
-
-	return &ProbeResult{Tracks: tracks, Duration: duration}, nil
+	return tracks, nil
 }
 
-// StreamWithAudio serves the given input with a specific audio track selected.
-//
-// It chooses between two ffmpeg strategies automatically:
-//   - Remux  (codec already browser-safe): copies all streams as-is, ~5–30s for a feature film
-//   - Transcode (AC3, DTS, EAC3, etc.):    re-encodes audio to AAC, can take several minutes
-//
-// Either way the output is written to a temp file with -movflags +faststart so the
-// moov atom is at the front of the file.  http.ServeContent then handles
-// Content-Length, Range requests, and ETags, giving the browser correct duration
-// and fully working seek from the very first request.
-//
-// A simple in-process cache means the expensive work only runs once per
-// (input, audioIndex) pair — every seek/range request after the first is instant.
-func StreamWithAudio(input string, audioIndex int, audioCodec string, w http.ResponseWriter, r *http.Request) {
-	key := transcodeKey(input, audioIndex)
+// ExtractSubtitle extracts a single subtitle track and serves it as WebVTT.
+// Results are cached so repeated requests don't re-run ffmpeg.
+var (
+	subtitleCacheMu sync.RWMutex
+	subtitleCache   = map[string][]byte{}
+)
 
-	transcodeMu.Lock()
-	entry, exists := transcodeCache[key]
-	if !exists {
-		entry = &transcodeEntry{done: make(chan struct{})}
-		transcodeCache[key] = entry
-		go processAudio(input, audioIndex, audioCodec, entry)
-	}
-	transcodeMu.Unlock()
+func subtitleCacheKey(input string, index int) string {
+	return fmt.Sprintf("%s::sub::%d", input, index)
+}
 
-	// Wait for processing to finish, or bail out if the client disconnects.
-	// The background goroutine continues either way so the cache is warm next time.
-	select {
-	case <-entry.done:
-	case <-r.Context().Done():
-		return
-	}
+func ExtractSubtitle(input string, subtitleIndex int, w http.ResponseWriter) {
+	key := subtitleCacheKey(input, subtitleIndex)
 
-	if entry.err != nil {
-		log.Printf("audio processing error for %s track %d: %v", input, audioIndex, entry.err)
-		http.Error(w, "audio processing failed", http.StatusInternalServerError)
-		return
-	}
+	subtitleCacheMu.RLock()
+	cached, ok := subtitleCache[key]
+	subtitleCacheMu.RUnlock()
 
-	f, err := os.Open(entry.path)
-	if err != nil {
-		http.Error(w, "failed to open output file: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer func(f *os.File) {
-		err := f.Close()
+	if !ok {
+		cmd := exec.Command("ffmpeg",
+			"-i", input,
+			"-map", fmt.Sprintf("0:s:%d", subtitleIndex),
+			"-c:s", "webvtt",
+			"-f", "webvtt",
+			"pipe:1",
+		)
+		out, err := cmd.Output()
 		if err != nil {
-			log.Println(err)
+			http.Error(w, "subtitle extraction failed: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-	}(f)
+		subtitleCacheMu.Lock()
+		subtitleCache[key] = out
+		subtitleCacheMu.Unlock()
+		cached = out
+	}
 
-	http.ServeContent(w, r, "stream.mp4", time.Time{}, f)
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write(cached)
 }
 
-// processAudio runs ffmpeg and writes the result to a temp file.
-// It signals entry.done when complete (success or failure).
-func processAudio(input string, audioIndex int, audioCodec string, entry *transcodeEntry) {
-	defer close(entry.done)
-
+// StreamWithAudio uses ffmpeg to select a specific audio track, transcode it to AAC,
+// and serve the result as a seekable MP4 with correct duration.
+func StreamWithAudio(input string, audioIndex int, w http.ResponseWriter, r *http.Request) {
 	tmp, err := os.CreateTemp("", "cove-audio-*.mp4")
 	if err != nil {
-		entry.err = fmt.Errorf("create temp file: %w", err)
+		http.Error(w, "temp file error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	tmpPath := tmp.Name()
-	err = tmp.Close()
-	if err != nil {
-		log.Println(err)
-		return
-	}
+	tmp.Close()
+	defer os.Remove(tmpPath)
 
-	var audioArgs []string
-	if browserSafeAudioCodecs[audioCodec] {
-		// Fast path: just copy the audio stream, no re-encoding needed
-		audioArgs = []string{"-c:a", "copy"}
-		log.Printf("remuxing audio track %d (%s) — no transcode needed", audioIndex, audioCodec)
-	} else {
-		// Slow path: transcode to AAC so the browser can play it
-		audioArgs = []string{"-c:a", "aac", "-b:a", "192k"}
-		log.Printf("transcoding audio track %d (%s → aac)", audioIndex, audioCodec)
-	}
-
-	args := []string{
+	ctx := r.Context()
+	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-i", input,
 		"-map", "0:v:0",
 		"-map", fmt.Sprintf("0:a:%d", audioIndex),
 		"-c:v", "copy",
-	}
-	args = append(args, audioArgs...)
-	args = append(args, "-movflags", "+faststart", "-y", tmpPath)
+		"-c:a", "aac",
+		"-b:a", "192k",
+		"-movflags", "+faststart",
+		"-y",
+		tmpPath,
+	)
 
-	cmd := exec.Command("ffmpeg", args...)
 	var ffmpegErr bytes.Buffer
 	cmd.Stderr = &ffmpegErr
 
 	if err := cmd.Run(); err != nil {
-		err := os.Remove(tmpPath)
-		if err != nil {
-			log.Println(err)
+		if ctx.Err() != nil {
 			return
 		}
-		entry.err = fmt.Errorf("ffmpeg: %w\n%s", err, ffmpegErr.String())
+		log.Printf("ffmpeg error: %v\n%s", err, ffmpegErr.String())
+		http.Error(w, "ffmpeg failed", http.StatusInternalServerError)
 		return
 	}
 
-	entry.path = tmpPath
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		http.Error(w, "failed to open output: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	http.ServeContent(w, r, "stream.mp4", time.Time{}, f)
 }
 
 func GetProgress(infoHash string) map[string]interface{} {

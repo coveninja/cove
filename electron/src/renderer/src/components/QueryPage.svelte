@@ -7,7 +7,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Button } from "$lib/components/ui/button";
   import { animate, splitText, stagger } from "animejs";
-  import { onMount, tick } from "svelte";
+  import { tick } from "svelte";
 
   let {
     query = $bindable(""),

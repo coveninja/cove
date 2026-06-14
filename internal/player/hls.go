@@ -17,16 +17,17 @@ import (
 )
 
 type hlsSession struct {
-	id       string
-	input    string
-	tracks   []AudioTrackInfo
-	duration float64
-	dir      string
-	cmd      *exec.Cmd
-	running  bool // true while ffmpeg is actively writing segments
-	startSeg int
-	lastUsed time.Time
-	mu       sync.Mutex
+	id         string
+	input      string
+	tracks     []AudioTrackInfo
+	duration   float64
+	dir        string
+	cmd        *exec.Cmd
+	running    bool // true while ffmpeg is actively writing segments
+	startSeg   int
+	lastUsed   time.Time
+	mu         sync.Mutex
+	restarting bool
 }
 
 var (
@@ -42,19 +43,39 @@ func newSessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+var browserSafeAudioCodecs = map[string]bool{
+
+	"aac": true, "mp3": true, "opus": true, "vorbis": true, "flac": true,
+}
+
 // startFfmpeg kills any running process for this session and starts a new one
 // exactly at the requested segment offset.
 func (s *hlsSession) startFfmpeg(startSeg int) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.cmd != nil && s.cmd.Process != nil {
-		// Ignore errors here — the process may have already exited naturally.
-		_ = s.cmd.Process.Kill()
-		_ = s.cmd.Wait()
+	if s.restarting {
+		s.mu.Unlock()
+		return nil
 	}
+	s.restarting = true
+
+	// Kill old process while holding the lock
+	oldCmd := s.cmd
 	s.running = false
 	s.startSeg = startSeg
+	s.cmd = nil
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.restarting = false
+		s.mu.Unlock()
+	}()
+
+	// Blocking Wait is safe outside the lock
+	if oldCmd != nil && oldCmd.Process != nil {
+		_ = oldCmd.Process.Kill()
+		_ = oldCmd.Wait()
+	}
 
 	// Clear segments from the previous run so seek detection
 	// reflects only what the current run has written.
@@ -258,13 +279,13 @@ func getHighestSegmentOnDisk(dir string, file string) int {
 				_, err := fmt.Sscanf(name, "v%d.ts", &n)
 				if err != nil {
 					log.Println(err)
-					return 0
+					continue
 				}
 			} else {
 				_, err := fmt.Sscanf(name, prefix+"%d.ts", &n)
 				if err != nil {
 					log.Println(err)
-					return 0
+					continue
 				}
 			}
 			if n > highest {
@@ -278,6 +299,7 @@ func getHighestSegmentOnDisk(dir string, file string) int {
 // ServeHLSFile serves a playlist or segment file belonging to a session.
 // For segment (.ts) files it waits up to 30 s for ffmpeg to write them before giving up.
 func ServeHLSFile(sessionID, file string, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	hlsMu.RLock()
 	session, ok := hlsSessions[sessionID]
 	hlsMu.RUnlock()
@@ -340,6 +362,7 @@ func ServeHLSFile(sessionID, file string, w http.ResponseWriter, r *http.Request
 
 			session.mu.Lock()
 			running := session.running
+			startSeg := session.startSeg
 			session.mu.Unlock()
 
 			needsRestart := false
@@ -348,7 +371,7 @@ func ServeHLSFile(sessionID, file string, w http.ResponseWriter, r *http.Request
 			} else if requestedSeg > highestDisk+2 {
 				// forward seek past what ffmpeg has written
 				needsRestart = true
-			} else if requestedSeg < session.startSeg {
+			} else if requestedSeg < startSeg {
 				// backward seek before where the current ffmpeg run started
 				needsRestart = true
 			}
@@ -434,13 +457,13 @@ func CleanupHLSSessions() {
 				err := session.cmd.Process.Kill()
 				if err != nil {
 					log.Println(err)
-					return
+					continue
 				}
 			}
 			err := os.RemoveAll(session.dir)
 			if err != nil {
 				log.Println(err)
-				return
+				continue
 			}
 			delete(hlsSessions, id)
 			log.Printf("HLS session %s cleaned up", id)

@@ -29,6 +29,7 @@
     "lucide-svelte": "^1.0.1",
     "mode-watcher": "^1.1.0",
     "plyr": "^3.8.4",
+    "svgpath": "^2.6.0",
     "vidstack": "^1.15.6"
   },
   "devDependencies": {
