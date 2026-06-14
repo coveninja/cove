@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/Arcadyi/cove/internal/utils"
 )
 
 type ManifestResource struct {
@@ -136,4 +138,30 @@ func FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, e
 		return nil, err
 	}
 	return data.Subtitles, nil
+}
+
+func SetupHandlers() {
+	http.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		err := json.NewEncoder(w).Encode(GetAddons())
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	http.HandleFunc("/api/addons/add", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		url := r.URL.Query().Get("url")
+		addon, err := AddAddon(url)
+		if err != nil {
+			http.Error(w, "could not fetch addon manifest: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		err = json.NewEncoder(w).Encode(addon)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
 }

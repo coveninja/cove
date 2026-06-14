@@ -10,8 +10,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
+	"github.com/Arcadyi/cove/internal/addons"
+	"github.com/Arcadyi/cove/internal/utils"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -644,4 +647,310 @@ func SuggestKeywords(query string, apiKey string) ([]Keyword, error) {
 		data.Results = data.Results[:10]
 	}
 	return data.Results, nil
+}
+
+func SetupHandlers(apiKey string) {
+	http.HandleFunc("/api/keywords", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("q")
+		if query == "" {
+			http.Error(w, "missing query", http.StatusBadRequest)
+			return
+		}
+		keywords, err := SuggestKeywords(query, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(keywords); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/search", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("q")
+		if query == "" {
+			http.Error(w, "missing query", http.StatusBadRequest)
+			return
+		}
+
+		regular, err := Search(query, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		byKeyword, _ := SearchByKeywords(query, apiKey)
+
+		seen := make(map[string]bool)
+		merged := make([]Media, 0, len(regular)+len(byKeyword))
+		for _, m := range regular {
+			key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
+			seen[key] = true
+			merged = append(merged, m)
+		}
+		for _, m := range byKeyword {
+			key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
+			if !seen[key] {
+				seen[key] = true
+				merged = append(merged, m)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(merged); err != nil {
+			log.Println(err)
+		}
+	}))
+	http.HandleFunc("/api/trailer", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		id := 0
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		trailer, err := GetTrailer(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = json.NewEncoder(w).Encode(map[string]string{"url": trailer})
+		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/clips", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbIDStr := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+
+		id, err := strconv.Atoi(tmdbIDStr)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		if mediaType == "" {
+			http.Error(w, "missing media type", http.StatusBadRequest)
+			return
+		}
+
+		clips, err := GetClips(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, "failed to fetch data", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(map[string][]string{"urls": clips})
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	http.HandleFunc("/api/images", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		id := 0
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		images, err := GetImages(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = json.NewEncoder(w).Encode(images)
+		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/details", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		id := 0
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		details, err := GetDetails(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = json.NewEncoder(w).Encode(details)
+		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/similar", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+		mediaType := r.URL.Query().Get("type")
+		results, err := GetSimilar(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(results)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	http.HandleFunc("/api/logos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		id := 0
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		logos, err := GetLogos(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = json.NewEncoder(w).Encode(logos)
+		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/imdb", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		id := 0
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		imdbID, err := GetIMDBId(id, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		err = json.NewEncoder(w).Encode(map[string]string{"imdb_id": imdbID})
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	// GET /api/tv/seasons?id=<tmdbID>
+	// Returns the list of seasons for a TV show.
+	http.HandleFunc("/api/tv/seasons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		id := 0
+		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		seasons, err := GetSeasons(id, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(seasons); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	// GET /api/tv/episodes?id=<tmdbID>&season=<seasonNumber>
+	// Returns the episodes for a given season of a TV show.
+	http.HandleFunc("/api/tv/episodes", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		seasonStr := r.URL.Query().Get("season")
+		id := 0
+		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		season, err := strconv.Atoi(seasonStr)
+		if err != nil || season < 1 {
+			http.Error(w, "invalid season", http.StatusBadRequest)
+			return
+		}
+		episodes, err := GetEpisodes(id, season, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(episodes); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/quality/batch", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		idsParam := r.URL.Query().Get("ids")
+		if idsParam == "" {
+			http.Error(w, "missing ids", http.StatusBadRequest)
+			return
+		}
+
+		idStrs := strings.Split(idsParam, ",")
+		sem := make(chan struct{}, 5)
+
+		type entry struct {
+			ID      string `json:"id"`
+			Quality string `json:"quality"`
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("X-Accel-Buffering", "no")
+		flusher, canFlush := w.(http.Flusher)
+
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		enc := json.NewEncoder(w)
+
+		for _, s := range idStrs {
+			id, err := strconv.Atoi(strings.TrimSpace(s))
+			if err != nil {
+				continue
+			}
+			wg.Add(1)
+			go func(tmdbID int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				imdbID, err := GetIMDBId(tmdbID, apiKey)
+				if err != nil || imdbID == "" {
+					return
+				}
+				streams, err := addons.GetAllStreams("movie", imdbID)
+				if err != nil || len(streams) == 0 {
+					return
+				}
+				q := addons.GetMaxQuality(streams)
+				if q == "" {
+					return
+				}
+				mu.Lock()
+				err = enc.Encode(entry{ID: strconv.Itoa(tmdbID), Quality: q})
+				if err != nil {
+					log.Println(err)
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+				mu.Unlock()
+			}(id)
+		}
+
+		wg.Wait()
+	}))
 }

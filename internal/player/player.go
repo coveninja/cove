@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/Arcadyi/cove/internal/addons"
+	"github.com/Arcadyi/cove/internal/tmdb"
+	"github.com/Arcadyi/cove/internal/utils"
 	"github.com/anacrolix/torrent"
 )
 
@@ -336,4 +341,288 @@ func formatSpeed(bytesPerSec int64) string {
 	default:
 		return fmt.Sprintf("%d B/s", bytesPerSec)
 	}
+}
+
+func SetupHandlers(apiKey string) {
+	http.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		id := 0
+		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		var imdbID string
+		var err error
+		if mediaType == "tv" {
+			imdbID, err = tmdb.GetTVIMDBId(id, apiKey)
+		} else {
+			imdbID, err = tmdb.GetIMDBId(id, apiKey)
+		}
+		if err != nil || imdbID == "" {
+			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
+			return
+		}
+
+		stremioID := imdbID
+		if mediaType == "tv" {
+			season := r.URL.Query().Get("season")
+			episode := r.URL.Query().Get("episode")
+			if season != "" && episode != "" {
+				stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
+			}
+		}
+
+		var allSubs []addons.Subtitle
+		for _, addon := range addons.GetAddons() {
+			subs, err := addons.FetchSubtitles(addon.URL, mediaType, stremioID)
+			if err != nil {
+				continue
+			}
+			allSubs = append(allSubs, subs...)
+		}
+		if allSubs == nil {
+			allSubs = []addons.Subtitle{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(allSubs)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	// /api/streams?id=<tmdbID>&type=movie|tv[&season=N&episode=N]
+	http.HandleFunc("/api/streams", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		if mediaType == "" {
+			mediaType = "movie"
+		}
+
+		id := 0
+		_, err := fmt.Sscanf(tmdbID, "%d", &id)
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+
+		// Resolve IMDB ID based on media type
+		var imdbID string
+		if mediaType == "tv" {
+			imdbID, err = tmdb.GetTVIMDBId(id, apiKey)
+		} else {
+			imdbID, err = tmdb.GetIMDBId(id, apiKey)
+		}
+		if err != nil || imdbID == "" {
+			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
+			return
+		}
+
+		// For TV, append season:episode to build the Stremio stream ID
+		stremioID := imdbID
+		if mediaType == "tv" {
+			season := r.URL.Query().Get("season")
+			episode := r.URL.Query().Get("episode")
+			if season == "" || episode == "" {
+				http.Error(w, "season and episode are required for tv streams", http.StatusBadRequest)
+				return
+			}
+			stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
+		}
+
+		streams, err := addons.GetAllStreams(mediaType, stremioID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if streams == nil {
+			streams = []addons.Stream{}
+		}
+		err = json.NewEncoder(w).Encode(streams)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	http.HandleFunc("/api/probe", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		streamURL := r.URL.Query().Get("url")
+
+		var probeInput string
+		switch {
+		case hash != "":
+			probeInput = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", hash)
+		case streamURL != "":
+			probeInput = streamURL
+		default:
+			http.Error(w, "missing hash or url", http.StatusBadRequest)
+			return
+		}
+
+		audioTracks, err := ProbeAudioTracks(probeInput)
+		if err != nil {
+			log.Println("probe audio error:", err)
+			audioTracks = []AudioTrackInfo{}
+		}
+
+		subtitleTracks, err := ProbeSubtitleTracks(probeInput)
+		if err != nil {
+			log.Println("probe subtitle error:", err)
+			subtitleTracks = []SubtitleTrackInfo{}
+		}
+
+		duration, err := ProbeDuration(probeInput)
+		if err != nil {
+			log.Println("probe duration error:", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"audio":     audioTracks,
+			"subtitles": subtitleTracks,
+			"duration":  duration,
+		})
+	}))
+
+	http.HandleFunc("/api/subtitle/extract", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		streamURL := r.URL.Query().Get("url")
+		index, err := strconv.Atoi(r.URL.Query().Get("index"))
+		if err != nil {
+			http.Error(w, "invalid index", http.StatusBadRequest)
+			return
+		}
+		var input string
+		switch {
+		case hash != "":
+			input = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", hash)
+		case streamURL != "":
+			input = streamURL
+		default:
+			http.Error(w, "missing hash or url", http.StatusBadRequest)
+			return
+		}
+		ExtractSubtitle(input, index, w)
+	}))
+
+	http.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		infoHash := r.URL.Query().Get("hash")
+		streamURL := r.URL.Query().Get("url")
+		audioStr := r.URL.Query().Get("audio")
+
+		if audioStr != "" {
+			audioIndex, err := strconv.Atoi(audioStr)
+			if err == nil {
+				// For torrents, point ffmpeg at the local stream endpoint so it can seek via range requests.
+				// For direct URLs, pass the URL straight through.
+				var input string
+				if streamURL != "" {
+					input = streamURL
+				} else if infoHash != "" {
+					input = fmt.Sprintf("http://localhost:6969/api/play?hash=%s", infoHash)
+				} else {
+					http.Error(w, "missing hash or url", http.StatusBadRequest)
+					return
+				}
+				StreamWithAudio(input, audioIndex, w, r)
+				return
+			}
+		}
+
+		if streamURL != "" {
+			http.Redirect(w, r, streamURL, http.StatusTemporaryRedirect)
+			return
+		}
+
+		if infoHash != "" {
+			StreamTorrent(infoHash, w, r)
+			return
+		}
+
+		http.Error(w, "missing hash or url", http.StatusBadRequest)
+	}))
+
+	// POST /api/hls/start — starts an HLS session, returns the session ID
+	http.HandleFunc("/api/hls/start", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input    string           `json:"input"`
+			Tracks   []AudioTrackInfo `json:"tracks"`
+			Duration float64          `json:"duration"` // Added duration
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		sessionID, err := StartHLSSession(body.Input, body.Tracks, body.Duration)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(map[string]string{"sessionID": sessionID})
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
+
+	// GET /api/hls/{sessionID}/{file} — serves master playlist, sub-playlists, and segments
+	http.HandleFunc("/api/hls/", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/hls/"), "/", 2)
+		if len(parts) != 2 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		ServeHLSFile(parts[0], parts[1], w, r)
+	}))
+
+	http.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		err := json.NewEncoder(w).Encode(GetProgress(hash))
+		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		rawURL := r.URL.Query().Get("url")
+		if rawURL == "" {
+			http.Error(w, "missing url", http.StatusBadRequest)
+			return
+		}
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer func(Body io.ReadCloser) {
+			err := Body.Close()
+			if err != nil {
+				log.Println(err)
+			}
+		}(resp.Body)
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
+		content := string(body)
+		if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
+			content = utils.SrtToVTT(content)
+		}
+		_, err = fmt.Fprint(w, content)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+	}))
 }
