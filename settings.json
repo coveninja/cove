@@ -1,0 +1,12 @@
+{
+  "openOnMute": false,
+  "defaultVolume": 1,
+  "autoPlay": false,
+  "rememberPosition": true,
+  "defaultProvider": "torrentio",
+  "preferHLS": true,
+  "subtitlesEnabled": true,
+  "defaultSubtitleLang": "en",
+  "defaultAudioLang": "en",
+  "showStreamDetails": true
+}

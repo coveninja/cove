@@ -1,5 +1,6 @@
 import type { Details, Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
 import type { Stream } from "$lib/types/addons";
+import type { Settings } from "$lib/types/bindings"; // tygo-generated
 
 const BASE = "http://localhost:6969/api";
 
@@ -29,4 +30,12 @@ export const api = {
     fetch(`${BASE}/videos?id=${media.id}&type=${media.media_type}`).then((r) =>
       r.json(),
     ),
+  getSettings: (): Promise<Settings> =>
+    fetch(`${BASE}/settings`).then((r) => r.json()),
+  updateSettings: (s: Settings): Promise<Settings> =>
+    fetch(`${BASE}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s),
+    }).then((r) => r.json()),
 };

@@ -5,3 +5,5 @@ packages:
     output_path: "electron/src/lib/types/addons.ts"
   - path: "github.com/Arcadyi/cove/internal/player"
     output_path: "electron/src/lib/types/player.ts"
+  - path: "github.com/Arcadyi/cove/internal/settings"
+    output_path: "electron/src/lib/types/settings.ts"

@@ -9,6 +9,9 @@
   import type { Page } from "$lib/types/types";
   import QueryPage from "./components/QueryPage.svelte";
   import HomePage from "./components/HomePage.svelte";
+  import SettingsPage from "./components/SettingsPage.svelte";
+  import { settings } from "$lib/stores/settings";
+  import { onMount } from "svelte";
 
   let query = $state("");
 
@@ -19,6 +22,11 @@
 
   let currentPage = $state<Page>({ type: "home" });
   let pageHistory = $state<Page[]>([]);
+
+  // Load settings once on startup so all components have values immediately.
+  onMount(() => {
+    settings.load();
+  });
 
   function changePage(page: Page): void {
     pageHistory.push(currentPage);
@@ -69,7 +77,9 @@
   {/if}
   <div class="flex h-screen flex-col overflow-hidden">
     <main class="relative min-h-0 flex-1 overflow-hidden">
-      {#if selectedMedia && currentPage.type === "mediaView"}
+      {#if currentPage.type === "settings"}
+        <SettingsPage />
+      {:else if selectedMedia && currentPage.type === "mediaView"}
         <MediaPage
           media={selectedMedia}
           onsimilar={(m) => {

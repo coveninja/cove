@@ -4,5 +4,6 @@ export type Page =
   | { type: "home" }
   | { type: "myList" }
   | { type: "explore" }
+  | { type: "settings" }
   | { type: "query"; query: string }
   | { type: "mediaView"; media: Media };

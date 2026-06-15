@@ -8,12 +8,13 @@
     CirclePlus,
     ArrowLeft,
     Flame,
+    Cog,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import CoveIcon from "../assets/CoveIcon.svelte";
-  import {animate, JSAnimation} from "animejs";
+  import { animate, JSAnimation } from "animejs";
   import type { Page } from "$lib/types/types";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
@@ -259,6 +260,23 @@
   </div>
 
   <div class="flex items-center gap-1 [webkit-app-region:no-drag]">
+    <Tooltip.Root>
+      <Tooltip.Trigger>
+        <Button
+          variant="outline"
+          size="icon"
+          class="rounded-none border-l-0"
+          onclick={() => {
+            selectPage("settings");
+          }}
+        >
+          <Cog />
+        </Button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>
+        <p>Explore</p>
+      </Tooltip.Content>
+    </Tooltip.Root>
     <ButtonGroup.Root>
       <Button variant="outline" size="icon-sm" onclick={minimize}>
         <Minus />

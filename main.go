@@ -10,6 +10,7 @@ import (
 
 	"github.com/Arcadyi/cove/internal/addons"
 	"github.com/Arcadyi/cove/internal/player"
+	"github.com/Arcadyi/cove/internal/settings"
 	"github.com/Arcadyi/cove/internal/tmdb"
 	"github.com/Arcadyi/cove/internal/utils"
 	"github.com/joho/godotenv"
@@ -38,10 +39,14 @@ func main() {
 	if err != nil {
 		log.Println("opensubtitles addon unavailable:", err)
 	}
+	if err := settings.InitSettings(); err != nil {
+		log.Println("could not load settings:", err)
+	}
 
 	addons.SetupHandlers()
 	tmdb.SetupHandlers(apiKey)
 	player.SetupHandlers(apiKey)
+	settings.SetupHandlers()
 
 	if err := player.Init(); err != nil {
 		log.Fatal("could not init torrent client:", err)

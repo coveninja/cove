@@ -17,6 +17,7 @@
   onMount(() => {
     animateWave(false);
     animateWave2(true);
+    if (!group) return;
     animate(group, {
       rotate: [-1.5, 1.5],
       ease: "inOutSine",
@@ -27,6 +28,7 @@
   });
 
   function animateWave(toA: boolean): void {
+    if (!wavePath) return;
     animate(wavePath, {
       d: svg.morphTo(toA ? phantomA : phantomB),
       ease: "inOutSine",
@@ -36,6 +38,7 @@
   }
 
   function animateWave2(toA: boolean): void {
+    if (!wavePath2) return;
     animate(wavePath2, {
       d: svg.morphTo(toA ? phantom2A : phantom2B),
       ease: "inOutSine",
