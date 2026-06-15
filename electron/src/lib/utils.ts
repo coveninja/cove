@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { Stream } from "$lib/types/addons";
-import { Details, MediaImages } from "$lib/types/tmdb";
+import {Details, MediaImages, MediaVideoObject, MediaVideos} from "$lib/types/tmdb";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -155,4 +155,60 @@ export function getImageOpt(
 
   // 3. Fallback: Return the first available image if nothing matches criteria
   return list[0]?.url ?? "";
+}
+
+interface VideoOptions {
+  iso?: string;
+  site?: string;
+  size?: number;
+  official?: boolean;
+  randomize?: boolean;
+}
+
+function buildEmbedUrl(video: MediaVideoObject): string {
+  if (video.embed_url) return video.embed_url;
+
+  const site = video.site.toLowerCase();
+  if (site === "youtube") {
+    return `https://www.youtube.com/embed/${video.key}`;
+  }
+  if (site === "vimeo") {
+    return `https://player.vimeo.com/video/${video.key}`;
+  }
+  return "";
+}
+
+export function getVideoOpt(
+  videos: MediaVideos | undefined | null,
+  type: "Clip" | "Featurette" | "Behind the Scenes" | "Teaser" | "Trailer",
+  opts: VideoOptions = {},
+): string {
+  if (!videos || !Array.isArray(videos.results)) return "";
+
+  let list = videos.results.filter((vid) => vid.type === type);
+
+  if (list.length === 0 && type !== "Trailer") {
+    list = videos.results.filter((vid) => vid.type === "Trailer");
+  }
+
+  if (list.length === 0) {
+    return videos.results[0] ? buildEmbedUrl(videos.results[0]) : "";
+  }
+
+  const matches = list.filter((vid) => {
+    if (opts.iso && vid.iso_639_1 && vid.iso_639_1 !== opts.iso) return false;
+    if (opts.site && vid.site && vid.site !== opts.site) return false;
+    if (opts.size !== undefined && vid.size !== opts.size) return false;
+    return !(opts.official !== undefined && vid.official !== opts.official);
+  });
+
+  if (matches.length > 0) {
+    if (opts.randomize) {
+      const randomIndex = Math.floor(Math.random() * matches.length);
+      return buildEmbedUrl(matches[randomIndex]);
+    }
+    return buildEmbedUrl(matches[0]);
+  }
+
+  return buildEmbedUrl(list[0]);
 }

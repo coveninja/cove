@@ -100,3 +100,17 @@ export interface MediaImages {
   logos: MediaImageObject[];
   posters: MediaImageObject[];
 }
+export interface MediaVideoObject {
+  iso_639_1: string;
+  name: string;
+  key: string;
+  site: string;
+  size: number /* int */;
+  type: string;
+  official: boolean;
+  published_at: string;
+  embed_url: string;
+}
+export interface MediaVideos {
+  results: MediaVideoObject[];
+}

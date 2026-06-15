@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Stream } from "$lib/types/addons";
-  import type { Media, MediaImages } from "$lib/types/tmdb";
+  import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
   import Player from "./Player.svelte";
   import { Button } from "$lib/components/ui/button";
   import { ChevronLeft, Star } from "lucide-svelte";
@@ -13,6 +13,7 @@
     formatRating,
     formatRuntime,
     getImageOpt,
+    getVideoOpt,
     qualityClass,
   } from "$lib/utils";
 
@@ -38,27 +39,27 @@
   let cast: string[] = $state([]);
   let ageRating = $state("");
   let keywords: string[] = $state([]);
-  let trailer: string | null = $state(null);
   let similar: Media[] = $state([]);
   let originCountry: string[] = $state([]);
   let maxQuality = $state<string | null>();
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
   let images = $state<MediaImages>();
+  let videos = $state<MediaVideos>();
 
   $effect(() => {
     detailsLoading = true;
     const type = media.media_type;
 
     Promise.all([
-      api.getTrailer(media),
+      api.getVideos(media),
       api.getSimilar(media),
       api.getDetails(media),
       api.getImages(media),
     ])
-      .then(([trailerUrl, similarList, details, img]) => {
+      .then(([vids, similarList, details, img]) => {
         images = img;
-        trailer = trailerUrl;
+        videos = vids;
         similar = similarList;
 
         genres =
@@ -125,12 +126,6 @@
     media.overview
       ?.split(". ")
       .map((s, i, arr) => (i < arr.length - 1 ? s + "." : s)) ?? [],
-  );
-
-  const trailerUrl = $derived(
-    trailer
-      ? `${trailer}?autoplay=1&controls=1&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=0`
-      : null,
   );
 </script>
 
@@ -257,13 +252,15 @@
 
                 <Separator />
 
-                {#if trailerUrl}
+                {#if videos?.results?.length > 0}
                   <div class="pointer-events-auto space-y-2">
                     <div
                       class="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-black"
                     >
                       <PlayerSimple
-                        src={trailerUrl}
+                        src={getVideoOpt(videos, "Trailer", {
+                          randomize: true,
+                        })}
                         controls={true}
                         bg={media.poster_path}
                       />

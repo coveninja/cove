@@ -1,11 +1,16 @@
 <script lang="ts">
-  import type { Details, Media, MediaImages } from "$lib/types/tmdb";
+  import type {
+    Details,
+    Media,
+    MediaImages,
+  } from "$lib/types/tmdb";
   import { animate } from "animejs";
   import {
     getImageOpt,
     formatRating,
     formatRuntime,
     qualityClass,
+    getVideoOpt,
   } from "$lib/utils";
   import { api } from "$lib/api";
   import { onMount } from "svelte";
@@ -42,8 +47,6 @@
 
   // ── Data ──────────────────────────────────────────────────────────────────
   let fetched = false;
-  let clips = $state<string[] | null>(null);
-  let trailer = $state<string | null>(null);
   let similar = $state<Media[]>([]);
   let images = $state<MediaImages>();
   let logoLoaded = $state(false);
@@ -55,17 +58,10 @@
   let originCountry = $state<string[]>([]);
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
+  let videoUrl = $state<string>();
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
-
-  const videoUrl = $derived.by(() => {
-    if (clips?.length) {
-      const url = clips[Math.floor(Math.random() * clips.length)];
-      if (url?.trim()) return url;
-    }
-    return trailer?.trim() || null;
-  });
 
   const overviewParagraphs = $derived(
     media.overview
@@ -79,8 +75,9 @@
     if (fetched) return;
     fetched = true;
 
-    api.getClips(media).then((urls) => (clips = urls));
-    api.getTrailer(media).then((url) => (trailer = url));
+    api.getVideos(media).then((d) => {
+      videoUrl = getVideoOpt(d, "Clip", { randomize: true });
+    });
     api.getSimilar(media).then((d) => (similar = d));
     api.getDetails(media).then((d: Details) => {
       genres = d.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];

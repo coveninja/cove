@@ -92,7 +92,11 @@
   style="opacity: 0; transform: scale(0.85); {style}"
 >
   {#if videoUrl}
-    <PlayerSimple src={videoUrl} controls={false} bg={media.poster_path} />
+    <PlayerSimple
+      src={videoUrl}
+      controls={false}
+      bg={media.poster_path}
+    />
   {:else}
     <img
       src={media.poster_path}

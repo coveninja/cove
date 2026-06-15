@@ -129,6 +129,21 @@ type MediaImages struct {
 	Posters   []MediaImageObject `json:"posters"`
 }
 
+type MediaVideoObject struct {
+	Iso6391     string `json:"iso_639_1"`
+	Name        string `json:"name"`
+	Key         string `json:"key"`
+	Site        string `json:"site"`
+	Size        int    `json:"size"`
+	Type        string `json:"type"`
+	Official    bool   `json:"official"`
+	PublishedAt string `json:"published_at"`
+	EmbedURL    string `json:"embed_url"`
+}
+type MediaVideos struct {
+	Results []MediaVideoObject `json:"results"`
+}
+
 const baseURL = "https://api.themoviedb.org/3"
 const imageBase = "https://image.tmdb.org/t/p/w500"
 const stillBase = "https://image.tmdb.org/t/p/w300"
@@ -398,69 +413,6 @@ func GetEpisodes(tmdbID int, seasonNumber int, apiKey string) ([]TVEpisode, erro
 	return data.Episodes, nil
 }
 
-func GetTrailer(tmdbID int, mediaType string, apiKey string) (string, error) {
-	url := fmt.Sprintf("%s/%s/%d/videos?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
-	res, err := http.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
-
-	var data struct {
-		Results []struct {
-			Key  string `json:"key"`
-			Type string `json:"type"`
-			Site string `json:"site"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
-		return "", err
-	}
-	for _, v := range data.Results {
-		if v.Type == "Trailer" && v.Site == "YouTube" {
-			return fmt.Sprintf("https://www.youtube.com/embed/%s", v.Key), nil
-		}
-	}
-	return "", nil
-}
-
-func GetClips(tmdbID int, mediaType string, apiKey string) ([]string, error) {
-	url := fmt.Sprintf("%s/%s/%d/videos?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
-	res, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
-
-	var data struct {
-		Results []struct {
-			Key  string `json:"key"`
-			Type string `json:"type"`
-			Site string `json:"site"`
-		} `json:"results"`
-	}
-	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
-		return nil, err
-	}
-	var featurettes []string
-	for _, v := range data.Results {
-		if v.Type == "Clip" && v.Site == "YouTube" {
-			featurettes = append(featurettes, fmt.Sprintf("https://www.youtube.com/embed/%s", v.Key))
-		}
-	}
-	return featurettes, nil
-}
-
 func GetImages(tmdbID int, mediaType string, apiKey string) (*MediaImages, error) {
 	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
 
@@ -490,6 +442,34 @@ func GetImages(tmdbID int, mediaType string, apiKey string) (*MediaImages, error
 
 	for i := range data.Posters {
 		data.Posters[i].URL = imageBase + data.Posters[i].FilePath
+	}
+
+	return &data, nil
+}
+
+func GetVideos(tmdbID int, mediaType string, apiKey string) (*MediaVideos, error) {
+	url := fmt.Sprintf("%s/%s/%d/videos?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status code: %d", res.StatusCode)
+	}
+
+	var data MediaVideos
+
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	for _, v := range data.Results {
+		if v.Site == "YouTube" {
+			v.EmbedURL = fmt.Sprintf("https://www.youtube.com/embed/%s", v.Key)
+		}
 	}
 
 	return &data, nil
@@ -721,54 +701,6 @@ func SetupHandlers(apiKey string) {
 			log.Println(err)
 		}
 	}))
-	http.HandleFunc("/api/trailer", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-		id := 0
-		_, err := fmt.Sscanf(tmdbID, "%d", &id)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		trailer, err := GetTrailer(id, mediaType, apiKey)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		err = json.NewEncoder(w).Encode(map[string]string{"url": trailer})
-		if err != nil {
-			log.Println(err)
-		}
-	}))
-
-	http.HandleFunc("/api/clips", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbIDStr := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-
-		id, err := strconv.Atoi(tmdbIDStr)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-
-		if mediaType == "" {
-			http.Error(w, "missing media type", http.StatusBadRequest)
-			return
-		}
-
-		clips, err := GetClips(id, mediaType, apiKey)
-		if err != nil {
-			http.Error(w, "failed to fetch data", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(map[string][]string{"urls": clips})
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}))
 
 	http.HandleFunc("/api/images", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
@@ -799,6 +731,40 @@ func SetupHandlers(apiKey string) {
 		w.Header().Set("Content-Type", "application/json")
 
 		err = json.NewEncoder(w).Encode(images)
+		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/videos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbIDStr := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+
+		if tmdbIDStr == "" || mediaType == "" {
+			http.Error(w, "missing required parameters", http.StatusBadRequest)
+			return
+		}
+
+		if mediaType != "movie" && mediaType != "tv" {
+			http.Error(w, "invalid media type", http.StatusBadRequest)
+			return
+		}
+
+		id, err := strconv.Atoi(tmdbIDStr)
+		if err != nil || id <= 0 {
+			http.Error(w, "invalid id format", http.StatusBadRequest)
+			return
+		}
+
+		videos, err := GetVideos(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		err = json.NewEncoder(w).Encode(videos)
 		if err != nil {
 			log.Println(err)
 		}

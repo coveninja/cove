@@ -112,9 +112,12 @@
     onkeydown={(e) => e.stopPropagation()}
     style="opacity: 0; transform: scale(0.9);"
   >
-
     {#if videoUrl}
-      <PlayerSimple src={videoUrl} controls={true} bg={media.poster_path} />
+      <PlayerSimple
+        src={videoUrl}
+        controls={true}
+        bg={media.poster_path}
+      />
     {:else}
       <img
         src={media.poster_path}
