@@ -534,6 +534,34 @@ func SetupHandlers(apiKey string) {
 		}
 	}))
 
+	http.HandleFunc("/api/hls/stop/", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		trimmed := strings.TrimPrefix(r.URL.Path, "/api/hls/stop/")
+		log.Println(trimmed)
+
+		if r.Method == http.MethodPost {
+			sessionID := strings.SplitN(trimmed, "/", 2)[0]
+			if sessionID == "" {
+				http.Error(w, "missing session ID", http.StatusBadRequest)
+				return
+			}
+			StopHLSSession(sessionID)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		parts := strings.SplitN(trimmed, "/", 2)
+		if len(parts) != 2 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		ServeHLSFile(parts[0], parts[1], w, r)
+	}))
+
 	// GET /api/hls/{sessionID}/{file} — serves master playlist, sub-playlists, and segments
 	http.HandleFunc("/api/hls/", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/api/hls/"), "/", 2)

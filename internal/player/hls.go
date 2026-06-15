@@ -492,3 +492,32 @@ func CleanupHLSSessions() {
 		}
 	}
 }
+
+// StopHLSSession immediately kills the ffmpeg process and removes the temp
+// directory for a single session. Safe to call from any goroutine.
+func StopHLSSession(id string) {
+	hlsMu.Lock()
+	session, ok := hlsSessions[id]
+	if ok {
+		delete(hlsSessions, id)
+	}
+	hlsMu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	session.mu.Lock()
+	cmd := session.cmd
+	dir := session.dir
+	session.cmd = nil
+	session.running = false
+	session.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait() // reap to avoid zombie
+	}
+	_ = os.RemoveAll(dir)
+	log.Printf("HLS session %s stopped", id)
+}

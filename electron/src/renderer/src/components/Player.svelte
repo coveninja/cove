@@ -19,6 +19,7 @@
   import "vidstack/player/styles/default/theme.css";
   import "vidstack/player/styles/default/layouts/video.css";
   import Hls from "hls.js";
+  import { onDestroy } from "svelte";
 
   // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,8 @@
     media?: Media;
     externalSubtitles?: { id: string; url: string; lang: string }[];
   } = $props();
+
+  let createdID = $state<string | null>(null);
 
   // ─── Audio tracks (from probe, used to decide HLS vs direct) ────────────────
 
@@ -206,6 +209,10 @@
     hlsLoading = true;
     hlsSessionID = null;
 
+    const controller = new AbortController();
+    // Track the session this particular effect run created so the
+    // cleanup can stop it even if hlsSessionID has already been cleared.
+
     fetch("http://localhost:6969/api/hls/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -215,18 +222,36 @@
         duration: probedDuration,
         videoCodec: videoCodec,
       }),
+      signal: controller.signal,
     })
       .then((r) => r.json())
       .then((d: { sessionID: string }) => {
+        createdID = d.sessionID;
         hlsSessionID = d.sessionID;
       })
       .catch((e) => {
+        if ((e as DOMException).name === "AbortError") return; // navigated away
         error = "Failed to start HLS session.";
         console.error(e);
       })
       .finally(() => {
         hlsLoading = false;
       });
+
+    return () => {
+      controller.abort(); // cancel in-flight request
+      if (createdID) {
+        fetch(`http://localhost:6969/api/hls/stop/${createdID}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          keepalive: true,
+        }).catch((e) => {
+          console.error("Failed for ID: " + createdID, e);
+        });
+      }
+    };
   });
 
   // ─── Update Vidstack source when activeStreamURL changes ────────────────────
@@ -560,6 +585,20 @@
       );
     }
   }
+
+  onDestroy(() => {
+    if (createdID) {
+      fetch(`http://localhost:6969/api/hls/stop/${createdID}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        keepalive: true,
+      }).catch((e) => {
+        console.error("Failed for ID: " + createdID, e);
+      });
+    }
+  });
 </script>
 
 <!-- ─── Template ──────────────────────────────────────────────────────────────── -->
@@ -592,7 +631,7 @@
           class="pointer-events-none absolute inset-x-0 z-20 flex flex-col items-center gap-0.5 px-6"
           style="bottom: {subtitleSettings.line}%"
         >
-          {#each currentCueText.split("\n") as line}
+          {#each currentCueText.split("\n") as line (line)}
             <span
               class="block max-w-prose text-center leading-snug text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]"
               style="font-size: {subtitleSettings.size}%; {subtitleSettings.background
@@ -721,7 +760,8 @@
 
             {#if subtitleSettingsOpen}
               <!-- click-outside backdrop -->
-              <div
+              <button
+                aria-label="subtitle"
                 class="fixed inset-0 z-40"
                 onclick={(e) => {
                   e.stopPropagation();
@@ -729,7 +769,7 @@
                   subtitleView = "tracks";
                   selectedLang = null;
                 }}
-              ></div>
+              ></button>
 
               <div
                 class="absolute right-0 bottom-full z-50 mb-2 w-52 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
@@ -933,7 +973,7 @@
 
                     {#if selectedLang === null}
                       <!-- Level 1: one row per language -->
-                      {#each [...tracksByLang.entries()] as [lang, tracks]}
+                      {#each [...tracksByLang.entries()] as [lang, tracks] ([lang, tracks])}
                         {@const active = tracks.some(
                           (t) => t.mode === "showing",
                         )}
