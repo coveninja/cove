@@ -265,7 +265,6 @@
         <Button
           variant="outline"
           size="icon"
-          class="rounded-none border-l-0"
           onclick={() => {
             selectPage("settings");
           }}

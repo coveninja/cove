@@ -72,7 +72,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-2xl space-y-8 p-6 pb-16">
+<div class="mx-auto max-w-2xl space-y-8 p-6 pb-16 pt-18">
   <!-- Header -->
   <div class="flex items-center justify-between">
     <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
