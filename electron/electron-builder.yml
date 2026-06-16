@@ -12,6 +12,11 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+extraResources:
+  - from: resources/cove
+    to: cove
+  - from: ../.env
+    to: .env
 win:
   executableName: electron
 nsis:
