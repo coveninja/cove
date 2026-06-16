@@ -101,7 +101,10 @@
     activeStream = stream;
     activeSubtitles = [];
 
-    const params = new URLSearchParams({ id: String(media.id), type: media.media_type });
+    const params = new URLSearchParams({
+      id: String(media.id),
+      type: media.media_type,
+    });
     if (media.media_type === "tv" && season != null && episode != null) {
       params.set("season", String(season));
       params.set("episode", String(episode));
@@ -109,7 +112,9 @@
 
     fetch(`http://localhost:6969/api/subtitles?${params}`)
       .then((r) => r.json())
-      .then((subs) => { activeSubtitles = Array.isArray(subs) ? subs : []; })
+      .then((subs) => {
+        activeSubtitles = Array.isArray(subs) ? subs : [];
+      })
       .catch(() => {});
   }
 
@@ -342,7 +347,8 @@
       >
         <StreamsList
           {media}
-          onPlayStream={(s: Stream) => playStream(s)}
+          onPlayStream={(s: Stream, season?: number, episode?: number) =>
+            playStream(s, season, episode)}
           bind:maxQuality
         />
       </div>
