@@ -3,9 +3,20 @@
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import type { Stream } from "$lib/types/addons";
   import * as Select from "$lib/components/ui/select/index.js";
-  import { ListFilter, Play, Settings2, ChevronLeft } from "lucide-svelte";
+  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
+  import {
+    ListFilter,
+    Play,
+    Settings2,
+    ChevronLeft,
+    Check,
+    RotateCcw,
+  } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner";
+  import { SvelteMap } from "svelte/reactivity";
+  import { api, formatPosition } from "$lib/api";
+  import type { WatchProgress } from "$lib/types/library";
 
   let loadingStreams = $state(false);
   let sortMode = $state<"seeders" | "size">("seeders");
@@ -50,6 +61,88 @@
   let streams = $state<Stream[]>([]);
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  // ── Watch progress ────────────────────────────────────────────────────────────
+
+  // TV: keyed by "season:episode"
+  let progressMap = new SvelteMap<string, WatchProgress>();
+  // Movie: single record
+  let movieProgress = $state<WatchProgress | null>(null);
+
+  function epKey(season: number, episode: number) {
+    return `${season}:${episode}`;
+  }
+
+  function epProgress(
+    season: number,
+    episode: number,
+  ): WatchProgress | undefined {
+    return progressMap.get(epKey(season, episode));
+  }
+
+  function progressPct(p: WatchProgress): number {
+    if (!p.duration_seconds) return 0;
+    return Math.min(100, (p.position_seconds / p.duration_seconds) * 100);
+  }
+
+  // Fetch all episode progress for this show whenever the media changes
+  $effect(() => {
+    if (!isTV) return;
+    api
+      .libraryGet(media.id, "tv")
+      .then((result) => {
+        progressMap.clear();
+        for (const p of result?.progress ?? []) {
+          if (p.season != null && p.episode != null) {
+            progressMap.set(epKey(p.season, p.episode), p);
+          }
+        }
+      })
+      .catch(console.error);
+  });
+
+  // Fetch movie progress
+  $effect(() => {
+    if (isTV) return;
+    api
+      .progressGet(media.id, "movie")
+      .then((p) => {
+        movieProgress = p;
+      })
+      .catch(console.error);
+  });
+
+  async function markWatched(ep: TVEpisode): Promise<void> {
+    const p = await api.progressSave({
+      tmdb_id: media.id,
+      media_type: "tv",
+      title: media.name,
+      poster_path: media.poster_path ?? "",
+      vote_average: media.vote_average ?? 0,
+      season: selectedSeason!,
+      episode: ep.episode_number,
+      position_seconds: 1,
+      duration_seconds: 1,
+      completed: true,
+    });
+    progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+  }
+
+  async function markUnwatched(ep: TVEpisode): Promise<void> {
+    const p = await api.progressSave({
+      tmdb_id: media.id,
+      media_type: "tv",
+      title: media.name,
+      poster_path: media.poster_path ?? "",
+      vote_average: media.vote_average ?? 0,
+      season: selectedSeason!,
+      episode: ep.episode_number,
+      position_seconds: 0,
+      duration_seconds: 0,
+      completed: false,
+    });
+    progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+  }
 
   // Data fetching
 
@@ -250,67 +343,146 @@
           {#each episodes as ep (ep.episode_number)}
             {@const unreleased =
               ep.air_date && new Date(ep.air_date) > new Date()}
-            <button
-              class="group flex w-full items-center gap-3 p-3 text-left transition-colors
-              {unreleased
-                ? 'cursor-default opacity-40'
-                : 'hover:bg-secondary/60'}"
-              onclick={() => {
-                if (!unreleased) selectedEpisode = ep;
-              }}
-              disabled={unreleased}
-            >
-              <!-- Thumbnail -->
-              <span
-                class="relative w-28 shrink-0 overflow-hidden rounded-md bg-muted"
-              >
-                {#if ep.still_path}
-                  <img
-                    src={ep.still_path}
-                    alt={ep.name}
-                    class="aspect-video w-full object-cover"
-                  />
-                {:else}
-                  <div
-                    class="flex aspect-video w-full items-center justify-center bg-secondary"
-                  >
-                    <Play class="size-5 text-muted-foreground/50" />
-                  </div>
-                {/if}
-                <span
-                  class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/40"
-                >
-                  <Play
-                    class="size-5 text-white opacity-0 transition-opacity group-hover:opacity-100"
-                  />
-                </span>
-              </span>
+            {@const prog =
+              selectedSeason != null
+                ? epProgress(selectedSeason, ep.episode_number)
+                : undefined}
+            {@const pct = prog ? progressPct(prog) : 0}
+            {@const completed = prog?.completed ?? false}
+            {@const inProgress = !completed && pct > 1}
 
-              <!-- Info -->
-              <span class="min-w-0 flex-1 flex-col py-0.5">
-                <span class="flex flex-col">
-                  <span class="text-sm leading-snug font-medium">{ep.name}</span
+            <ContextMenu.Root>
+              <ContextMenu.Trigger class="w-full text-left">
+                <button
+                  class="group relative flex w-full items-center gap-3 p-3 text-left transition-colors
+                    {unreleased
+                    ? 'cursor-default opacity-40'
+                    : 'hover:bg-secondary/60'}
+                    {completed ? 'opacity-70' : ''}"
+                  onclick={() => {
+                    if (!unreleased) selectedEpisode = ep;
+                  }}
+                  disabled={unreleased}
+                >
+                  <!-- Thumbnail -->
+                  <span
+                    class="relative w-28 shrink-0 overflow-hidden rounded-md bg-muted"
                   >
-                  <span class="text-xs font-semibold text-muted-foreground">
-                    E{ep.episode_number}
-                    {#if ep.air_date}
-                      · <span class="font-normal"
-                        >{unreleased
-                          ? relativeDate(ep.air_date)
-                          : ep.air_date}</span
+                    {#if ep.still_path}
+                      <img
+                        src={ep.still_path}
+                        alt={ep.name}
+                        class="aspect-video w-full object-cover"
+                      />
+                    {:else}
+                      <div
+                        class="flex aspect-video w-full items-center justify-center bg-secondary"
                       >
+                        <Play class="size-5 text-muted-foreground/50" />
+                      </div>
+                    {/if}
+
+                    <!-- Completed checkmark -->
+                    {#if completed}
+                      <span
+                        class="absolute inset-0 flex items-center justify-center bg-black/50"
+                      >
+                        <span
+                          class="flex size-7 items-center justify-center rounded-full bg-green-500/90"
+                        >
+                          <Check class="size-4 text-white" />
+                        </span>
+                      </span>
+                    {:else}
+                      <!-- Hover play overlay (only when not completed) -->
+                      <span
+                        class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/40"
+                      >
+                        <Play
+                          class="size-5 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                        />
+                      </span>
                     {/if}
                   </span>
-                </span>
-                {#if ep.overview}
-                  <p
-                    class="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground"
+
+                  <!-- Info -->
+                  <span class="min-w-0 flex-1 flex-col py-0.5">
+                    <span class="flex flex-col">
+                      <span
+                        class="text-sm leading-snug font-medium {completed
+                          ? 'text-muted-foreground'
+                          : ''}">{ep.name}</span
+                      >
+                      <span
+                        class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"
+                      >
+                        E{ep.episode_number}
+                        {#if ep.air_date}
+                          · <span class="font-normal"
+                            >{unreleased
+                              ? relativeDate(ep.air_date)
+                              : ep.air_date}</span
+                          >
+                        {/if}
+                        {#if inProgress}
+                          · <span class="font-normal text-accent"
+                            >{formatPosition(prog!.position_seconds)} watched</span
+                          >
+                        {/if}
+                      </span>
+                    </span>
+                    {#if ep.overview}
+                      <p
+                        class="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground"
+                      >
+                        {ep.overview}
+                      </p>
+                    {/if}
+                  </span>
+
+                  <!-- In-progress bar (absolute bottom of row) -->
+                  {#if inProgress}
+                    <span
+                      class="absolute right-0 bottom-0 left-0 h-0.5 overflow-hidden bg-secondary"
+                    >
+                      <span
+                        class="block h-full bg-accent transition-all"
+                        style="width: {pct}%"
+                      ></span>
+                    </span>
+                  {/if}
+                </button>
+              </ContextMenu.Trigger>
+
+              {#if !unreleased}
+                <ContextMenu.Content>
+                  {#if !completed}
+                    <ContextMenu.Item
+                      onclick={() => markWatched(ep)}
+                      class="flex items-center gap-2"
+                    >
+                      <Check class="size-4" /> Mark as Watched
+                    </ContextMenu.Item>
+                  {:else}
+                    <ContextMenu.Item
+                      onclick={() => markUnwatched(ep)}
+                      class="flex items-center gap-2"
+                    >
+                      <RotateCcw class="size-4" /> Mark as Unwatched
+                    </ContextMenu.Item>
+                  {/if}
+                  <ContextMenu.Separator />
+                  <ContextMenu.Item
+                    onclick={() => {
+                      selectedEpisode = ep;
+                    }}
+                    class="flex items-center gap-2"
                   >
-                    {ep.overview}
-                  </p>
-                {/if}
-              </span>
-            </button>
+                    <Play class="size-4" /> View Streams
+                  </ContextMenu.Item>
+                </ContextMenu.Content>
+              {/if}
+            </ContextMenu.Root>
           {/each}
         {/if}
       </div>
@@ -343,17 +515,74 @@
               class="aspect-video w-24 shrink-0 rounded-md object-cover"
             />
           {/if}
-          <div class="min-w-0">
+          <div class="min-w-0 flex-1">
             <p class="text-[11px] text-muted-foreground">
               S{selectedSeason} · E{selectedEpisode.episode_number}
             </p>
             <p class="text-sm leading-snug font-semibold">
               {selectedEpisode.name}
             </p>
+            <!-- Episode progress -->
+            {#if selectedSeason != null}
+              {@const prog = epProgress(
+                selectedSeason,
+                selectedEpisode.episode_number,
+              )}
+              {#if prog}
+                {@const pct = progressPct(prog)}
+                {#if prog.completed}
+                  <p
+                    class="mt-1.5 flex items-center gap-1 text-[11px] text-green-500"
+                  >
+                    <Check class="size-3" /> Watched
+                  </p>
+                {:else if pct > 1}
+                  <div class="mt-2 space-y-1">
+                    <div
+                      class="h-1 w-full overflow-hidden rounded-full bg-secondary"
+                    >
+                      <div
+                        class="h-full rounded-full bg-accent transition-all"
+                        style="width: {pct}%"
+                      ></div>
+                    </div>
+                    <p class="text-[10px] text-muted-foreground">
+                      {formatPosition(prog.position_seconds)} / {formatPosition(
+                        prog.duration_seconds,
+                      )}
+                    </p>
+                  </div>
+                {/if}
+              {/if}
+            {/if}
           </div>
         </div>
       {:else}
-        <h3 class="text-lg font-semibold">Available Streams</h3>
+        <!-- Movie: "Available Streams" header with progress -->
+        <div class="flex items-start justify-between gap-3">
+          <h3 class="text-lg font-semibold">Available Streams</h3>
+        </div>
+        {#if movieProgress}
+          {#if movieProgress.completed}
+            <p class="flex items-center gap-1.5 text-xs text-green-500">
+              <Check class="size-3.5" /> Watched
+            </p>
+          {:else if progressPct(movieProgress) > 1}
+            <div class="space-y-1">
+              <div class="h-1 w-full overflow-hidden rounded-full bg-secondary">
+                <div
+                  class="h-full rounded-full bg-accent transition-all"
+                  style="width: {progressPct(movieProgress)}%"
+                ></div>
+              </div>
+              <p class="text-[11px] text-muted-foreground">
+                {formatPosition(movieProgress.position_seconds)} / {formatPosition(
+                  movieProgress.duration_seconds,
+                )}
+              </p>
+            </div>
+          {/if}
+        {/if}
       {/if}
 
       <!-- Quality + sort filters -->

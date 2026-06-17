@@ -8,6 +8,9 @@
   import { ChevronDown, Play, Star } from "lucide-svelte";
   import { countryName, qualityClass } from "$lib/utils";
   import PlayerSimple from "./PlayerSimple.svelte";
+  import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
+  import type { LibraryEntry, WatchProgress } from "$lib/types/library";
+  import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
 
   let {
     media,
@@ -23,6 +26,7 @@
     onwatch,
     onexpand,
     onmouseleave,
+    onpopoverchange,
   }: {
     media: Media;
     style: string;
@@ -37,6 +41,7 @@
     onwatch: () => void;
     onexpand: () => void;
     onmouseleave?: (e: MouseEvent) => void;
+    onpopoverchange?: (open: boolean) => void;
   } = $props();
 
   // Expose the root element so the parent can check relatedTarget against it
@@ -53,6 +58,48 @@
       : media.release_date
     )?.slice(0, 4),
   );
+
+  // ── Library state ─────────────────────────────────────────────────────────────
+
+  let libraryEntry = $state<LibraryEntry | null>(null);
+  let movieProgress = $state<WatchProgress | null>(null);
+
+  $effect(() => {
+    api
+      .libraryGet(media.id, media.media_type)
+      .then((result) => {
+        if (!result) return;
+        libraryEntry = result.entry;
+        if (media.media_type === "movie") {
+          movieProgress = result.progress[0] ?? null;
+        }
+      })
+      .catch(console.error);
+  });
+
+  const movieProgressPct = $derived(
+    movieProgress && movieProgress.duration_seconds > 0
+      ? Math.min(
+          100,
+          (movieProgress.position_seconds / movieProgress.duration_seconds) *
+            100,
+        )
+      : 0,
+  );
+
+  const hasIncompleteProgress = $derived(
+    movieProgress !== null && !movieProgress.completed && movieProgressPct > 1,
+  );
+
+  // For TV shows show which episode to resume; for movies "Continue" or "Watch".
+  const watchButtonLabel = $derived.by(() => {
+    if (media.media_type === "tv") {
+      const s = libraryEntry?.last_watched_season;
+      const e = libraryEntry?.last_watched_episode;
+      if (s != null && e != null) return `Continue S${s}E${e}`;
+    }
+    return hasIncompleteProgress ? "Continue" : "Watch";
+  });
 
   // Animate in when mounted
   $effect(() => {
@@ -92,11 +139,7 @@
   style="opacity: 0; transform: scale(0.85); {style}"
 >
   {#if videoUrl}
-    <PlayerSimple
-      src={videoUrl}
-      controls={false}
-      bg={media.poster_path}
-    />
+    <PlayerSimple src={videoUrl} controls={false} bg={media.poster_path} />
   {:else}
     <img
       src={media.poster_path}
@@ -175,10 +218,37 @@
       >{media.overview}</span
     >
 
-    <span class="flex w-full pt-0.5">
+    <!-- Library: status pill + user rating -->
+    {#if libraryEntry}
+      <span class="flex items-center gap-2">
+        <span
+          class="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
+        >
+          {STATUS_LABELS[libraryEntry.status as LibraryStatus]}
+        </span>
+        {#if libraryEntry.rating !== null && libraryEntry.rating !== undefined}
+          <span class="flex items-center gap-0.5 text-xs text-yellow-400">
+            <Star class="size-3 fill-current" />
+            {libraryEntry.rating}/5
+          </span>
+        {/if}
+      </span>
+    {/if}
+
+    <!-- Movie progress bar -->
+    {#if hasIncompleteProgress}
+      <div class="h-1 w-full overflow-hidden rounded-full bg-secondary">
+        <div
+          class="h-full rounded-full bg-foreground/60 transition-all"
+          style="width: {movieProgressPct}%"
+        ></div>
+      </div>
+    {/if}
+
+    <span class="flex w-full gap-1 pt-0.5">
       <ButtonGroup.Root class="flex w-full">
         <Button
-          class="w-[75%] border-b border-accent bg-accent text-accent-foreground hover:bg-accent-foreground hover:text-accent"
+          class="w-[85%] border-b border-accent bg-accent text-accent-foreground hover:bg-accent-foreground hover:text-accent"
           variant="default"
           size="sm"
           onclick={(e) => {
@@ -186,20 +256,27 @@
             onwatch();
           }}
         >
-          <Play class="size-3" /> Watch
+          <Play class="size-3" />
+          {watchButtonLabel}
         </Button>
         <Button
-          class="w-[25%]"
+          class="w-[15%]"
           variant="outline"
-          size="sm"
+          size="icon-sm"
           onclick={(e) => {
             e.stopPropagation();
             onexpand();
           }}
         >
-          <ChevronDown class="size-3" /> Details
+          <ChevronDown class="size-3" />
         </Button>
       </ButtonGroup.Root>
+      <LibraryStatusPanel
+        {libraryEntry}
+        {media}
+        size="icon-sm"
+        {onpopoverchange}
+      />
     </span>
   </span>
 </span>

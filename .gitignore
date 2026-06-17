@@ -1,3 +1,4 @@
 /.env
 /electron/build/
 /cove
+/library.json

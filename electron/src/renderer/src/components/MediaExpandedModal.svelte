@@ -8,6 +8,10 @@
   import { Play, Star, X } from "lucide-svelte";
   import { countryName, qualityClass } from "$lib/utils";
   import PlayerSimple from "./PlayerSimple.svelte";
+  import { api, formatPosition } from "$lib/api";
+  import type { LibraryEntry, WatchProgress } from "$lib/types/library";
+  import StarRating from "./StarRating.svelte";
+  import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
 
   let {
     media,
@@ -55,14 +59,70 @@
     )?.slice(0, 4),
   );
 
-  // Click-outside to close
+  // ── Library state ─────────────────────────────────────────────────────────────
+
+  let libraryEntry = $state<LibraryEntry | null>(null);
+  let movieProgress = $state<WatchProgress | null>(null);
+  let tvProgressList = $state<WatchProgress[]>([]);
+
+  // Load library entry + progress on open
   $effect(() => {
-    function handleClickOutside(e: MouseEvent): void {
-      if (el && !el.contains(e.target as Node)) close();
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    api
+      .libraryGet(media.id, media.media_type)
+      .then((result) => {
+        if (!result) {
+          libraryEntry = null;
+          movieProgress = null;
+          tvProgressList = [];
+          return;
+        }
+        libraryEntry = result.entry;
+        if (media.media_type === "movie") {
+          movieProgress = result.progress[0] ?? null;
+        } else {
+          tvProgressList = result.progress;
+        }
+      })
+      .catch(console.error);
   });
+
+  // ── Derived: progress display ─────────────────────────────────────────────────
+
+  const movieProgressPct = $derived(
+    movieProgress && movieProgress.duration_seconds > 0
+      ? Math.min(
+          100,
+          (movieProgress.position_seconds / movieProgress.duration_seconds) *
+            100,
+        )
+      : 0,
+  );
+
+  const episodesWatched = $derived(
+    tvProgressList.filter((p) => p.completed).length,
+  );
+
+  const hasIncompleteMovieProgress = $derived(
+    media.media_type === "movie" &&
+      movieProgress !== null &&
+      !movieProgress.completed &&
+      movieProgressPct > 1,
+  );
+
+  // ── Watch button label ────────────────────────────────────────────────────────
+
+  // For TV: show the episode to resume from if we have one.
+  // For movies: "Continue" when there's incomplete progress, else "Watch".
+  const watchButtonLabel = $derived.by(() => {
+    if (media.media_type === "tv") {
+      const s = libraryEntry?.last_watched_season;
+      const e = libraryEntry?.last_watched_episode;
+      if (s != null && e != null) return `Continue S${s}E${e}`;
+    }
+    return hasIncompleteMovieProgress ? "Continue" : "Watch";
+  });
+
+  // ── Modal animation ───────────────────────────────────────────────────────────
 
   // Animate in on mount
   $effect(() => {
@@ -103,7 +163,6 @@
 >
   <!-- Modal — only scale is animated, no translate conflict -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-
   <div
     bind:this={el}
     role="presentation"
@@ -113,11 +172,7 @@
     style="opacity: 0; transform: scale(0.9);"
   >
     {#if videoUrl}
-      <PlayerSimple
-        src={videoUrl}
-        controls={true}
-        bg={media.poster_path}
-      />
+      <PlayerSimple src={videoUrl} controls={true} bg={media.poster_path} />
     {:else}
       <img
         src={media.poster_path}
@@ -127,23 +182,27 @@
     {/if}
 
     <div class="flex flex-col gap-2 p-5">
+      <!-- Title row -->
       <div class="flex w-full items-baseline justify-between pb-3">
-        <span class="flex min-w-0 flex-1 items-baseline gap-2 pr-3">
-          <span class="text-md truncate leading-none font-semibold"
-            >{title}</span
-          >
-          {#if year}<Badge variant="default">{year}</Badge>{/if}
+        <span class="flex min-w-0 flex-1 items-center gap-1 pr-3">
+          <span class="text-md truncate text-2xl leading-none font-semibold"
+            >{title}
+          </span>
+          {#if year}<Badge variant="outline">{year}</Badge>{/if}
+          <Badge variant="outline" class="text-yellow-400">
+            <Star class="size-4" />
+            {media.vote_average?.toFixed(1)}
+            <span class="font-bold">TMDB</span>
+          </Badge>
         </span>
-        <span
-          class="flex flex-row items-center justify-center gap-1 text-xs leading-none whitespace-nowrap text-yellow-400"
-        >
-          <Star class="size-4" />
-          {media.vote_average?.toFixed(1)}
-        </span>
+        <div class="flex gap-2">
+          <StarRating {libraryEntry} {media} />
+        </div>
       </div>
 
       <Separator />
 
+      <!-- Metadata badges -->
       <span class="flex flex-col gap-2 pr-3">
         <span class="flex flex-wrap items-center gap-2">
           {#if ageRating}
@@ -194,6 +253,40 @@
         {/if}
       </span>
 
+      <!-- Movie progress bar -->
+      {#if hasIncompleteMovieProgress && movieProgress}
+        <div
+          class="flex items-center gap-2 rounded-md bg-secondary/40 px-3 py-2"
+        >
+          <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+            <div
+              class="h-full rounded-full bg-foreground/70 transition-all"
+              style="width: {movieProgressPct}%"
+            ></div>
+          </div>
+          <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {formatPosition(movieProgress.position_seconds)} / {formatPosition(
+              movieProgress.duration_seconds,
+            )}
+          </span>
+        </div>
+      {/if}
+
+      <!-- TV: episodes-watched summary -->
+      {#if media.media_type === "tv" && episodesWatched > 0}
+        <div
+          class="flex items-center gap-2 rounded-md bg-secondary/40 px-3 py-2"
+        >
+          <span class="text-xs text-muted-foreground">
+            {episodesWatched} episode{episodesWatched !== 1 ? "s" : ""} watched
+            {#if numberOfEpisodes}· {Math.round(
+                (episodesWatched / numberOfEpisodes) * 100,
+              )}%{/if}
+          </span>
+        </div>
+      {/if}
+
+      <!-- Overview + similar / cast + keywords grid -->
       <div class="grid grid-cols-[1fr_auto] gap-x-3 gap-y-3">
         <div class="flex flex-col justify-between gap-3 rounded-lg">
           {#each overviewParagraphs as paragraph, i (i)}
@@ -270,8 +363,8 @@
           {/if}
         </div>
       </div>
-
-      <span class="flex w-full pt-0.5">
+      <!-- Action buttons -->
+      <span class="flex w-full pt-0.5 gap-1">
         <ButtonGroup.Root class="flex w-full">
           <Button
             class="w-[75%] border-b border-accent bg-accent text-accent-foreground hover:bg-accent-foreground hover:text-accent"
@@ -282,7 +375,8 @@
               onwatch();
             }}
           >
-            <Play class="size-3" /> Watch
+            <Play class="size-3" />
+            {watchButtonLabel}
           </Button>
           <Button
             class="w-[25%]"
@@ -296,6 +390,7 @@
             <X class="size-3" /> Close
           </Button>
         </ButtonGroup.Root>
+        <LibraryStatusPanel {libraryEntry} {media} size="icon" />
       </span>
     </div>
   </div>

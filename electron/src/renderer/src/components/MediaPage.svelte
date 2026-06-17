@@ -2,7 +2,6 @@
   import type { Stream } from "$lib/types/addons";
   import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
   import Player from "./Player.svelte";
-  import { Button } from "$lib/components/ui/button";
   import { ChevronLeft, Star } from "lucide-svelte";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
@@ -32,6 +31,10 @@
 
   let activeStream: Stream | null = $state(null);
   let activeSubtitles = $state<{ id: string; url: string; lang: string }[]>([]);
+
+  // Track which season/episode is being played so Player can load saved progress
+  let activeSeason = $state<number | undefined>(undefined);
+  let activeEpisode = $state<number | undefined>(undefined);
 
   let detailsLoading = $state(false);
   let genres: string[] = $state([]);
@@ -99,6 +102,8 @@
 
   function playStream(stream: Stream, season?: number, episode?: number): void {
     activeStream = stream;
+    activeSeason = season;
+    activeEpisode = episode;
     activeSubtitles = [];
 
     const params = new URLSearchParams({
@@ -138,6 +143,8 @@
       src={activeStream.infoHash || activeStream.url}
       {media}
       externalSubtitles={activeSubtitles}
+      season={activeSeason}
+      episode={activeEpisode}
     />
   </div>
 {:else}

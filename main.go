@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Arcadyi/cove/internal/addons"
+	"github.com/Arcadyi/cove/internal/library"
 	"github.com/Arcadyi/cove/internal/player"
 	"github.com/Arcadyi/cove/internal/settings"
 	"github.com/Arcadyi/cove/internal/tmdb"
@@ -42,11 +43,15 @@ func main() {
 	if err := settings.InitSettings(); err != nil {
 		log.Println("could not load settings:", err)
 	}
+	if err := library.Init(); err != nil {
+		log.Println("could not load library:", err)
+	}
 
 	addons.SetupHandlers()
 	tmdb.SetupHandlers(apiKey)
 	player.SetupHandlers(apiKey)
 	settings.SetupHandlers()
+	library.SetupHandlers()
 
 	if err := player.Init(); err != nil {
 		log.Fatal("could not init torrent client:", err)

@@ -10,6 +10,7 @@
   import QueryPage from "./components/QueryPage.svelte";
   import HomePage from "./components/HomePage.svelte";
   import SettingsPage from "./components/SettingsPage.svelte";
+  import MyListPage from "./components/MyListPage.svelte";
   import { settings } from "$lib/stores/settings";
   import { onMount } from "svelte";
 
@@ -98,6 +99,8 @@
         />
       {:else if currentPage.type === "home"}
         <HomePage />
+      {:else if currentPage.type === "myList"}
+        <MyListPage onSelectMedia={selectMedia} />
       {/if}
     </main>
   </div>

@@ -20,6 +20,7 @@
   import "vidstack/player/styles/default/layouts/video.css";
   import Hls from "hls.js";
   import { onDestroy } from "svelte";
+  import { api } from "$lib/api";
 
   // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -58,10 +59,14 @@
     src,
     media,
     externalSubtitles = [],
+    season = undefined,
+    episode = undefined,
   }: {
     src: string;
     media?: Media;
     externalSubtitles?: { id: string; url: string; lang: string }[];
+    season?: number;
+    episode?: number;
   } = $props();
 
   let createdID = $state<string | null>(null);
@@ -97,9 +102,9 @@
 
   const needsHLS = $derived(
     audioTracks.length > 1 ||
-    audioTracks.some((t) =>
-      UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
-    ),
+      audioTracks.some((t) =>
+        UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
+      ),
   );
 
   // ─── Playback state (driven by Vidstack events) ─────────────────────────────
@@ -147,6 +152,13 @@
   const title = $derived(
     media ? (media.media_type === "tv" ? media.name : media.title) : "",
   );
+
+  // ─── Watch-progress state ────────────────────────────────────────────────────
+
+  // Position loaded from the server; null = nothing saved or already completed.
+  let savedPosition = $state<number | null>(null);
+  // Prevents us from seeking twice if canPlay fires more than once.
+  let hasSeekedToSaved = $state(false);
 
   // ─── Probe audio tracks ─────────────────────────────────────────────────────
 
@@ -198,6 +210,24 @@
       });
 
     return () => controller.abort();
+  });
+
+  // ─── Load saved watch position (runs whenever src/season/episode changes) ────
+
+  $effect(() => {
+    if (!media || !src) return;
+    savedPosition = null;
+    hasSeekedToSaved = false;
+
+    api
+      .progressGet(media.id, media.media_type, season ?? null, episode ?? null)
+      .then((prog) => {
+        // Only restore if there's a meaningful position that isn't done yet
+        if (prog && !prog.completed && prog.position_seconds > 10) {
+          savedPosition = prog.position_seconds;
+        }
+      })
+      .catch(console.error);
   });
 
   // ─── Start HLS session when needed ──────────────────────────────────────────
@@ -278,22 +308,24 @@
           hls.on(Hls.Events.ERROR, (_: any, data: any) => {
             if (!data.fatal) return; // hls.js handles non-fatal errors itself
 
-            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveryAttempts < 3) {
-              // Media errors (codec/buffer issues) — try swapAudioCodec on
-              // the second attempt, which forces hls.js to reinitialise the
-              // SourceBuffer with a different codec string.
+            if (
+              data.type === Hls.ErrorTypes.MEDIA_ERROR &&
+              mediaRecoveryAttempts < 3
+            ) {
               mediaRecoveryAttempts++;
               if (mediaRecoveryAttempts === 1) {
-                console.warn("[hls] media error — attempting recoverMediaError");
+                console.warn(
+                  "[hls] media error — attempting recoverMediaError",
+                );
                 hls.recoverMediaError();
               } else {
-                console.warn("[hls] media error — attempting swapAudioCodec + recoverMediaError");
+                console.warn(
+                  "[hls] media error — attempting swapAudioCodec + recoverMediaError",
+                );
                 hls.swapAudioCodec();
                 hls.recoverMediaError();
               }
             } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              // Network errors — just resume loading; the segment server will
-              // keep the connection alive until the segment is ready.
               console.warn("[hls] network error — resuming load");
               hls.startLoad();
             } else {
@@ -322,7 +354,7 @@
     };
   });
 
-  // ─── Set player source ────────────────────────────────────────────────────
+  // ─── Set player source ────────────────────────────────────────────────────────
 
   $effect(() => {
     if (!playerEl || !activeStreamURL) return;
@@ -339,6 +371,15 @@
     waiting = false;
     fakeProgress = 100;
     syncAudioTracks();
+
+    // Seek to the saved position the first time playback becomes ready.
+    if (savedPosition !== null && !hasSeekedToSaved) {
+      hasSeekedToSaved = true;
+      const video = playerEl?.querySelector<HTMLVideoElement>("video");
+      if (video) {
+        video.currentTime = savedPosition;
+      }
+    }
   }
 
   function onWaiting(): void {
@@ -395,7 +436,7 @@
       });
   });
 
-  // ─── Fake loading bar animation ───────────────────────────────────────────────
+  // ─── Fake loading bar animation ──────────────────────────────────────────────
 
   $effect(() => {
     if (canPlay) {
@@ -410,8 +451,6 @@
   });
 
   // ─── Torrent progress (SSE) ──────────────────────────────────────────────────
-  // One persistent connection replaces per-tick HTTP requests.
-  // EventSource auto-reconnects on its own; we just close it on cleanup.
 
   $effect(() => {
     if (!isHash) return () => {};
@@ -434,6 +473,64 @@
     };
 
     return () => es.close();
+  });
+
+  // ─── Watch-progress saving ────────────────────────────────────────────────────
+  //
+  // Saves position every 10 seconds while playing, and marks completed on "ended".
+  // Also auto-adds the title to the library as "watching" if not already there
+  // (handled server-side in the progress POST handler).
+
+  $effect(() => {
+    if (!playerEl || !canPlay || !media) return () => {};
+    const video = playerEl.querySelector<HTMLVideoElement>("video");
+    if (!video) return () => {};
+
+    let lastSaveMs = 0;
+
+    function saveCurrentProgress(completed: boolean) {
+      const pos = video!.currentTime;
+      const dur = video!.duration || probedDuration || 0;
+      if (!dur || pos < 5) return; // skip the very start
+
+      api
+        .progressSave({
+          tmdb_id: media!.id,
+          media_type: media!.media_type,
+          title: title,
+          poster_path: media!.poster_path ?? "",
+          vote_average: media!.vote_average ?? 0,
+          last_air_date: (media as any)?.last_air_date ?? "",
+          season: season ?? null,
+          episode: episode ?? null,
+          position_seconds: completed ? dur : pos,
+          duration_seconds: dur,
+          completed,
+        })
+        .catch(console.error);
+    }
+
+    function onTimeUpdateProgress() {
+      const now = Date.now();
+      if (now - lastSaveMs < 10_000) return; // throttle: save at most every 10s
+      lastSaveMs = now;
+      // Auto-detect completion: >90% through
+      const dur = video!.duration || probedDuration || 0;
+      const completed = dur > 0 && video!.currentTime / dur >= 0.9;
+      saveCurrentProgress(completed);
+    }
+
+    function onEnded() {
+      saveCurrentProgress(true);
+    }
+
+    video.addEventListener("timeupdate", onTimeUpdateProgress);
+    video.addEventListener("ended", onEnded);
+
+    return () => {
+      video.removeEventListener("timeupdate", onTimeUpdateProgress);
+      video.removeEventListener("ended", onEnded);
+    };
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -466,8 +563,6 @@
   let subtitleLoading = $state(false);
 
   // ─── Pre-warm subtitle cache (sequential) ────────────────────────────────────
-  // Fetch built-in subtitles one at a time so we don't fire N simultaneous
-  // requests and exhaust the browser's ~6 connection slots to localhost:6969.
 
   $effect(() => {
     if (builtInSubtitles.length === 0) return;
@@ -584,7 +679,7 @@
   });
 
   $effect(() => {
-    src; // track dependency
+    let s = src; // track dependency
     selectedTrackId = null;
     subtitleCues = [];
     currentCueText = null;
@@ -727,13 +822,13 @@
                 <Headphones class="size-4" />
                 <span class="text-xs">
                   {vidstackAudioTracks.find((t) => t.selected)?.label ??
-                  "Audio"}
+                    "Audio"}
                 </span>
               </Popover.Trigger>
               <Popover.Content side="top" class="w-52 p-0">
                 <div class="border-b border-border px-3 py-2">
                   <span class="text-xs font-medium text-muted-foreground"
-                  >Audio Track</span
+                    >Audio Track</span
                   >
                 </div>
                 <div class="p-1">
@@ -898,9 +993,9 @@
                     <div class="flex justify-between text-xs">
                       <span class="text-muted-foreground">Sync offset</span>
                       <span
-                      >{subtitleSettings.offset > 0 ? "+" : ""}{(
-                        subtitleSettings.offset / 1000
-                      ).toFixed(1)}s</span
+                        >{subtitleSettings.offset > 0 ? "+" : ""}{(
+                          subtitleSettings.offset / 1000
+                        ).toFixed(1)}s</span
                       >
                     </div>
                     <div class="flex gap-1">
@@ -913,7 +1008,7 @@
                           );
                         }}
                         class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                      >−500ms</button
+                        >−500ms</button
                       >
                       <button
                         onclick={(e) => {
@@ -924,7 +1019,7 @@
                           );
                         }}
                         class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                      >+500ms</button
+                        >+500ms</button
                       >
                     </div>
                     {#if subtitleSettings.offset !== 0}
@@ -934,7 +1029,7 @@
                           subtitleSettings.offset = 0;
                         }}
                         class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
-                      >Reset</button
+                        >Reset</button
                       >
                     {/if}
                   </div>
@@ -1130,7 +1225,7 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
-          >{title}</span
+            >{title}</span
           >
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"

@@ -1,9 +1,5 @@
 <script lang="ts">
-  import type {
-    Details,
-    Media,
-    MediaImages,
-  } from "$lib/types/tmdb";
+  import type { Details, Media, MediaImages } from "$lib/types/tmdb";
   import { animate } from "animejs";
   import {
     getImageOpt,
@@ -18,10 +14,15 @@
   import MediaHoverCard from "./MediaHoverCard.svelte";
   import MediaExpandedModal from "./MediaExpandedModal.svelte";
 
+  import type { LibraryEntry } from "$lib/types/library";
+  import { libraryChanged } from "$lib/stores/library";
+  import { CircleCheckBig } from "lucide-svelte";
+
   let {
     media,
     onclick,
     quality = null,
+    newEpisodes = false,
     initialExpanded = false,
     onclose,
     onsimilar,
@@ -29,6 +30,7 @@
     media: Media;
     onclick: (m: Media) => void;
     quality?: string | null;
+    newEpisodes?: boolean;
     initialExpanded?: boolean;
     onclose?: () => void;
     onsimilar?: (m: Media) => void;
@@ -59,6 +61,8 @@
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
   let videoUrl = $state<string>();
+  let libraryEntry = $state<LibraryEntry | null>(null);
+  const isWatched = $derived(libraryEntry?.status === "finished");
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
@@ -142,12 +146,24 @@
       fetchData();
     }, 400);
   }
+  let popoverOpen = $state(false);
 
   function onLeave(e?: MouseEvent): void {
     clearTimeout(hoverTimeout);
-    if (expanded) return;
+    if (expanded || popoverOpen) return;
+
+    const relatedTarget = e?.relatedTarget as Node | null;
+
+    // Moving into the hover card itself — keep it open
     const hoverEl = hoverCardInstance?.getEl();
-    if (e && hoverEl && hoverEl.contains(e.relatedTarget as Node)) return;
+    if (relatedTarget && hoverEl?.contains(relatedTarget)) return;
+
+    // Moving into a portalled popover — keep it open
+    const popover = document.querySelector(
+      "[data-radix-popper-content-wrapper]",
+    );
+    if (relatedTarget && popover?.contains(relatedTarget)) return;
+
     if (hoverCardInstance) {
       hoverCardInstance.animateClose(() => {
         hovered = false;
@@ -178,6 +194,13 @@
     }
   });
 
+  $effect(() => {
+    $libraryChanged;
+    api.libraryGet(media.id, media.media_type).then((result) => {
+      libraryEntry = result?.entry ?? null;
+    });
+  });
+
   // ── Load animation ────────────────────────────────────────────────────────
   onMount(() => {
     api.getImages(media).then((d) => {
@@ -196,6 +219,9 @@
           },
         });
       }
+    });
+    api.libraryGet(media.id, media.media_type).then((result) => {
+      libraryEntry = result?.entry ?? null;
     });
   });
 </script>
@@ -222,13 +248,17 @@
             randomize: true,
           })}
           alt={title}
-          class="block aspect-2/3 w-full rounded-md object-cover"
+          class="block aspect-2/3 w-full rounded-md object-cover transition-opacity duration-300 {isWatched
+            ? 'opacity-35'
+            : 'opacity-100'}"
         />
       {:else if logoLoaded && media.poster_path}
         <img
           src={media.poster_path}
           alt={title}
-          class="block aspect-2/3 w-full rounded-md object-cover"
+          class="block aspect-2/3 w-full rounded-md object-cover transition-opacity duration-300 {isWatched
+            ? 'opacity-35'
+            : 'opacity-100'}"
         />
       {:else}
         <div
@@ -245,6 +275,26 @@
         >
           {quality.toUpperCase()}
         </span>
+      {/if}
+      {#if newEpisodes}
+        <div
+          class="absolute inset-x-0 bottom-0 rounded-b-md"
+          style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 55%, transparent 100%)"
+        >
+          <p
+            class="px-2 pt-6 pb-2 text-[11px] font-semibold tracking-wide text-white"
+          >
+            New Episodes
+          </p>
+        </div>
+      {/if}
+      {#if isWatched}
+        <div
+          class="absolute inset-0 flex items-center justify-center rounded-md"
+          style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+        >
+          <CircleCheckBig class="size-12 text-white/80" />
+        </div>
       {/if}
       {#if media.media_type === "tv" && numberOfSeasons !== null}
         <span
@@ -273,6 +323,7 @@
     onmouseleave={onLeave}
     onwatch={() => onclick(media)}
     onexpand={expand}
+    onpopoverchange={(open) => (popoverOpen = open)}
   />
 {/if}
 
