@@ -96,6 +96,14 @@ type Details struct {
 	NumberOfSeasons  int        `json:"number_of_seasons"`
 	NumberOfEpisodes int        `json:"number_of_episodes"`
 	Seasons          []TVSeason `json:"seasons"`
+	// LastEpisodeToAir is TV-only. Used client-side to detect unwatched new
+	// episodes by comparing season/episode_number against the user's
+	// last-watched position.
+	LastEpisodeToAir *struct {
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+	} `json:"last_episode_to_air"`
 }
 
 type searchResponse struct {

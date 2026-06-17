@@ -98,12 +98,23 @@
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
+  // A show has unwatched new episodes when the latest aired episode is
+  // numerically ahead of the user's last-watched episode. Comparing season
+  // and episode numbers (not dates) avoids the bug where a recently-watched
+  // older episode looks "newer" than an unwatched episode that aired weeks
+  // ago — timestamps don't reflect watch order, episode numbers do.
   function hasNewEpisodes(entry: LibraryEntry): boolean {
     if (entry.media_type !== "tv" || entry.status !== "watching") return false;
-    if (!entry.last_air_date || !entry.last_watched_at) return false;
-    const aired = new Date(entry.last_air_date);
-    if (aired > new Date()) return false;
-    return aired > new Date(entry.last_watched_at);
+
+    const airedS = entry.last_aired_season;
+    const airedE = entry.last_aired_episode;
+    if (airedS == null || airedE == null) return false;
+
+    const watchedS = entry.last_watched_season ?? 0;
+    const watchedE = entry.last_watched_episode ?? 0;
+
+    if (airedS > watchedS) return true;
+    return airedS === watchedS && airedE > watchedE;
   }
 
   function toMedia(entry: LibraryEntry): Media {

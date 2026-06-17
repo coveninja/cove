@@ -23,6 +23,8 @@
     originCountry,
     numberOfSeasons,
     numberOfEpisodes,
+    lastAiredSeason = null,
+    lastAiredEpisode = null,
     cast,
     keywords,
     similar,
@@ -40,6 +42,8 @@
     originCountry: string[];
     numberOfSeasons: number | null;
     numberOfEpisodes: number | null;
+    lastAiredSeason?: number | null;
+    lastAiredEpisode?: number | null;
     cast: string[];
     keywords: string[];
     similar: Media[];
@@ -196,7 +200,12 @@
           </Badge>
         </span>
         <div class="flex gap-2">
-          <StarRating {libraryEntry} {media} />
+          <StarRating
+            {libraryEntry}
+            {media}
+            {lastAiredSeason}
+            {lastAiredEpisode}
+          />
         </div>
       </div>
 
@@ -364,7 +373,7 @@
         </div>
       </div>
       <!-- Action buttons -->
-      <span class="flex w-full pt-0.5 gap-1">
+      <span class="flex w-full gap-1 pt-0.5">
         <ButtonGroup.Root class="flex w-full">
           <Button
             class="w-[75%] border-b border-accent bg-accent text-accent-foreground hover:bg-accent-foreground hover:text-accent"
@@ -390,7 +399,13 @@
             <X class="size-3" /> Close
           </Button>
         </ButtonGroup.Root>
-        <LibraryStatusPanel {libraryEntry} {media} size="icon" />
+        <LibraryStatusPanel
+          {libraryEntry}
+          {media}
+          {lastAiredSeason}
+          {lastAiredEpisode}
+          size="icon"
+        />
       </span>
     </div>
   </div>

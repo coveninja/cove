@@ -6,9 +6,16 @@
   import { animate, stagger } from "animejs";
   import { libraryChanged } from "$lib/stores/library";
 
-  let { libraryEntry, media } = $props<{
+  let {
+    libraryEntry,
+    media,
+    lastAiredSeason = null,
+    lastAiredEpisode = null,
+  } = $props<{
     libraryEntry: LibraryEntry;
     media: Media;
+    lastAiredSeason?: number | null;
+    lastAiredEpisode?: number | null;
   }>();
 
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
@@ -87,6 +94,8 @@
           poster_path: media.poster_path ?? "",
           vote_average: media.vote_average ?? 0,
           last_air_date: media.last_air_date ?? "",
+          last_aired_season: lastAiredSeason,
+          last_aired_episode: lastAiredEpisode,
         });
       }
 

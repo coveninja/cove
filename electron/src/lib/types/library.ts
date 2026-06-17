@@ -28,6 +28,8 @@ export interface LibraryEntry {
   last_watched_at?: string; // updated every time progress is saved
   last_watched_season?: number /* int */; // most recently watched TV episode
   last_watched_episode?: number /* int */; // most recently watched TV episode
+  last_aired_season?: number /* int */; // TMDB last_episode_to_air.season_number
+  last_aired_episode?: number /* int */; // TMDB last_episode_to_air.episode_number
   added_at: string;
   updated_at: string;
 }

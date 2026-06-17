@@ -22,6 +22,8 @@
     originCountry,
     numberOfSeasons,
     numberOfEpisodes,
+    lastAiredSeason = null,
+    lastAiredEpisode = null,
     quality,
     onwatch,
     onexpand,
@@ -37,6 +39,8 @@
     originCountry: string[];
     numberOfSeasons: number | null;
     numberOfEpisodes: number | null;
+    lastAiredSeason?: number | null;
+    lastAiredEpisode?: number | null;
     quality: string | null;
     onwatch: () => void;
     onexpand: () => void;
@@ -274,6 +278,8 @@
       <LibraryStatusPanel
         {libraryEntry}
         {media}
+        {lastAiredSeason}
+        {lastAiredEpisode}
         size="icon-sm"
         {onpopoverchange}
       />

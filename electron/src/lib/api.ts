@@ -7,7 +7,7 @@ const BASE = "http://localhost:6969/api";
 
 // ── Library: TypeScript-only types ────────────────────────────────────────────
 //
-// LibraryStatusPanel can't be a Go union type, so we define it here and let tygo
+// LibraryStatus can't be a Go union type, so we define it here and let tygo
 // emit `string` for the Status field in LibraryEntry. Both are correct at
 // runtime; the union just gives callers better autocomplete.
 
@@ -29,7 +29,6 @@ export function formatPosition(seconds: number): string {
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
-
 
 // ── API ────────────────────────────────────────────────────────────────────────
 
@@ -88,6 +87,8 @@ export const api = {
     poster_path: string;
     vote_average?: number;
     last_air_date?: string;
+    last_aired_season?: number | null;
+    last_aired_episode?: number | null;
     status?: LibraryStatus;
   }): Promise<LibraryEntry> =>
     fetch(`${BASE}/library`, {
@@ -164,6 +165,8 @@ export const api = {
     poster_path?: string;
     vote_average?: number;
     last_air_date?: string;
+    last_aired_season?: number | null;
+    last_aired_episode?: number | null;
     season?: number | null;
     episode?: number | null;
     position_seconds: number;

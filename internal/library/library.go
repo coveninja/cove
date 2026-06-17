@@ -46,6 +46,8 @@ type LibraryEntry struct {
 	LastWatchedAt      *time.Time `json:"last_watched_at"`      // updated every time progress is saved
 	LastWatchedSeason  *int       `json:"last_watched_season"`  // most recently watched TV episode
 	LastWatchedEpisode *int       `json:"last_watched_episode"` // most recently watched TV episode
+	LastAiredSeason    *int       `json:"last_aired_season"`    // TMDB last_episode_to_air.season_number
+	LastAiredEpisode   *int       `json:"last_aired_episode"`   // TMDB last_episode_to_air.episode_number
 	AddedAt            time.Time  `json:"added_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
@@ -178,13 +180,15 @@ func handleCollection(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var body struct {
-			TmdbID      int     `json:"tmdb_id"`
-			MediaType   string  `json:"media_type"`
-			Title       string  `json:"title"`
-			PosterPath  string  `json:"poster_path"`
-			Status      Status  `json:"status"`
-			VoteAverage float64 `json:"vote_average"`
-			LastAirDate string  `json:"last_air_date"`
+			TmdbID           int     `json:"tmdb_id"`
+			MediaType        string  `json:"media_type"`
+			Title            string  `json:"title"`
+			PosterPath       string  `json:"poster_path"`
+			Status           Status  `json:"status"`
+			VoteAverage      float64 `json:"vote_average"`
+			LastAirDate      string  `json:"last_air_date"`
+			LastAiredSeason  *int    `json:"last_aired_season"`
+			LastAiredEpisode *int    `json:"last_aired_episode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
@@ -209,6 +213,14 @@ func handleCollection(w http.ResponseWriter, r *http.Request) {
 		entry.Status = body.Status
 		entry.VoteAverage = body.VoteAverage
 		entry.LastAirDate = body.LastAirDate
+		// Only overwrite if the caller actually sent values — avoids resetting
+		// fields populated by other code paths (e.g. progressSave).
+		if body.LastAiredSeason != nil {
+			entry.LastAiredSeason = body.LastAiredSeason
+		}
+		if body.LastAiredEpisode != nil {
+			entry.LastAiredEpisode = body.LastAiredEpisode
+		}
 		entry.UpdatedAt = now
 		// Re-link any progress records that became orphaned when the entry was
 		// previously removed. This keeps library_entry_id consistent for a
@@ -280,17 +292,19 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var body struct {
-			TmdbID          int     `json:"tmdb_id"`
-			MediaType       string  `json:"media_type"`
-			Title           string  `json:"title"`
-			PosterPath      string  `json:"poster_path"`
-			VoteAverage     float64 `json:"vote_average"`
-			LastAirDate     string  `json:"last_air_date"`
-			Season          *int    `json:"season"`
-			Episode         *int    `json:"episode"`
-			PositionSeconds float64 `json:"position_seconds"`
-			DurationSeconds float64 `json:"duration_seconds"`
-			Completed       bool    `json:"completed"`
+			TmdbID           int     `json:"tmdb_id"`
+			MediaType        string  `json:"media_type"`
+			Title            string  `json:"title"`
+			PosterPath       string  `json:"poster_path"`
+			VoteAverage      float64 `json:"vote_average"`
+			LastAirDate      string  `json:"last_air_date"`
+			LastAiredSeason  *int    `json:"last_aired_season"`
+			LastAiredEpisode *int    `json:"last_aired_episode"`
+			Season           *int    `json:"season"`
+			Episode          *int    `json:"episode"`
+			PositionSeconds  float64 `json:"position_seconds"`
+			DurationSeconds  float64 `json:"duration_seconds"`
+			Completed        bool    `json:"completed"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
@@ -327,9 +341,14 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 		if body.Episode != nil {
 			entry.LastWatchedEpisode = body.Episode
 		}
-		// Keep last_air_date fresh if the caller sends a newer value.
 		if body.LastAirDate != "" {
 			entry.LastAirDate = body.LastAirDate
+		}
+		if body.LastAiredSeason != nil {
+			entry.LastAiredSeason = body.LastAiredSeason
+		}
+		if body.LastAiredEpisode != nil {
+			entry.LastAiredEpisode = body.LastAiredEpisode
 		}
 
 		// Upsert the progress record.

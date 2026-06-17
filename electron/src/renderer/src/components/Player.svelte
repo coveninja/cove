@@ -21,6 +21,7 @@
   import Hls from "hls.js";
   import { onDestroy } from "svelte";
   import { api } from "$lib/api";
+  import { settings } from "$lib/stores/settings";
 
   // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,10 @@
 
   let createdID = $state<string | null>(null);
 
+  // Ensure settings are populated even if the user never visited the
+  // settings page this session. Safe to call repeatedly — it's just a GET.
+  settings.load().catch(() => {});
+
   // ─── Audio tracks (from probe, used to decide HLS vs direct) ────────────────
 
   let audioTracks = $state<AudioTrackInfo[]>([]);
@@ -81,6 +86,12 @@
   let builtInSubtitles = $state<
     { id: string; url: string; lang: string; label: string }[]
   >([]);
+
+  // True only once the probe (which produces builtInSubtitles) has settled —
+  // success or failure. externalSubtitles is a static prop already resolved
+  // before mount, so the probe finishing is the one async source we still
+  // need to wait on before trusting the combined track list is complete.
+  let subtitleProbeReady = $state(false);
 
   // ─── Vidstack audio track list (populated from HLS manifest) ────────────────
 
@@ -101,10 +112,11 @@
   );
 
   const needsHLS = $derived(
+    ($settings?.preferHLS ?? false) ||
     audioTracks.length > 1 ||
-      audioTracks.some((t) =>
-        UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
-      ),
+    audioTracks.some((t) =>
+      UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
+    ),
   );
 
   // ─── Playback state (driven by Vidstack events) ─────────────────────────────
@@ -142,6 +154,24 @@
   let subtitleSettingsOpen = $state(false);
   let subtitleView = $state<"tracks" | "settings">("tracks");
 
+  // ─── Seed subtitle style from global settings ───────────────────────────────
+  //
+  // Applied once, then left alone — if the user tweaks size/position/background
+  // for this session via the in-player panel, we don't want global settings
+  // (or a later save from the Settings page) silently overriding that mid-watch.
+  // Sync offset is intentionally excluded: drift is per-file, not a style
+  // preference, so it has no global default to seed from.
+
+  let appliedSubtitleDefaults = false;
+  $effect(() => {
+    if (appliedSubtitleDefaults || !$settings) return;
+    appliedSubtitleDefaults = true;
+    subtitleSettings.size = $settings.subtitleSize ?? subtitleSettings.size;
+    subtitleSettings.line = $settings.subtitlePosition ?? subtitleSettings.line;
+    subtitleSettings.background =
+      $settings.subtitleBackground ?? subtitleSettings.background;
+  });
+
   // ─── Other state ────────────────────────────────────────────────────────────
 
   let logoUrl = $state<string | null>(null);
@@ -170,6 +200,8 @@
     hlsSessionID = null;
     canPlay = false;
     error = null;
+    appliedAudioAutoSelect = false;
+    subtitleProbeReady = false;
 
     const probeURL = isHash
       ? `http://localhost:6969/api/probe?hash=${src}`
@@ -207,6 +239,12 @@
         audioTracks = [];
         builtInSubtitles = [];
         probedDuration = null;
+      })
+      .finally(() => {
+        // Only NOW is the full track list (built-in + external) settled.
+        // Setting this any earlier risks the auto-select effect locking onto
+        // whichever subtitle source happened to resolve first.
+        subtitleProbeReady = true;
       });
 
     return () => controller.abort();
@@ -218,6 +256,11 @@
     if (!media || !src) return;
     savedPosition = null;
     hasSeekedToSaved = false;
+
+    // Default true (matches the Go-side default) — only explicit false opts out.
+    // Using "=== false" rather than a falsy check means we still try to
+    // remember position during the brief window before settings finish loading.
+    if ($settings?.rememberPosition === false) return;
 
     api
       .progressGet(media.id, media.media_type, season ?? null, episode ?? null)
@@ -364,6 +407,21 @@
     playerEl.src = activeStreamURL;
   });
 
+  // ─── Apply initial volume / mute from settings ──────────────────────────────
+  //
+  // Applied once, imperatively, rather than as a bound prop — otherwise every
+  // settings change mid-playback would fight the user's own mute/volume
+  // adjustments. Gated on settings actually being loaded so we don't briefly
+  // apply stale defaults before the GET resolves.
+
+  let appliedInitialAV = false;
+  $effect(() => {
+    if (!playerEl || appliedInitialAV || !$settings) return;
+    appliedInitialAV = true;
+    playerEl.muted = $settings.openOnMute ?? false;
+    playerEl.volume = $settings.defaultVolume ?? 1;
+  });
+
   // ─── Vidstack event handlers ─────────────────────────────────────────────────
 
   function onCanPlay(): void {
@@ -422,6 +480,21 @@
     }
     syncAudioTracks();
   }
+
+  // ─── Auto-select preferred audio track ──────────────────────────────────────
+  //
+  // Only meaningful once there's more than one track to choose between.
+  // Applied once per video so it doesn't override a manual switch later.
+
+  let appliedAudioAutoSelect = false;
+  $effect(() => {
+    if (appliedAudioAutoSelect || vidstackAudioTracks.length <= 1) return;
+    const lang = $settings?.defaultAudioLang;
+    if (!lang) return;
+    appliedAudioAutoSelect = true;
+    const match = vidstackAudioTracks.find((t) => t.language === lang);
+    if (match && !match.selected) switchAudioTrack(match.id);
+  });
 
   // ─── Logo fetch ──────────────────────────────────────────────────────────────
 
@@ -595,6 +668,30 @@
     })),
   ]);
 
+  // ─── Auto-select preferred subtitle track ────────────────────────────────────
+  //
+  // Only fires if "Enable subtitles by default" is on. Applied once per video
+  // so a manual "Off" selection later in the same session sticks.
+  //
+  // Gated on subtitleProbeReady rather than just "textTracks is non-empty":
+  // externalSubtitles (a static prop) is often available immediately, while
+  // builtInSubtitles only populates once the probe resolves. Matching against
+  // defaultSubtitleLang too early can lock onto whichever source happened to
+  // be ready first — e.g. an external Portuguese track — before the file's
+  // own English track has even loaded.
+
+  let appliedSubtitleAutoSelect = false;
+  $effect(() => {
+    if (appliedSubtitleAutoSelect) return;
+    if (!$settings?.subtitlesEnabled) return;
+    if (!subtitleProbeReady) return; // wait for both sources to settle
+    if (textTracks.length === 0) return; // nothing to select at all
+    appliedSubtitleAutoSelect = true;
+    const lang = $settings.defaultSubtitleLang;
+    const match = textTracks.find((t) => t.language === lang) ?? textTracks[0];
+    if (match) selectTextTrack(match.id);
+  });
+
   let selectedLang = $state<string | null>(null);
   const tracksByLang = $derived.by(() => {
     const groups = new Map<
@@ -683,6 +780,7 @@
     selectedTrackId = null;
     subtitleCues = [];
     currentCueText = null;
+    appliedSubtitleAutoSelect = false;
   });
 
   function selectTextTrack(id: string): void {
@@ -822,13 +920,13 @@
                 <Headphones class="size-4" />
                 <span class="text-xs">
                   {vidstackAudioTracks.find((t) => t.selected)?.label ??
-                    "Audio"}
+                  "Audio"}
                 </span>
               </Popover.Trigger>
               <Popover.Content side="top" class="w-52 p-0">
                 <div class="border-b border-border px-3 py-2">
                   <span class="text-xs font-medium text-muted-foreground"
-                    >Audio Track</span
+                  >Audio Track</span
                   >
                 </div>
                 <div class="p-1">
@@ -924,141 +1022,142 @@
               </div>
 
               <!-- body -->
-              {#if subtitleView === "settings"}
-                <div class="space-y-4 p-3">
-                  <!-- Font size -->
-                  <div class="space-y-1.5">
-                    <div class="flex justify-between text-xs">
-                      <span class="text-muted-foreground">Size</span>
-                      <span>{subtitleSettings.size}%</span>
+              <div class="max-h-80 overflow-y-auto">
+                {#if subtitleView === "settings"}
+                  <div class="space-y-4 p-3">
+                    <!-- Font size -->
+                    <div class="space-y-1.5">
+                      <div class="flex justify-between text-xs">
+                        <span class="text-muted-foreground">Size</span>
+                        <span>{subtitleSettings.size}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="50"
+                        max="200"
+                        step="10"
+                        bind:value={subtitleSettings.size}
+                        onclick={(e) => e.stopPropagation()}
+                        class="w-full accent-white"
+                      />
                     </div>
-                    <input
-                      type="range"
-                      min="50"
-                      max="200"
-                      step="10"
-                      bind:value={subtitleSettings.size}
-                      onclick={(e) => e.stopPropagation()}
-                      class="w-full accent-white"
-                    />
-                  </div>
 
-                  <!-- Position -->
-                  <div class="space-y-1.5">
-                    <div class="flex justify-between text-xs">
-                      <span class="text-muted-foreground">Position</span>
-                      <span>{subtitleSettings.line}%</span>
+                    <!-- Position -->
+                    <div class="space-y-1.5">
+                      <div class="flex justify-between text-xs">
+                        <span class="text-muted-foreground">Position</span>
+                        <span>{subtitleSettings.line}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="2"
+                        max="90"
+                        step="1"
+                        bind:value={subtitleSettings.line}
+                        onclick={(e) => e.stopPropagation()}
+                        class="w-full accent-white"
+                      />
+                      <div
+                        class="flex justify-between text-[10px] text-muted-foreground"
+                      >
+                        <span>Bottom</span>
+                        <span>Top</span>
+                      </div>
                     </div>
-                    <input
-                      type="range"
-                      min="2"
-                      max="90"
-                      step="1"
-                      bind:value={subtitleSettings.line}
-                      onclick={(e) => e.stopPropagation()}
-                      class="w-full accent-white"
-                    />
-                    <div
-                      class="flex justify-between text-[10px] text-muted-foreground"
-                    >
-                      <span>Bottom</span>
-                      <span>Top</span>
-                    </div>
-                  </div>
 
-                  <!-- Background toggle -->
-                  <div class="flex items-center justify-between text-xs">
-                    <span class="text-muted-foreground">Background</span>
-                    <button
-                      aria-label="Toggle background"
-                      onclick={(e) => {
+                    <!-- Background toggle -->
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-muted-foreground">Background</span>
+                      <button
+                        aria-label="Toggle background"
+                        onclick={(e) => {
                         e.stopPropagation();
                         subtitleSettings.background =
                           !subtitleSettings.background;
                       }}
-                      class="h-5 w-9 rounded-full transition-colors {subtitleSettings.background
+                        class="h-5 w-9 rounded-full transition-colors {subtitleSettings.background
                         ? 'bg-white'
                         : 'bg-white/20'}"
-                    >
+                      >
                       <span
                         class="block size-4 translate-x-0.5 rounded-full bg-black transition-transform {subtitleSettings.background
                           ? 'translate-x-4'
                           : ''}"
                       ></span>
-                    </button>
-                  </div>
+                      </button>
+                    </div>
 
-                  <!-- Sync offset -->
-                  <div class="space-y-1.5">
-                    <div class="flex justify-between text-xs">
-                      <span class="text-muted-foreground">Sync offset</span>
-                      <span
+                    <!-- Sync offset -->
+                    <div class="space-y-1.5">
+                      <div class="flex justify-between text-xs">
+                        <span class="text-muted-foreground">Sync offset</span>
+                        <span
                         >{subtitleSettings.offset > 0 ? "+" : ""}{(
                           subtitleSettings.offset / 1000
                         ).toFixed(1)}s</span
-                      >
-                    </div>
-                    <div class="flex gap-1">
-                      <button
-                        onclick={(e) => {
+                        >
+                      </div>
+                      <div class="flex gap-1">
+                        <button
+                          onclick={(e) => {
                           e.stopPropagation();
                           subtitleSettings.offset = Math.max(
                             -10000,
                             subtitleSettings.offset - 500,
                           );
                         }}
-                        class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
+                          class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
                         >−500ms</button
-                      >
-                      <button
-                        onclick={(e) => {
+                        >
+                        <button
+                          onclick={(e) => {
                           e.stopPropagation();
                           subtitleSettings.offset = Math.min(
                             10000,
                             subtitleSettings.offset + 500,
                           );
                         }}
-                        class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
+                          class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
                         >+500ms</button
-                      >
-                    </div>
-                    {#if subtitleSettings.offset !== 0}
-                      <button
-                        onclick={(e) => {
+                        >
+                      </div>
+                      {#if subtitleSettings.offset !== 0}
+                        <button
+                          onclick={(e) => {
                           e.stopPropagation();
                           subtitleSettings.offset = 0;
                         }}
-                        class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
+                          class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
                         >Reset</button
-                      >
-                    {/if}
+                        >
+                      {/if}
+                    </div>
                   </div>
-                </div>
-              {:else}
-                <div class="p-1">
-                  <!-- Off -->
-                  <button
-                    onclick={(e) => {
+                {:else}
+                  <div class="p-1">
+                    <!-- Off -->
+                    <button
+                      onclick={(e) => {
                       e.stopPropagation();
                       selectTextTrack("");
                       subtitleSettingsOpen = false;
                       selectedLang = null;
                     }}
-                    class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {textTracks.every(
+                      class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {textTracks.every(
                       (t) => t.mode !== 'showing',
                     )
                       ? 'font-semibold'
                       : ''}"
-                  >
-                    Off
-                  </button>
+                    >
+                      Off
+                    </button>
 
-                  {#if selectedLang === null}
-                    <!-- Level 1: one row per language -->
-                    {#each [...tracksByLang.entries()] as [lang, tracks] (lang)}
-                      {@const active = tracks.some((t) => t.mode === "showing")}
-                      <button
-                        onclick={(e) => {
+                    {#if selectedLang === null}
+                      <!-- Level 1: one row per language -->
+                      {#each [...tracksByLang.entries()] as [lang, tracks] (lang)}
+                        {@const active = tracks.some((t) => t.mode === "showing")}
+                        <button
+                          onclick={(e) => {
                           e.stopPropagation();
                           if (tracks.length === 1) {
                             selectTextTrack(tracks[0].id);
@@ -1067,48 +1166,49 @@
                             selectedLang = lang;
                           }
                         }}
-                        class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {active
+                          class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {active
                           ? 'font-semibold'
                           : ''}"
-                      >
-                        <span class="flex-1 truncate">{langName(lang)}</span>
-                        {#if active}
+                        >
+                          <span class="flex-1 truncate">{langName(lang)}</span>
+                          {#if active}
                           <span
                             class="mr-1.5 size-1.5 shrink-0 rounded-full bg-white"
                           ></span>
-                        {/if}
-                        {#if tracks.length > 1}
-                          <ChevronRight
-                            class="size-3.5 shrink-0 text-muted-foreground"
-                          />
-                        {/if}
-                      </button>
-                    {/each}
-                  {:else}
-                    <!-- Level 2: versions within the chosen language -->
-                    {#each tracksByLang.get(selectedLang) ?? [] as track (track.id)}
-                      <button
-                        onclick={(e) => {
+                          {/if}
+                          {#if tracks.length > 1}
+                            <ChevronRight
+                              class="size-3.5 shrink-0 text-muted-foreground"
+                            />
+                          {/if}
+                        </button>
+                      {/each}
+                    {:else}
+                      <!-- Level 2: versions within the chosen language -->
+                      {#each tracksByLang.get(selectedLang) ?? [] as track (track.id)}
+                        <button
+                          onclick={(e) => {
                           e.stopPropagation();
                           selectTextTrack(track.id);
                           subtitleSettingsOpen = false;
                           selectedLang = null;
                         }}
-                        class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {track.mode ===
+                          class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {track.mode ===
                         'showing'
                           ? 'font-semibold'
                           : ''}"
-                      >
-                        <span class="flex-1 truncate">{track.label}</span>
-                        {#if track.mode === "showing"}
+                        >
+                          <span class="flex-1 truncate">{track.label}</span>
+                          {#if track.mode === "showing"}
                           <span class="size-1.5 shrink-0 rounded-full bg-white"
                           ></span>
-                        {/if}
-                      </button>
-                    {/each}
-                  {/if}
-                </div>
-              {/if}
+                          {/if}
+                        </button>
+                      {/each}
+                    {/if}
+                  </div>
+                {/if}
+              </div>
             </Popover.Content>
           </Popover.Root>
 
@@ -1225,7 +1325,7 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
-            >{title}</span
+          >{title}</span
           >
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"

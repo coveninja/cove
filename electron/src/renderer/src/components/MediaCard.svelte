@@ -16,7 +16,7 @@
 
   import type { LibraryEntry } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
-  import { CircleCheckBig } from "lucide-svelte";
+  import { CircleCheckBig, HeartOff } from "lucide-svelte";
 
   let {
     media,
@@ -60,9 +60,12 @@
   let originCountry = $state<string[]>([]);
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
+  let lastAiredSeason = $state<number | null>(null);
+  let lastAiredEpisode = $state<number | null>(null);
   let videoUrl = $state<string>();
   let libraryEntry = $state<LibraryEntry | null>(null);
   const isWatched = $derived(libraryEntry?.status === "finished");
+  const isDropped = $derived(libraryEntry?.status === "dropped");
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
@@ -100,6 +103,8 @@
       if (media.media_type === "tv") {
         numberOfSeasons = d.number_of_seasons ?? null;
         numberOfEpisodes = d.number_of_episodes ?? null;
+        lastAiredSeason = d.last_episode_to_air?.season_number ?? null;
+        lastAiredEpisode = d.last_episode_to_air?.episode_number ?? null;
       }
     });
   }
@@ -138,32 +143,30 @@
   }
 
   // ── Hover handlers ────────────────────────────────────────────────────────
-  function onHover(): void {
-    if (expanded) return;
-    hoverTimeout = setTimeout(() => {
-      computeHoverStyle();
-      hovered = true;
-      fetchData();
-    }, 400);
-  }
   let popoverOpen = $state(false);
 
-  function onLeave(e?: MouseEvent): void {
-    clearTimeout(hoverTimeout);
-    if (expanded || popoverOpen) return;
+  // True whenever the pointer is anywhere inside the card, the hover card, or
+  // a popover opened from either of them. Mouse events keep this current;
+  // closing itself is decided by closeIfIdle() rather than directly inside
+  // the mouse handlers, since popover open/close also needs to trigger it —
+  // and a popover closing doesn't fire any mouse event of its own.
+  let withinZone = $state(false);
 
-    const relatedTarget = e?.relatedTarget as Node | null;
-
-    // Moving into the hover card itself — keep it open
+  function isWithinZone(target: Node | null): boolean {
+    if (!target) return false;
+    if (buttonEl?.contains(target)) return true;
     const hoverEl = hoverCardInstance?.getEl();
-    if (relatedTarget && hoverEl?.contains(relatedTarget)) return;
-
-    // Moving into a portalled popover — keep it open
+    if (hoverEl?.contains(target)) return true;
+    // Popovers are portalled to <body>, so they're never a DOM descendant of
+    // either element above — check separately.
     const popover = document.querySelector(
       "[data-radix-popper-content-wrapper]",
     );
-    if (relatedTarget && popover?.contains(relatedTarget)) return;
+    return !!popover?.contains(target);
+  }
 
+  function closeIfIdle(): void {
+    if (expanded || popoverOpen || withinZone) return;
     if (hoverCardInstance) {
       hoverCardInstance.animateClose(() => {
         hovered = false;
@@ -172,6 +175,31 @@
       hovered = false;
     }
   }
+
+  function onHover(): void {
+    withinZone = true;
+    if (expanded) return;
+    hoverTimeout = setTimeout(() => {
+      computeHoverStyle();
+      hovered = true;
+      fetchData();
+    }, 400);
+  }
+
+  function onLeave(e?: MouseEvent): void {
+    clearTimeout(hoverTimeout);
+    withinZone = isWithinZone((e?.relatedTarget ?? null) as Node | null);
+    closeIfIdle();
+  }
+
+  // Re-evaluate whenever a popover closes. This is the missing piece: picking
+  // an option in a popover doesn't move the mouse, so no mouseleave fires —
+  // without this, the hover card would only close on the next unrelated
+  // hover/unhover cycle (or, as just observed, never at all once the popover
+  // starts closing itself immediately on selection).
+  $effect(() => {
+    if (!popoverOpen) closeIfIdle();
+  });
 
   // ── Expand / close ────────────────────────────────────────────────────────
   function expand(): void {
@@ -248,17 +276,17 @@
             randomize: true,
           })}
           alt={title}
-          class="block aspect-2/3 w-full rounded-md object-cover transition-opacity duration-300 {isWatched
+          class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
             ? 'opacity-35'
-            : 'opacity-100'}"
+            : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
         />
       {:else if logoLoaded && media.poster_path}
         <img
           src={media.poster_path}
           alt={title}
-          class="block aspect-2/3 w-full rounded-md object-cover transition-opacity duration-300 {isWatched
+          class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
             ? 'opacity-35'
-            : 'opacity-100'}"
+            : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
         />
       {:else}
         <div
@@ -296,6 +324,14 @@
           <CircleCheckBig class="size-12 text-white/80" />
         </div>
       {/if}
+      {#if isDropped}
+        <div
+          class="absolute inset-0 flex items-center justify-center rounded-md"
+          style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+        >
+          <HeartOff class="size-12 text-red-600/80" />
+        </div>
+      {/if}
       {#if media.media_type === "tv" && numberOfSeasons !== null}
         <span
           class="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
@@ -319,6 +355,8 @@
     {originCountry}
     {numberOfSeasons}
     {numberOfEpisodes}
+    {lastAiredSeason}
+    {lastAiredEpisode}
     {quality}
     onmouseleave={onLeave}
     onwatch={() => onclick(media)}
@@ -338,6 +376,8 @@
     {originCountry}
     {numberOfSeasons}
     {numberOfEpisodes}
+    {lastAiredSeason}
+    {lastAiredEpisode}
     {cast}
     {keywords}
     {similar}

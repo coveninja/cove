@@ -654,6 +654,33 @@ func SetupHandlers(apiKey string) {
 		}
 	}))
 
+	// GET /api/speedtest — streams a fixed-size payload so the client can
+	// measure raw download throughput for the "Match My Internet Speed"
+	// stream-selection mode. Not a rigorous benchmark (single connection,
+	// no compression, local network only) but good enough as a rough guide.
+	http.HandleFunc("/api/speedtest", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		const payloadSize = 25 * 1024 * 1024 // 25 MiB
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
+		w.Header().Set("Cache-Control", "no-store")
+
+		buf := make([]byte, 1<<20) // 1 MiB chunks
+		flusher, _ := w.(http.Flusher)
+		for written := 0; written < payloadSize; {
+			n := len(buf)
+			if remaining := payloadSize - written; remaining < n {
+				n = remaining
+			}
+			if _, err := w.Write(buf[:n]); err != nil {
+				return // client aborted — nothing to clean up
+			}
+			written += n
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+
 	http.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		rawURL := r.URL.Query().Get("url")
 		if rawURL == "" {

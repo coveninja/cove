@@ -24,26 +24,40 @@ type Settings struct {
 	DefaultProvider string `json:"defaultProvider"` // e.g. "torrentio", "debrid"
 	PreferHLS       bool   `json:"preferHLS"`       // use HLS pipeline over direct stream
 
+	// Stream auto-selection
+	AutoSelectStream      bool    `json:"autoSelectStream"`      // skip the manual stream list and play immediately
+	StreamSelectionMode   string  `json:"streamSelectionMode"`   // "balanced" | "seeders" | "quality" | "smallest" | "bandwidth"
+	MeasuredBandwidthMbps float64 `json:"measuredBandwidthMbps"` // from the in-app speed test; 0 = never measured
+
 	// Subtitles
-	SubtitlesEnabled    bool   `json:"subtitlesEnabled"`
-	DefaultSubtitleLang string `json:"defaultSubtitleLang"` // ISO 639-1 e.g. "en"
-	DefaultAudioLang    string `json:"defaultAudioLang"`    // ISO 639-1 e.g. "en"
+	SubtitlesEnabled    bool    `json:"subtitlesEnabled"`
+	DefaultSubtitleLang string  `json:"defaultSubtitleLang"` // ISO 639-1 e.g. "en"
+	DefaultAudioLang    string  `json:"defaultAudioLang"`    // ISO 639-1 e.g. "en"
+	SubtitleSize        float64 `json:"subtitleSize"`        // percentage, 50–200
+	SubtitlePosition    float64 `json:"subtitlePosition"`    // percent from bottom, 2–90
+	SubtitleBackground  bool    `json:"subtitleBackground"`  // dark box behind subtitle text
 
 	// UI
 	ShowStreamDetails bool `json:"showStreamDetails"` // show codec/resolution badges on stream list
 }
 
 var defaultSettings = Settings{
-	OpenOnMute:          false,
-	DefaultVolume:       1.0,
-	AutoPlay:            false,
-	RememberPosition:    true,
-	DefaultProvider:     "torrentio",
-	PreferHLS:           true,
-	SubtitlesEnabled:    false,
-	DefaultSubtitleLang: "en",
-	DefaultAudioLang:    "en",
-	ShowStreamDetails:   true,
+	OpenOnMute:            false,
+	DefaultVolume:         1.0,
+	AutoPlay:              false,
+	RememberPosition:      true,
+	DefaultProvider:       "torrentio",
+	PreferHLS:             true,
+	AutoSelectStream:      false,
+	StreamSelectionMode:   "balanced",
+	MeasuredBandwidthMbps: 0,
+	SubtitlesEnabled:      false,
+	DefaultSubtitleLang:   "en",
+	DefaultAudioLang:      "en",
+	SubtitleSize:          100,
+	SubtitlePosition:      8,
+	SubtitleBackground:    true,
+	ShowStreamDetails:     true,
 }
 
 var (

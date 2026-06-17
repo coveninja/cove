@@ -8,6 +8,7 @@
   import { Slider } from "$lib/components/ui/slider/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
+  import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
 
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
@@ -70,6 +71,29 @@
   function providerLabel(value: string) {
     return PROVIDERS.find((p) => p.value === value)?.label ?? value;
   }
+
+  let testingSpeed = $state(false);
+  let speedTestError = $state<string | null>(null);
+
+  async function runSpeedTest() {
+    if (!draft) return;
+    testingSpeed = true;
+    speedTestError = null;
+    try {
+      const start = performance.now();
+      const res = await fetch("http://localhost:6969/api/speedtest", {
+        cache: "no-store",
+      });
+      const blob = await res.blob();
+      const seconds = (performance.now() - start) / 1000;
+      const mbps = (blob.size * 8) / 1_000_000 / seconds;
+      patch("measuredBandwidthMbps", Math.round(mbps * 10) / 10);
+    } catch {
+      speedTestError = "Speed test failed — check your connection.";
+    } finally {
+      testingSpeed = false;
+    }
+  }
 </script>
 
 <div class="mx-auto max-w-2xl space-y-8 p-6 pb-16 pt-18">
@@ -95,7 +119,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="open-muted" class="text-sm font-medium"
-              >Open videos muted</Label
+            >Open videos muted</Label
             >
             <p class="text-xs text-muted-foreground">
               Start every video with audio muted.
@@ -116,6 +140,7 @@
           </div>
           <div class="flex items-center gap-3">
             <Slider
+              type="multiple"
               value={[draft.defaultVolume * 100]}
               min={0}
               max={100}
@@ -135,7 +160,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="autoplay" class="text-sm font-medium"
-              >Autoplay next episode</Label
+            >Autoplay next episode</Label
             >
             <p class="text-xs text-muted-foreground">
               Automatically start the next episode when one finishes.
@@ -152,7 +177,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="remember-pos" class="text-sm font-medium"
-              >Remember position</Label
+            >Remember position</Label
             >
             <p class="text-xs text-muted-foreground">
               Resume from where you left off.
@@ -199,7 +224,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="prefer-hls" class="text-sm font-medium"
-              >Use HLS pipeline</Label
+            >Use HLS pipeline</Label
             >
             <p class="text-xs text-muted-foreground">
               Re-mux via ffmpeg before playing. Better seek support, higher CPU
@@ -211,6 +236,87 @@
             checked={draft.preferHLS}
             onCheckedChange={(v) => patch("preferHLS", v)}
           />
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Stream Selection ── -->
+    <section class="space-y-4">
+      <h2
+        class="text-sm font-semibold tracking-wider text-muted-foreground uppercase"
+      >
+        Stream Selection
+      </h2>
+
+      <div class="space-y-1">
+        <div class="flex items-center justify-between py-3">
+          <div>
+            <Label for="auto-select-stream" class="text-sm font-medium"
+            >Automatically pick best stream</Label
+            >
+            <p class="text-xs text-muted-foreground">
+              Skip the stream list — start playing immediately when you press
+              Watch.
+            </p>
+          </div>
+          <Switch
+            id="auto-select-stream"
+            checked={draft.autoSelectStream}
+            onCheckedChange={(v) => patch("autoSelectStream", v)}
+          />
+        </div>
+        <Separator />
+
+        <div class="flex items-center justify-between py-3">
+          <div class="pr-4">
+            <Label class="text-sm font-medium">Selection strategy</Label>
+            <p class="text-xs text-muted-foreground">
+              {STREAM_SELECTION_MODES.find(
+                (m) => m.value === draft.streamSelectionMode,
+              )?.description ?? ""}
+            </p>
+          </div>
+          <Select.Root type="single" bind:value={draft.streamSelectionMode}>
+            <Select.Trigger class="w-56 shrink-0">
+              {STREAM_SELECTION_MODES.find(
+                (m) => m.value === draft.streamSelectionMode,
+              )?.label ?? "Choose…"}
+            </Select.Trigger>
+            <Select.Content>
+              {#each STREAM_SELECTION_MODES as m (m.value)}
+                <Select.Item value={m.value}>{m.label}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
+        <Separator />
+
+        <div class="flex items-center justify-between py-3">
+          <div class="pr-4">
+            <Label class="text-sm font-medium">Connection speed</Label>
+            {#if draft.measuredBandwidthMbps > 0}
+              <p class="text-xs text-muted-foreground">
+                Last measured at {draft.measuredBandwidthMbps} Mbps. Used by
+                "Match My Internet Speed".
+              </p>
+            {:else}
+              <p class="text-xs text-muted-foreground">
+                Not measured yet — needed for "Match My Internet Speed".
+              </p>
+            {/if}
+            {#if speedTestError}
+              <p class="text-xs text-red-500">{speedTestError}</p>
+            {/if}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            class="shrink-0"
+            onclick={runSpeedTest}
+            disabled={testingSpeed}
+          >
+            {testingSpeed ? "Testing…" : "Test My Speed"}
+          </Button>
         </div>
       </div>
     </section>
@@ -227,7 +333,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="subs-enabled" class="text-sm font-medium"
-              >Enable subtitles by default</Label
+            >Enable subtitles by default</Label
             >
             <p class="text-xs text-muted-foreground">
               Show subtitles automatically when available.
@@ -244,7 +350,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label class="text-sm font-medium"
-              >Preferred subtitle language</Label
+            >Preferred subtitle language</Label
             >
             <p class="text-xs text-muted-foreground">
               Auto-select this language when subtitles are available.
@@ -281,6 +387,75 @@
             </Select.Content>
           </Select.Root>
         </div>
+        <Separator />
+
+        <div class="flex items-center justify-between py-3">
+          <div>
+            <Label class="text-sm font-medium">Subtitle size</Label>
+            <p class="text-xs text-muted-foreground">
+              Default text size for subtitles in the player.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <Slider
+              type="multiple"
+              value={[draft.subtitleSize]}
+              min={50}
+              max={200}
+              step={10}
+              class="w-32"
+              onValueChange={([v]) => patch("subtitleSize", v)}
+            />
+            <span
+              class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+            >
+              {draft.subtitleSize}%
+            </span>
+          </div>
+        </div>
+        <Separator />
+
+        <div class="flex items-center justify-between py-3">
+          <div>
+            <Label class="text-sm font-medium">Subtitle position</Label>
+            <p class="text-xs text-muted-foreground">
+              Vertical placement from the bottom of the screen.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <Slider
+              type="multiple"
+              value={[draft.subtitlePosition]}
+              min={2}
+              max={90}
+              step={1}
+              class="w-32"
+              onValueChange={([v]) => patch("subtitlePosition", v)}
+            />
+            <span
+              class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+            >
+              {draft.subtitlePosition}%
+            </span>
+          </div>
+        </div>
+        <Separator />
+
+        <div class="flex items-center justify-between py-3">
+          <div>
+            <Label for="subtitle-bg" class="text-sm font-medium"
+            >Subtitle background</Label
+            >
+            <p class="text-xs text-muted-foreground">
+              Show a dark box behind subtitle text for readability.
+            </p>
+          </div>
+          <Switch
+            id="subtitle-bg"
+            checked={draft.subtitleBackground}
+            onCheckedChange={(v) => patch("subtitleBackground", v)}
+          />
+        </div>
       </div>
     </section>
 
@@ -296,7 +471,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="stream-details" class="text-sm font-medium"
-              >Show stream details</Label
+            >Show stream details</Label
             >
             <p class="text-xs text-muted-foreground">
               Display codec, resolution, and size badges on the stream list.

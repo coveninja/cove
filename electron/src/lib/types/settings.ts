@@ -21,11 +21,20 @@ export interface Settings {
   defaultProvider: string; // e.g. "torrentio", "debrid"
   preferHLS: boolean; // use HLS pipeline over direct stream
   /**
+   * Stream auto-selection
+   */
+  autoSelectStream: boolean; // skip the manual stream list and play immediately
+  streamSelectionMode: string; // "balanced" | "seeders" | "quality" | "smallest" | "bandwidth"
+  measuredBandwidthMbps: number /* float64 */; // from the in-app speed test; 0 = never measured
+  /**
    * Subtitles
    */
   subtitlesEnabled: boolean;
   defaultSubtitleLang: string; // ISO 639-1 e.g. "en"
   defaultAudioLang: string; // ISO 639-1 e.g. "en"
+  subtitleSize: number /* float64 */; // percentage, 50–200
+  subtitlePosition: number /* float64 */; // percent from bottom, 2–90
+  subtitleBackground: boolean; // dark box behind subtitle text
   /**
    * UI
    */

@@ -5,8 +5,14 @@
   "rememberPosition": true,
   "defaultProvider": "torrentio",
   "preferHLS": true,
+  "autoSelectStream": true,
+  "streamSelectionMode": "balanced",
+  "measuredBandwidthMbps": 5809.3,
   "subtitlesEnabled": true,
   "defaultSubtitleLang": "en",
   "defaultAudioLang": "en",
+  "subtitleSize": 160,
+  "subtitlePosition": 8,
+  "subtitleBackground": true,
   "showStreamDetails": true
 }

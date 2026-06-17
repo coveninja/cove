@@ -80,6 +80,16 @@ export interface Details {
   number_of_seasons: number /* int */;
   number_of_episodes: number /* int */;
   seasons: TVSeason[];
+  /**
+   * LastEpisodeToAir is TV-only. Used client-side to detect unwatched new
+   * episodes by comparing season/episode_number against the user's
+   * last-watched position.
+   */
+  last_episode_to_air?: {
+    season_number: number /* int */;
+    episode_number: number /* int */;
+    air_date: string;
+  };
 }
 export interface Keyword {
   id: number /* int */;

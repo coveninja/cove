@@ -17,6 +17,13 @@
   import { SvelteMap } from "svelte/reactivity";
   import { api, formatPosition } from "$lib/api";
   import type { WatchProgress } from "$lib/types/library";
+  import { settings } from "$lib/stores/settings";
+  import {
+    getSeeders,
+    getSizeBytes,
+    pickBestStream,
+    formatStreamSummary,
+  } from "$lib/streamSelection";
 
   let loadingStreams = $state(false);
   let sortMode = $state<"seeders" | "size">("seeders");
@@ -61,6 +68,11 @@
   let streams = $state<Stream[]>([]);
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  // ── Auto stream selection ─────────────────────────────────────────────────────
+
+  let autoPicking = $state(false);
+  let autoPickCancelled = $state(false);
 
   // ── Watch progress ────────────────────────────────────────────────────────────
 
@@ -180,6 +192,8 @@
       clearPoll();
       loadingStreams = true;
       streams = [];
+      autoPickCancelled = false;
+      autoPicking = false;
       fetchStreams().then(() => {
         loadingStreams = false;
         if (streams.length === 0)
@@ -189,6 +203,8 @@
       clearPoll();
       loadingStreams = true;
       streams = [];
+      autoPickCancelled = false;
+      autoPicking = false;
       fetchStreams().then(() => {
         loadingStreams = false;
         if (streams.length === 0)
@@ -200,27 +216,6 @@
   });
 
   // Stream helpers
-
-  function getSeeders(stream: Stream): number {
-    const match = stream.title.match(/👤\s*(\d+)/);
-    return match ? Number(match[1]) : 0;
-  }
-
-  function getSizeBytes(stream: Stream): number {
-    const match = stream.title.match(/💾\s*([\d.]+)\s*(TB|GB|MB)/i);
-    if (!match) return 0;
-    const value = Number(match[1]);
-    switch (match[2].toUpperCase()) {
-      case "TB":
-        return value * 1024 ** 4;
-      case "GB":
-        return value * 1024 ** 3;
-      case "MB":
-        return value * 1024 ** 2;
-      default:
-        return 0;
-    }
-  }
 
   const availableQualities = $derived.by(() => {
     const qs = [
@@ -290,6 +285,38 @@
         streams = res;
         maxQuality = getMaxQuality(streams);
         if (streams.length > 0) clearPoll();
+
+        if (
+          $settings?.autoSelectStream &&
+          !autoPickCancelled &&
+          !autoPicking &&
+          streams.length > 0
+        ) {
+          const best = pickBestStream(
+            streams,
+            $settings.streamSelectionMode ?? "balanced",
+            { measuredBandwidthMbps: $settings.measuredBandwidthMbps },
+          );
+          if (best) {
+            const mode = $settings.streamSelectionMode ?? "balanced";
+            console.log(
+              `[stream-select] auto (${mode}): "${best.name}" — ${formatStreamSummary(best)}`,
+              best,
+            );
+            autoPicking = true;
+            // Small delay so the "Auto-selecting…" message and its cancel
+            // button actually get a moment on screen before playback starts.
+            setTimeout(() => {
+              if (!autoPickCancelled) {
+                onPlayStream(
+                  best,
+                  selectedSeason ?? undefined,
+                  selectedEpisode?.episode_number,
+                );
+              }
+            }, 500);
+          }
+        }
       });
   }
 </script>
@@ -623,7 +650,24 @@
     <!-- Stream rows -->
     <ScrollArea class="min-h-0 flex-1">
       <div class="p-4">
-        {#if loadingStreams}
+        {#if autoPicking && !autoPickCancelled}
+          <div class="flex flex-col items-center justify-center gap-3 py-12">
+            <Spinner class="size-8" />
+            <span class="text-sm text-muted-foreground">
+              Auto-selecting the best stream…
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={() => {
+                autoPickCancelled = true;
+                autoPicking = false;
+              }}
+            >
+              Choose manually instead
+            </Button>
+          </div>
+        {:else if loadingStreams}
           <div class="flex flex-col items-center justify-center gap-2 py-12">
             <Spinner class="size-8" />
             <span class="animate-pulse text-sm text-muted-foreground">
@@ -648,12 +692,17 @@
             {#each filteredStreams as stream (stream)}
               <button
                 class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
-                onclick={() =>
+                onclick={() => {
+                  console.log(
+                    `[stream-select] manual: "${stream.name}" — ${formatStreamSummary(stream)}`,
+                    stream,
+                  );
                   onPlayStream(
                     stream,
                     selectedSeason ?? undefined,
                     selectedEpisode?.episode_number,
-                  )}
+                  );
+                }}
               >
                 <span class="flex items-center justify-between gap-2">
                   <span class="text-sm font-medium text-foreground"

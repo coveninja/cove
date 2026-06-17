@@ -13,11 +13,15 @@
     libraryEntry,
     media,
     size = "icon",
+    lastAiredSeason = null,
+    lastAiredEpisode = null,
     onpopoverchange,
   } = $props<{
     libraryEntry: LibraryEntry;
     media: Media;
     size: string | null;
+    lastAiredSeason?: number | null;
+    lastAiredEpisode?: number | null;
     onpopoverchange?: (open: boolean) => void;
   }>();
 
@@ -53,11 +57,20 @@
           poster_path: media.poster_path ?? "",
           vote_average: media.vote_average ?? 0,
           last_air_date: media.last_air_date ?? "",
+          last_aired_season: lastAiredSeason,
+          last_aired_episode: lastAiredEpisode,
           status,
         });
       }
 
       libraryChanged.update((n) => n + 1);
+      // Set directly rather than relying solely on onOpenChange: mutating a
+      // bind:open value doesn't reliably re-fire the component's own
+      // onOpenChange callback, so the parent's popoverOpen tracking (and the
+      // hover card's close check tied to it) would otherwise never hear that
+      // this closed.
+      popoverOpen = false;
+      onpopoverchange?.(false);
     } catch (e) {
       console.error("library status:", e);
     }
