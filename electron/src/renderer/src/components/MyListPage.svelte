@@ -10,6 +10,7 @@
   import { libraryChanged } from "$lib/stores/library";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
+  import Upcoming from "./Upcoming.svelte";
 
   let { onSelectMedia }: { onSelectMedia: (m: Media) => void } = $props();
 
@@ -114,20 +115,37 @@
     const watchedE = entry.last_watched_episode ?? 0;
 
     if (airedS > watchedS) return true;
-    return airedS === watchedS && airedE > watchedE;
+    if (airedS === watchedS && airedE > watchedE) return true;
+    return false;
   }
 
-  function toMedia(entry: LibraryEntry): Media {
-    return {
-      id: entry.tmdb_id,
-      media_type: entry.media_type as "movie" | "tv",
-      title: entry.media_type === "movie" ? entry.title : (undefined as any),
-      name: entry.media_type === "tv" ? entry.title : (undefined as any),
-      poster_path: entry.poster_path,
-      overview: "",
-      vote_average: entry.vote_average,
-    } as unknown as Media;
+  function toMediaKey(entry: LibraryEntry): string {
+    return `${entry.tmdb_id}-${entry.media_type}`;
   }
+
+  // Real, fully-populated Media objects fetched per entry — replaces the old
+  // toMedia() stub that hand-built a partial Media client-side (hardcoding
+  // overview: "" among other things). LibraryEntry intentionally doesn't
+  // persist a full copy of TMDB's metadata, so this is the genuine source
+  // instead of a lossy stand-in. Keyed so re-fetching on every libraryChanged
+  // tick doesn't re-request titles already loaded.
+  let mediaByKey = $state<Record<string, Media>>({});
+
+  async function ensureMediaLoaded(entry: LibraryEntry): Promise<void> {
+    const key = toMediaKey(entry);
+    if (mediaByKey[key]) return;
+    try {
+      mediaByKey[key] = await api.getMediaByID(entry.tmdb_id, entry.media_type);
+    } catch (e) {
+      console.error("Failed to load media for", key, e);
+    }
+  }
+
+  $effect(() => {
+    for (const entry of entries) {
+      ensureMediaLoaded(entry); // no-op if cached; fires in parallel otherwise
+    }
+  });
 
   const EMPTY_MESSAGES: Record<string, { heading: string; sub: string }> = {
     all: {
@@ -219,8 +237,12 @@
     <!-- ── Content ────────────────────────────────────────────────────────────── -->
   {:else}
     <ScrollArea class="h-full">
+      <div class="mt-24 rounded-2xl bg-card p-4">
+        <Upcoming {onSelectMedia} />
+      </div>
+
       {#if filtered.length === 0}
-        <div class="flex h-[60vh] flex-col items-center justify-center gap-3">
+        <div class="flex h-[60vh] flex-col items-center justify-center gap-4">
           <p class="text-base font-medium">
             {EMPTY_MESSAGES[activeStatus]?.heading}
           </p>
@@ -230,21 +252,32 @@
         </div>
       {:else}
         <div
-          class="mt-32 grid gap-4 pr-4"
+          class="mt-5 grid gap-4 pr-4"
           style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
         >
           {#each filtered as entry (entry.id)}
-            {@const media = toMedia(entry)}
+            {@const media = mediaByKey[toMediaKey(entry)]}
             <div
               class="relative"
               animate:flip={{ duration: 300, easing: cubicOut }}
             >
-              <MediaCard
-                {media}
-                onclick={() => onSelectMedia(media)}
-                onsimilar={(m) => onSelectMedia(m)}
-                newEpisodes={hasNewEpisodes(entry)}
-              />
+              {#if media}
+                <MediaCard
+                  {media}
+                  onclick={() => onSelectMedia(media)}
+                  onsimilar={(m) => onSelectMedia(m)}
+                  newEpisodes={hasNewEpisodes(entry)}
+                />
+              {:else}
+                <!-- Real Media object still loading — show the poster we
+                     already have stored so the grid doesn't look broken,
+                     swap to the interactive MediaCard once it resolves. -->
+                <img
+                  src={entry.poster_path}
+                  alt={entry.title}
+                  class="aspect-2/3 w-full rounded-md object-cover opacity-60"
+                />
+              {/if}
 
               {#if entry.rating !== null && entry.rating !== undefined}
                 <div

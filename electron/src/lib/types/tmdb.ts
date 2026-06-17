@@ -44,6 +44,12 @@ export interface TVEpisode {
   air_date: string;
 }
 export interface Details {
+  /**
+   * Overview was missing entirely — TMDB always returns it, but Go's JSON
+   * decoder silently drops any source field with no matching destination
+   * field, so it never survived the unmarshal in GetDetails below.
+   */
+  overview: string;
   genres: {
     name: string;
   }[];
@@ -89,6 +95,18 @@ export interface Details {
     season_number: number /* int */;
     episode_number: number /* int */;
     air_date: string;
+  };
+  /**
+   * NextEpisodeToAir is TV-only and only present while the show is still
+   * airing. Used to power the "Upcoming" widget — null once a show has
+   * ended or gone on indefinite hiatus with nothing scheduled.
+   */
+  next_episode_to_air?: {
+    name: string;
+    season_number: number /* int */;
+    episode_number: number /* int */;
+    air_date: string;
+    still_path: string;
   };
 }
 export interface Keyword {

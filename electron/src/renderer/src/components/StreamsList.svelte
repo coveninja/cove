@@ -24,6 +24,8 @@
     pickBestStream,
     formatStreamSummary,
   } from "$lib/streamSelection";
+  import { Skeleton } from "$lib/components/ui/skeleton";
+  import type { TVEpisode } from "$lib/types/tmdb";
 
   let loadingStreams = $state(false);
   let sortMode = $state<"seeders" | "size">("seeders");
@@ -42,14 +44,6 @@
     episode_count: number;
     name: string;
     poster_path: string;
-  };
-
-  type TVEpisode = {
-    episode_number: number;
-    name: string;
-    overview: string;
-    still_path: string;
-    air_date: string;
   };
 
   // State
@@ -539,6 +533,10 @@
             <img
               src={selectedEpisode.still_path}
               alt={selectedEpisode.name}
+              class="aspect-video w-24 shrink-0 rounded-md object-cover"
+            />
+          {:else}
+            <Skeleton
               class="aspect-video w-24 shrink-0 rounded-md object-cover"
             />
           {/if}

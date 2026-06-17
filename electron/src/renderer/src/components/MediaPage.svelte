@@ -19,6 +19,11 @@
   import StreamsList from "./StreamsList.svelte";
   import PlayerSimple from "./PlayerSimple.svelte";
   import { api } from "$lib/api";
+  import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
+  import type { LibraryEntry, WatchProgress } from "$lib/types/library";
+  import { SvelteURLSearchParams } from "svelte/reactivity";
+  import MediaCard from "./MediaCard.svelte";
+  import StarRating from "./StarRating.svelte";
 
   let {
     media,
@@ -28,6 +33,33 @@
     onsimilar?: (m: Media) => void;
     onBack?: () => void;
   } = $props();
+
+  let libraryEntry = $state<LibraryEntry | null>(null);
+  let movieProgress = $state<WatchProgress | null>(null);
+  let tvProgressList = $state<WatchProgress[]>([]);
+  let lastAiredSeason = $state<number | null>(null);
+  let lastAiredEpisode = $state<number | null>(null);
+
+  // Load library entry + progress on open
+  $effect(() => {
+    api
+      .libraryGet(media.id, media.media_type)
+      .then((result) => {
+        if (!result) {
+          libraryEntry = null;
+          movieProgress = null;
+          tvProgressList = [];
+          return;
+        }
+        libraryEntry = result.entry;
+        if (media.media_type === "movie") {
+          movieProgress = result.progress[0] ?? null;
+        } else {
+          tvProgressList = result.progress;
+        }
+      })
+      .catch(console.error);
+  });
 
   let activeStream: Stream | null = $state(null);
   let activeSubtitles = $state<{ id: string; url: string; lang: string }[]>([]);
@@ -49,6 +81,11 @@
   let numberOfEpisodes = $state<number | null>(null);
   let images = $state<MediaImages>();
   let videos = $state<MediaVideos>();
+  // Captured once Details loads, then left alone — deliberately NOT re-derived
+  // from the live `media` prop afterward. If `media` ever gets replaced or
+  // refreshed elsewhere (e.g. after a library status change) with a leaner
+  // object, the overview text shouldn't silently vanish because of it.
+  let detailsOverview = $state<string | null>(null);
 
   $effect(() => {
     detailsLoading = true;
@@ -64,6 +101,15 @@
         images = img;
         videos = vids;
         similar = similarList;
+        detailsOverview = details.overview ?? null;
+
+        console.log("[overview-debug] MediaPage getDetails resolved", {
+          tmdbId: media.id,
+          mediaType: media.media_type,
+          hasOverview: !!details.overview,
+          overviewPreview: details.overview?.slice(0, 60),
+          libraryEntryAtFetchTime: libraryEntry,
+        });
 
         genres =
           details.genres?.map((g: { name: string }) => g.name).slice(0, 3) ??
@@ -80,8 +126,8 @@
 
         keywords =
           (type === "movie"
-            ? details.keywords?.keywords
-            : details.keywords?.results
+              ? details.keywords?.keywords
+              : details.keywords?.results
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
@@ -91,11 +137,20 @@
         if (type === "tv") {
           numberOfSeasons = details.number_of_seasons ?? null;
           numberOfEpisodes = details.number_of_episodes ?? null;
+          lastAiredSeason = details.last_episode_to_air?.season_number ?? null;
+          lastAiredEpisode =
+            details.last_episode_to_air?.episode_number ?? null;
         }
 
         detailsLoading = false;
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("[overview-debug] MediaPage details fetch FAILED", {
+          tmdbId: media.id,
+          mediaType: media.media_type,
+          libraryEntryAtFetchTime: libraryEntry,
+          error: err,
+        });
         detailsLoading = false;
       });
   });
@@ -106,7 +161,7 @@
     activeEpisode = episode;
     activeSubtitles = [];
 
-    const params = new URLSearchParams({
+    const params = new SvelteURLSearchParams({
       id: String(media.id),
       type: media.media_type,
     });
@@ -125,13 +180,13 @@
 
   const year = $derived(
     (media.media_type === "tv"
-      ? media.first_air_date
-      : media.release_date
+        ? media.first_air_date
+        : media.release_date
     )?.slice(0, 4),
   );
 
   const overviewParagraphs = $derived(
-    media.overview
+    (detailsOverview ?? media.overview)
       ?.split(". ")
       .map((s, i, arr) => (i < arr.length - 1 ? s + "." : s)) ?? [],
   );
@@ -233,8 +288,8 @@
                       class="rounded border border-border px-1.5 py-0.5 text-xs"
                     >
                       {numberOfEpisodes} episode{numberOfEpisodes !== 1
-                        ? "s"
-                        : ""}
+                      ? "s"
+                      : ""}
                     </span>
                   {/if}
                   {#if maxQuality}
@@ -248,17 +303,25 @@
                   {/if}
                 </div>
 
-                {#if genres.length}
-                  <div class="flex flex-wrap gap-1.5">
-                    {#each genres as genre (genre)}
-                      <span
-                        class="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium text-secondary-foreground"
-                      >
-                        {genre}
-                      </span>
-                    {/each}
-                  </div>
-                {/if}
+                <div class="flex justify-between align-middle">
+                  {#if genres.length}
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      {#each genres as genre (genre)}
+                        <Badge variant="outline">{genre}</Badge>
+                      {/each}
+                    </div>
+                  {/if}
+                  <StarRating {libraryEntry} {media} />
+                </div>
+                <div class="flex justify-end align-middle">
+                  <LibraryStatusPanel
+                    {libraryEntry}
+                    {media}
+                    {lastAiredSeason}
+                    {lastAiredEpisode}
+                    size="icon-sm"
+                  />
+                </div>
 
                 <Separator />
 
@@ -324,22 +387,7 @@
                     <h3 class="text-sm font-semibold">More like this</h3>
                     <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
                       {#each similar as item (item.id)}
-                        <div
-                          role="button"
-                          tabindex="0"
-                          class="cursor-pointer overflow-hidden rounded-md transition-opacity hover:opacity-75"
-                          onclick={() => onsimilar?.(item)}
-                          onkeydown={(e) =>
-                            e.key === "Enter" && onsimilar?.(item)}
-                        >
-                          <img
-                            src={item.poster_path}
-                            alt={item.media_type === "tv"
-                              ? item.name
-                              : item.title}
-                            class="aspect-2/3 w-full object-cover"
-                          />
-                        </div>
+                        <MediaCard media={item} onclick={onsimilar} />
                       {/each}
                     </div>
                   </div>

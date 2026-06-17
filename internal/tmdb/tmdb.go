@@ -60,7 +60,11 @@ type TVEpisode struct {
 }
 
 type Details struct {
-	Genres []struct {
+	// Overview was missing entirely — TMDB always returns it, but Go's JSON
+	// decoder silently drops any source field with no matching destination
+	// field, so it never survived the unmarshal in GetDetails below.
+	Overview string `json:"overview"`
+	Genres   []struct {
 		Name string `json:"name"`
 	} `json:"genres"`
 	Runtime        int   `json:"runtime"`
@@ -104,6 +108,16 @@ type Details struct {
 		EpisodeNumber int    `json:"episode_number"`
 		AirDate       string `json:"air_date"`
 	} `json:"last_episode_to_air"`
+	// NextEpisodeToAir is TV-only and only present while the show is still
+	// airing. Used to power the "Upcoming" widget — null once a show has
+	// ended or gone on indefinite hiatus with nothing scheduled.
+	NextEpisodeToAir *struct {
+		Name          string `json:"name"`
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+		StillPath     string `json:"still_path"`
+	} `json:"next_episode_to_air"`
 }
 
 type searchResponse struct {
@@ -515,7 +529,53 @@ func GetDetails(tmdbID int, mediaType string, apiKey string) (*Details, error) {
 	if err := json.NewDecoder(res.Body).Decode(&details); err != nil {
 		return nil, err
 	}
+	if details.NextEpisodeToAir != nil && details.NextEpisodeToAir.StillPath != "" {
+		details.NextEpisodeToAir.StillPath = stillBase + details.NextEpisodeToAir.StillPath
+	}
 	return &details, nil
+}
+
+// GetMediaByID fetches a single movie or TV show directly by ID and maps it
+// into the same Media shape Search/GetSimilar already return — title,
+// overview, poster, vote average, all genuinely populated from TMDB.
+//
+// This exists specifically so callers that only have a bare tmdb_id (e.g. a
+// LibraryEntry, which intentionally doesn't persist a full copy of TMDB's
+// metadata) can get a real Media object instead of reconstructing a partial
+// stand-in client-side. A hand-built stand-in is a leaky abstraction: it's
+// indistinguishable from a real Media object by type, but quietly missing
+// fields a real one always has — which is exactly how the overview-text bug
+// happened. Every consumer of Media should be able to trust it's complete.
+func GetMediaByID(tmdbID int, mediaType string, apiKey string) (*Media, error) {
+	url := fmt.Sprintf("%s/%s/%d?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status code: %d", res.StatusCode)
+	}
+
+	var data Media
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	// /movie/{id} and /tv/{id} don't return media_type — unlike search
+	// results, this is a single known-type lookup, so just set it directly.
+	data.MediaType = mediaType
+	if data.PosterURL != "" {
+		data.PosterURL = imageBase + data.PosterURL
+	}
+
+	return &data, nil
 }
 
 func (d *Details) AgeRating() string {
@@ -774,6 +834,41 @@ func SetupHandlers(apiKey string) {
 
 		err = json.NewEncoder(w).Encode(videos)
 		if err != nil {
+			log.Println(err)
+		}
+	}))
+
+	// GET /api/media?id=<tmdbID>&type=<movie|tv>
+	// Returns a single, fully-populated Media object by ID — for callers that
+	// only have a bare tmdb_id (e.g. from a LibraryEntry) and need the real
+	// TMDB object rather than reconstructing a partial one client-side.
+	http.HandleFunc("/api/media", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tmdbIDStr := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+
+		if tmdbIDStr == "" || mediaType == "" {
+			http.Error(w, "missing required parameters", http.StatusBadRequest)
+			return
+		}
+		if mediaType != "movie" && mediaType != "tv" {
+			http.Error(w, "invalid media type", http.StatusBadRequest)
+			return
+		}
+
+		id, err := strconv.Atoi(tmdbIDStr)
+		if err != nil || id <= 0 {
+			http.Error(w, "invalid id format", http.StatusBadRequest)
+			return
+		}
+
+		media, err := GetMediaByID(id, mediaType, apiKey)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(media); err != nil {
 			log.Println(err)
 		}
 	}))

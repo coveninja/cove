@@ -15,9 +15,9 @@ export type LibraryStatus = "watch_later" | "watching" | "finished" | "dropped";
 
 export const STATUS_LABELS: Record<LibraryStatus, string> = {
   watch_later: "Watch Later",
-  watching: "Watching",
-  finished: "Finished",
-  dropped: "Dropped",
+  watching:    "Watching",
+  finished:    "Finished",
+  dropped:     "Dropped",
 };
 
 /** "1h 23m" / "4m 12s" / "8s" */
@@ -33,6 +33,7 @@ export function formatPosition(seconds: number): string {
 // ── API ────────────────────────────────────────────────────────────────────────
 
 export const api = {
+
   // ── TMDB ────────────────────────────────────────────────────────────────────
   search: (q: string): Promise<Media[]> =>
     fetch(`${BASE}/search?q=${encodeURIComponent(q)}`).then((r) => r.json()),
@@ -44,24 +45,22 @@ export const api = {
     fetch(`${BASE}/streams?id=${tmdbId}`).then((r) => r.json()),
 
   getSimilar: (media: Media): Promise<Media[]> =>
-    fetch(`${BASE}/similar?id=${media.id}&type=${media.media_type}`).then((r) =>
-      r.json(),
-    ),
+    fetch(`${BASE}/similar?id=${media.id}&type=${media.media_type}`).then((r) => r.json()),
+
+  // Fetches a genuine, fully-populated Media object by ID — for places that
+  // only have a bare tmdb_id (e.g. a LibraryEntry) and would otherwise have
+  // to reconstruct a partial Media object by hand.
+  getMediaByID: (tmdbId: number, mediaType: string): Promise<Media> =>
+    fetch(`${BASE}/media?id=${tmdbId}&type=${mediaType}`).then((r) => r.json()),
 
   getDetails: (media: Media): Promise<Details> =>
-    fetch(`${BASE}/details?id=${media.id}&type=${media.media_type}`).then((r) =>
-      r.json(),
-    ),
+    fetch(`${BASE}/details?id=${media.id}&type=${media.media_type}`).then((r) => r.json()),
 
   getImages: (media: Media): Promise<MediaImages> =>
-    fetch(`${BASE}/images?id=${media.id}&type=${media.media_type}`).then((r) =>
-      r.json(),
-    ),
+    fetch(`${BASE}/images?id=${media.id}&type=${media.media_type}`).then((r) => r.json()),
 
   getVideos: (media: Media): Promise<MediaVideos> =>
-    fetch(`${BASE}/videos?id=${media.id}&type=${media.media_type}`).then((r) =>
-      r.json(),
-    ),
+    fetch(`${BASE}/videos?id=${media.id}&type=${media.media_type}`).then((r) => r.json()),
 
   // ── Settings ─────────────────────────────────────────────────────────────────
   getSettings: (): Promise<Settings> =>
@@ -76,9 +75,7 @@ export const api = {
 
   // ── Library ──────────────────────────────────────────────────────────────────
   libraryList: (status?: LibraryStatus): Promise<LibraryEntry[]> =>
-    fetch(`${BASE}/library${status ? `?status=${status}` : ""}`).then((r) =>
-      r.json(),
-    ),
+    fetch(`${BASE}/library${status ? `?status=${status}` : ""}`).then((r) => r.json()),
 
   libraryUpsert: (p: {
     tmdb_id: number;
@@ -103,18 +100,13 @@ export const api = {
   libraryGet: (
     tmdbId: number,
     mediaType: string,
-  ): Promise<{
-    entry: LibraryEntry | null;
-    progress: WatchProgress[];
-  } | null> =>
+  ): Promise<{ entry: LibraryEntry | null; progress: WatchProgress[] } | null> =>
     fetch(`${BASE}/library/${tmdbId}/${mediaType}`).then((r) =>
       r.status === 404 ? null : r.json(),
     ),
 
   libraryRemove: (tmdbId: number, mediaType: string): Promise<void> =>
-    fetch(`${BASE}/library/${tmdbId}/${mediaType}`, { method: "DELETE" }).then(
-      () => {},
-    ),
+    fetch(`${BASE}/library/${tmdbId}/${mediaType}`, { method: "DELETE" }).then(() => {}),
 
   librarySetStatus: (
     tmdbId: number,
@@ -140,20 +132,16 @@ export const api = {
 
   // ── Watch progress ────────────────────────────────────────────────────────────
   // Returns null when no progress has been saved yet (not an error).
-  progressGet: async (
+  progressGet: (
     tmdbId: number,
     mediaType: string,
     season?: number | null,
     episode?: number | null,
   ): Promise<WatchProgress | null> => {
-    const p = new URLSearchParams({
-      tmdb_id: String(tmdbId),
-      media_type: mediaType,
-    });
+    const p = new URLSearchParams({ tmdb_id: String(tmdbId), media_type: mediaType });
     if (season != null) p.set("season", String(season));
     if (episode != null) p.set("episode", String(episode));
-    const r = await fetch(`${BASE}/library/progress?${p}`);
-    return await (r.ok ? r.json() : null);
+    return fetch(`${BASE}/library/progress?${p}`).then((r) => (r.ok ? r.json() : null));
   },
 
   // Upserts a progress record. Also auto-creates a "watching" library entry

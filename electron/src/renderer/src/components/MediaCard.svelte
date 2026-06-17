@@ -66,12 +66,16 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
+  // Same reasoning as MediaPage: captured once from Details and left alone,
+  // so a later change to the live `media` prop (e.g. after a library status
+  // update elsewhere) can't make the overview text silently disappear.
+  let detailsOverview = $state<string | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
 
   const overviewParagraphs = $derived(
-    media.overview
+    (detailsOverview ?? media.overview)
       .split(". ")
       .map((s, i, arr) => (i < arr.length - 1 ? s + "." : s))
       .filter((s) => s.trim().length > 0),
@@ -86,27 +90,53 @@
       videoUrl = getVideoOpt(d, "Clip", { randomize: true });
     });
     api.getSimilar(media).then((d) => (similar = d));
-    api.getDetails(media).then((d: Details) => {
-      genres = d.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];
-      runtime = formatRuntime(d);
-      cast =
-        d.credits?.cast?.slice(0, 5).map((c: { name: string }) => c.name) ?? [];
-      ageRating = formatRating(d);
-      keywords =
-        (media.media_type === "movie"
-          ? d.keywords?.keywords
-          : d.keywords?.results
-        )
-          ?.slice(0, 4)
-          .map((k: { name: string }) => k.name) ?? [];
-      originCountry = d.origin_country;
-      if (media.media_type === "tv") {
-        numberOfSeasons = d.number_of_seasons ?? null;
-        numberOfEpisodes = d.number_of_episodes ?? null;
-        lastAiredSeason = d.last_episode_to_air?.season_number ?? null;
-        lastAiredEpisode = d.last_episode_to_air?.episode_number ?? null;
-      }
-    });
+    api
+      .getDetails(media)
+      .then((d: Details) => {
+        detailsOverview = d.overview ?? null;
+
+        console.log("[overview-debug] MediaCard getDetails resolved", {
+          tmdbId: media.id,
+          mediaType: media.media_type,
+          hasOverview: !!d.overview,
+          overviewPreview: d.overview?.slice(0, 60),
+          libraryEntryAtFetchTime: libraryEntry,
+        });
+
+        genres =
+          d.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];
+        runtime = formatRuntime(d);
+        cast =
+          d.credits?.cast?.slice(0, 5).map((c: { name: string }) => c.name) ??
+          [];
+        ageRating = formatRating(d);
+        keywords =
+          (media.media_type === "movie"
+              ? d.keywords?.keywords
+              : d.keywords?.results
+          )
+            ?.slice(0, 4)
+            .map((k: { name: string }) => k.name) ?? [];
+        originCountry = d.origin_country;
+        if (media.media_type === "tv") {
+          numberOfSeasons = d.number_of_seasons ?? null;
+          numberOfEpisodes = d.number_of_episodes ?? null;
+          lastAiredSeason = d.last_episode_to_air?.season_number ?? null;
+          lastAiredEpisode = d.last_episode_to_air?.episode_number ?? null;
+        }
+      })
+      .catch((err) => {
+        // Previously this call had NO catch handler at all — a rejection
+        // here meant detailsOverview/genres/cast/etc. silently stayed at
+        // their initial empty values forever for this card, with no error
+        // surfaced anywhere. If this fires, that's very likely the bug.
+        console.error("[overview-debug] MediaCard getDetails FAILED", {
+          tmdbId: media.id,
+          mediaType: media.media_type,
+          libraryEntryAtFetchTime: libraryEntry,
+          error: err,
+        });
+      });
   }
 
   // ── Hover card positioning ────────────────────────────────────────────────
