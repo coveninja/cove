@@ -42,6 +42,18 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
+  mainWindow.webContents.session.webRequest.onHeadersReceived(
+    (details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          "Cross-Origin-Resource-Policy": ["cross-origin"],
+          "Cross-Origin-Embedder-Policy": ["unsafe-none"],
+        },
+      });
+    },
+  );
+
   ipcMain.on("window-minimize", () => {
     mainWindow.minimize();
   });
