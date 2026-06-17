@@ -8,6 +8,7 @@
   import { Slider } from "$lib/components/ui/slider/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
+  import * as Tabs from "$lib/components/ui/tabs/index.js";
   import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
 
   let draft = $state<Settings | null>(null);
@@ -96,8 +97,7 @@
   }
 </script>
 
-<div class="mx-auto max-w-2xl space-y-8 p-6 pb-16 pt-18">
-  <!-- Header -->
+<div class="mx-auto max-w-2xl space-y-6 p-6 pt-18 pb-16">
   <div class="flex items-center justify-between">
     <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
     <div class="flex gap-2">
@@ -107,19 +107,20 @@
   </div>
 
   {#if draft}
-    <!-- ── Playback ── -->
-    <section class="space-y-4">
-      <h2
-        class="text-sm font-semibold tracking-wider text-muted-foreground uppercase"
-      >
-        Playback
-      </h2>
+    <Tabs.Root value="playback">
+      <Tabs.List class="w-full">
+        <Tabs.Trigger value="playback">Playback</Tabs.Trigger>
+        <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
+        <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
+        <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
+      </Tabs.List>
 
-      <div class="space-y-1">
+      <!-- ── Playback ── -->
+      <Tabs.Content value="playback" class="mt-4 space-y-1">
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="open-muted" class="text-sm font-medium"
-            >Open videos muted</Label
+              >Open videos muted</Label
             >
             <p class="text-xs text-muted-foreground">
               Start every video with audio muted.
@@ -160,7 +161,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="autoplay" class="text-sm font-medium"
-            >Autoplay next episode</Label
+              >Autoplay next episode</Label
             >
             <p class="text-xs text-muted-foreground">
               Automatically start the next episode when one finishes.
@@ -177,7 +178,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="remember-pos" class="text-sm font-medium"
-            >Remember position</Label
+              >Remember position</Label
             >
             <p class="text-xs text-muted-foreground">
               Resume from where you left off.
@@ -189,18 +190,10 @@
             onCheckedChange={(v) => patch("rememberPosition", v)}
           />
         </div>
-      </div>
-    </section>
+      </Tabs.Content>
 
-    <!-- ── Streaming ── -->
-    <section class="space-y-4">
-      <h2
-        class="text-sm font-semibold tracking-wider text-muted-foreground uppercase"
-      >
-        Streaming
-      </h2>
-
-      <div class="space-y-1">
+      <!-- ── Streaming ── -->
+      <Tabs.Content value="streaming" class="mt-4 space-y-1">
         <div class="flex items-center justify-between py-3">
           <div>
             <Label class="text-sm font-medium">Default provider</Label>
@@ -209,9 +202,9 @@
             </p>
           </div>
           <Select.Root type="single" bind:value={draft.defaultProvider}>
-            <Select.Trigger class="w-52">
-              {providerLabel(draft.defaultProvider)}
-            </Select.Trigger>
+            <Select.Trigger class="w-52"
+              >{providerLabel(draft.defaultProvider)}</Select.Trigger
+            >
             <Select.Content>
               {#each PROVIDERS as p}
                 <Select.Item value={p.value}>{p.label}</Select.Item>
@@ -224,7 +217,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="prefer-hls" class="text-sm font-medium"
-            >Use HLS pipeline</Label
+              >Use HLS pipeline</Label
             >
             <p class="text-xs text-muted-foreground">
               Re-mux via ffmpeg before playing. Better seek support, higher CPU
@@ -237,22 +230,12 @@
             onCheckedChange={(v) => patch("preferHLS", v)}
           />
         </div>
-      </div>
-    </section>
+        <Separator />
 
-    <!-- ── Stream Selection ── -->
-    <section class="space-y-4">
-      <h2
-        class="text-sm font-semibold tracking-wider text-muted-foreground uppercase"
-      >
-        Stream Selection
-      </h2>
-
-      <div class="space-y-1">
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="auto-select-stream" class="text-sm font-medium"
-            >Automatically pick best stream</Label
+              >Automatically pick best stream</Label
             >
             <p class="text-xs text-muted-foreground">
               Skip the stream list — start playing immediately when you press
@@ -296,8 +279,8 @@
             <Label class="text-sm font-medium">Connection speed</Label>
             {#if draft.measuredBandwidthMbps > 0}
               <p class="text-xs text-muted-foreground">
-                Last measured at {draft.measuredBandwidthMbps} Mbps. Used by
-                "Match My Internet Speed".
+                Last measured at {draft.measuredBandwidthMbps} Mbps. Used by "Match
+                My Internet Speed".
               </p>
             {:else}
               <p class="text-xs text-muted-foreground">
@@ -318,22 +301,14 @@
             {testingSpeed ? "Testing…" : "Test My Speed"}
           </Button>
         </div>
-      </div>
-    </section>
+      </Tabs.Content>
 
-    <!-- ── Subtitles & Audio ── -->
-    <section class="space-y-4">
-      <h2
-        class="text-sm font-semibold tracking-wider text-muted-foreground uppercase"
-      >
-        Subtitles &amp; Audio
-      </h2>
-
-      <div class="space-y-1">
+      <!-- ── Subtitles & Audio ── -->
+      <Tabs.Content value="subtitles" class="mt-4 space-y-1">
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="subs-enabled" class="text-sm font-medium"
-            >Enable subtitles by default</Label
+              >Enable subtitles by default</Label
             >
             <p class="text-xs text-muted-foreground">
               Show subtitles automatically when available.
@@ -350,16 +325,16 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label class="text-sm font-medium"
-            >Preferred subtitle language</Label
+              >Preferred subtitle language</Label
             >
             <p class="text-xs text-muted-foreground">
               Auto-select this language when subtitles are available.
             </p>
           </div>
           <Select.Root type="single" bind:value={draft.defaultSubtitleLang}>
-            <Select.Trigger class="w-36">
-              {langLabel(draft.defaultSubtitleLang)}
-            </Select.Trigger>
+            <Select.Trigger class="w-36"
+              >{langLabel(draft.defaultSubtitleLang)}</Select.Trigger
+            >
             <Select.Content>
               {#each LANGUAGES as l}
                 <Select.Item value={l.value}>{l.label}</Select.Item>
@@ -377,9 +352,9 @@
             </p>
           </div>
           <Select.Root type="single" bind:value={draft.defaultAudioLang}>
-            <Select.Trigger class="w-36">
-              {langLabel(draft.defaultAudioLang)}
-            </Select.Trigger>
+            <Select.Trigger class="w-36"
+              >{langLabel(draft.defaultAudioLang)}</Select.Trigger
+            >
             <Select.Content>
               {#each LANGUAGES as l}
                 <Select.Item value={l.value}>{l.label}</Select.Item>
@@ -408,9 +383,8 @@
             />
             <span
               class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+              >{draft.subtitleSize}%</span
             >
-              {draft.subtitleSize}%
-            </span>
           </div>
         </div>
         <Separator />
@@ -434,9 +408,8 @@
             />
             <span
               class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+              >{draft.subtitlePosition}%</span
             >
-              {draft.subtitlePosition}%
-            </span>
           </div>
         </div>
         <Separator />
@@ -444,7 +417,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="subtitle-bg" class="text-sm font-medium"
-            >Subtitle background</Label
+              >Subtitle background</Label
             >
             <p class="text-xs text-muted-foreground">
               Show a dark box behind subtitle text for readability.
@@ -456,22 +429,14 @@
             onCheckedChange={(v) => patch("subtitleBackground", v)}
           />
         </div>
-      </div>
-    </section>
+      </Tabs.Content>
 
-    <!-- ── Interface ── -->
-    <section class="space-y-4">
-      <h2
-        class="text-sm font-semibold tracking-wider text-muted-foreground uppercase"
-      >
-        Interface
-      </h2>
-
-      <div class="space-y-1">
+      <!-- ── Interface ── -->
+      <Tabs.Content value="interface" class="mt-4 space-y-1">
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="stream-details" class="text-sm font-medium"
-            >Show stream details</Label
+              >Show stream details</Label
             >
             <p class="text-xs text-muted-foreground">
               Display codec, resolution, and size badges on the stream list.
@@ -483,8 +448,23 @@
             onCheckedChange={(v) => patch("showStreamDetails", v)}
           />
         </div>
-      </div>
-    </section>
+        <div class="flex items-center justify-between py-3">
+          <div>
+            <Label for="thumbnail-previes" class="text-sm font-medium"
+              >Hide Spoilers</Label
+            >
+            <p class="text-xs text-muted-foreground">
+              Hide not-seen episode thumbnails, descriptions, and episode names;
+            </p>
+          </div>
+          <Switch
+            id="stream-details"
+            checked={draft.hideSpoilers}
+            onCheckedChange={(v) => patch("hideSpoilers", v)}
+          />
+        </div>
+      </Tabs.Content>
+    </Tabs.Root>
   {:else}
     <p class="text-muted-foreground">Loading settings…</p>
   {/if}

@@ -14,5 +14,6 @@
   "subtitleSize": 160,
   "subtitlePosition": 8,
   "subtitleBackground": true,
-  "showStreamDetails": true
+  "showStreamDetails": true,
+  "hideSpoilers": false
 }

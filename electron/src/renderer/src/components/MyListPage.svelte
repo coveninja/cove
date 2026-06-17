@@ -115,8 +115,7 @@
     const watchedE = entry.last_watched_episode ?? 0;
 
     if (airedS > watchedS) return true;
-    if (airedS === watchedS && airedE > watchedE) return true;
-    return false;
+    return airedS === watchedS && airedE > watchedE;
   }
 
   function toMediaKey(entry: LibraryEntry): string {
@@ -237,7 +236,7 @@
     <!-- ── Content ────────────────────────────────────────────────────────────── -->
   {:else}
     <ScrollArea class="h-full">
-      <div class="mt-24 rounded-2xl bg-card p-4">
+      <div class="mt-24 rounded-2xl border-b bg-card p-4">
         <Upcoming {onSelectMedia} />
       </div>
 

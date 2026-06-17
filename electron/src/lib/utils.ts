@@ -2,6 +2,9 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { Stream } from "$lib/types/addons";
 import {Details, MediaImages, MediaVideoObject, MediaVideos} from "$lib/types/tmdb";
+import {api} from "$lib/api";
+import {SvelteMap} from "svelte/reactivity";
+import type {WatchProgress} from "$lib/types/library";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -211,4 +214,31 @@ export function getVideoOpt(
   }
 
   return buildEmbedUrl(list[0]);
+}
+
+export function relativeDate(dateStr: string): string {
+  const days = Math.ceil(
+    (new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24),
+  );
+  if (days <= 1) return "Coming Tomorrow";
+  if (days <= 7) return `Coming in ${days} Days`;
+  if (days <= 14) return "Coming Next Week";
+  return `Coming ${new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+export function epKey(season: number, episode: number): string {
+  return `${season}:${episode}`;
+}
+
+export function epProgress(
+  season: number,
+  episode: number,
+  progressMap: SvelteMap<string, WatchProgress>,
+): WatchProgress | undefined {
+  return progressMap.get(epKey(season, episode));
+}
+
+export function progressPct(p: WatchProgress): number {
+  if (!p.duration_seconds) return 0;
+  return Math.min(100, (p.position_seconds / p.duration_seconds) * 100);
 }

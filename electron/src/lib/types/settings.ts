@@ -39,4 +39,5 @@ export interface Settings {
    * UI
    */
   showStreamDetails: boolean; // show codec/resolution badges on stream list
+  hideSpoilers: boolean;
 }

@@ -17,12 +17,5 @@ export interface UpcomingItem {
   episode: number;
   episodeName: string;
   airDate: string; // YYYY-MM-DD from TMDB
+  stillPath: string;
 }
-
-export type TVEpisode = {
-  episode_number: number;
-  name: string;
-  overview: string;
-  still_path: string;
-  air_date: string;
-};

@@ -1,16 +1,20 @@
 <script lang="ts">
-  import { getMaxQuality, inferQuality } from "$lib/utils";
+  import {
+    epKey,
+    epProgress,
+    getMaxQuality,
+    inferQuality,
+    progressPct,
+  } from "$lib/utils";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import type { Stream } from "$lib/types/addons";
   import * as Select from "$lib/components/ui/select/index.js";
-  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import {
     ListFilter,
     Play,
     Settings2,
     ChevronLeft,
     Check,
-    RotateCcw,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner";
@@ -23,9 +27,11 @@
     getSizeBytes,
     pickBestStream,
     formatStreamSummary,
+    type StreamSelectionMode,
   } from "$lib/streamSelection";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import type { TVEpisode } from "$lib/types/tmdb";
+  import EpisodeCard from "./EpisodeCard.svelte";
 
   let loadingStreams = $state(false);
   let sortMode = $state<"seeders" | "size">("seeders");
@@ -75,22 +81,6 @@
   // Movie: single record
   let movieProgress = $state<WatchProgress | null>(null);
 
-  function epKey(season: number, episode: number) {
-    return `${season}:${episode}`;
-  }
-
-  function epProgress(
-    season: number,
-    episode: number,
-  ): WatchProgress | undefined {
-    return progressMap.get(epKey(season, episode));
-  }
-
-  function progressPct(p: WatchProgress): number {
-    if (!p.duration_seconds) return 0;
-    return Math.min(100, (p.position_seconds / p.duration_seconds) * 100);
-  }
-
   // Fetch all episode progress for this show whenever the media changes
   $effect(() => {
     if (!isTV) return;
@@ -117,38 +107,6 @@
       })
       .catch(console.error);
   });
-
-  async function markWatched(ep: TVEpisode): Promise<void> {
-    const p = await api.progressSave({
-      tmdb_id: media.id,
-      media_type: "tv",
-      title: media.name,
-      poster_path: media.poster_path ?? "",
-      vote_average: media.vote_average ?? 0,
-      season: selectedSeason!,
-      episode: ep.episode_number,
-      position_seconds: 1,
-      duration_seconds: 1,
-      completed: true,
-    });
-    progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
-  }
-
-  async function markUnwatched(ep: TVEpisode): Promise<void> {
-    const p = await api.progressSave({
-      tmdb_id: media.id,
-      media_type: "tv",
-      title: media.name,
-      poster_path: media.poster_path ?? "",
-      vote_average: media.vote_average ?? 0,
-      season: selectedSeason!,
-      episode: ep.episode_number,
-      position_seconds: 0,
-      duration_seconds: 0,
-      completed: false,
-    });
-    progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
-  }
 
   // Data fetching
 
@@ -250,16 +208,6 @@
       (selectedSeason !== null ? `Season ${selectedSeason}` : "Season"),
   );
 
-  function relativeDate(dateStr: string): string {
-    const days = Math.ceil(
-      (new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24),
-    );
-    if (days <= 1) return "Coming Tomorrow";
-    if (days <= 7) return `Coming in ${days} Days`;
-    if (days <= 14) return "Coming Next Week";
-    return `Coming ${new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
-  }
-
   function clearPoll(): void {
     if (pollInterval) {
       clearInterval(pollInterval);
@@ -288,7 +236,8 @@
         ) {
           const best = pickBestStream(
             streams,
-            $settings.streamSelectionMode ?? "balanced",
+            ($settings.streamSelectionMode as StreamSelectionMode) ??
+              "balanced",
             { measuredBandwidthMbps: $settings.measuredBandwidthMbps },
           );
           if (best) {
@@ -362,148 +311,13 @@
           </div>
         {:else}
           {#each episodes as ep (ep.episode_number)}
-            {@const unreleased =
-              ep.air_date && new Date(ep.air_date) > new Date()}
-            {@const prog =
-              selectedSeason != null
-                ? epProgress(selectedSeason, ep.episode_number)
-                : undefined}
-            {@const pct = prog ? progressPct(prog) : 0}
-            {@const completed = prog?.completed ?? false}
-            {@const inProgress = !completed && pct > 1}
-
-            <ContextMenu.Root>
-              <ContextMenu.Trigger class="w-full text-left">
-                <button
-                  class="group relative flex w-full items-center gap-3 p-3 text-left transition-colors
-                    {unreleased
-                    ? 'cursor-default opacity-40'
-                    : 'hover:bg-secondary/60'}
-                    {completed ? 'opacity-70' : ''}"
-                  onclick={() => {
-                    if (!unreleased) selectedEpisode = ep;
-                  }}
-                  disabled={unreleased}
-                >
-                  <!-- Thumbnail -->
-                  <span
-                    class="relative w-28 shrink-0 overflow-hidden rounded-md bg-muted"
-                  >
-                    {#if ep.still_path}
-                      <img
-                        src={ep.still_path}
-                        alt={ep.name}
-                        class="aspect-video w-full object-cover"
-                      />
-                    {:else}
-                      <div
-                        class="flex aspect-video w-full items-center justify-center bg-secondary"
-                      >
-                        <Play class="size-5 text-muted-foreground/50" />
-                      </div>
-                    {/if}
-
-                    <!-- Completed checkmark -->
-                    {#if completed}
-                      <span
-                        class="absolute inset-0 flex items-center justify-center bg-black/50"
-                      >
-                        <span
-                          class="flex size-7 items-center justify-center rounded-full bg-green-500/90"
-                        >
-                          <Check class="size-4 text-white" />
-                        </span>
-                      </span>
-                    {:else}
-                      <!-- Hover play overlay (only when not completed) -->
-                      <span
-                        class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/40"
-                      >
-                        <Play
-                          class="size-5 text-white opacity-0 transition-opacity group-hover:opacity-100"
-                        />
-                      </span>
-                    {/if}
-                  </span>
-
-                  <!-- Info -->
-                  <span class="min-w-0 flex-1 flex-col py-0.5">
-                    <span class="flex flex-col">
-                      <span
-                        class="text-sm leading-snug font-medium {completed
-                          ? 'text-muted-foreground'
-                          : ''}">{ep.name}</span
-                      >
-                      <span
-                        class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"
-                      >
-                        E{ep.episode_number}
-                        {#if ep.air_date}
-                          · <span class="font-normal"
-                            >{unreleased
-                              ? relativeDate(ep.air_date)
-                              : ep.air_date}</span
-                          >
-                        {/if}
-                        {#if inProgress}
-                          · <span class="font-normal text-accent"
-                            >{formatPosition(prog!.position_seconds)} watched</span
-                          >
-                        {/if}
-                      </span>
-                    </span>
-                    {#if ep.overview}
-                      <p
-                        class="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground"
-                      >
-                        {ep.overview}
-                      </p>
-                    {/if}
-                  </span>
-
-                  <!-- In-progress bar (absolute bottom of row) -->
-                  {#if inProgress}
-                    <span
-                      class="absolute right-0 bottom-0 left-0 h-0.5 overflow-hidden bg-secondary"
-                    >
-                      <span
-                        class="block h-full bg-accent transition-all"
-                        style="width: {pct}%"
-                      ></span>
-                    </span>
-                  {/if}
-                </button>
-              </ContextMenu.Trigger>
-
-              {#if !unreleased}
-                <ContextMenu.Content>
-                  {#if !completed}
-                    <ContextMenu.Item
-                      onclick={() => markWatched(ep)}
-                      class="flex items-center gap-2"
-                    >
-                      <Check class="size-4" /> Mark as Watched
-                    </ContextMenu.Item>
-                  {:else}
-                    <ContextMenu.Item
-                      onclick={() => markUnwatched(ep)}
-                      class="flex items-center gap-2"
-                    >
-                      <RotateCcw class="size-4" /> Mark as Unwatched
-                    </ContextMenu.Item>
-                  {/if}
-                  <ContextMenu.Separator />
-                  <ContextMenu.Item
-                    onclick={() => {
-                      selectedEpisode = ep;
-                    }}
-                    class="flex items-center gap-2"
-                  >
-                    <Play class="size-4" /> View Streams
-                  </ContextMenu.Item>
-                </ContextMenu.Content>
-              {/if}
-            </ContextMenu.Root>
+            <EpisodeCard
+              {media}
+              {ep}
+              {selectedSeason}
+              bind:selectedEpisode
+              {progressMap}
+            />
           {/each}
         {/if}
       </div>
@@ -552,6 +366,7 @@
               {@const prog = epProgress(
                 selectedSeason,
                 selectedEpisode.episode_number,
+                progressMap,
               )}
               {#if prog}
                 {@const pct = progressPct(prog)}

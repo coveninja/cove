@@ -8,7 +8,7 @@
     qualityClass,
     getVideoOpt,
   } from "$lib/utils";
-  import { api } from "$lib/api";
+  import { api, type LibraryStatus, STATUS_LABELS } from "$lib/api";
   import { onMount } from "svelte";
   import { Spinner } from "$lib/components/ui/spinner";
   import MediaHoverCard from "./MediaHoverCard.svelte";
@@ -16,7 +16,10 @@
 
   import type { LibraryEntry } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
-  import { CircleCheckBig, HeartOff } from "lucide-svelte";
+  import { BookmarkIcon, CircleCheckBig, HeartOff } from "lucide-svelte";
+  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
+  import { Button } from "$lib/components/ui/button";
+  import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
 
   let {
     media,
@@ -112,8 +115,8 @@
         ageRating = formatRating(d);
         keywords =
           (media.media_type === "movie"
-              ? d.keywords?.keywords
-              : d.keywords?.results
+            ? d.keywords?.keywords
+            : d.keywords?.results
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
@@ -284,94 +287,101 @@
   });
 </script>
 
-<div
-  bind:this={buttonEl}
-  onclick={() => !expanded && onclick(media)}
-  onmouseenter={onHover}
-  onmouseleave={onLeave}
-  class={initialExpanded
-    ? "contents"
-    : `relative ${!expanded ? "cursor-pointer" : ""} ${hovered || expanded ? "z-50" : "z-0"}`}
-  role="button"
-  tabindex="0"
-  onkeydown={(e) => e.key === "Enter" && !expanded && onclick(media)}
->
-  {#if !initialExpanded}
-    <div bind:this={posterEl} class="relative">
-      {#if logoLoaded && images.posters.length > 0}
-        <img
-          src={getImageOpt(images, "posters", {
-            iso: "en",
-            voteAverage: 5,
-            randomize: true,
-          })}
-          alt={title}
-          class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
-            ? 'opacity-35'
-            : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
-        />
-      {:else if logoLoaded && media.poster_path}
-        <img
-          src={media.poster_path}
-          alt={title}
-          class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
-            ? 'opacity-35'
-            : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
-        />
-      {:else}
-        <div
-          class="flex aspect-2/3 w-full items-center justify-center rounded-md"
-        >
-          <Spinner class="size-10" />
+<ContextMenu.Root>
+  <ContextMenu.Trigger>
+    <div
+      bind:this={buttonEl}
+      onclick={() => !expanded && onclick(media)}
+      onmouseenter={onHover}
+      onmouseleave={onLeave}
+      class={initialExpanded
+        ? "contents"
+        : `relative ${!expanded ? "cursor-pointer" : ""} ${hovered || expanded ? "z-50" : "z-0"}`}
+      role="button"
+      tabindex="0"
+      onkeydown={(e) => e.key === "Enter" && !expanded && onclick(media)}
+    >
+      {#if !initialExpanded}
+        <div bind:this={posterEl} class="relative">
+          {#if logoLoaded && images.posters.length > 0}
+            <img
+              src={getImageOpt(images, "posters", {
+                iso: "en",
+                voteAverage: 5,
+                randomize: true,
+              })}
+              alt={title}
+              class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
+                ? 'opacity-35'
+                : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
+            />
+          {:else if logoLoaded && media.poster_path}
+            <img
+              src={media.poster_path}
+              alt={title}
+              class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
+                ? 'opacity-35'
+                : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
+            />
+          {:else}
+            <div
+              class="flex aspect-2/3 w-full items-center justify-center rounded-md"
+            >
+              <Spinner class="size-10" />
+            </div>
+          {/if}
+          {#if quality}
+            <span
+              class="absolute bottom-1.5 left-1.5 rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
+                quality,
+              )}"
+            >
+              {quality.toUpperCase()}
+            </span>
+          {/if}
+          {#if newEpisodes}
+            <div
+              class="absolute inset-x-0 bottom-0 rounded-b-md"
+              style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 55%, transparent 100%)"
+            >
+              <p
+                class="px-2 pt-6 pb-2 text-[11px] font-semibold tracking-wide text-white"
+              >
+                New Episodes
+              </p>
+            </div>
+          {/if}
+          {#if isWatched}
+            <div
+              class="absolute inset-0 flex items-center justify-center rounded-md"
+              style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+            >
+              <CircleCheckBig class="size-12 text-white/80" />
+            </div>
+          {/if}
+          {#if isDropped}
+            <div
+              class="absolute inset-0 flex items-center justify-center rounded-md"
+              style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+            >
+              <HeartOff class="size-12 text-red-600/80" />
+            </div>
+          {/if}
+          {#if media.media_type === "tv" && numberOfSeasons !== null}
+            <span
+              class="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
+            >
+              {numberOfSeasons}S
+            </span>
+          {/if}
         </div>
-      {/if}
-      {#if quality}
-        <span
-          class="absolute bottom-1.5 left-1.5 rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
-            quality,
-          )}"
-        >
-          {quality.toUpperCase()}
-        </span>
-      {/if}
-      {#if newEpisodes}
-        <div
-          class="absolute inset-x-0 bottom-0 rounded-b-md"
-          style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 55%, transparent 100%)"
-        >
-          <p
-            class="px-2 pt-6 pb-2 text-[11px] font-semibold tracking-wide text-white"
-          >
-            New Episodes
-          </p>
-        </div>
-      {/if}
-      {#if isWatched}
-        <div
-          class="absolute inset-0 flex items-center justify-center rounded-md"
-          style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
-        >
-          <CircleCheckBig class="size-12 text-white/80" />
-        </div>
-      {/if}
-      {#if isDropped}
-        <div
-          class="absolute inset-0 flex items-center justify-center rounded-md"
-          style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
-        >
-          <HeartOff class="size-12 text-red-600/80" />
-        </div>
-      {/if}
-      {#if media.media_type === "tv" && numberOfSeasons !== null}
-        <span
-          class="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
-        >
-          {numberOfSeasons}S
-        </span>
       {/if}
     </div>
-  {/if}
-</div>
+  </ContextMenu.Trigger>
+  <ContextMenu.Content>
+    <LibraryContextMenuContent {libraryEntry} {media} />
+  </ContextMenu.Content>
+</ContextMenu.Root>
 
 {#if hovered && !expanded}
   <MediaHoverCard

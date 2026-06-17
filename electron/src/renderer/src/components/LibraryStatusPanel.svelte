@@ -4,7 +4,7 @@
   import type { Media } from "$lib/types/tmdb";
   import * as Popover from "$lib/components/ui/popover/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { BookmarkIcon, Plus } from "lucide-svelte";
+  import {BookmarkIcon, BookmarkPlus, Plus} from "lucide-svelte";
   import { animate } from "animejs";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import { libraryChanged } from "$lib/stores/library";
@@ -75,6 +75,8 @@
       console.error("library status:", e);
     }
   }
+
+  const inLibrary = $derived(!!libraryEntry);
 </script>
 
 <Popover.Root
@@ -83,7 +85,11 @@
 >
   <Popover.Trigger>
     <Button variant="default" {size}>
-      <Plus />
+      {#if inLibrary}
+        <BookmarkIcon class="size-4" />
+      {:else}
+        <BookmarkPlus />
+      {/if}
     </Button>
   </Popover.Trigger>
   <Popover.Content class="rounded-3xl p-0">

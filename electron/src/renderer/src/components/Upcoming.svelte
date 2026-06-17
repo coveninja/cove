@@ -5,6 +5,7 @@
   import { ChevronLeft, ChevronRight } from "lucide-svelte";
   import UpcomingMediaCard from "./UpcomingMediaCard.svelte";
   import type { UpcomingItem } from "$lib/types/types";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let { onSelectMedia }: { onSelectMedia: (m: Media) => void } = $props();
 
@@ -27,7 +28,7 @@
               id: entry.tmdb_id,
               media_type: "tv",
             } as Media);
-            const next = (details as any).next_episode_to_air;
+            const next = details.next_episode_to_air;
             if (!next?.air_date) return null;
             return {
               tmdbId: entry.tmdb_id,
@@ -75,32 +76,35 @@
   <div class="space-y-3">
     <div class="flex items-center justify-between px-1">
       <h2 class="text-lg font-semibold">Upcoming</h2>
-      <div class="flex gap-1">
-        <button
-          onclick={() => scrollByCards(-1)}
-          class="flex size-8 items-center justify-center rounded-full bg-secondary text-muted-foreground transition hover:bg-secondary/70 hover:text-foreground"
-          aria-label="Scroll left"
-        >
-          <ChevronLeft class="size-4" />
-        </button>
-        <button
-          onclick={() => scrollByCards(1)}
-          class="flex size-8 items-center justify-center rounded-full bg-secondary text-muted-foreground transition hover:bg-secondary/70 hover:text-foreground"
-          aria-label="Scroll right"
-        >
-          <ChevronRight class="size-4" />
-        </button>
-      </div>
     </div>
 
-    <div
-      bind:this={trackEl}
-      class="flex scrollbar-none gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
-      style="scroll-snap-type: x mandatory;"
-    >
-      {#each items as item (item.tmdbId)}
-        <UpcomingMediaCard {item} {onSelectMedia} />
-      {/each}
+    <div class="flex items-center justify-between gap-2">
+      <Button
+        onclick={() => scrollByCards(-1)}
+        variant="outline"
+        size="icon"
+        aria-label="Scroll left"
+      >
+        <ChevronLeft class="size-4" />
+      </Button>
+      <div
+        bind:this={trackEl}
+        class="flex scrollbar-none gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
+        style="scroll-snap-type: x mandatory;"
+      >
+        {#each items as item (item.tmdbId)}
+          <UpcomingMediaCard {item} {onSelectMedia} />
+        {/each}
+      </div>
+
+      <Button
+        onclick={() => scrollByCards(1)}
+        variant="outline"
+        size="icon"
+        aria-label="Scroll right"
+      >
+        <ChevronRight class="size-4" />
+      </Button>
     </div>
   </div>
 {/if}

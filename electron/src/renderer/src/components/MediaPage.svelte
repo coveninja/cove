@@ -126,8 +126,8 @@
 
         keywords =
           (type === "movie"
-              ? details.keywords?.keywords
-              : details.keywords?.results
+            ? details.keywords?.keywords
+            : details.keywords?.results
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
@@ -180,8 +180,8 @@
 
   const year = $derived(
     (media.media_type === "tv"
-        ? media.first_air_date
-        : media.release_date
+      ? media.first_air_date
+      : media.release_date
     )?.slice(0, 4),
   );
 
@@ -288,8 +288,8 @@
                       class="rounded border border-border px-1.5 py-0.5 text-xs"
                     >
                       {numberOfEpisodes} episode{numberOfEpisodes !== 1
-                      ? "s"
-                      : ""}
+                        ? "s"
+                        : ""}
                     </span>
                   {/if}
                   {#if maxQuality}

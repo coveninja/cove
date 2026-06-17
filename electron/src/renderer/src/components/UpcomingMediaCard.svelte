@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { Tv } from "lucide-svelte";
+  import { EyeOff, Tv } from "lucide-svelte";
   import type { Media } from "$lib/types/tmdb";
   import type { UpcomingItem } from "$lib/types/types";
   import { SvelteDate } from "svelte/reactivity";
   import { Badge } from "$lib/components/ui/badge/index.js";
   let { item, onSelectMedia } = $props();
+  import { settings } from "$lib/stores/settings";
+  import ScrambledText from "./ScrambledText.svelte";
 
   function isToday(dateStr: string): boolean {
     const date = new Date(dateStr + "T00:00:00");
@@ -48,7 +50,11 @@
   let media = $derived(toMedia(item));
 
   // Prefer the episode still (what's actually coming) over the show's
-  const imageSrc = $derived(item.stillPath || item.posterPath);
+  const imageSrc = $derived.by((): string | null => {
+    return item.stillPath || item.posterPath || null;
+  });
+
+  const isSpoilerHidden = $derived(!!$settings?.hideSpoilers);
 </script>
 
 <button
@@ -61,7 +67,9 @@
       <img
         src={imageSrc}
         alt={item.title}
-        class="aspect-video w-full object-cover transition-transform duration-200 group-hover:scale-105"
+        class="aspect-video w-full object-cover transition-transform duration-200 group-hover:scale-105 {isSpoilerHidden
+          ? 'scale-110 blur-md'
+          : ''}"
       />
     {:else}
       <div
@@ -70,7 +78,15 @@
         <Tv class="size-8 text-muted-foreground/40" />
       </div>
     {/if}
-    <span class="absolute inset-x-0 top-0 block px-2 pt-1.5">
+
+    {#if isSpoilerHidden && imageSrc}
+      <span class="absolute inset-0 flex items-center justify-center">
+        <EyeOff class="size-7 text-white drop-shadow-md" />
+      </span>
+    {/if}
+    <span
+      class="absolute inset-x-0 top-0 flex flex-row justify-between px-2 pt-1.5"
+    >
       <Badge
         variant="secondary"
         class="block bg-card/80 text-[11px] font-semibold tracking-wide {isToday(
@@ -81,6 +97,9 @@
       >
         {formatAirDate(item.airDate)}
       </Badge>
+      {#if isSpoilerHidden}
+        <Badge variant="outline">Spoilers Hidden</Badge>
+      {/if}
     </span>
     <span
       class="absolute inset-x-0 bottom-0 block px-2 pt-24 pb-1.5"
@@ -93,9 +112,10 @@
           {item.title}
         </span>
         <span class="block truncate text-xs text-muted-foreground">
-          S{item.season}E{item.episode}{item.episodeName
-            ? ` · ${item.episodeName}`
-            : ""}
+          S{item.season}E{item.episode}
+          {#if item.episodeName}
+            · <ScrambledText text={item.episodeName} active={isSpoilerHidden} />
+          {/if}
         </span>
       </span>
     </span>

@@ -39,6 +39,7 @@ type Settings struct {
 
 	// UI
 	ShowStreamDetails bool `json:"showStreamDetails"` // show codec/resolution badges on stream list
+	HideSpoilers      bool `json:"hideSpoilers"`
 }
 
 var defaultSettings = Settings{
@@ -58,6 +59,7 @@ var defaultSettings = Settings{
 	SubtitlePosition:      8,
 	SubtitleBackground:    true,
 	ShowStreamDetails:     true,
+	HideSpoilers:          false,
 }
 
 var (

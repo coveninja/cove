@@ -113,10 +113,10 @@
 
   const needsHLS = $derived(
     ($settings?.preferHLS ?? false) ||
-    audioTracks.length > 1 ||
-    audioTracks.some((t) =>
-      UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
-    ),
+      audioTracks.length > 1 ||
+      audioTracks.some((t) =>
+        UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
+      ),
   );
 
   // ─── Playback state (driven by Vidstack events) ─────────────────────────────
@@ -920,13 +920,13 @@
                 <Headphones class="size-4" />
                 <span class="text-xs">
                   {vidstackAudioTracks.find((t) => t.selected)?.label ??
-                  "Audio"}
+                    "Audio"}
                 </span>
               </Popover.Trigger>
               <Popover.Content side="top" class="w-52 p-0">
                 <div class="border-b border-border px-3 py-2">
                   <span class="text-xs font-medium text-muted-foreground"
-                  >Audio Track</span
+                    >Audio Track</span
                   >
                 </div>
                 <div class="p-1">
@@ -1071,19 +1071,19 @@
                       <button
                         aria-label="Toggle background"
                         onclick={(e) => {
-                        e.stopPropagation();
-                        subtitleSettings.background =
-                          !subtitleSettings.background;
-                      }}
+                          e.stopPropagation();
+                          subtitleSettings.background =
+                            !subtitleSettings.background;
+                        }}
                         class="h-5 w-9 rounded-full transition-colors {subtitleSettings.background
-                        ? 'bg-white'
-                        : 'bg-white/20'}"
+                          ? 'bg-white'
+                          : 'bg-white/20'}"
                       >
-                      <span
-                        class="block size-4 translate-x-0.5 rounded-full bg-black transition-transform {subtitleSettings.background
-                          ? 'translate-x-4'
-                          : ''}"
-                      ></span>
+                        <span
+                          class="block size-4 translate-x-0.5 rounded-full bg-black transition-transform {subtitleSettings.background
+                            ? 'translate-x-4'
+                            : ''}"
+                        ></span>
                       </button>
                     </div>
 
@@ -1092,43 +1092,43 @@
                       <div class="flex justify-between text-xs">
                         <span class="text-muted-foreground">Sync offset</span>
                         <span
-                        >{subtitleSettings.offset > 0 ? "+" : ""}{(
-                          subtitleSettings.offset / 1000
-                        ).toFixed(1)}s</span
+                          >{subtitleSettings.offset > 0 ? "+" : ""}{(
+                            subtitleSettings.offset / 1000
+                          ).toFixed(1)}s</span
                         >
                       </div>
                       <div class="flex gap-1">
                         <button
                           onclick={(e) => {
-                          e.stopPropagation();
-                          subtitleSettings.offset = Math.max(
-                            -10000,
-                            subtitleSettings.offset - 500,
-                          );
-                        }}
+                            e.stopPropagation();
+                            subtitleSettings.offset = Math.max(
+                              -10000,
+                              subtitleSettings.offset - 500,
+                            );
+                          }}
                           class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                        >−500ms</button
+                          >−500ms</button
                         >
                         <button
                           onclick={(e) => {
-                          e.stopPropagation();
-                          subtitleSettings.offset = Math.min(
-                            10000,
-                            subtitleSettings.offset + 500,
-                          );
-                        }}
+                            e.stopPropagation();
+                            subtitleSettings.offset = Math.min(
+                              10000,
+                              subtitleSettings.offset + 500,
+                            );
+                          }}
                           class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                        >+500ms</button
+                          >+500ms</button
                         >
                       </div>
                       {#if subtitleSettings.offset !== 0}
                         <button
                           onclick={(e) => {
-                          e.stopPropagation();
-                          subtitleSettings.offset = 0;
-                        }}
+                            e.stopPropagation();
+                            subtitleSettings.offset = 0;
+                          }}
                           class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
-                        >Reset</button
+                          >Reset</button
                         >
                       {/if}
                     </div>
@@ -1138,16 +1138,16 @@
                     <!-- Off -->
                     <button
                       onclick={(e) => {
-                      e.stopPropagation();
-                      selectTextTrack("");
-                      subtitleSettingsOpen = false;
-                      selectedLang = null;
-                    }}
+                        e.stopPropagation();
+                        selectTextTrack("");
+                        subtitleSettingsOpen = false;
+                        selectedLang = null;
+                      }}
                       class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {textTracks.every(
-                      (t) => t.mode !== 'showing',
-                    )
-                      ? 'font-semibold'
-                      : ''}"
+                        (t) => t.mode !== 'showing',
+                      )
+                        ? 'font-semibold'
+                        : ''}"
                     >
                       Off
                     </button>
@@ -1155,26 +1155,28 @@
                     {#if selectedLang === null}
                       <!-- Level 1: one row per language -->
                       {#each [...tracksByLang.entries()] as [lang, tracks] (lang)}
-                        {@const active = tracks.some((t) => t.mode === "showing")}
+                        {@const active = tracks.some(
+                          (t) => t.mode === "showing",
+                        )}
                         <button
                           onclick={(e) => {
-                          e.stopPropagation();
-                          if (tracks.length === 1) {
-                            selectTextTrack(tracks[0].id);
-                            subtitleSettingsOpen = false;
-                          } else {
-                            selectedLang = lang;
-                          }
-                        }}
+                            e.stopPropagation();
+                            if (tracks.length === 1) {
+                              selectTextTrack(tracks[0].id);
+                              subtitleSettingsOpen = false;
+                            } else {
+                              selectedLang = lang;
+                            }
+                          }}
                           class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {active
-                          ? 'font-semibold'
-                          : ''}"
+                            ? 'font-semibold'
+                            : ''}"
                         >
                           <span class="flex-1 truncate">{langName(lang)}</span>
                           {#if active}
-                          <span
-                            class="mr-1.5 size-1.5 shrink-0 rounded-full bg-white"
-                          ></span>
+                            <span
+                              class="mr-1.5 size-1.5 shrink-0 rounded-full bg-white"
+                            ></span>
                           {/if}
                           {#if tracks.length > 1}
                             <ChevronRight
@@ -1188,20 +1190,21 @@
                       {#each tracksByLang.get(selectedLang) ?? [] as track (track.id)}
                         <button
                           onclick={(e) => {
-                          e.stopPropagation();
-                          selectTextTrack(track.id);
-                          subtitleSettingsOpen = false;
-                          selectedLang = null;
-                        }}
+                            e.stopPropagation();
+                            selectTextTrack(track.id);
+                            subtitleSettingsOpen = false;
+                            selectedLang = null;
+                          }}
                           class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition hover:bg-secondary {track.mode ===
-                        'showing'
-                          ? 'font-semibold'
-                          : ''}"
+                          'showing'
+                            ? 'font-semibold'
+                            : ''}"
                         >
                           <span class="flex-1 truncate">{track.label}</span>
                           {#if track.mode === "showing"}
-                          <span class="size-1.5 shrink-0 rounded-full bg-white"
-                          ></span>
+                            <span
+                              class="size-1.5 shrink-0 rounded-full bg-white"
+                            ></span>
                           {/if}
                         </button>
                       {/each}
@@ -1325,7 +1328,7 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
-          >{title}</span
+            >{title}</span
           >
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"
