@@ -1,5 +1,5 @@
 // src/lib/stores/settings.ts
-import { writable, derived } from "svelte/store";
+import { writable, derived, Subscriber, Unsubscriber } from "svelte/store";
 import type { Settings } from "$lib/types/settings";
 import { api } from "$lib/api";
 
@@ -14,12 +14,27 @@ const DEFAULTS: Settings = {
   defaultSubtitleLang: "en",
   defaultAudioLang: "en",
   showStreamDetails: true,
+  autoSelectStream: true,
+  streamSelectionMode: null,
+  measuredBandwidthMbps: 0,
+  subtitleSize: 150,
+  subtitlePosition: 8,
+  subtitleBackground: true,
+  hideSpoilers: false,
 };
 
-function createSettingsStore() {
+function createSettingsStore(): {
+  subscribe: (
+    this: void,
+    run: Subscriber<Settings>,
+    invalidate?: () => void,
+  ) => Unsubscriber;
+  load: () => Promise<void>;
+  save: (patch: Partial<Settings>) => void;
+} {
   const { subscribe, set, update } = writable<Settings>(DEFAULTS);
 
-  async function load() {
+  async function load(): Promise<void> {
     try {
       set(await api.getSettings());
     } catch (e) {
@@ -27,13 +42,13 @@ function createSettingsStore() {
     }
   }
 
-  function save(patch: Partial<Settings>) {
+  function save(patch: Partial<Settings>): void {
     update((current) => {
       const next = { ...current, ...patch };
       // Optimistic update — persist in the background.
-      api.updateSettings(next).catch((e) =>
-        console.error("Failed to save settings:", e),
-      );
+      api
+        .updateSettings(next)
+        .catch((e) => console.error("Failed to save settings:", e));
       return next;
     });
   }

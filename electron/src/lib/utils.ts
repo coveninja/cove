@@ -1,10 +1,14 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { Stream } from "$lib/types/addons";
-import {Details, MediaImages, MediaVideoObject, MediaVideos} from "$lib/types/tmdb";
-import {api} from "$lib/api";
-import {SvelteMap} from "svelte/reactivity";
-import type {WatchProgress} from "$lib/types/library";
+import {
+  Details,
+  MediaImages,
+  MediaVideoObject,
+  MediaVideos,
+} from "$lib/types/tmdb";
+import { SvelteMap } from "svelte/reactivity";
+import type { WatchProgress } from "$lib/types/library";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));

@@ -34,6 +34,7 @@
   let {
     query = $bindable(""),
     loading = $bindable(false),
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     onSelectPage = (p: Page) => {},
     canGoBack = false,
     onGoBack,
@@ -288,7 +289,9 @@
     </div>
   </div>
 
-  <div class="flex w-48 items-center justify-end gap-1 [webkit-app-region:no-drag]">
+  <div
+    class="flex w-48 items-center justify-end gap-1 [webkit-app-region:no-drag]"
+  >
     {#if fullscreenInfo}
       <Tooltip.Root>
         <Tooltip.Trigger>

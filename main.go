@@ -18,28 +18,33 @@ import (
 )
 
 func main() {
-	ex, envErr := os.Executable()
-	if envErr == nil {
-		envErr := godotenv.Load(filepath.Join(filepath.Dir(ex), ".env"))
-		if envErr != nil {
-			return
+	// Load .env if present. A missing .env is NOT fatal: env vars may be set
+	// externally (Docker, systemd, CI), and returning here would ignore them
+	// and silently kill startup with no log line. Treat a load failure as a
+	// warning only.
+	if ex, err := os.Executable(); err == nil {
+		if err := godotenv.Load(filepath.Join(filepath.Dir(ex), ".env")); err != nil {
+			log.Println("no .env next to binary; relying on the environment:", err)
 		}
-	} else {
-		envErr := godotenv.Load()
-		if envErr != nil {
-			return
-		}
+	} else if err := godotenv.Load(); err != nil {
+		log.Println("no .env in working dir; relying on the environment:", err)
 	}
+
 	apiKey := os.Getenv("TMDB_API_KEY")
-	_, err := addons.AddAddon("https://torrentio.strem.fun")
-	if err != nil {
-		log.Fatal(err)
-		return
+	if apiKey == "" {
+		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
 	}
-	_, err = addons.AddAddon("https://opensubtitles-v3.strem.io")
-	if err != nil {
+
+	// Addon registration is best-effort. A transient network failure reaching
+	// an addon at startup must not prevent the server from booting — the addon
+	// is re-contacted on each stream request and can recover then.
+	if _, err := addons.AddAddon("https://torrentio.strem.fun"); err != nil {
+		log.Println("torrentio addon unavailable:", err)
+	}
+	if _, err := addons.AddAddon("https://opensubtitles-v3.strem.io"); err != nil {
 		log.Println("opensubtitles addon unavailable:", err)
 	}
+
 	if err := settings.InitSettings(); err != nil {
 		log.Println("could not load settings:", err)
 	}
@@ -53,9 +58,12 @@ func main() {
 	settings.SetupHandlers()
 	library.SetupHandlers()
 
+	// The torrent client is core functionality — if it can't start, there's
+	// nothing to stream, so this one stays fatal.
 	if err := player.Init(); err != nil {
 		log.Fatal("could not init torrent client:", err)
 	}
+
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()

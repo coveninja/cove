@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Stream } from "$lib/types/addons";
   import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
-  import { ChevronLeft, Star } from "lucide-svelte";
+  import { Star } from "lucide-svelte";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
@@ -19,7 +19,7 @@
   import PlayerSimple from "./PlayerSimple.svelte";
   import { api } from "$lib/api";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
-  import type { LibraryEntry, WatchProgress } from "$lib/types/library";
+  import type { LibraryEntry } from "$lib/types/library";
   import MediaCard from "./MediaCard.svelte";
   import StarRating from "./StarRating.svelte";
 
@@ -46,8 +46,8 @@
   } = $props();
 
   let libraryEntry = $state<LibraryEntry | null>(null);
-  let movieProgress = $state<WatchProgress | null>(null);
-  let tvProgressList = $state<WatchProgress[]>([]);
+  //let movieProgress = $state<WatchProgress | null>(null);
+  //let tvProgressList = $state<WatchProgress[]>([]);
   let lastAiredSeason = $state<number | null>(null);
   let lastAiredEpisode = $state<number | null>(null);
 
@@ -58,15 +58,15 @@
       .then((result) => {
         if (!result) {
           libraryEntry = null;
-          movieProgress = null;
-          tvProgressList = [];
+          //movieProgress = null;
+          //tvProgressList = [];
           return;
         }
         libraryEntry = result.entry;
         if (media.media_type === "movie") {
-          movieProgress = result.progress[0] ?? null;
+          //movieProgress = result.progress[0] ?? null;
         } else {
-          tvProgressList = result.progress;
+          //tvProgressList = result.progress;
         }
       })
       .catch(console.error);

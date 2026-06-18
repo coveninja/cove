@@ -8,7 +8,7 @@
     qualityClass,
     getVideoOpt,
   } from "$lib/utils";
-  import { api, type LibraryStatus, STATUS_LABELS } from "$lib/api";
+  import { api } from "$lib/api";
   import { onMount } from "svelte";
   import { Spinner } from "$lib/components/ui/spinner";
   import MediaHoverCard from "./MediaHoverCard.svelte";
@@ -16,9 +16,8 @@
 
   import type { LibraryEntry } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
-  import { BookmarkIcon, CircleCheckBig, HeartOff } from "lucide-svelte";
+  import { CircleCheckBig, HeartOff } from "lucide-svelte";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
-  import { Button } from "$lib/components/ui/button";
   import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
 
   let {
@@ -120,8 +119,8 @@
         ageRating = formatRating(d);
         keywords =
           (media.media_type === "movie"
-              ? d.keywords?.keywords
-              : d.keywords?.results
+            ? d.keywords?.keywords
+            : d.keywords?.results
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
@@ -261,6 +260,7 @@
   });
 
   $effect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     $libraryChanged;
     api.libraryGet(media.id, media.media_type).then((result) => {
       libraryEntry = result?.entry ?? null;

@@ -4,7 +4,7 @@
   import type { Media } from "$lib/types/tmdb";
   import * as Popover from "$lib/components/ui/popover/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import {BookmarkIcon, BookmarkPlus, Plus} from "lucide-svelte";
+  import { BookmarkIcon, BookmarkPlus } from "lucide-svelte";
   import { animate } from "animejs";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import { libraryChanged } from "$lib/stores/library";
@@ -97,7 +97,7 @@
       {#each Object.entries(STATUS_LABELS) as [value, label] (value)}
         {@const isActive = libraryEntry?.status === value}
         <Button
-          onclick={(e) => {
+          onclick={(e: { stopPropagation: () => void }) => {
             e.stopPropagation();
             handleStatus(value as LibraryStatus);
           }}

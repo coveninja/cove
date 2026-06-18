@@ -4,11 +4,9 @@
   import MediaCard from "./MediaCard.svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { api } from "$lib/api";
-  import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { Button } from "$lib/components/ui/button";
   import { animate, splitText, stagger } from "animejs";
   import { tick } from "svelte";
-  import CoveIcon from "../assets/CoveIcon.svelte";
 
   let {
     query = $bindable(""),
@@ -20,7 +18,7 @@
 
   let results: Media[] = $state([]);
   let keywords: { id: number; name: string }[] = $state([]);
-  let qualityMap = new SvelteMap<number, string>();
+  let qualityMap = $state<SvelteMap<number, string>>();
 
   let resultsTextEl = $state<HTMLElement>();
   let displayQuery = $state("");
@@ -115,7 +113,7 @@
           <span class="size-1.5"></span>
           {#key displayQuery}
             <span class="text-accent" bind:this={resultsTextEl}
-            >{displayQuery}</span
+              >{displayQuery}</span
             >
           {/key}
         </div>
