@@ -15,6 +15,7 @@
     loading = $bindable(true),
     onSelectMedia,
     onSuggested,
+    onWatch,
   } = $props();
 
   let results: Media[] = $state([]);
@@ -114,7 +115,7 @@
           <span class="size-1.5"></span>
           {#key displayQuery}
             <span class="text-accent" bind:this={resultsTextEl}
-              >{displayQuery}</span
+            >{displayQuery}</span
             >
           {/key}
         </div>
@@ -167,6 +168,7 @@
             onsimilar={(m) => {
               onSelectMedia(m);
             }}
+            onwatch={onWatch}
           />
         {/each}
       </div>

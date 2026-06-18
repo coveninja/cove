@@ -9,6 +9,7 @@
     ArrowLeft,
     Flame,
     Cog,
+    Minimize2,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
@@ -34,8 +35,20 @@
     query = $bindable(""),
     loading = $bindable(false),
     onSelectPage = (p: Page) => {},
-    pageHistory = $bindable([]),
+    canGoBack = false,
     onGoBack,
+    fullscreenInfo = null,
+    onMinimizePlayer,
+    onCloseStream,
+  }: {
+    query?: string;
+    loading?: boolean;
+    onSelectPage?: (p: Page) => void;
+    canGoBack?: boolean;
+    onGoBack?: () => void;
+    fullscreenInfo?: { title: string; subtitle?: string } | null;
+    onMinimizePlayer?: () => void;
+    onCloseStream?: () => void;
   } = $props();
 
   let searchOuter = $state<HTMLDivElement>();
@@ -68,7 +81,10 @@
 
   async function toggleSearch(show: boolean): Promise<void> {
     if (show === (searchState === "active")) return;
-    if (query.length > 0 && searchFocused) return;
+    // While the input is focused, leave it open no matter what's in it —
+    // clicking into an empty box and then moving the mouse off the bar
+    // shouldn't collapse it out from under you mid-interaction.
+    if (searchFocused) return;
 
     animate(searchOuter, {
       width: show ? 300 : 36,
@@ -105,10 +121,23 @@
     toggleSearch(false);
   }}
 >
-  <div class="flex items-center gap-2">
-    <span class="text-2xl font-bold tracking-wider text-accent">
-      <CoveIcon size={45} />
-    </span>
+  <div class="flex w-48 min-w-0 items-center gap-2">
+    {#if fullscreenInfo}
+      <div class="flex min-w-0 flex-col leading-tight">
+        <span class="max-w-64 truncate text-sm font-semibold text-white">
+          {fullscreenInfo.title}
+        </span>
+        {#if fullscreenInfo.subtitle}
+          <span class="max-w-64 truncate text-xs text-white/60">
+            {fullscreenInfo.subtitle}
+          </span>
+        {/if}
+      </div>
+    {:else}
+      <span class="text-2xl font-bold tracking-wider text-accent">
+        <CoveIcon size={45} />
+      </span>
+    {/if}
   </div>
 
   <div
@@ -142,7 +171,7 @@
               variant="outline"
               size="icon"
               class="rounded-l-full rounded-r-none"
-              disabled={pageHistory.length < 1}
+              disabled={!canGoBack}
               onclick={onGoBack}
             >
               <ArrowLeft />
@@ -259,33 +288,56 @@
     </div>
   </div>
 
-  <div class="flex items-center gap-1 [webkit-app-region:no-drag]">
-    <Tooltip.Root>
-      <Tooltip.Trigger>
-        <Button
-          variant="outline"
-          size="icon"
-          onclick={() => {
-            selectPage("settings");
-          }}
-        >
-          <Cog />
+  <div class="flex w-48 items-center justify-end gap-1 [webkit-app-region:no-drag]">
+    {#if fullscreenInfo}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button variant="outline" size="icon" onclick={onMinimizePlayer}>
+            <Minimize2 />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>Minimize player</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button variant="outline" size="icon" onclick={onCloseStream}>
+            <X />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>Close stream</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
+    {:else}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button
+            variant="outline"
+            size="icon"
+            onclick={() => {
+              selectPage("settings");
+            }}
+          >
+            <Cog />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>Explore</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
+      <ButtonGroup.Root>
+        <Button variant="outline" size="icon-sm" onclick={minimize}>
+          <Minus />
         </Button>
-      </Tooltip.Trigger>
-      <Tooltip.Content>
-        <p>Explore</p>
-      </Tooltip.Content>
-    </Tooltip.Root>
-    <ButtonGroup.Root>
-      <Button variant="outline" size="icon-sm" onclick={minimize}>
-        <Minus />
-      </Button>
-      <Button variant="outline" size="icon-sm" onclick={maximize}>
-        <Square />
-      </Button>
-      <Button variant="outline" size="icon-sm" onclick={close}>
-        <X />
-      </Button>
-    </ButtonGroup.Root>
+        <Button variant="outline" size="icon-sm" onclick={maximize}>
+          <Square />
+        </Button>
+        <Button variant="outline" size="icon-sm" onclick={close}>
+          <X />
+        </Button>
+      </ButtonGroup.Root>
+    {/if}
   </div>
 </div>

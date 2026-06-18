@@ -29,6 +29,7 @@
     initialExpanded = false,
     onclose,
     onsimilar,
+    onwatch,
   }: {
     media: Media;
     onclick: (m: Media) => void;
@@ -37,6 +38,10 @@
     initialExpanded?: boolean;
     onclose?: () => void;
     onsimilar?: (m: Media) => void;
+    // Wires up "Watch"/"Continue" to jump straight into playback instead of
+    // opening the media page. Optional and falls back to onclick (the old
+    // behavior) so callers that haven't been updated yet still work.
+    onwatch?: (m: Media, season?: number, episode?: number) => void;
   } = $props();
 
   // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -115,8 +120,8 @@
         ageRating = formatRating(d);
         keywords =
           (media.media_type === "movie"
-            ? d.keywords?.keywords
-            : d.keywords?.results
+              ? d.keywords?.keywords
+              : d.keywords?.results
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
@@ -216,7 +221,7 @@
       computeHoverStyle();
       hovered = true;
       fetchData();
-    }, 400);
+    }, 500);
   }
 
   function onLeave(e?: MouseEvent): void {
@@ -399,7 +404,8 @@
     {lastAiredEpisode}
     {quality}
     onmouseleave={onLeave}
-    onwatch={() => onclick(media)}
+    onwatch={(season, episode) =>
+      onwatch ? onwatch(media, season, episode) : onclick(media)}
     onexpand={expand}
     onpopoverchange={(open) => (popoverOpen = open)}
   />
@@ -422,7 +428,8 @@
     {keywords}
     {similar}
     {quality}
-    onwatch={() => onclick(media)}
+    onwatch={(season, episode) =>
+      onwatch ? onwatch(media, season, episode) : onclick(media)}
     onclose={closeExpanded}
     onsimilar={(m) => {
       closeExpanded();

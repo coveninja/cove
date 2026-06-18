@@ -42,7 +42,7 @@
     lastAiredSeason?: number | null;
     lastAiredEpisode?: number | null;
     quality: string | null;
-    onwatch: () => void;
+    onwatch: (season?: number, episode?: number) => void;
     onexpand: () => void;
     onmouseleave?: (e: MouseEvent) => void;
     onpopoverchange?: (open: boolean) => void;
@@ -58,8 +58,8 @@
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
   const year = $derived(
     (media.media_type === "tv"
-      ? media.first_air_date
-      : media.release_date
+        ? media.first_air_date
+        : media.release_date
     )?.slice(0, 4),
   );
 
@@ -84,10 +84,10 @@
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
-          100,
-          (movieProgress.position_seconds / movieProgress.duration_seconds) *
-            100,
-        )
+        100,
+        (movieProgress.position_seconds / movieProgress.duration_seconds) *
+        100,
+      )
       : 0,
   );
 
@@ -172,7 +172,7 @@
       <span class="flex flex-wrap items-center gap-2">
         {#if ageRating}
           <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-            >{ageRating}</span
+          >{ageRating}</span
           >
         {/if}
         {#if originCountry.length}
@@ -182,7 +182,7 @@
         {/if}
         {#if runtime}
           <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-            >{runtime}</span
+          >{runtime}</span
           >
         {/if}
         {#if media.media_type === "tv" && numberOfSeasons !== null}
@@ -219,7 +219,7 @@
     </span>
 
     <span class="line-clamp-2 text-xs text-muted-foreground"
-      >{media.overview}</span
+    >{media.overview}</span
     >
 
     <!-- Library: status pill + user rating -->
@@ -257,7 +257,10 @@
           size="sm"
           onclick={(e) => {
             e.stopPropagation();
-            onwatch();
+            onwatch(
+              libraryEntry?.last_watched_season ?? undefined,
+              libraryEntry?.last_watched_episode ?? undefined,
+            );
           }}
         >
           <Play class="size-3" />

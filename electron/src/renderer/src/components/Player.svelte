@@ -62,12 +62,18 @@
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
+    compact = false,
   }: {
     src: string;
     media?: Media;
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
+    // True while shown in the small floating PiP box — subtitles get
+    // clipped/illegible at that size and just eat into the limited screen
+    // real estate, so we skip rendering them (the underlying cue-tracking
+    // logic keeps running, so they reappear instantly back in full mode).
+    compact?: boolean;
   } = $props();
 
   let createdID = $state<string | null>(null);
@@ -113,10 +119,10 @@
 
   const needsHLS = $derived(
     ($settings?.preferHLS ?? false) ||
-      audioTracks.length > 1 ||
-      audioTracks.some((t) =>
-        UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
-      ),
+    audioTracks.length > 1 ||
+    audioTracks.some((t) =>
+      UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
+    ),
   );
 
   // ─── Playback state (driven by Vidstack events) ─────────────────────────────
@@ -833,7 +839,7 @@
       <media-provider class="h-full w-full"></media-provider>
 
       <!-- ── Custom subtitle overlay ────────────────────────────────────────── -->
-      {#if subtitleLoading}
+      {#if subtitleLoading && !compact}
         <div
           class="pointer-events-none absolute inset-x-0 bottom-16 z-20 flex justify-center"
         >
@@ -842,7 +848,7 @@
           </span>
         </div>
       {/if}
-      {#if currentCueText}
+      {#if currentCueText && !compact}
         <div
           class="pointer-events-none absolute inset-x-0 z-20 flex flex-col items-center gap-0.5 px-6"
           style="bottom: {subtitleSettings.line}%"
@@ -920,13 +926,13 @@
                 <Headphones class="size-4" />
                 <span class="text-xs">
                   {vidstackAudioTracks.find((t) => t.selected)?.label ??
-                    "Audio"}
+                  "Audio"}
                 </span>
               </Popover.Trigger>
               <Popover.Content side="top" class="w-52 p-0">
                 <div class="border-b border-border px-3 py-2">
                   <span class="text-xs font-medium text-muted-foreground"
-                    >Audio Track</span
+                  >Audio Track</span
                   >
                 </div>
                 <div class="p-1">
@@ -1092,9 +1098,9 @@
                       <div class="flex justify-between text-xs">
                         <span class="text-muted-foreground">Sync offset</span>
                         <span
-                          >{subtitleSettings.offset > 0 ? "+" : ""}{(
-                            subtitleSettings.offset / 1000
-                          ).toFixed(1)}s</span
+                        >{subtitleSettings.offset > 0 ? "+" : ""}{(
+                          subtitleSettings.offset / 1000
+                        ).toFixed(1)}s</span
                         >
                       </div>
                       <div class="flex gap-1">
@@ -1107,7 +1113,7 @@
                             );
                           }}
                           class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                          >−500ms</button
+                        >−500ms</button
                         >
                         <button
                           onclick={(e) => {
@@ -1118,7 +1124,7 @@
                             );
                           }}
                           class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                          >+500ms</button
+                        >+500ms</button
                         >
                       </div>
                       {#if subtitleSettings.offset !== 0}
@@ -1128,7 +1134,7 @@
                             subtitleSettings.offset = 0;
                           }}
                           class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
-                          >Reset</button
+                        >Reset</button
                         >
                       {/if}
                     </div>
@@ -1328,7 +1334,7 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
-            >{title}</span
+          >{title}</span
           >
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"
@@ -1343,3 +1349,15 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* Without this, the wrapper's own aspect ratio (which on an ultrawide
+     monitor in full-screen mode can be much wider than 16:9) ends up
+     dictating how the video gets scaled, cropping anything that doesn't
+     happen to match it. Forcing `contain` makes it always letterbox /
+     pillarbox to the source's real aspect ratio instead. !important
+     because vidstack's own bundled theme CSS may otherwise win. */
+  :global(media-player video) {
+    object-fit: contain !important;
+  }
+</style>

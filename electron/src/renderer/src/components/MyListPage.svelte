@@ -11,13 +11,22 @@
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
   import Upcoming from "./Upcoming.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
+  import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
 
-  let { onSelectMedia }: { onSelectMedia: (m: Media) => void } = $props();
+  let {
+    onSelectMedia,
+    onWatch,
+  }: {
+    onSelectMedia: (m: Media) => void;
+    onWatch?: (m: Media, season?: number, episode?: number) => void;
+  } = $props();
 
   // ── State ────────────────────────────────────────────────────────────────────
 
   let entries = $state<LibraryEntry[]>([]);
   let loading = $state(true);
+  let activeType = $state<"all" | "movie" | "tv">("all");
   let activeStatus = $state<LibraryStatus | "all">("all");
 
   // ── Data ─────────────────────────────────────────────────────────────────────
@@ -57,12 +66,17 @@
 
   const counts = $derived(
     Object.fromEntries(
-      TAB_ORDER.map((s) => [
-        s,
-        s === "all"
-          ? entries.length
-          : entries.filter((e) => e.status === s).length,
-      ]),
+      TAB_ORDER.map((s) => {
+        const typeFiltered = entries.filter(
+          (e) => activeType === "all" || e.media_type === activeType,
+        );
+        return [
+          s,
+          s === "all"
+            ? typeFiltered.length
+            : typeFiltered.filter((e) => e.status === s).length,
+        ];
+      }),
     ),
   );
 
@@ -75,26 +89,28 @@
 
   const filtered = $derived(
     (activeStatus === "all"
-      ? entries
-      : entries.filter((e) => e.status === activeStatus)
-    ).toSorted((a, b) => {
-      // On the "all" tab, group by status order first
-      if (activeStatus === "all") {
-        const statusDiff =
-          (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
-        if (statusDiff !== 0) return statusDiff;
-      }
+        ? entries
+        : entries.filter((e) => e.status === activeStatus)
+    )
+      .filter((e) => activeType === "all" || e.media_type === activeType)
+      .toSorted((a, b) => {
+        // On the "all" tab, group by status order first
+        if (activeStatus === "all") {
+          const statusDiff =
+            (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99);
+          if (statusDiff !== 0) return statusDiff;
+        }
 
-      // Within "watching": new episodes float to top
-      const aNew = hasNewEpisodes(a) ? 1 : 0;
-      const bNew = hasNewEpisodes(b) ? 1 : 0;
-      if (bNew !== aNew) return bNew - aNew;
+        // Within "watching": new episodes float to top
+        const aNew = hasNewEpisodes(a) ? 1 : 0;
+        const bNew = hasNewEpisodes(b) ? 1 : 0;
+        if (bNew !== aNew) return bNew - aNew;
 
-      // Then by most recent date
-      const aDate = a.last_air_date || a.updated_at;
-      const bDate = b.last_air_date || b.updated_at;
-      return new Date(bDate).getTime() - new Date(aDate).getTime();
-    }),
+        // Then by most recent date
+        const aDate = a.last_air_date || a.updated_at;
+        const bDate = b.last_air_date || b.updated_at;
+        return new Date(bDate).getTime() - new Date(aDate).getTime();
+      }),
   );
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -190,32 +206,56 @@
         {/if}
       </div>
 
-      <!-- Status tabs -->
-      {#if !loading && entries.length > 0}
-        <div class="flex flex-wrap gap-1.5">
-          {#each TAB_ORDER as tab (tab)}
-            {@const count = counts[tab]}
-            {#if count > 0 || tab === "all"}
-              <button
-                onclick={() => (activeStatus = tab)}
-                class="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors
-                  {activeStatus === tab
-                  ? 'bg-foreground text-background'
-                  : 'bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground'}"
-              >
-                {TAB_LABELS[tab]}
-                <span
-                  class="tabular-nums {activeStatus === tab
-                    ? 'text-background/70'
-                    : 'text-muted-foreground/60'}"
+      <div class="flex flex-col gap-1">
+        {#if !loading && entries.length > 0}
+          <div class="mt-2 flex gap-1.5">
+            <ButtonGroup.Root>
+              {#each [["all", "All"], ["movie", "Movies"], ["tv", "TV Shows"]] as [type, typeLabel] (type)}
+                <Button
+                  onclick={() => (activeType = type as typeof activeType)}
+                  size="xs"
+                  class="rounded-full px-3 py-1 text-xs font-medium transition-colors
+          {activeType === type
+                    ? 'bg-foreground text-background'
+                    : 'bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground'}"
                 >
-                  {count}
-                </span>
-              </button>
-            {/if}
-          {/each}
-        </div>
-      {/if}
+                  {typeLabel}
+                </Button>
+              {/each}
+            </ButtonGroup.Root>
+          </div>
+        {/if}
+
+        <!-- Status tabs -->
+        {#if !loading && entries.length > 0}
+          <div class="flex flex-wrap gap-1.5">
+            <ButtonGroup.Root>
+              {#each TAB_ORDER as tab (tab)}
+                {@const count = counts[tab]}
+                {#if count > 0 || tab === "all"}
+                  <Button
+                    onclick={() => (activeStatus = tab)}
+                    size="xs"
+                    class="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors
+                  {activeStatus === tab
+                      ? 'bg-foreground text-background'
+                      : 'bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground'}"
+                  >
+                    {TAB_LABELS[tab]}
+                    <span
+                      class="tabular-nums {activeStatus === tab
+                        ? 'text-background/70'
+                        : 'text-muted-foreground/60'}"
+                    >
+                      {count}
+                    </span>
+                  </Button>
+                {/if}
+              {/each}
+            </ButtonGroup.Root>
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -236,7 +276,7 @@
     <!-- ── Content ────────────────────────────────────────────────────────────── -->
   {:else}
     <ScrollArea class="h-full">
-      <div class="mt-24 rounded-2xl border-b bg-card p-4">
+      <div class="mt-35 rounded-2xl border-b bg-card p-4">
         <Upcoming {onSelectMedia} />
       </div>
 
@@ -266,6 +306,7 @@
                   onclick={() => onSelectMedia(media)}
                   onsimilar={(m) => onSelectMedia(m)}
                   newEpisodes={hasNewEpisodes(entry)}
+                  onwatch={onWatch}
                 />
               {:else}
                 <!-- Real Media object still loading — show the poster we

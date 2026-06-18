@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Stream } from "$lib/types/addons";
   import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
-  import Player from "./Player.svelte";
   import { ChevronLeft, Star } from "lucide-svelte";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
@@ -21,17 +20,29 @@
   import { api } from "$lib/api";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
-  import { SvelteURLSearchParams } from "svelte/reactivity";
   import MediaCard from "./MediaCard.svelte";
   import StarRating from "./StarRating.svelte";
 
   let {
     media,
     onsimilar,
+    onPlay,
+    streamActive = false,
+    activeSeason,
+    activeEpisode,
   }: {
     media: Media;
     onsimilar?: (m: Media) => void;
     onBack?: () => void;
+    onPlay: (
+      stream: Stream,
+      season?: number,
+      episode?: number,
+      episodeName?: string,
+    ) => void;
+    streamActive?: boolean;
+    activeSeason?: number;
+    activeEpisode?: number;
   } = $props();
 
   let libraryEntry = $state<LibraryEntry | null>(null);
@@ -60,13 +71,6 @@
       })
       .catch(console.error);
   });
-
-  let activeStream: Stream | null = $state(null);
-  let activeSubtitles = $state<{ id: string; url: string; lang: string }[]>([]);
-
-  // Track which season/episode is being played so Player can load saved progress
-  let activeSeason = $state<number | undefined>(undefined);
-  let activeEpisode = $state<number | undefined>(undefined);
 
   let detailsLoading = $state(false);
   let genres: string[] = $state([]);
@@ -155,28 +159,26 @@
       });
   });
 
-  function playStream(stream: Stream, season?: number, episode?: number): void {
-    activeStream = stream;
-    activeSeason = season;
-    activeEpisode = episode;
-    activeSubtitles = [];
-
-    const params = new SvelteURLSearchParams({
-      id: String(media.id),
-      type: media.media_type,
-    });
-    if (media.media_type === "tv" && season != null && episode != null) {
-      params.set("season", String(season));
-      params.set("episode", String(episode));
-    }
-
-    fetch(`http://localhost:6969/api/subtitles?${params}`)
-      .then((r) => r.json())
-      .then((subs) => {
-        activeSubtitles = Array.isArray(subs) ? subs : [];
-      })
-      .catch(() => {});
+  function playStream(
+    stream: Stream,
+    season?: number,
+    episode?: number,
+    episodeName?: string,
+  ): void {
+    onPlay(stream, season, episode, episodeName);
   }
+
+  // Prefer whatever's actively playing (full or PiP); failing that, fall
+  // back to the show's last-watched SEASON from the library, so opening the
+  // page lands on the right season instead of always defaulting to the
+  // first one. Deliberately NOT doing the same for the episode: selecting
+  // an episode in StreamsList kicks off its auto-select/auto-play effect,
+  // and simply opening a show's page should never start playback on its
+  // own — only an actively-playing session should ever pre-select one.
+  const landingSeason = $derived(
+    activeSeason ?? libraryEntry?.last_watched_season ?? undefined,
+  );
+  const landingEpisode = $derived(activeEpisode);
 
   const year = $derived(
     (media.media_type === "tv"
@@ -192,221 +194,212 @@
   );
 </script>
 
-{#if activeStream}
-  <div class="h-full w-full overflow-hidden rounded-xl bg-black">
-    <Player
-      src={activeStream.infoHash || activeStream.url}
-      {media}
-      externalSubtitles={activeSubtitles}
-      season={activeSeason}
-      episode={activeEpisode}
-    />
-  </div>
-{:else}
+<div
+  class="relative flex h-full w-full overflow-hidden rounded-xl border border-border bg-background pt-18 pr-6"
+>
   <div
-    class="relative flex h-full w-full overflow-hidden rounded-xl border border-border bg-background pt-18 pr-6"
-  >
-    <div
-      class="absolute inset-0 scale-110 bg-cover bg-center opacity-30 blur-md"
-      style="background-image: url('{getImageOpt(images, 'backdrops', {
-        iso: 'en',
-        randomize: true,
-      })}')"
-    ></div>
+    class="absolute inset-0 scale-110 bg-cover bg-center opacity-30 blur-md"
+    style="background-image: url('{getImageOpt(images, 'backdrops', {
+      iso: 'en',
+      randomize: true,
+    })}')"
+  ></div>
 
-    <div class="relative z-10 flex h-full w-full gap-1 rounded-2xl">
-      <div class="min-w-0 flex-1">
-        <ScrollArea class="h-full w-full">
-          <div class="p-6 pr-4">
-            {#if detailsLoading}
-              <div class="flex h-full items-center justify-center">
-                <span class="animate-pulse text-sm text-muted-foreground">
-                  Loading details...
-                </span>
-              </div>
-            {:else}
-              <div class="space-y-4">
-                <div class="flex items-center gap-3">
-                  <div class="flex items-center gap-2">
-                    <div
-                      class="flex max-h-20 max-w-64 items-center justify-center"
-                    >
-                      {#if images && images.logos.length > 0}
-                        <img
-                          src={getImageOpt(images, "logos", { iso: "en" })}
-                          alt="Logo"
-                          class="max-h-full w-auto max-w-full object-contain"
-                        />
-                      {:else}
-                        <span class="text-3xl font-bold">{media.title}</span>
-                      {/if}
-                    </div>
-                    {#if year}
-                      <Badge variant="default">{year}</Badge>
+  <div class="relative z-10 flex h-full w-full gap-1 rounded-2xl">
+    <div class="min-w-0 flex-1">
+      <ScrollArea class="h-full w-full">
+        <div class="p-6 pr-4">
+          {#if detailsLoading}
+            <div class="flex h-full items-center justify-center">
+              <span class="animate-pulse text-sm text-muted-foreground">
+                Loading details...
+              </span>
+            </div>
+          {:else}
+            <div class="space-y-4">
+              <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2">
+                  <div
+                    class="flex max-h-20 max-w-64 items-center justify-center"
+                  >
+                    {#if images && images.logos.length > 0}
+                      <img
+                        src={getImageOpt(images, "logos", { iso: "en" })}
+                        alt="Logo"
+                        class="max-h-full w-auto max-w-full object-contain"
+                      />
+                    {:else}
+                      <span class="text-3xl font-bold">{media.title}</span>
                     {/if}
                   </div>
+                  {#if year}
+                    <Badge variant="default">{year}</Badge>
+                  {/if}
                 </div>
+              </div>
 
-                <div class="flex flex-wrap items-center gap-3 text-sm">
-                  <span class="flex items-center gap-1 text-yellow-400">
-                    <Star class="size-4 fill-current" />
-                    {media.vote_average?.toFixed(1)}
+              <div class="flex flex-wrap items-center gap-3 text-sm">
+                <span class="flex items-center gap-1 text-yellow-400">
+                  <Star class="size-4 fill-current" />
+                  {media.vote_average?.toFixed(1)}
+                </span>
+                {#if ageRating}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {ageRating}
                   </span>
-                  {#if ageRating}
-                    <span
-                      class="rounded border border-border px-1.5 py-0.5 text-xs"
-                    >
-                      {ageRating}
-                    </span>
-                  {/if}
-                  {#if originCountry.length}
-                    <span
-                      class="rounded border border-border px-1.5 py-0.5 text-xs"
-                    >
-                      {originCountry
-                        .map((code) => countryName(code))
-                        .join(", ")}
-                    </span>
-                  {/if}
-                  {#if runtime}
-                    <span
-                      class="rounded border border-border px-1.5 py-0.5 text-xs"
-                    >
-                      {runtime}
-                    </span>
-                  {/if}
-                  <!-- Seasons + episodes count for TV shows -->
-                  {#if media.media_type === "tv" && numberOfSeasons !== null}
-                    <span
-                      class="rounded border border-border px-1.5 py-0.5 text-xs"
-                    >
-                      {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
-                    </span>
-                  {/if}
-                  {#if media.media_type === "tv" && numberOfEpisodes !== null}
-                    <span
-                      class="rounded border border-border px-1.5 py-0.5 text-xs"
-                    >
-                      {numberOfEpisodes} episode{numberOfEpisodes !== 1
-                        ? "s"
-                        : ""}
-                    </span>
-                  {/if}
-                  {#if maxQuality}
-                    <span
-                      class="rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
-                        maxQuality,
-                      )}"
-                    >
-                      {maxQuality.toUpperCase()}
-                    </span>
-                  {/if}
-                </div>
+                {/if}
+                {#if originCountry.length}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {originCountry.map((code) => countryName(code)).join(", ")}
+                  </span>
+                {/if}
+                {#if runtime}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {runtime}
+                  </span>
+                {/if}
+                <!-- Seasons + episodes count for TV shows -->
+                {#if media.media_type === "tv" && numberOfSeasons !== null}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
+                  </span>
+                {/if}
+                {#if media.media_type === "tv" && numberOfEpisodes !== null}
+                  <span
+                    class="rounded border border-border px-1.5 py-0.5 text-xs"
+                  >
+                    {numberOfEpisodes} episode{numberOfEpisodes !== 1
+                      ? "s"
+                      : ""}
+                  </span>
+                {/if}
+                {#if maxQuality}
+                  <span
+                    class="rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
+                      maxQuality,
+                    )}"
+                  >
+                    {maxQuality.toUpperCase()}
+                  </span>
+                {/if}
+              </div>
 
-                <div class="flex justify-between align-middle">
-                  {#if genres.length}
-                    <div class="flex flex-wrap items-center gap-1.5">
-                      {#each genres as genre (genre)}
-                        <Badge variant="outline">{genre}</Badge>
-                      {/each}
-                    </div>
-                  {/if}
-                  <StarRating {libraryEntry} {media} />
-                </div>
-                <div class="flex justify-end align-middle">
-                  <LibraryStatusPanel
-                    {libraryEntry}
-                    {media}
-                    {lastAiredSeason}
-                    {lastAiredEpisode}
-                    size="icon-sm"
-                  />
-                </div>
-
-                <Separator />
-
-                {#if videos?.results?.length > 0}
-                  <div class="pointer-events-auto space-y-2">
-                    <div
-                      class="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-black"
-                    >
-                      <PlayerSimple
-                        src={getVideoOpt(videos, "Trailer", {
-                          randomize: true,
-                        })}
-                        controls={true}
-                        bg={media.poster_path}
-                      />
-                    </div>
+              <div class="flex justify-between align-middle">
+                {#if genres.length}
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    {#each genres as genre (genre)}
+                      <Badge variant="outline">{genre}</Badge>
+                    {/each}
                   </div>
                 {/if}
+                <StarRating {libraryEntry} {media} />
+              </div>
+              <div class="flex justify-end align-middle">
+                <LibraryStatusPanel
+                  {libraryEntry}
+                  {media}
+                  {lastAiredSeason}
+                  {lastAiredEpisode}
+                  size="icon-sm"
+                />
+              </div>
 
-                <div class="space-y-2">
-                  <h3 class="text-sm font-semibold">Overview</h3>
-                  <div class="space-y-2 text-sm text-muted-foreground">
-                    {#each overviewParagraphs as paragraph, i (i)}
-                      <p>{paragraph}</p>
+              <Separator />
+
+              {#if videos?.results?.length > 0 && !streamActive}
+                <div class="pointer-events-auto space-y-2">
+                  <div
+                    class="relative aspect-video w-full overflow-hidden rounded-lg border border-border bg-black"
+                  >
+                    <PlayerSimple
+                      src={getVideoOpt(videos, "Trailer", {
+                        randomize: true,
+                      })}
+                      controls={true}
+                      bg={media.poster_path}
+                    />
+                  </div>
+                </div>
+              {/if}
+
+              <div class="space-y-2">
+                <h3 class="text-sm font-semibold">Overview</h3>
+                <div class="space-y-2 text-sm text-muted-foreground">
+                  {#each overviewParagraphs as paragraph, i (i)}
+                    <p>{paragraph}</p>
+                  {/each}
+                </div>
+              </div>
+
+              {#if cast.length}
+                <div>
+                  <h3 class="mb-2 text-sm font-semibold">Cast</h3>
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each cast as person (person)}
+                      <span
+                        class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
+                      >
+                        {person}
+                      </span>
                     {/each}
                   </div>
                 </div>
+              {/if}
 
-                {#if cast.length}
-                  <div>
-                    <h3 class="mb-2 text-sm font-semibold">Cast</h3>
-                    <div class="flex flex-wrap gap-1.5">
-                      {#each cast as person (person)}
-                        <span
-                          class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
-                        >
-                          {person}
-                        </span>
-                      {/each}
-                    </div>
+              {#if keywords.length}
+                <div>
+                  <h3 class="mb-2 text-sm font-semibold">
+                    This {media.media_type === "tv" ? "show" : "film"} is
+                  </h3>
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each keywords as keyword (keyword)}
+                      <span
+                        class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
+                      >
+                        {keyword}
+                      </span>
+                    {/each}
                   </div>
-                {/if}
+                </div>
+              {/if}
 
-                {#if keywords.length}
-                  <div>
-                    <h3 class="mb-2 text-sm font-semibold">
-                      This {media.media_type === "tv" ? "show" : "film"} is
-                    </h3>
-                    <div class="flex flex-wrap gap-1.5">
-                      {#each keywords as keyword (keyword)}
-                        <span
-                          class="rounded-full bg-secondary px-2.5 py-0.5 text-xs text-secondary-foreground"
-                        >
-                          {keyword}
-                        </span>
-                      {/each}
-                    </div>
+              {#if similar.length}
+                <div class="space-y-2">
+                  <h3 class="text-sm font-semibold">More like this</h3>
+                  <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
+                    {#each similar as item (item.id)}
+                      <MediaCard media={item} onclick={onsimilar} />
+                    {/each}
                   </div>
-                {/if}
-
-                {#if similar.length}
-                  <div class="space-y-2">
-                    <h3 class="text-sm font-semibold">More like this</h3>
-                    <div class="grid grid-cols-3 gap-3 sm:grid-cols-4">
-                      {#each similar as item (item.id)}
-                        <MediaCard media={item} onclick={onsimilar} />
-                      {/each}
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </div>
-        </ScrollArea>
-      </div>
-      <div
-        class="flex h-full w-[35%] min-w-0 flex-none flex-col overflow-hidden"
-      >
-        <StreamsList
-          {media}
-          onPlayStream={(s: Stream, season?: number, episode?: number) =>
-            playStream(s, season, episode)}
-          bind:maxQuality
-        />
-      </div>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      </ScrollArea>
+    </div>
+    <div class="flex h-full w-[35%] min-w-0 flex-none flex-col overflow-hidden">
+      <StreamsList
+        {media}
+        onPlayStream={(
+          s: Stream,
+          season?: number,
+          episode?: number,
+          episodeName?: string,
+        ) => playStream(s, season, episode, episodeName)}
+        bind:maxQuality
+        {streamActive}
+        activeSeason={landingSeason}
+        activeEpisode={landingEpisode}
+      />
     </div>
   </div>
-{/if}
+</div>

@@ -48,7 +48,7 @@
     keywords: string[];
     similar: Media[];
     quality: string | null;
-    onwatch: () => void;
+    onwatch: (season?: number, episode?: number) => void;
     onclose: () => void;
     onsimilar?: (m: Media) => void;
   } = $props();
@@ -58,8 +58,8 @@
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
   const year = $derived(
     (media.media_type === "tv"
-      ? media.first_air_date
-      : media.release_date
+        ? media.first_air_date
+        : media.release_date
     )?.slice(0, 4),
   );
 
@@ -95,10 +95,10 @@
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
-          100,
-          (movieProgress.position_seconds / movieProgress.duration_seconds) *
-            100,
-        )
+        100,
+        (movieProgress.position_seconds / movieProgress.duration_seconds) *
+        100,
+      )
       : 0,
   );
 
@@ -108,9 +108,9 @@
 
   const hasIncompleteMovieProgress = $derived(
     media.media_type === "movie" &&
-      movieProgress !== null &&
-      !movieProgress.completed &&
-      movieProgressPct > 1,
+    movieProgress !== null &&
+    !movieProgress.completed &&
+    movieProgressPct > 1,
   );
 
   // ── Watch button label ────────────────────────────────────────────────────────
@@ -190,7 +190,7 @@
       <div class="flex w-full items-baseline justify-between pb-3">
         <span class="flex min-w-0 flex-1 items-center gap-1 pr-3">
           <span class="text-md truncate text-2xl leading-none font-semibold"
-            >{title}
+          >{title}
           </span>
           {#if year}<Badge variant="outline">{year}</Badge>{/if}
           <Badge variant="outline" class="text-yellow-400">
@@ -216,7 +216,7 @@
         <span class="flex flex-wrap items-center gap-2">
           {#if ageRating}
             <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-              >{ageRating}</span
+            >{ageRating}</span
             >
           {/if}
           {#if originCountry.length}
@@ -226,7 +226,7 @@
           {/if}
           {#if runtime}
             <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-              >{runtime}</span
+            >{runtime}</span
             >
           {/if}
           {#if media.media_type === "tv" && numberOfSeasons !== null}
@@ -275,8 +275,8 @@
           </div>
           <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
             {formatPosition(movieProgress.position_seconds)} / {formatPosition(
-              movieProgress.duration_seconds,
-            )}
+            movieProgress.duration_seconds,
+          )}
           </span>
         </div>
       {/if}
@@ -289,8 +289,8 @@
           <span class="text-xs text-muted-foreground">
             {episodesWatched} episode{episodesWatched !== 1 ? "s" : ""} watched
             {#if numberOfEpisodes}· {Math.round(
-                (episodesWatched / numberOfEpisodes) * 100,
-              )}%{/if}
+              (episodesWatched / numberOfEpisodes) * 100,
+            )}%{/if}
           </span>
         </div>
       {/if}
@@ -381,7 +381,10 @@
             size="sm"
             onclick={(e) => {
               e.stopPropagation();
-              onwatch();
+              onwatch(
+                libraryEntry?.last_watched_season ?? undefined,
+                libraryEntry?.last_watched_episode ?? undefined,
+              );
             }}
           >
             <Play class="size-3" />
