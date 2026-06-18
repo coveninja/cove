@@ -60,9 +60,9 @@
   // stop StreamsList from re-triggering auto-select for the same episode.
   const streamActiveForSelectedMedia = $derived(
     !!playerSession &&
-    !!selectedMedia &&
-    playerSession.media.id === selectedMedia.id &&
-    playerSession.media.media_type === selectedMedia.media_type,
+      !!selectedMedia &&
+      playerSession.media.id === selectedMedia.id &&
+      playerSession.media.media_type === selectedMedia.media_type,
   );
 
   const activePlaybackSeason = $derived(
@@ -78,21 +78,21 @@
   const fullscreenInfo = $derived(
     playerMode === "full" && playerSession
       ? {
-        title:
-          playerSession.media.media_type === "tv"
-            ? playerSession.media.name
-            : playerSession.media.title,
-        subtitle:
-          playerSession.media.media_type === "tv" &&
-          playerSession.season != null &&
-          playerSession.episode != null
-            ? `S${playerSession.season}E${playerSession.episode}${
-              playerSession.episodeName
-                ? ` - ${playerSession.episodeName}`
-                : ""
-            }`
-            : undefined,
-      }
+          title:
+            playerSession.media.media_type === "tv"
+              ? playerSession.media.name
+              : playerSession.media.title,
+          subtitle:
+            playerSession.media.media_type === "tv" &&
+            playerSession.season != null &&
+            playerSession.episode != null
+              ? `S${playerSession.season}E${playerSession.episode}${
+                  playerSession.episodeName
+                    ? ` - ${playerSession.episodeName}`
+                    : ""
+                }`
+              : undefined,
+        }
       : null,
   );
 
@@ -281,8 +281,8 @@
     selectedMedia = media;
 
     const isTV = media.media_type === "tv";
-    const targetSeason = isTV ? season ?? 1 : undefined;
-    const targetEpisode = isTV ? episode ?? 1 : undefined;
+    const targetSeason = isTV ? (season ?? 1) : undefined;
+    const targetEpisode = isTV ? (episode ?? 1) : undefined;
 
     const API_BASE = "http://localhost:6969";
     const url = isTV
@@ -305,9 +305,7 @@
         const eps: { episode_number: number; name: string }[] = await fetch(
           `${API_BASE}/api/tv/episodes?id=${media.id}&season=${targetSeason}`,
         ).then((r) => r.json());
-        episodeName = eps.find(
-          (e) => e.episode_number === targetEpisode,
-        )?.name;
+        episodeName = eps.find((e) => e.episode_number === targetEpisode)?.name;
       } catch (e) {
         // Non-critical — just means the topbar's subtitle line won't show
         // an episode title.
@@ -421,7 +419,13 @@
           }}
           onPlay={(stream, season, episode, episodeName) => {
             if (selectedMedia) {
-              startPlayback(selectedMedia, stream, season, episode, episodeName);
+              startPlayback(
+                selectedMedia,
+                stream,
+                season,
+                episode,
+                episodeName,
+              );
             }
           }}
           streamActive={streamActiveForSelectedMedia}
@@ -462,12 +466,17 @@
           class:fixed={playerMode === "pip"}
           class:right-4={playerMode === "pip"}
           class:bottom-4={playerMode === "pip"}
-          class:w-80={playerMode === "pip"}
+          class:w-md={playerMode === "pip"}
           class:aspect-video={playerMode === "pip"}
           class:rounded-lg={playerMode === "pip"}
           class:ring-1={playerMode === "pip"}
           class:ring-border={playerMode === "pip"}
-          transition:scale={{ duration: 280, start: 0.92, opacity: 0, easing: cubicOut }}
+          transition:scale={{
+            duration: 280,
+            start: 0.92,
+            opacity: 0,
+            easing: cubicOut,
+          }}
         >
           <Player
             src={playerSession.stream.infoHash || playerSession.stream.url}
