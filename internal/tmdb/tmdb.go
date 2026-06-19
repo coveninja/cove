@@ -190,6 +190,7 @@ type MediaVideos struct {
 
 const baseURL = "https://api.themoviedb.org/3"
 const imageBase = "https://image.tmdb.org/t/p/w500"
+const imageBaseOriginal = "https://image.tmdb.org/t/p/original"
 const stillBase = "https://image.tmdb.org/t/p/w300"
 
 func (c *Client) SearchByKeywords(query string) ([]Media, error) {
@@ -477,7 +478,7 @@ func (c *Client) GetImages(tmdbID int, mediaType string) (*MediaImages, error) {
 	}
 
 	for i := range data.Backdrops {
-		data.Backdrops[i].URL = imageBase + data.Backdrops[i].FilePath
+		data.Backdrops[i].URL = imageBaseOriginal + data.Backdrops[i].FilePath
 	}
 
 	for i := range data.Logos {

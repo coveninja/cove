@@ -1,3 +1,15 @@
+<script module lang="ts">
+  // Vidstack rejects pending media requests with "provider destroyed"
+  // when a player is torn down mid-flight. These are harmless; swallow
+  // only this exact message so real rejections still surface.
+  if (typeof window !== "undefined") {
+    window.addEventListener("unhandledrejection", (e) => {
+      const msg =
+        typeof e.reason === "string" ? e.reason : e.reason?.message;
+      if (msg === "provider destroyed") e.preventDefault();
+    });
+  }
+</script>
 <script lang="ts">
   import "vidstack/bundle";
   import "vidstack/svelte";
@@ -12,40 +24,85 @@
     Volume2,
     VolumeOff,
   } from "lucide-svelte";
-  let { src, controls = false, bg = "" } = $props();
+  import type { MediaPlayerElement } from "vidstack/elements";
+
+  let {
+    src,
+    autoplay = true,
+    controls = false,
+    loop = true,
+    muted = true,
+    bg = "",
+    class: Class = "",
+    onProgress = (_current: number, _duration: number) => {},
+    onDuration = (_seconds: number) => {},
+    onEnded = () => {},
+  } = $props();
+
+  let player = $state<MediaPlayerElement | null>(null);
+
+  // play() rejects with "provider destroyed" if the player is torn down
+  // before it resolves. These rejections are safe to ignore.
+  function safePlay(p: MediaPlayerElement): void {
+    void p.play().catch(() => {});
+  }
+
+  $effect(() => {
+    const p = player;
+    if (!p) return undefined;
+
+    const handleDuration = () => {
+      if (p.duration > 0) onDuration(p.duration);
+    };
+    const handleTime = () => {
+      if (p.duration > 0) onProgress(p.currentTime, p.duration);
+    };
+    const handleEnded = () => onEnded();
+    const handleCanPlay = () => {
+      if (autoplay) safePlay(p);
+    };
+
+    p.addEventListener("duration-change", handleDuration);
+    p.addEventListener("time-update", handleTime);
+    p.addEventListener("ended", handleEnded);
+    p.addEventListener("can-play", handleCanPlay);
+
+    return () => {
+      p.removeEventListener("duration-change", handleDuration);
+      p.removeEventListener("time-update", handleTime);
+      p.removeEventListener("ended", handleEnded);
+      p.removeEventListener("can-play", handleCanPlay);
+    };
+  });
 </script>
 
 {#key src}
   <media-player
+    bind:this={player}
     {src}
-    autoplay
-    muted={true}
-    loop
+    {muted}
+    {loop}
     playsinline
-    class="group/player relative aspect-video w-full bg-black"
+    class="group/player relative h-full w-full bg-black {Class}"
   >
-    <media-provider class="h-full w-full object-cover"></media-provider>
+    <media-provider class="h-full w-full"></media-provider>
     <button
       type="button"
       aria-label="Toggle playback"
       class="absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-none bg-transparent p-0"
       onclick={(e) => {
         e.stopPropagation();
-        const player = e.currentTarget.parentElement as any;
-
-        if (player.paused) {
-          player.play();
-        } else {
-          player.pause();
-        }
+        if (!player) return;
+        if (player.paused) safePlay(player);
+        else void Promise.resolve(player.pause()).catch(() => {});
       }}
     ></button>
 
     {#if bg}
       <img
-        src={bg}
         class="absolute inset-0 z-20 h-full w-full object-cover transition-opacity duration-300 group-data-started/player:pointer-events-none group-data-[started]/player:opacity-0"
         alt="bg"
+        src={bg}
       />
     {/if}
     {#if controls}
@@ -92,3 +149,17 @@
     {/if}
   </media-player>
 {/key}
+
+<style>
+  media-player {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Vidstack renders the <video> at runtime, so reach it with :global */
+  media-player :global(video) {
+    height: 100%;
+    width: 100%;
+    object-fit: cover;
+  }
+</style>

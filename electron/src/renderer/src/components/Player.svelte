@@ -22,6 +22,11 @@
   import { onDestroy } from "svelte";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
+  import { TorrentProgress } from "$lib/player/torrentProgress.svelte";
+  import { ProgressSaver } from "$lib/player/progressSaver.svelte";
+  import { SubtitleCues } from "$lib/player/subtitleCues.svelte";
+  import { HlsSession } from "$lib/player/hlsSession.svelte";
+  import { SvelteMap } from "svelte/reactivity";
 
   // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -76,8 +81,6 @@
     compact?: boolean;
   } = $props();
 
-  let createdID = $state<string | null>(null);
-
   // Ensure settings are populated even if the user never visited the
   // settings page this session. Safe to call repeatedly — it's just a GET.
   settings.load().catch(() => {});
@@ -117,10 +120,10 @@
 
   const needsHLS = $derived(
     ($settings?.preferHLS ?? false) ||
-    audioTracks.length > 1 ||
-    audioTracks.some((t) =>
-      UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
-    ),
+      audioTracks.length > 1 ||
+      audioTracks.some((t) =>
+        UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
+      ),
   );
 
   // ─── Playback state (driven by Vidstack events) ─────────────────────────────
@@ -133,12 +136,11 @@
 
   // ─── HLS session ────────────────────────────────────────────────────────────
 
-  let hlsSessionID = $state<string | null>(null);
-  let hlsLoading = $state(false); // true while waiting for POST /api/hls/start
+  const hlsSession = new HlsSession();
 
   const activeStreamURL = $derived.by(() => {
-    if (needsHLS && hlsSessionID) {
-      return api.hlsMasterUrl(hlsSessionID);
+    if (needsHLS && hlsSession.sessionID) {
+      return api.hlsMasterUrl(hlsSession.sessionID);
     }
     if (!needsHLS && audioTracks.length > 0) {
       // No ffmpeg needed, stream directly
@@ -179,9 +181,7 @@
   // ─── Other state ────────────────────────────────────────────────────────────
 
   let logoUrl = $state<string | null>(null);
-  let torrentProgress = $state(0);
-  let peers = $state(0);
-  let torrentSpeed = $state("0 B/s");
+  const torrent = new TorrentProgress();
 
   const title = $derived(
     media ? (media.media_type === "tv" ? media.name : media.title) : "",
@@ -189,10 +189,7 @@
 
   // ─── Watch-progress state ────────────────────────────────────────────────────
 
-  // Position loaded from the server; null = nothing saved or already completed.
-  let savedPosition = $state<number | null>(null);
-  // Prevents us from seeking twice if canPlay fires more than once.
-  let hasSeekedToSaved = $state(false);
+  const progress = new ProgressSaver();
 
   // ─── Probe audio tracks ─────────────────────────────────────────────────────
 
@@ -201,7 +198,7 @@
     audioTracks = [];
     videoCodec = "";
     builtInSubtitles = [];
-    hlsSessionID = null;
+    hlsSession.sessionID = null;
     canPlay = false;
     error = null;
     appliedAudioAutoSelect = false;
@@ -216,20 +213,19 @@
         duration: number;
       }>(src, controller.signal)
       .then((data) => {
-          audioTracks = data.audio ?? [];
-          videoCodec = data.videoCodec ?? "";
-          probedDuration = data.duration ?? null;
+        audioTracks = data.audio ?? [];
+        videoCodec = data.videoCodec ?? "";
+        probedDuration = data.duration ?? null;
 
-          builtInSubtitles = (data.subtitles ?? []).map((t) => ({
-            id: `builtin-${t.index}`,
-            url: api.subtitleExtractUrl(src, t.index),
-            lang: t.language || `track${t.index}`,
-            label:
-              t.title ||
-              (t.language ? langName(t.language) : `Track ${t.index + 1}`),
-          }));
-        },
-      )
+        builtInSubtitles = (data.subtitles ?? []).map((t) => ({
+          id: `builtin-${t.index}`,
+          url: api.subtitleExtractUrl(src, t.index),
+          lang: t.language || `track${t.index}`,
+          label:
+            t.title ||
+            (t.language ? langName(t.language) : `Track ${t.index + 1}`),
+        }));
+      })
       .catch(() => {
         audioTracks = [];
         builtInSubtitles = [];
@@ -249,65 +245,33 @@
 
   $effect(() => {
     if (!media || !src) return;
-    savedPosition = null;
-    hasSeekedToSaved = false;
+    progress.reset();
 
     // Default true (matches the Go-side default) — only explicit false opts out.
     // Using "=== false" rather than a falsy check means we still try to
     // remember position during the brief window before settings finish loading.
     if ($settings?.rememberPosition === false) return;
 
-    api
-      .progressGet(media.id, media.media_type, season ?? null, episode ?? null)
-      .then((prog) => {
-        // Only restore if there's a meaningful position that isn't done yet
-        if (prog && !prog.completed && prog.position_seconds > 10) {
-          savedPosition = prog.position_seconds;
-        }
-      })
-      .catch(console.error);
+    progress.load(media.id, media.media_type, season ?? null, episode ?? null);
   });
 
   // ─── Start HLS session when needed ──────────────────────────────────────────
 
   $effect(() => {
     if (!needsHLS || audioTracks.length === 0 || probedDuration === null)
-      return;
+      return () => {};
 
-    hlsLoading = true;
-    hlsSessionID = null;
-
-    const controller = new AbortController();
-
-    api
-      .hlsStart(
-        {
-          input: baseInput,
-          tracks: audioTracks,
-          duration: probedDuration,
-          videoCodec: videoCodec,
-        },
-        controller.signal,
-      )
-      .then((d) => {
-        createdID = d.sessionID;
-        hlsSessionID = d.sessionID;
-      })
-      .catch((e) => {
-        if ((e as DOMException).name === "AbortError") return;
-        error = "Failed to start HLS session.";
-        console.error(e);
-      })
-      .finally(() => {
-        hlsLoading = false;
-      });
-
-    return () => {
-      controller.abort();
-      if (createdID) {
-        api.hlsStop(createdID);
-      }
-    };
+    return hlsSession.start(
+      {
+        input: baseInput,
+        tracks: audioTracks,
+        duration: probedDuration,
+        videoCodec: videoCodec,
+      },
+      (msg) => {
+        error = msg;
+      },
+    );
   });
 
   // ─── Update Vidstack source when activeStreamURL changes ────────────────────
@@ -416,13 +380,7 @@
     syncAudioTracks();
 
     // Seek to the saved position the first time playback becomes ready.
-    if (savedPosition !== null && !hasSeekedToSaved) {
-      hasSeekedToSaved = true;
-      const video = playerEl?.querySelector<HTMLVideoElement>("video");
-      if (video) {
-        video.currentTime = savedPosition;
-      }
-    }
+    progress.resume(playerEl?.querySelector<HTMLVideoElement>("video"));
   }
 
   function onWaiting(): void {
@@ -485,11 +443,9 @@
 
   $effect(() => {
     if (!media) return;
-    api
-      .getLogos(media.id, media.media_type)
-      .then((logos: string[]) => {
-        if (logos?.length) logoUrl = logos[0];
-      });
+    api.getLogos(media.id, media.media_type).then((logos: string[]) => {
+      if (logos?.length) logoUrl = logos[0];
+    });
   });
 
   // ─── Fake loading bar animation ──────────────────────────────────────────────
@@ -510,23 +466,7 @@
 
   $effect(() => {
     if (!isHash) return () => {};
-
-    const es = new EventSource(api.progressStreamUrl(src));
-
-    es.onmessage = (e) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (d.found) {
-          torrentProgress = d.progress ?? 0;
-          peers = d.peers ?? 0;
-          torrentSpeed = d.speed ?? "0 B/s";
-        }
-      } catch {
-        // ignore malformed frames
-      }
-    };
-
-    return () => es.close();
+    return torrent.start(src);
   });
 
   // ─── Watch-progress saving ────────────────────────────────────────────────────
@@ -540,51 +480,17 @@
     const video = playerEl.querySelector<HTMLVideoElement>("video");
     if (!video) return () => {};
 
-    let lastSaveMs = 0;
-
-    function saveCurrentProgress(completed: boolean) {
-      const pos = video!.currentTime;
-      const dur = video!.duration || probedDuration || 0;
-      if (!dur || pos < 5) return; // skip the very start
-
-      api
-        .progressSave({
-          tmdb_id: media!.id,
-          media_type: media!.media_type,
-          title: title,
-          poster_path: media!.poster_path ?? "",
-          vote_average: media!.vote_average ?? 0,
-          last_air_date: (media as any)?.last_air_date ?? "",
-          season: season ?? null,
-          episode: episode ?? null,
-          position_seconds: completed ? dur : pos,
-          duration_seconds: dur,
-          completed,
-        })
-        .catch(console.error);
-    }
-
-    function onTimeUpdateProgress() {
-      const now = Date.now();
-      if (now - lastSaveMs < 10_000) return; // throttle: save at most every 10s
-      lastSaveMs = now;
-      // Auto-detect completion: >90% through
-      const dur = video!.duration || probedDuration || 0;
-      const completed = dur > 0 && video!.currentTime / dur >= 0.9;
-      saveCurrentProgress(completed);
-    }
-
-    function onEnded() {
-      saveCurrentProgress(true);
-    }
-
-    video.addEventListener("timeupdate", onTimeUpdateProgress);
-    video.addEventListener("ended", onEnded);
-
-    return () => {
-      video.removeEventListener("timeupdate", onTimeUpdateProgress);
-      video.removeEventListener("ended", onEnded);
-    };
+    return progress.track(video, () => ({
+      tmdbId: media!.id,
+      mediaType: media!.media_type,
+      title: title,
+      posterPath: media!.poster_path ?? "",
+      voteAverage: media!.vote_average ?? 0,
+      lastAirDate: (media as any)?.last_air_date ?? "",
+      season: season ?? null,
+      episode: episode ?? null,
+      probedDuration: probedDuration,
+    }));
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -600,11 +506,11 @@
   }
 
   const loadingMessage = $derived.by(() => {
-    if (hlsLoading) return "Preparing tracks…";
-    if (needsHLS && !hlsSessionID) return "Starting stream…";
+    if (hlsSession.loading) return "Preparing tracks…";
+    if (needsHLS && !hlsSession.sessionID) return "Starting stream…";
     if (isHash)
-      return peers > 0
-        ? `Connecting · ${peers} peers · ${torrentSpeed}`
+      return torrent.peers > 0
+        ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
         : "Connecting to peers…";
     return "Buffering…";
   });
@@ -612,14 +518,12 @@
   // ─── Custom subtitle renderer ─────────────────────────────────────────────────
 
   let selectedTrackId = $state<string | null>(null);
-  let subtitleCues = $state<{ start: number; end: number; text: string }[]>([]);
-  let currentCueText = $state<string | null>(null);
-  let subtitleLoading = $state(false);
+  const subtitles = new SubtitleCues();
 
   // ─── Pre-warm subtitle cache (sequential) ────────────────────────────────────
 
   $effect(() => {
-    if (builtInSubtitles.length === 0) return;
+    if (builtInSubtitles.length === 0) return () => {};
     let cancelled = false;
 
     (async () => {
@@ -675,7 +579,7 @@
 
   let selectedLang = $state<string | null>(null);
   const tracksByLang = $derived.by(() => {
-    const groups = new Map<
+    const groups = new SvelteMap<
       string,
       { id: string; label: string; language: string; mode: string }[]
     >();
@@ -687,105 +591,39 @@
     return groups;
   });
 
-  function parseVTTTime(ts: string): number {
-    const parts = ts.trim().replace(/\r/g, "").replace(",", ".").split(":");
-    if (parts.length === 3)
-      return +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
-    return +parts[0] * 60 + parseFloat(parts[1]);
-  }
-
-  function parseVTT(
-    raw: string,
-  ): { start: number; end: number; text: string }[] {
-    const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    const cues: { start: number; end: number; text: string }[] = [];
-    for (const block of normalized.split(/\n\n+/)) {
-      const lines = block.trim().split("\n");
-      const ti = lines.findIndex((l) => l.includes("-->"));
-      if (ti === -1) continue;
-      const [startStr, endAndRest] = lines[ti].split("-->");
-      const endStr = endAndRest.trim().split(/\s+/)[0];
-      const text = lines
-        .slice(ti + 1)
-        .join("\n")
-        .replace(/<[^>]+>/g, "")
-        .trim();
-      if (!text) continue;
-      const start = parseVTTTime(startStr);
-      const end = parseVTTTime(endStr);
-      if (isNaN(start) || isNaN(end)) {
-        console.warn("[subs] skipping cue with bad timestamps:", lines[ti]);
-        continue;
-      }
-      cues.push({ start, end, text });
-    }
-    return cues;
-  }
-
-  async function loadSubtitleCues(url: string): Promise<void> {
-    subtitleLoading = true;
-    subtitleCues = [];
-    try {
-      const res = await fetch(url);
-      const raw = await res.text();
-      subtitleCues = parseVTT(raw);
-    } catch (e) {
-      console.error("[subs] failed to load subtitles:", e);
-      subtitleCues = [];
-    } finally {
-      subtitleLoading = false;
-    }
-  }
-
   $effect(() => {
     if (!playerEl || !canPlay) return () => {};
     const video = playerEl.querySelector<HTMLVideoElement>("video");
     if (!video) return () => {};
-
-    function onTimeUpdate() {
-      if (!subtitleCues.length) {
-        currentCueText = null;
-        return;
-      }
-      const t = video!.currentTime + subtitleSettings.offset / 1000;
-      const cue = subtitleCues.find((c) => t >= c.start && t < c.end);
-      currentCueText = cue?.text ?? null;
-    }
-
-    video.addEventListener("timeupdate", onTimeUpdate);
-    return () => video.removeEventListener("timeupdate", onTimeUpdate);
+    return subtitles.track(video, () => subtitleSettings.offset);
   });
 
   $effect(() => {
     let s = src; // track dependency
     selectedTrackId = null;
-    subtitleCues = [];
-    currentCueText = null;
+    subtitles.clear();
     appliedSubtitleAutoSelect = false;
   });
 
   function selectTextTrack(id: string): void {
     selectedTrackId = id || null;
     if (!id) {
-      subtitleCues = [];
-      currentCueText = null;
+      subtitles.clear();
       return;
     }
     const builtin = builtInSubtitles.find((s) => s.id === id);
     if (builtin) {
-      loadSubtitleCues(builtin.url);
+      subtitles.load(builtin.url);
       return;
     }
     const ext = externalSubtitles.find((s) => s.id === id);
     if (ext) {
-      loadSubtitleCues(api.subtitleProxyUrl(ext.url));
+      subtitles.load(api.subtitleProxyUrl(ext.url));
     }
   }
 
   onDestroy(() => {
-    if (createdID) {
-      api.hlsStop(createdID);
-    }
+    hlsSession.stop();
   });
 </script>
 
@@ -804,7 +642,7 @@
       <media-provider class="h-full w-full"></media-provider>
 
       <!-- ── Custom subtitle overlay ────────────────────────────────────────── -->
-      {#if subtitleLoading && !compact}
+      {#if subtitles.loading && !compact}
         <div
           class="pointer-events-none absolute inset-x-0 bottom-16 z-20 flex justify-center"
         >
@@ -813,12 +651,12 @@
           </span>
         </div>
       {/if}
-      {#if currentCueText && !compact}
+      {#if subtitles.currentText && !compact}
         <div
           class="pointer-events-none absolute inset-x-0 z-20 flex flex-col items-center gap-0.5 px-6"
           style="bottom: {subtitleSettings.line}%"
         >
-          {#each currentCueText.split("\n") as line (line)}
+          {#each subtitles.currentText.split("\n") as line (line)}
             <span
               class="block max-w-prose text-center leading-snug text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]"
               style="font-size: {subtitleSettings.size}%; {subtitleSettings.background
@@ -891,13 +729,13 @@
                 <Headphones class="size-4" />
                 <span class="text-xs">
                   {vidstackAudioTracks.find((t) => t.selected)?.label ??
-                  "Audio"}
+                    "Audio"}
                 </span>
               </Popover.Trigger>
               <Popover.Content side="top" class="w-52 p-0">
                 <div class="border-b border-border px-3 py-2">
                   <span class="text-xs font-medium text-muted-foreground"
-                  >Audio Track</span
+                    >Audio Track</span
                   >
                 </div>
                 <div class="p-1">
@@ -1063,9 +901,9 @@
                       <div class="flex justify-between text-xs">
                         <span class="text-muted-foreground">Sync offset</span>
                         <span
-                        >{subtitleSettings.offset > 0 ? "+" : ""}{(
-                          subtitleSettings.offset / 1000
-                        ).toFixed(1)}s</span
+                          >{subtitleSettings.offset > 0 ? "+" : ""}{(
+                            subtitleSettings.offset / 1000
+                          ).toFixed(1)}s</span
                         >
                       </div>
                       <div class="flex gap-1">
@@ -1078,7 +916,7 @@
                             );
                           }}
                           class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                        >−500ms</button
+                          >−500ms</button
                         >
                         <button
                           onclick={(e) => {
@@ -1089,7 +927,7 @@
                             );
                           }}
                           class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                        >+500ms</button
+                          >+500ms</button
                         >
                       </div>
                       {#if subtitleSettings.offset !== 0}
@@ -1187,7 +1025,7 @@
           </Popover.Root>
 
           <!-- Torrent progress indicator -->
-          {#if isHash && torrentProgress > 0 && torrentProgress < 100}
+          {#if isHash && torrent.progress > 0 && torrent.progress < 100}
             <Popover.Root>
               <Popover.Trigger
                 onclick={(e) => e.stopPropagation()}
@@ -1210,28 +1048,28 @@
                     fill="none"
                     stroke="currentColor"
                     stroke-width="1.5"
-                    stroke-dasharray="{(torrentProgress / 100) * 31.4} 31.4"
+                    stroke-dasharray="{(torrent.progress / 100) * 31.4} 31.4"
                     stroke-linecap="round"
                     transform="rotate(-90 6 6)"
                     class="text-green-400 transition-all duration-500"
                   />
                 </svg>
-                <span class="text-xs">{torrentProgress.toFixed(0)}%</span>
+                <span class="text-xs">{torrent.progress.toFixed(0)}%</span>
               </Popover.Trigger>
               <Popover.Content class="w-52" side="top">
                 <p class="mb-2 text-sm font-medium">Download Progress</p>
                 <div class="mb-1 h-1.5 w-full rounded-full bg-secondary">
                   <div
                     class="h-full rounded-full bg-green-500 transition-all"
-                    style="width: {torrentProgress}%"
+                    style="width: {torrent.progress}%"
                   ></div>
                 </div>
                 <div class="flex justify-between text-xs text-muted-foreground">
-                  <span>{torrentProgress.toFixed(1)}%</span>
-                  {#if peers > 0}<span>{peers} peers</span>{/if}
+                  <span>{torrent.progress.toFixed(1)}%</span>
+                  {#if torrent.peers > 0}<span>{torrent.peers} peers</span>{/if}
                 </div>
                 <div class="mt-1 text-xs text-muted-foreground">
-                  ↓ {torrentSpeed}
+                  ↓ {torrent.speed}
                 </div>
               </Popover.Content>
             </Popover.Root>
@@ -1299,7 +1137,7 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
-          >{title}</span
+            >{title}</span
           >
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"

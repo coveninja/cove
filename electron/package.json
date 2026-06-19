@@ -32,6 +32,7 @@
     "mode-watcher": "^1.1.0",
     "plyr": "^3.8.4",
     "svgpath": "^2.6.0",
+    "typescript-eslint": "^8.61.1",
     "vidstack": "^1.15.6"
   },
   "devDependencies": {
@@ -59,7 +60,7 @@
     "prettier-plugin-tailwindcss": "^0.8.0",
     "shadcn-svelte": "^1.3.0",
     "svelte": "^5.45.6",
-    "svelte-check": "^4.3.4",
+    "svelte-check": "^4.6.0",
     "tailwind-merge": "^3.6.0",
     "tailwind-variants": "^3.2.2",
     "tailwindcss": "^4.3.0",

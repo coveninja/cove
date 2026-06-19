@@ -16,13 +16,15 @@
     lastAiredSeason = null,
     lastAiredEpisode = null,
     onpopoverchange,
+    class: className = "",
   } = $props<{
-    libraryEntry: LibraryEntry;
+    libraryEntry: LibraryEntry | null;
     media: Media;
     size: string | null;
     lastAiredSeason?: number | null;
     lastAiredEpisode?: number | null;
     onpopoverchange?: (open: boolean) => void;
+    class?: string;
   }>();
 
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
@@ -84,7 +86,7 @@
   onOpenChange={(o) => onpopoverchange?.(o)}
 >
   <Popover.Trigger>
-    <Button variant="default" {size}>
+    <Button variant="default" {size} class={className}>
       {#if inLibrary}
         <BookmarkIcon class="size-4" />
       {:else}
