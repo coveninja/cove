@@ -24,6 +24,7 @@
     type StreamSelectionMode,
   } from "$lib/streamSelection";
   import { api } from "$lib/api";
+  import InsightsPage from "./components/InsightsPage.svelte";
 
   let query = $state("");
 
@@ -443,7 +444,13 @@
           onWatch={quickPlay}
         />
       {:else if currentPage.type === "home"}
-        <HomePage />
+        <HomePage
+          onInsightsSwitch={() => {
+            changePage({ type: "insights" });
+          }}
+        />
+      {:else if currentPage.type === "insights"}
+        <InsightsPage />
       {:else if currentPage.type === "myList"}
         <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
       {/if}

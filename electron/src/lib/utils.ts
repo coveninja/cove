@@ -94,11 +94,15 @@ export function qualityClass(quality: string): string {
 }
 
 export function formatRuntime(d: Details): string {
-  return d.runtime > 0
-    ? `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`
-    : d.episode_run_time?.[0]
-      ? `${d.episode_run_time[0]}m / ep`
-      : "";
+  if (d.runtime > 0) return `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`;
+  if (d.episode_run_time?.[0]) return `${d.episode_run_time[0]}m / ep`;
+  // TMDB often leaves episode_run_time empty for TV — fall back to the
+  // season/episode count.
+  if (d.number_of_seasons > 0)
+    return `${d.number_of_seasons} Season${d.number_of_seasons === 1 ? "" : "s"}`;
+  if (d.number_of_episodes > 0)
+    return `${d.number_of_episodes} Episode${d.number_of_episodes === 1 ? "" : "s"}`;
+  return "";
 }
 
 export function formatRating(d: Details): string {

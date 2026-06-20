@@ -1,6 +1,16 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
-  import {Pause, Play, Star, Volume2, VolumeOff} from "lucide-svelte";
+  import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
+  import {
+    ChevronLeft,
+    ChevronRight,
+    Pause,
+    Play,
+    Star,
+    ThumbsDown,
+    Volume2,
+    VolumeOff,
+  } from "lucide-svelte";
   import type { Details, Media, MediaImages } from "$lib/types/tmdb";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { api } from "$lib/api";
@@ -17,52 +27,8 @@
   import type { LibraryEntry } from "$lib/types/library";
   import PlayerSimple from "./PlayerSimple.svelte";
 
-  let testMedia1: Media = {
-    id: 1339713,
-    title: "Obsession",
-    name: "Obsession",
-    overview:
-      'After breaking the mysterious "One Wish Willow" to win his crush\'s heart, a hopeless romantic finds himself getting exactly what he asked for but soon discovers that some desires come at a dark, sinister price.',
-    release_date: "2025-03-27",
-    first_air_date: "",
-    vote_average: 7.9,
-    media_type: "movie",
-    trailer_url: "",
-    clip_urls: "",
-    popularity: 324.5,
-  };
-  let testMedia2: Media = {
-    id: 1233413,
-    title: "Sinners",
-    name: "Sinners",
-    overview:
-      "Trying to leave their troubled lives behind, twin brothers return to their hometown to start again, only to discover that an even greater evil is waiting to welcome them back.",
-    release_date: "2025-03-27",
-    first_air_date: "",
-    vote_average: 7.4,
-    media_type: "movie",
-    trailer_url: "",
-    clip_urls: "",
-    popularity: 324.5,
-  };
-
-  let testMedia3: Media = {
-    id: 936075,
-    title: "Michael",
-    name: "Michael",
-    overview:
-      "The story of Michael Jackson, one of the most influential artists the world has ever known, and his life beyond the music. His journey from the discovery of his extraordinary talent as the lead of the Jackson Five, to the visionary artist whose creative ambition fueled a relentless pursuit to become the biggest entertainer in the world, highlighting both his life off-stage and some of the most iconic performances from his early solo career.",
-    release_date: "2025-03-27",
-    first_air_date: "",
-    vote_average: 7.4,
-    media_type: "movie",
-    trailer_url: "",
-    clip_urls: "",
-    popularity: 324.5,
-  };
-
   let mediaIndex = $state<number>(0);
-  let medias = $state<Media[]>([testMedia1, testMedia2, testMedia3]);
+  let medias = $state<Media[]>([]);
   let isMuted = $state(true);
   let isPaused = $state(true);
 
@@ -73,6 +39,10 @@
   let runtimes = $state<string[]>([]);
   let tmdbRatings = $state<string[]>([]);
   let libraryEntries = $state<LibraryEntry[]>([]);
+
+  $effect(() => {
+    api.discover("all", { limit: 10 }).then((d) => (medias = d));
+  });
 
   $effect(() => {
     backdropUrls = new Array(medias.length).fill("");
@@ -120,6 +90,7 @@
   });
 
   function next(): void {
+    if (medias.length === 0) return;
     mediaIndex = (mediaIndex + 1) % medias.length;
   }
 
@@ -145,7 +116,7 @@
     currentAnimation?.pause();
     currentAnimation = null;
     progress = 0;
-    if (!videoClips[idx]) startTimer();
+    if (medias.length > 0 && !videoClips[idx]) startTimer();
   });
 
   let overviewEl = $state<HTMLElement | null>(null);
@@ -153,14 +124,12 @@
   $effect(() => {
     const idx = mediaIndex;
     const el = overviewEl;
-    if (!el) return;
+    const media = medias[idx];
+    if (!el || !media) return;
 
-    el.textContent = medias[idx].overview;
+    el.textContent = media.overview;
 
-    const { words } = splitText(el, {
-      words: true,
-    });
-
+    const { words } = splitText(el, { words: true });
     animate(words, {
       opacity: ["0", "1"],
       duration: 2000,
@@ -168,6 +137,32 @@
       delay: stagger(50),
     });
   });
+
+  function dismissCurrent(): void {
+    const media = medias[mediaIndex];
+    if (!media) return;
+    api.notInterested(media).catch(() => {}); // fire-and-forget; UI updates optimistically
+    medias = medias.filter(
+      (m) => !(m.id === media.id && m.media_type === media.media_type),
+    );
+    if (mediaIndex >= medias.length) mediaIndex = 0;
+  }
+
+  function moveToNext(): void {
+    if (mediaIndex === medias.length - 1) {
+      mediaIndex = 0;
+    } else {
+      mediaIndex += 1;
+    }
+  }
+
+  function moveToPrevious(): void {
+    if (mediaIndex === 0) {
+      mediaIndex = medias.length;
+    } else {
+      mediaIndex -= 1;
+    }
+  }
 
   onDestroy(() => currentAnimation?.pause());
 </script>
@@ -217,9 +212,9 @@
   ></div>
 
   <div
-    class="absolute inset-0 z-30 mt-[10%] mb-[5%] ml-[5%] flex w-[40%] flex-col items-start gap-4 xl:w-[30%] 2xl:w-[25%]"
+    class="absolute top-[25%] bottom-[5%] left-[5%] z-30 flex min-h-0 w-[40%] flex-col items-start gap-4 xl:w-[30%] 2xl:w-[25%]"
   >
-    <div class="relative h-36 w-full self-center">
+    <div class="relative h-[14vw] max-h-36 w-full shrink-0 self-center">
       {#each logoUrls as url, i (i)}
         {#if url}
           <img
@@ -254,39 +249,71 @@
       </div>
     {/key}
 
-    <p bind:this={overviewEl} class="px-4 font-medium"></p>
+    <p
+      bind:this={overviewEl}
+      class="line-clamp-3 min-h-0 overflow-hidden px-4 font-medium xl:line-clamp-5"
+    ></p>
 
-    <div class="mt-auto flex w-full flex-row gap-1 px-4">
-      <Button
-        variant="outline"
-        size="icon"
-        onclick={() => (isMuted = !isMuted)}
-      >
-        {#if isMuted}<VolumeOff />{:else}<Volume2 />{/if}
-      </Button>
-      <Button
-        variant="outline"
-        size="icon"
-        onclick={() => (isPaused = !isPaused)}
-      >
-        {#if isPaused}<Play />{:else}<Pause />{/if}
-      </Button>
-    </div>
+    <div class="mt-auto flex w-full flex-col gap-4">
+      <div class="flex w-full flex-row gap-4 px-4">
+        <Button
+          variant="outline"
+          size="icon"
+          onclick={() => (isMuted = !isMuted)}
+        >
+          {#if isMuted}<VolumeOff />{:else}<Volume2 />{/if}
+        </Button>
+        <Button
+          variant="outline"
+          size="icon"
+          onclick={() => (isPaused = !isPaused)}
+        >
+          {#if isPaused}<Play />{:else}<Pause />{/if}
+        </Button>
+        <ButtonGroup.Root>
+          <Button
+            variant="outline"
+            size="icon"
+            onclick={moveToPrevious}
+            aria-label="Next"
+          >
+            <ChevronLeft />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onclick={moveToNext}
+            aria-label="Next"
+          >
+            <ChevronRight />
+          </Button>
+        </ButtonGroup.Root>
 
-    <div class="mt-auto flex w-full flex-row px-4">
-      <Button
-        variant="default"
-        size="lg"
-        class="flex-1 rounded-r-none bg-accent/75 hover:bg-accent"
-      >
-        Watch
-      </Button>
-      <LibraryStatusPanel
-        libraryEntry={libraryEntries[mediaIndex]}
-        media={medias[mediaIndex]}
-        size="icon-lg"
-        class="rounded-l-none"
-      />
+        <Button
+          variant="outline"
+          size="icon"
+          onclick={dismissCurrent}
+          aria-label="Not interested"
+        >
+          <ThumbsDown />
+        </Button>
+      </div>
+
+      <div class="flex w-full flex-row px-4">
+        <Button
+          variant="default"
+          size="lg"
+          class="flex-1 rounded-r-none bg-accent/75 hover:bg-accent"
+        >
+          Watch
+        </Button>
+        <LibraryStatusPanel
+          libraryEntry={libraryEntries[mediaIndex]}
+          media={medias[mediaIndex]}
+          size="icon-lg"
+          class="rounded-l-none"
+        />
+      </div>
     </div>
 
     <div class="flex w-full flex-row gap-1 px-4">

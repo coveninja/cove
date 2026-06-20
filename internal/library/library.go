@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Arcadyi/cove/internal/utils"
@@ -68,10 +69,140 @@ type WatchProgress struct {
 	WatchedAt       time.Time `json:"watched_at"`
 }
 
+// Dismissal records a "not interested" — a title to keep out of recommendations
+// and to nudge taste away from, without it being a library shelf entry.
+type Dismissal struct {
+	TmdbID      int       `json:"tmdb_id"`
+	MediaType   string    `json:"media_type"`
+	DismissedAt time.Time `json:"dismissed_at"`
+}
+
 // diskStore is the on-disk JSON format.
 type diskStore struct {
-	Entries  map[string]*LibraryEntry  `json:"entries"`  // key: entryKey()
-	Progress map[string]*WatchProgress `json:"progress"` // key: progressKey()
+	Entries   map[string]*LibraryEntry  `json:"entries"`   // key: entryKey()
+	Progress  map[string]*WatchProgress `json:"progress"`  // key: progressKey()
+	Dismissed map[string]*Dismissal     `json:"dismissed"` // key: entryKey()
+}
+
+// TasteSignal is the minimal per-title signal the discover package needs,
+// without exposing the library's internals.
+type TasteSignal struct {
+	TmdbID     int
+	MediaType  string
+	Status     Status
+	UserRating *float64 // user's 0–5 rating; nil if unrated
+	Completed  bool     // any progress record for this title is completed
+	Dismissed  bool
+}
+
+// TasteSignals returns one signal per title the user has any history with —
+// every library entry, plus titles with completed watch history even if the
+// entry was later removed. Safe to call concurrently.
+func (l *Library) TasteSignals() []TasteSignal {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	completed := make(map[string]bool)
+	for _, p := range l.db.Progress {
+		if p.Completed {
+			completed[entryKey(p.TmdbID, p.MediaType)] = true
+		}
+	}
+
+	out := make([]TasteSignal, 0, len(l.db.Entries))
+	seen := make(map[string]bool, len(l.db.Entries))
+	for _, e := range l.db.Entries {
+		key := entryKey(e.TmdbID, e.MediaType)
+		seen[key] = true
+		out = append(out, TasteSignal{
+			TmdbID:     e.TmdbID,
+			MediaType:  e.MediaType,
+			Status:     e.Status,
+			UserRating: e.Rating,
+			Completed:  completed[key],
+		})
+	}
+
+	// Titles removed from the list but still finished: don't re-recommend them,
+	// and keep them as a positive taste signal.
+	for _, p := range l.db.Progress {
+		if !p.Completed {
+			continue
+		}
+		key := entryKey(p.TmdbID, p.MediaType)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, TasteSignal{
+			TmdbID:    p.TmdbID,
+			MediaType: p.MediaType,
+			Completed: true, // no entry => no status
+		})
+	}
+	for key, d := range l.db.Dismissed {
+		if seen[key] {
+			continue // already represented; exclusion is handled either way
+		}
+		seen[key] = true
+		out = append(out, TasteSignal{
+			TmdbID:    d.TmdbID,
+			MediaType: d.MediaType,
+			Dismissed: true,
+		})
+	}
+	return out
+}
+
+type Stats struct {
+	Total      int            `json:"total"`     // library entries (dismissals excluded)
+	ByType     map[string]int `json:"by_type"`   // entries per media type
+	ByStatus   map[string]int `json:"by_status"` // status -> count
+	Finished   map[string]int `json:"finished"`  // finished entries per type
+	Dismissed  int            `json:"dismissed"`
+	Rated      int            `json:"rated"`
+	AvgRating  float64        `json:"avg_rating"`  // mean user rating over rated titles, 0–5
+	MovieShare float64        `json:"movie_share"` // preference, from finished+watching counts
+	TVShare    float64        `json:"tv_share"`
+}
+
+func (l *Library) Stats() Stats {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	st := Stats{
+		ByType:   map[string]int{"movie": 0, "tv": 0},
+		ByStatus: map[string]int{},
+		Finished: map[string]int{"movie": 0, "tv": 0},
+	}
+	engaged := map[string]int{"movie": 0, "tv": 0}
+	var ratingSum float64
+
+	for _, e := range l.db.Entries {
+		st.Total++
+		st.ByType[e.MediaType]++
+		st.ByStatus[e.Status]++
+		if e.Status == StatusFinished {
+			st.Finished[e.MediaType]++
+		}
+		if e.Status == StatusFinished || e.Status == StatusWatching {
+			engaged[e.MediaType]++
+		}
+		if e.Rating != nil {
+			st.Rated++
+			ratingSum += *e.Rating
+		}
+	}
+	if st.Rated > 0 {
+		st.AvgRating = ratingSum / float64(st.Rated)
+	}
+	st.Dismissed = len(l.db.Dismissed)
+
+	if total := engaged["movie"] + engaged["tv"]; total > 0 {
+		st.MovieShare = float64(engaged["movie"]) / float64(total)
+		st.TVShare = float64(engaged["tv"]) / float64(total)
+	}
+	return st
 }
 
 // Library ── Service ──────────────────────────────────────────────────────────────────
@@ -87,6 +218,7 @@ type Library struct {
 	mu   sync.RWMutex
 	db   diskStore
 	path string
+	gen  atomic.Uint64
 }
 
 // ── New ────────────────────────────────────────────────────────────────────────
@@ -99,8 +231,9 @@ type Library struct {
 func New() (*Library, error) {
 	l := &Library{
 		db: diskStore{
-			Entries:  make(map[string]*LibraryEntry),
-			Progress: make(map[string]*WatchProgress),
+			Entries:   make(map[string]*LibraryEntry),
+			Progress:  make(map[string]*WatchProgress),
+			Dismissed: make(map[string]*Dismissal),
 		},
 	}
 
@@ -132,8 +265,11 @@ func (l *Library) persist() error {
 	if err != nil {
 		return err
 	}
+	l.gen.Add(1)
 	return utils.AtomicWriteFile(l.path, raw, 0o644)
 }
+
+func (l *Library) Generation() uint64 { return l.gen.Load() }
 
 // ── Key helpers ───────────────────────────────────────────────────────────────
 
@@ -167,6 +303,8 @@ func (l *Library) SetupHandlers() {
 	http.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
 	http.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
 	http.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
+	http.HandleFunc("/api/library/dismiss", utils.CorsMiddleware(l.handleDismiss))
+	http.HandleFunc("/api/library/stats", utils.CorsMiddleware(l.handleStats))
 }
 
 // ── Handler: /api/library ─────────────────────────────────────────────────────
@@ -541,6 +679,65 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodOptions:
+		w.Header().Set("Access-Control-Allow-Methods", "POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusNoContent)
+
+	case http.MethodPost, http.MethodDelete:
+		var body struct {
+			TmdbID    int    `json:"tmdb_id"`
+			MediaType string `json:"media_type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if body.TmdbID == 0 || body.MediaType == "" {
+			http.Error(w, "tmdb_id and media_type required", http.StatusBadRequest)
+			return
+		}
+
+		key := entryKey(body.TmdbID, body.MediaType)
+		l.mu.Lock()
+		if r.Method == http.MethodPost {
+			l.db.Dismissed[key] = &Dismissal{
+				TmdbID:      body.TmdbID,
+				MediaType:   body.MediaType,
+				DismissedAt: time.Now(),
+			}
+		} else {
+			delete(l.db.Dismissed, key)
+		}
+		err := l.persist()
+		l.mu.Unlock()
+		if err != nil {
+			http.Error(w, "persist failed", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	jsonOK(w, l.Stats())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

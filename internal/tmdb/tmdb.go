@@ -54,6 +54,8 @@ type Media struct {
 	ClipURLs   string   `json:"clip_urls"`
 	Images     []string `json:"images"`
 	Popularity float64  `json:"popularity"`
+	GenreIDs   []int    `json:"genre_ids,omitempty"`
+	Adult      bool     `json:"adult,omitempty"`
 }
 
 type MediaDetails struct {
@@ -87,6 +89,7 @@ type Details struct {
 	// field, so it never survived the unmarshal in GetDetails below.
 	Overview string `json:"overview"`
 	Genres   []struct {
+		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"genres"`
 	Runtime        int   `json:"runtime"`
@@ -112,9 +115,11 @@ type Details struct {
 	} `json:"content_ratings"`
 	Keywords struct {
 		Keywords []struct {
+			ID   int    `json:"id"`
 			Name string `json:"name"`
 		} `json:"keywords"` // movies
 		Results []struct {
+			ID   int    `json:"id"`
 			Name string `json:"name"`
 		} `json:"results"` // tv shows
 	} `json:"keywords"`
@@ -629,19 +634,16 @@ func (d *Details) DisplayRuntime() string {
 	return ""
 }
 
-func (d *Details) KeywordNames() []string {
-	keywords := d.Keywords.Keywords
-	if len(keywords) == 0 {
-		keywords = d.Keywords.Results
+func (d *Details) KeywordPairs() map[int]string {
+	kws := d.Keywords.Keywords
+	if len(kws) == 0 {
+		kws = d.Keywords.Results
 	}
-	names := make([]string, 0, min(6, len(keywords)))
-	for i, k := range keywords {
-		if i >= 6 {
-			break
-		}
-		names = append(names, k.Name)
+	out := make(map[int]string, len(kws))
+	for _, k := range kws {
+		out[k.ID] = k.Name
 	}
-	return names
+	return out
 }
 
 func (c *Client) GetSimilar(tmdbID int, mediaType string) ([]Media, error) {
@@ -711,6 +713,138 @@ func (c *Client) GetLogos(tmdbID int, mediaType string) ([]string, error) {
 		urls = append(urls, "https://image.tmdb.org/t/p/w500"+l.FilePath)
 	}
 	return urls, nil
+}
+
+// ── Discover ──────────────────────────────────────────────────────────────────
+
+// DiscoverParams configures one /discover query. with_genres / with_keywords
+// are OR'd (pipe) to broaden recall; without_genres is comma-joined to exclude
+// all listed.
+type DiscoverParams struct {
+	MediaType      string // "movie" | "tv" (required)
+	Page           int    // 1-based; 0 lets TMDB default to 1
+	SortBy         string // default "popularity.desc"
+	WithGenres     []int
+	WithoutGenres  []int
+	WithKeywords   []int
+	MinVoteCount   float64
+	MinVoteAverage float64
+	IncludeAdult   bool
+	Region         string
+	CertCountry    string // movie-only; e.g. "US"
+	CertLTE        string // movie-only; e.g. "PG"
+}
+
+type DiscoverResult struct {
+	Results    []Media `json:"results"`
+	Page       int     `json:"page"`
+	TotalPages int     `json:"total_pages"`
+}
+
+func joinIDs(ids []int, sep string) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.Itoa(id)
+	}
+	return strings.Join(parts, sep)
+}
+
+// Discover runs TMDB's /discover/{movie|tv}. TMDB concerns only — all
+// personalization lives in the discover package.
+func (c *Client) Discover(p DiscoverParams) (*DiscoverResult, error) {
+	if p.MediaType != "movie" && p.MediaType != "tv" {
+		return nil, fmt.Errorf("discover: invalid media type %q", p.MediaType)
+	}
+
+	q := neturl.Values{}
+	q.Set("api_key", c.apiKey)
+	q.Set("include_adult", strconv.FormatBool(p.IncludeAdult))
+	sortBy := p.SortBy
+	if sortBy == "" {
+		sortBy = "popularity.desc"
+	}
+	q.Set("sort_by", sortBy)
+	if p.Page > 0 {
+		q.Set("page", strconv.Itoa(p.Page))
+	}
+	if len(p.WithGenres) > 0 {
+		q.Set("with_genres", joinIDs(p.WithGenres, "|"))
+	}
+	if len(p.WithoutGenres) > 0 {
+		q.Set("without_genres", joinIDs(p.WithoutGenres, ","))
+	}
+	if len(p.WithKeywords) > 0 {
+		q.Set("with_keywords", joinIDs(p.WithKeywords, "|"))
+	}
+	if p.MinVoteCount > 0 {
+		q.Set("vote_count.gte", strconv.FormatFloat(p.MinVoteCount, 'f', -1, 64))
+	}
+	if p.MinVoteAverage > 0 {
+		q.Set("vote_average.gte", strconv.FormatFloat(p.MinVoteAverage, 'f', -1, 64))
+	}
+	if p.Region != "" {
+		q.Set("region", p.Region)
+	}
+	if p.MediaType == "movie" && p.CertCountry != "" && p.CertLTE != "" {
+		q.Set("certification_country", p.CertCountry)
+		q.Set("certification.lte", p.CertLTE)
+	}
+
+	url := fmt.Sprintf("%s/discover/%s?%s", baseURL, p.MediaType, q.Encode())
+	res, err := c.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		if err := Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("discover: TMDB returned %d", res.StatusCode)
+	}
+
+	var data DiscoverResult
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	// Match the shape the rest of the app expects: absolute poster URLs and a
+	// populated media_type (/discover omits it).
+	for i := range data.Results {
+		data.Results[i].MediaType = p.MediaType
+		if data.Results[i].PosterURL != "" {
+			data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+		}
+	}
+	return &data, nil
+}
+
+// GenreList returns TMDB's full genre list (id+name) for a media type — for
+// browse UIs and the kid-mode genre picker. Reuses the Keyword {id,name} shape.
+func (c *Client) GenreList(mediaType string) ([]Keyword, error) {
+	if mediaType != "movie" && mediaType != "tv" {
+		return nil, fmt.Errorf("genre list: invalid media type %q", mediaType)
+	}
+	url := fmt.Sprintf("%s/genre/%s/list?api_key=%s", baseURL, mediaType, c.apiKey)
+	res, err := c.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		if err := Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	var data struct {
+		Genres []Keyword `json:"genres"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data.Genres, nil
 }
 
 func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {

@@ -296,7 +296,7 @@
   <ContextMenu.Trigger>
     <div
       bind:this={buttonEl}
-      onclick={() => !expanded && onclick(media)}
+      onclick={() => !expanded && expand()}
       onmouseenter={onHover}
       onmouseleave={onLeave}
       class={initialExpanded

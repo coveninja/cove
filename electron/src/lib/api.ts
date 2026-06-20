@@ -1,4 +1,10 @@
-import type { Details, Media, MediaImages, MediaVideos, TVEpisode } from "$lib/types/tmdb";
+import type {
+  Details,
+  Media,
+  MediaImages,
+  MediaVideos,
+  TVEpisode,
+} from "$lib/types/tmdb";
 import type { Stream } from "$lib/types/addons";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
@@ -103,6 +109,34 @@ export interface AddonSubtitle {
   lang: string;
 }
 
+export interface Taste {
+  id: number;
+  name: string;
+  score: number;
+}
+
+export type DiscoverProfile = "adult" | "kid";
+
+export interface LibraryStats {
+  total: number;
+  by_type: Record<string, number>;
+  by_status: Record<string, number>;
+  finished: Record<string, number>;
+  dismissed: number;
+  rated: number;
+  avg_rating: number;
+  movie_share: number;
+  tv_share: number;
+}
+
+export interface DiscoverInsights {
+  top_movie_genres: Taste[];
+  top_tv_genres: Taste[];
+  disliked_genres: Taste[];
+  top_keywords: Taste[];
+  signals_used: number;
+}
+
 // ── API ────────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -174,9 +208,7 @@ export const api = {
     `${BASE}/hls/${sessionId}/master.m3u8`,
 
   subtitleExtractUrl: (src: string, index: number): string => {
-    const q = isHashSrc(src)
-      ? `hash=${src}`
-      : `url=${encodeURIComponent(src)}`;
+    const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
     return `${BASE}/subtitle/extract?${q}&index=${index}`;
   },
 
@@ -193,9 +225,7 @@ export const api = {
 
   /** ffprobe the source. Generic so the caller supplies the result shape. */
   probe: <T = unknown>(src: string, signal?: AbortSignal): Promise<T> => {
-    const q = isHashSrc(src)
-      ? `hash=${src}`
-      : `url=${encodeURIComponent(src)}`;
+    const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
     return request(`/probe?${q}`, signal ? { signal } : undefined);
   },
 
@@ -262,8 +292,10 @@ export const api = {
   libraryGet: (
     tmdbId: number,
     mediaType: string,
-  ): Promise<{ entry: LibraryEntry | null; progress: WatchProgress[] } | null> =>
-    requestOrNull(`/library/${tmdbId}/${mediaType}`),
+  ): Promise<{
+    entry: LibraryEntry | null;
+    progress: WatchProgress[];
+  } | null> => requestOrNull(`/library/${tmdbId}/${mediaType}`),
 
   libraryRemove: (tmdbId: number, mediaType: string): Promise<void> =>
     request(`/library/${tmdbId}/${mediaType}`, { method: "DELETE" }),
@@ -329,4 +361,71 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p),
     }),
+
+  // ── Discovery ────────────────────────────────────────────────────────────────
+  discover: (
+    type: "movie" | "tv" | "all",
+    opts: { limit?: number; profile?: DiscoverProfile } = {},
+  ): Promise<Media[]> => {
+    const p = new URLSearchParams({ type });
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.profile) p.set("profile", opts.profile);
+    return request(`/discover?${p}`);
+  },
+
+  discoverByGenre: (
+    type: "movie" | "tv",
+    genreId: number,
+    opts: { limit?: number; profile?: DiscoverProfile } = {},
+  ): Promise<Media[]> => {
+    const p = new URLSearchParams({ type, genre: String(genreId) });
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.profile) p.set("profile", opts.profile);
+    return request(`/discover/genre?${p}`);
+  },
+
+  discoverByKeyword: (
+    type: "movie" | "tv",
+    keywordId: number,
+    opts: { limit?: number; profile?: DiscoverProfile } = {},
+  ): Promise<Media[]> => {
+    const p = new URLSearchParams({ type, keyword: String(keywordId) });
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.profile) p.set("profile", opts.profile);
+    return request(`/discover/keyword?${p}`);
+  },
+
+  discoverTopGenres: (
+    type: "movie" | "tv",
+    limit?: number,
+  ): Promise<Taste[]> => {
+    const p = new URLSearchParams({ type });
+    if (limit != null) p.set("limit", String(limit));
+    return request(`/discover/genres?${p}`);
+  },
+
+  discoverTopKeywords: (limit?: number): Promise<Taste[]> =>
+    request(`/discover/keywords${limit ? `?limit=${limit}` : ""}`),
+
+  genreList: (type: "movie" | "tv"): Promise<{ id: number; name: string }[]> =>
+    request(`/genres?type=${type}`),
+
+  notInterested: (media: Media): Promise<void> =>
+    request(`/library/dismiss`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tmdb_id: media.id, media_type: media.media_type }),
+    }),
+
+  undoNotInterested: (media: Media): Promise<void> =>
+    request(`/library/dismiss`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tmdb_id: media.id, media_type: media.media_type }),
+    }),
+
+  // ── Profile / insights ───────────────────────────────────────────────────────
+  libraryStats: (): Promise<LibraryStats> => request(`/library/stats`),
+
+  discoverInsights: (): Promise<DiscoverInsights> => request(`/discover/insights`),
 };

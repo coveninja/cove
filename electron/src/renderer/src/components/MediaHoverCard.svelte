@@ -11,6 +11,7 @@
   import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
+  import StarRating from "./StarRating.svelte";
 
   let {
     media,
@@ -58,8 +59,8 @@
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
   const year = $derived(
     (media.media_type === "tv"
-        ? media.first_air_date
-        : media.release_date
+      ? media.first_air_date
+      : media.release_date
     )?.slice(0, 4),
   );
 
@@ -84,10 +85,10 @@
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
-        100,
-        (movieProgress.position_seconds / movieProgress.duration_seconds) *
-        100,
-      )
+          100,
+          (movieProgress.position_seconds / movieProgress.duration_seconds) *
+            100,
+        )
       : 0,
   );
 
@@ -132,14 +133,13 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
 <span
   bind:this={el}
   role="presentation"
-  class="pointer-events-auto z-50 flex min-w-75 cursor-default flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
-  onclick={(e) => e.stopPropagation()}
-  onkeydown={(e) => e.stopPropagation()}
+  class="z-50 flex min-w-75 cursor-pointer flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
   {onmouseleave}
+  onclick={() => onexpand()}
   style="opacity: 0; transform: scale(0.85); {style}"
 >
   {#if videoUrl}
@@ -168,11 +168,11 @@
 
     <Separator />
 
-    <span class="flex flex-col gap-2 pr-3">
+    <span class="flex flex-1 flex-col gap-2 pr-3">
       <span class="flex flex-wrap items-center gap-2">
         {#if ageRating}
           <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-          >{ageRating}</span
+            >{ageRating}</span
           >
         {/if}
         {#if originCountry.length}
@@ -182,27 +182,8 @@
         {/if}
         {#if runtime}
           <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-          >{runtime}</span
+            >{runtime}</span
           >
-        {/if}
-        {#if media.media_type === "tv" && numberOfSeasons !== null}
-          <span class="rounded border border-border px-1.5 py-0.5 text-xs">
-            {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
-          </span>
-        {/if}
-        {#if media.media_type === "tv" && numberOfEpisodes !== null}
-          <span class="rounded border border-border px-1.5 py-0.5 text-xs">
-            {numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}
-          </span>
-        {/if}
-        {#if quality}
-          <span
-            class="rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
-              quality,
-            )}"
-          >
-            {quality.toUpperCase()}
-          </span>
         {/if}
       </span>
       {#if genres.length}
@@ -218,26 +199,9 @@
       {/if}
     </span>
 
-    <span class="line-clamp-2 text-xs text-muted-foreground"
-    >{media.overview}</span
+    <span class="line-clamp-3 text-xs text-muted-foreground"
+      >{media.overview}</span
     >
-
-    <!-- Library: status pill + user rating -->
-    {#if libraryEntry}
-      <span class="flex items-center gap-2">
-        <span
-          class="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
-        >
-          {STATUS_LABELS[libraryEntry.status as LibraryStatus]}
-        </span>
-        {#if libraryEntry.rating !== null && libraryEntry.rating !== undefined}
-          <span class="flex items-center gap-0.5 text-xs text-yellow-400">
-            <Star class="size-3 fill-current" />
-            {libraryEntry.rating}/5
-          </span>
-        {/if}
-      </span>
-    {/if}
 
     <!-- Movie progress bar -->
     {#if hasIncompleteProgress}
@@ -249,43 +213,27 @@
       </div>
     {/if}
 
-    <span class="flex w-full gap-1 pt-0.5">
-      <ButtonGroup.Root class="flex w-full">
-        <Button
-          class="w-[85%] border-b border-accent bg-accent text-accent-foreground hover:bg-accent-foreground hover:text-accent"
-          variant="default"
-          size="sm"
-          onclick={(e) => {
-            e.stopPropagation();
-            onwatch(
-              libraryEntry?.last_watched_season ?? undefined,
-              libraryEntry?.last_watched_episode ?? undefined,
-            );
-          }}
-        >
-          <Play class="size-3" />
-          {watchButtonLabel}
-        </Button>
-        <Button
-          class="w-[15%]"
-          variant="outline"
-          size="icon-sm"
-          onclick={(e) => {
-            e.stopPropagation();
-            onexpand();
-          }}
-        >
-          <ChevronDown class="size-3" />
-        </Button>
-      </ButtonGroup.Root>
-      <LibraryStatusPanel
-        {libraryEntry}
-        {media}
-        {lastAiredSeason}
-        {lastAiredEpisode}
-        size="icon-sm"
-        {onpopoverchange}
-      />
+    <span class="flex w-full items-center justify-between gap-1 pt-0.5">
+      <span class="contents" onclick={(e) => e.stopPropagation()}>
+        <StarRating
+          {libraryEntry}
+          {media}
+          {lastAiredSeason}
+          {lastAiredEpisode}
+        />
+      </span>
+
+      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+      <span class="contents" onclick={(e) => e.stopPropagation()}>
+        <LibraryStatusPanel
+          {libraryEntry}
+          {media}
+          {lastAiredSeason}
+          {lastAiredEpisode}
+          size="icon-lg"
+          {onpopoverchange}
+        />
+      </span>
     </span>
   </span>
 </span>

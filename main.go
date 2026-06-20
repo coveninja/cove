@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Arcadyi/cove/internal/addons"
+	"github.com/Arcadyi/cove/internal/discover"
 	"github.com/Arcadyi/cove/internal/library"
 	"github.com/Arcadyi/cove/internal/player"
 	"github.com/Arcadyi/cove/internal/settings"
@@ -69,6 +70,9 @@ func main() {
 	p.SetupHandlers()
 	st.SetupHandlers()
 	lib.SetupHandlers()
+
+	disc := discover.New(tmdbClient, lib)
+	disc.SetupHandlers()
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)

@@ -27,6 +27,8 @@ export interface Media {
   clip_urls: string;
   images: string[];
   popularity: number /* float64 */;
+  genre_ids?: number /* int */[];
+  adult?: boolean;
 }
 export interface MediaDetails {
   imdb_id: string;
@@ -61,6 +63,7 @@ export interface Details {
    */
   overview: string;
   genres: {
+    id: number /* int */;
     name: string;
   }[];
   runtime: number /* int */;
@@ -86,9 +89,11 @@ export interface Details {
   };
   keywords: {
     keywords: {
+      id: number /* int */;
       name: string;
     }[]; // movies
     results: {
+      id: number /* int */;
       name: string;
     }[]; // tv shows
   };
@@ -151,4 +156,28 @@ export interface MediaVideoObject {
 }
 export interface MediaVideos {
   results: MediaVideoObject[];
+}
+/**
+ * DiscoverParams configures one /discover query. with_genres / with_keywords
+ * are OR'd (pipe) to broaden recall; without_genres is comma-joined to exclude
+ * all listed.
+ */
+export interface DiscoverParams {
+  MediaType: string; // "movie" | "tv" (required)
+  Page: number /* int */; // 1-based; 0 lets TMDB default to 1
+  SortBy: string; // default "popularity.desc"
+  WithGenres: number /* int */[];
+  WithoutGenres: number /* int */[];
+  WithKeywords: number /* int */[];
+  MinVoteCount: number /* float64 */;
+  MinVoteAverage: number /* float64 */;
+  IncludeAdult: boolean;
+  Region: string;
+  CertCountry: string; // movie-only; e.g. "US"
+  CertLTE: string; // movie-only; e.g. "PG"
+}
+export interface DiscoverResult {
+  results: Media[];
+  page: number /* int */;
+  total_pages: number /* int */;
 }

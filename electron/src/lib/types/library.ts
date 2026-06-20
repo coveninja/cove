@@ -51,6 +51,38 @@ export interface WatchProgress {
   watched_at: string;
 }
 /**
+ * Dismissal records a "not interested" — a title to keep out of recommendations
+ * and to nudge taste away from, without it being a library shelf entry.
+ */
+export interface Dismissal {
+  tmdb_id: number /* int */;
+  media_type: string;
+  dismissed_at: string;
+}
+/**
+ * TasteSignal is the minimal per-title signal the discover package needs,
+ * without exposing the library's internals.
+ */
+export interface TasteSignal {
+  TmdbID: number /* int */;
+  MediaType: string;
+  Status: Status;
+  UserRating?: number /* float64 */; // user's 0–5 rating; nil if unrated
+  Completed: boolean; // any progress record for this title is completed
+  Dismissed: boolean;
+}
+export interface Stats {
+  total: number /* int */; // library entries (dismissals excluded)
+  by_type: { [key: string]: number /* int */}; // entries per media type
+  by_status: { [key: string]: number /* int */}; // status -> count
+  finished: { [key: string]: number /* int */}; // finished entries per type
+  dismissed: number /* int */;
+  rated: number /* int */;
+  avg_rating: number /* float64 */; // mean user rating over rated titles, 0–5
+  movie_share: number /* float64 */; // preference, from finished+watching counts
+  tv_share: number /* float64 */;
+}
+/**
  * Library ── Service ──────────────────────────────────────────────────────────────────
  * Library owns all of the package's mutable state. It used to live in package
  * globals; holding it on a struct lets callers construct (and tests spin up)
