@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
-  import { Star } from "lucide-svelte";
+  import {Pause, Play, Star, Volume2, VolumeOff} from "lucide-svelte";
   import type { Details, Media, MediaImages } from "$lib/types/tmdb";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { api } from "$lib/api";
@@ -63,6 +63,8 @@
 
   let mediaIndex = $state<number>(0);
   let medias = $state<Media[]>([testMedia1, testMedia2, testMedia3]);
+  let isMuted = $state(true);
+  let isPaused = $state(true);
 
   let backdropUrls = $state<string[]>([]);
   let videoClips = $state<string[]>([]);
@@ -193,6 +195,8 @@
           loop={false}
           controls={false}
           bg={backdropUrls[mediaIndex]}
+          bind:muted={isMuted}
+          bind:paused={isPaused}
           onProgress={(cur, dur) => (progress = (cur / dur) * 100)}
           onEnded={() => (mediaIndex = (mediaIndex + 1) % medias.length)}
         />
@@ -205,7 +209,11 @@
   ></div>
 
   <div
-    class="absolute inset-0 z-20 rounded-b-2xl border-b bg-linear-to-r from-black/80 from-0% to-transparent to-50% xl:to-40%"
+    class="absolute inset-0 z-20 bg-linear-to-r from-black/80 from-0% to-transparent to-50% xl:to-40%"
+  ></div>
+
+  <div
+    class="absolute inset-0 z-20 bg-linear-to-t from-background from-0% to-transparent to-20% xl:to-40%"
   ></div>
 
   <div
@@ -247,6 +255,23 @@
     {/key}
 
     <p bind:this={overviewEl} class="px-4 font-medium"></p>
+
+    <div class="mt-auto flex w-full flex-row gap-1 px-4">
+      <Button
+        variant="outline"
+        size="icon"
+        onclick={() => (isMuted = !isMuted)}
+      >
+        {#if isMuted}<VolumeOff />{:else}<Volume2 />{/if}
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        onclick={() => (isPaused = !isPaused)}
+      >
+        {#if isPaused}<Play />{:else}<Pause />{/if}
+      </Button>
+    </div>
 
     <div class="mt-auto flex w-full flex-row px-4">
       <Button

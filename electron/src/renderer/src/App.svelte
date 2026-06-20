@@ -50,7 +50,7 @@
 
   let playerSession = $state<PlayerSession | null>(null);
   let playerMode = $state<"full" | "pip" | null>(null);
-  let playerWrapperEl: HTMLDivElement | null = null;
+  let playerWrapperEl = $state<HTMLDivElement | null>(null);
   let playerModeAnimation: JSAnimation | null = null;
 
   const canGoBack = $derived(playerMode === "full" || pageHistory.length > 0);
@@ -60,9 +60,9 @@
   // stop StreamsList from re-triggering auto-select for the same episode.
   const streamActiveForSelectedMedia = $derived(
     !!playerSession &&
-    !!selectedMedia &&
-    playerSession.media.id === selectedMedia.id &&
-    playerSession.media.media_type === selectedMedia.media_type,
+      !!selectedMedia &&
+      playerSession.media.id === selectedMedia.id &&
+      playerSession.media.media_type === selectedMedia.media_type,
   );
 
   const activePlaybackSeason = $derived(
@@ -78,21 +78,21 @@
   const fullscreenInfo = $derived(
     playerMode === "full" && playerSession
       ? {
-        title:
-          playerSession.media.media_type === "tv"
-            ? playerSession.media.name
-            : playerSession.media.title,
-        subtitle:
-          playerSession.media.media_type === "tv" &&
-          playerSession.season != null &&
-          playerSession.episode != null
-            ? `S${playerSession.season}E${playerSession.episode}${
-              playerSession.episodeName
-                ? ` - ${playerSession.episodeName}`
-                : ""
-            }`
-            : undefined,
-      }
+          title:
+            playerSession.media.media_type === "tv"
+              ? playerSession.media.name
+              : playerSession.media.title,
+          subtitle:
+            playerSession.media.media_type === "tv" &&
+            playerSession.season != null &&
+            playerSession.episode != null
+              ? `S${playerSession.season}E${playerSession.episode}${
+                  playerSession.episodeName
+                    ? ` - ${playerSession.episodeName}`
+                    : ""
+                }`
+              : undefined,
+        }
       : null,
   );
 
@@ -231,8 +231,7 @@
         id: media.id,
         type: media.media_type,
         season: media.media_type === "tv" ? (season ?? undefined) : undefined,
-        episode:
-          media.media_type === "tv" ? (episode ?? undefined) : undefined,
+        episode: media.media_type === "tv" ? (episode ?? undefined) : undefined,
       })
       .then((subs) => {
         // Guard against a newer playStream call having superseded this one
@@ -393,6 +392,7 @@
     {fullscreenInfo}
     onMinimizePlayer={() => setPlayerMode("pip")}
     onCloseStream={closePlayer}
+    {currentPage}
   />
   {#if selectedSimilar}
     {#key selectedSimilar.id}

@@ -19,6 +19,7 @@
   import "vidstack/player/styles/default/theme.css";
   import "vidstack/player/styles/default/layouts/video.css";
   import Hls from "hls.js";
+  import type { MediaPlayerElement } from "vidstack/elements";
   import { onDestroy } from "svelte";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
@@ -104,13 +105,18 @@
 
   // ─── Vidstack audio track list (populated from HLS manifest) ────────────────
 
-  let vidstackAudioTracks = $state<
-    { id: string; label: string; language: string; selected: boolean }[]
-  >([]);
+  interface VidstackAudioTrack {
+    id: string;
+    label: string;
+    language: string;
+    selected: boolean;
+  }
+
+  let vidstackAudioTracks = $state<VidstackAudioTrack[]>([]);
 
   // ─── DOM refs ───────────────────────────────────────────────────────────────
 
-  let playerEl = $state<HTMLElement | null>(null);
+  let playerEl = $state<MediaPlayerElement | null>(null);
 
   // ─── Source derivations ─────────────────────────────────────────────────────
 
@@ -279,7 +285,7 @@
   $effect(() => {
     if (!playerEl) return () => {};
 
-    function onProviderChange(e: any): void {
+    function onProviderChange(e: CustomEvent): void {
       if (e.detail?.type === "hls") {
         e.detail.library = Hls;
         e.detail.config = {
@@ -293,11 +299,11 @@
           levelLoadingTimeOut: 60000,
         };
 
-        e.detail.addEventListener?.("hls-instance", (ev: any) => {
-          const hls = ev.detail;
+        e.detail.addEventListener?.("hls-instance", (ev: CustomEvent) => {
+          const hls = ev.detail as Hls;
           let mediaRecoveryAttempts = 0;
 
-          hls.on(Hls.Events.ERROR, (_: any, data: any) => {
+          hls.on(Hls.Events.ERROR, (_, data) => {
             if (!data.fatal) return; // hls.js handles non-fatal errors itself
 
             if (
@@ -404,9 +410,11 @@
 
   function syncAudioTracks(): void {
     if (!playerEl) return;
-    const tracks = playerEl.audioTracks as any[];
+    const tracks = playerEl.audioTracks as
+      | Iterable<VidstackAudioTrack>
+      | undefined;
     if (!tracks) return;
-    vidstackAudioTracks = Array.from(tracks).map((t: any) => ({
+    vidstackAudioTracks = Array.from(tracks).map((t) => ({
       id: t.id,
       label: t.label,
       language: t.language,
@@ -416,10 +424,12 @@
 
   function switchAudioTrack(id: string): void {
     if (!playerEl) return;
-    const tracks = playerEl.audioTracks as any[];
+    const tracks = playerEl.audioTracks as
+      | Iterable<VidstackAudioTrack>
+      | undefined;
     if (!tracks) return;
     for (const t of Array.from(tracks)) {
-      if ((t as any).id === id) (t as any).selected = true;
+      if (t.id === id) t.selected = true;
     }
     syncAudioTracks();
   }
@@ -486,7 +496,7 @@
       title: title,
       posterPath: media!.poster_path ?? "",
       voteAverage: media!.vote_average ?? 0,
-      lastAirDate: (media as any)?.last_air_date ?? "",
+      lastAirDate: (media as { last_air_date?: string }).last_air_date ?? "",
       season: season ?? null,
       episode: episode ?? null,
       probedDuration: probedDuration,

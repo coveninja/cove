@@ -31,7 +31,8 @@
     autoplay = true,
     controls = false,
     loop = true,
-    muted = true,
+    muted = $bindable(true),
+    paused = $bindable(true),
     bg = "",
     class: Class = "",
     onProgress = (_current: number, _duration: number) => {},
@@ -61,18 +62,41 @@
     const handleCanPlay = () => {
       if (autoplay) safePlay(p);
     };
+    const handlePlay = () => (paused = false);
+    const handlePause = () => (paused = true);
+    const handleVolume = () => (muted = p.muted);
 
     p.addEventListener("duration-change", handleDuration);
     p.addEventListener("time-update", handleTime);
     p.addEventListener("ended", handleEnded);
     p.addEventListener("can-play", handleCanPlay);
+    p.addEventListener("play", handlePlay);
+    p.addEventListener("pause", handlePause);
+    p.addEventListener("volume-change", handleVolume);
 
     return () => {
       p.removeEventListener("duration-change", handleDuration);
       p.removeEventListener("time-update", handleTime);
       p.removeEventListener("ended", handleEnded);
       p.removeEventListener("can-play", handleCanPlay);
+      p.removeEventListener("play", handlePlay);
+      p.removeEventListener("pause", handlePause);
+      p.removeEventListener("volume-change", handleVolume);
     };
+  });
+
+  $effect(() => {
+    const p = player;
+    if (!p) return;
+    if (p.muted !== muted) p.muted = muted;
+  });
+
+  // Apply parent-driven play/pause to the player.
+  $effect(() => {
+    const p = player;
+    if (!p) return;
+    if (paused && !p.paused) void Promise.resolve(p.pause()).catch(() => {});
+    else if (!paused && p.paused) safePlay(p);
   });
 </script>
 

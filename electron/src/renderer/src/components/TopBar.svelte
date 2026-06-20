@@ -40,6 +40,7 @@
     fullscreenInfo = null,
     onMinimizePlayer,
     onCloseStream,
+    currentPage,
   }: {
     query?: string;
     loading?: boolean;
@@ -49,6 +50,7 @@
     fullscreenInfo?: { title: string; subtitle?: string } | null;
     onMinimizePlayer?: () => void;
     onCloseStream?: () => void;
+    currentPage?: Page;
   } = $props();
 
   let searchOuter = $state<HTMLDivElement>();
@@ -191,7 +193,10 @@
             <Button
               variant="outline"
               size="icon"
-              class="rounded-none border-l-0"
+              class="rounded-none border-l-0 transition-all {currentPage?.type ===
+              'home'
+                ? 'text-accent hover:text-accent/75'
+                : 'bg-foreground'}"
               onclick={() => {
                 selectPage("home");
               }}
@@ -209,7 +214,9 @@
             <Button
               variant="outline"
               size="icon"
-              class="rounded-none border-l-0"
+              class="rounded-none border-l-0 {currentPage?.type === 'myList'
+                ? 'text-accent hover:text-accent/75'
+                : 'bg-foreground'}"
               onclick={() => {
                 selectPage("myList");
               }}
@@ -227,7 +234,9 @@
             <Button
               variant="outline"
               size="icon"
-              class="rounded-none border-l-0"
+              class="rounded-none border-l-0{currentPage?.type === 'explore'
+                ? 'text-accent hover:text-accent/75'
+                : 'bg-foreground'}"
               onclick={() => {
                 selectPage("explore");
               }}
