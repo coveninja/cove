@@ -1,5 +1,5 @@
 {
-  "openOnMute": false,
+  "openOnMute": true,
   "defaultVolume": 1,
   "autoPlay": false,
   "rememberPosition": true,

@@ -21,7 +21,7 @@
     getVideoOpt,
   } from "$lib/utils";
   import { animate, splitText, stagger } from "animejs";
-  import { onDestroy } from "svelte";
+  import { getContext, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import type { LibraryEntry } from "$lib/types/library";
@@ -31,6 +31,37 @@
   let medias = $state<Media[]>([]);
   let isMuted = $state(true);
   let isPaused = $state(true);
+
+  // Starts playback (auto-picking the best stream) for the current item.
+  // Provided by App.svelte via context, so no prop threading through HomePage.
+  const watchMedia = getContext<
+    ((m: Media, season?: number, episode?: number) => void) | undefined
+  >("watchMedia");
+
+  function watchCurrent(): void {
+    const media = medias[mediaIndex];
+    if (!media) return;
+    const entry = libraryEntries[mediaIndex];
+    watchMedia?.(
+      media,
+      entry?.last_watched_season ?? undefined,
+      entry?.last_watched_episode ?? undefined,
+    );
+  }
+
+  // "Continue S2E4" for a resumable show, otherwise "Watch" — mirrors the modal.
+  const watchLabel = $derived.by(() => {
+    const media = medias[mediaIndex];
+    const entry = libraryEntries[mediaIndex];
+    if (
+      media?.media_type === "tv" &&
+      entry?.last_watched_season != null &&
+      entry?.last_watched_episode != null
+    ) {
+      return `Continue S${entry.last_watched_season}E${entry.last_watched_episode}`;
+    }
+    return "Watch";
+  });
 
   let backdropUrls = $state<string[]>([]);
   let videoClips = $state<string[]>([]);
@@ -158,7 +189,7 @@
 
   function moveToPrevious(): void {
     if (mediaIndex === 0) {
-      mediaIndex = medias.length;
+      mediaIndex = medias.length -1;
     } else {
       mediaIndex -= 1;
     }
@@ -304,8 +335,10 @@
           variant="default"
           size="lg"
           class="flex-1 rounded-r-none bg-accent/75 hover:bg-accent"
+          onclick={watchCurrent}
         >
-          Watch
+          <Play class="fill-current" />
+          {watchLabel}
         </Button>
         <LibraryStatusPanel
           libraryEntry={libraryEntries[mediaIndex]}

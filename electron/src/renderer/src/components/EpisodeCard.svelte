@@ -85,7 +85,7 @@
       disabled={unreleased}
     >
       <!-- Thumbnail -->
-      <span class="relative w-28 shrink-0 overflow-hidden rounded-md bg-muted">
+      <span class="relative w-48 shrink-0 overflow-hidden rounded-md bg-muted">
         {#if ep.still_path}
           <img
             src={ep.still_path}

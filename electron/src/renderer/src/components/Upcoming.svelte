@@ -6,6 +6,7 @@
   import UpcomingMediaCard from "./UpcomingMediaCard.svelte";
   import type { UpcomingItem } from "$lib/types/types";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 
   let { onSelectMedia }: { onSelectMedia: (m: Media) => void } = $props();
 
@@ -72,10 +73,10 @@
   }
 </script>
 
-{#if !loading && items.length > 0}
+{#if loading}
   <div class="space-y-3">
     <div class="flex items-center justify-between px-1">
-      <h2 class="text-lg font-semibold">Upcoming</h2>
+      <h2 class="text-lg font-semibold">New Episodes</h2>
     </div>
 
     <div class="flex items-center justify-between gap-2">
@@ -89,7 +90,42 @@
       </Button>
       <div
         bind:this={trackEl}
-        class="flex scrollbar-none gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
+        class="flex min-w-0 flex-1 scrollbar-none gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
+        style="scroll-snap-type: x mandatory;"
+      >
+        {#each { length: 5 } as _, i (i)}
+          <Skeleton class="h-40 w-70 shrink-0 rounded-2xl" />
+        {/each}
+      </div>
+
+      <Button
+        onclick={() => scrollByCards(1)}
+        variant="outline"
+        size="icon"
+        aria-label="Scroll right"
+      >
+        <ChevronRight class="size-4" />
+      </Button>
+    </div>
+  </div>
+{:else if items.length > 0}
+  <div class="space-y-3">
+    <div class="flex items-center justify-between px-1">
+      <h2 class="text-lg font-semibold">New Episodes</h2>
+    </div>
+
+    <div class="flex items-center justify-between gap-2">
+      <Button
+        onclick={() => scrollByCards(-1)}
+        variant="outline"
+        size="icon"
+        aria-label="Scroll left"
+      >
+        <ChevronLeft class="size-4" />
+      </Button>
+      <div
+        bind:this={trackEl}
+        class="flex min-w-0 flex-1 scrollbar-none gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
         style="scroll-snap-type: x mandatory;"
       >
         {#each items as item (item.tmdbId)}
@@ -107,4 +143,6 @@
       </Button>
     </div>
   </div>
+{:else}
+  <!-- nothing, or hide the whole section -->
 {/if}

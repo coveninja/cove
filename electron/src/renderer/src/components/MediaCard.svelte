@@ -5,14 +5,12 @@
     getImageOpt,
     formatRating,
     formatRuntime,
-    qualityClass,
     getVideoOpt,
   } from "$lib/utils";
   import { api } from "$lib/api";
-  import { onMount } from "svelte";
+  import { getContext, onMount } from "svelte";
   import { Spinner } from "$lib/components/ui/spinner";
   import MediaHoverCard from "./MediaHoverCard.svelte";
-  import MediaExpandedModal from "./MediaExpandedModal.svelte";
 
   import type { LibraryEntry } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
@@ -25,23 +23,26 @@
     onclick,
     quality = null,
     newEpisodes = false,
-    initialExpanded = false,
-    onclose,
-    onsimilar,
     onwatch,
   }: {
     media: Media;
     onclick: (m: Media) => void;
     quality?: string | null;
     newEpisodes?: boolean;
-    initialExpanded?: boolean;
-    onclose?: () => void;
-    onsimilar?: (m: Media) => void;
-    // Wires up "Watch"/"Continue" to jump straight into playback instead of
-    // opening the media page. Optional and falls back to onclick (the old
-    // behavior) so callers that haven't been updated yet still work.
     onwatch?: (m: Media, season?: number, episode?: number) => void;
   } = $props();
+
+  // Opens the shared, app-level detail overlay. Provided via context by
+  // App.svelte, so every card — wherever it sits in the tree — reaches the
+  // same single modal without any prop drilling. Falls back to the onclick
+  // prop if a card is ever rendered outside that provider.
+  const openDetail = getContext<((m: Media) => void) | undefined>(
+    "openMediaDetail",
+  );
+  function openOverlay(): void {
+    if (openDetail) openDetail(media);
+    else onclick(media);
+  }
 
   // ── DOM refs ──────────────────────────────────────────────────────────────
   let posterEl = $state<HTMLElement | null>(null);
@@ -50,20 +51,16 @@
 
   // ── UI state ──────────────────────────────────────────────────────────────
   let hovered = $state(false);
-  let expanded = $state(false);
   let hoverCardStyle = $state("");
   let hoverTimeout: ReturnType<typeof setTimeout>;
 
-  // ── Data ──────────────────────────────────────────────────────────────────
+  // ── Data (for the hover card) ───────────────────────────────────────────────
   let fetched = false;
-  let similar = $state<Media[]>([]);
   let images = $state<MediaImages>();
   let logoLoaded = $state(false);
   let genres = $state<string[]>([]);
   let runtime = $state<string>("");
-  let cast = $state<string[]>([]);
   let ageRating = $state<string>("");
-  let keywords = $state<string[]>([]);
   let originCountry = $state<string[]>([]);
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
@@ -73,22 +70,11 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
-  // Same reasoning as MediaPage: captured once from Details and left alone,
-  // so a later change to the live `media` prop (e.g. after a library status
-  // update elsewhere) can't make the overview text silently disappear.
-  let detailsOverview = $state<string | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
 
-  const overviewParagraphs = $derived(
-    (detailsOverview ?? media.overview)
-      .split(". ")
-      .map((s, i, arr) => (i < arr.length - 1 ? s + "." : s))
-      .filter((s) => s.trim().length > 0),
-  );
-
-  // ── Data fetching ─────────────────────────────────────────────────────────
+  // ── Data fetching (hover card only) ─────────────────────────────────────────
   function fetchData(): void {
     if (fetched) return;
     fetched = true;
@@ -96,34 +82,13 @@
     api.getVideos(media).then((d) => {
       videoUrl = getVideoOpt(d, "Clip", { randomize: true });
     });
-    api.getSimilar(media).then((d) => (similar = d));
     api
       .getDetails(media)
       .then((d: Details) => {
-        detailsOverview = d.overview ?? null;
-
-        console.log("[overview-debug] MediaCard getDetails resolved", {
-          tmdbId: media.id,
-          mediaType: media.media_type,
-          hasOverview: !!d.overview,
-          overviewPreview: d.overview?.slice(0, 60),
-          libraryEntryAtFetchTime: libraryEntry,
-        });
-
         genres =
           d.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];
         runtime = formatRuntime(d);
-        cast =
-          d.credits?.cast?.slice(0, 5).map((c: { name: string }) => c.name) ??
-          [];
         ageRating = formatRating(d);
-        keywords =
-          (media.media_type === "movie"
-            ? d.keywords?.keywords
-            : d.keywords?.results
-          )
-            ?.slice(0, 4)
-            .map((k: { name: string }) => k.name) ?? [];
         originCountry = d.origin_country;
         if (media.media_type === "tv") {
           numberOfSeasons = d.number_of_seasons ?? null;
@@ -133,14 +98,9 @@
         }
       })
       .catch((err) => {
-        // Previously this call had NO catch handler at all — a rejection
-        // here meant detailsOverview/genres/cast/etc. silently stayed at
-        // their initial empty values forever for this card, with no error
-        // surfaced anywhere. If this fires, that's very likely the bug.
-        console.error("[overview-debug] MediaCard getDetails FAILED", {
+        console.error("MediaCard getDetails failed", {
           tmdbId: media.id,
           mediaType: media.media_type,
-          libraryEntryAtFetchTime: libraryEntry,
           error: err,
         });
       });
@@ -203,7 +163,7 @@
   }
 
   function closeIfIdle(): void {
-    if (expanded || popoverOpen || withinZone) return;
+    if (popoverOpen || withinZone) return;
     if (hoverCardInstance) {
       hoverCardInstance.animateClose(() => {
         hovered = false;
@@ -215,7 +175,6 @@
 
   function onHover(): void {
     withinZone = true;
-    if (expanded) return;
     hoverTimeout = setTimeout(() => {
       computeHoverStyle();
       hovered = true;
@@ -236,27 +195,6 @@
   // starts closing itself immediately on selection).
   $effect(() => {
     if (!popoverOpen) closeIfIdle();
-  });
-
-  // ── Expand / close ────────────────────────────────────────────────────────
-  function expand(): void {
-    expanded = true;
-    fetchData();
-  }
-
-  function closeExpanded(): void {
-    expanded = false;
-    hovered = false;
-    onclose?.();
-  }
-
-  // ── Initial expanded (e.g. deep-linked) ──────────────────────────────────
-  $effect(() => {
-    if (initialExpanded) {
-      expanded = true;
-      hovered = true;
-      fetchData();
-    }
   });
 
   $effect(() => {
@@ -296,91 +234,71 @@
   <ContextMenu.Trigger>
     <div
       bind:this={buttonEl}
-      onclick={() => !expanded && expand()}
+      onclick={openOverlay}
       onmouseenter={onHover}
       onmouseleave={onLeave}
-      class={initialExpanded
-        ? "contents"
-        : `relative ${!expanded ? "cursor-pointer" : ""} ${hovered || expanded ? "z-50" : "z-0"}`}
+      class={`relative cursor-pointer ${hovered ? "z-50" : "z-0"}`}
       role="button"
       tabindex="0"
-      onkeydown={(e) => e.key === "Enter" && !expanded && onclick(media)}
+      onkeydown={(e) => e.key === "Enter" && openOverlay()}
     >
-      {#if !initialExpanded}
-        <div bind:this={posterEl} class="relative">
-          {#if logoLoaded && images.posters.length > 0}
-            <img
-              src={getImageOpt(images, "posters", {
-                iso: "en",
-                voteAverage: 5,
-                randomize: true,
-              })}
-              alt={title}
-              class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
-                ? 'opacity-35'
-                : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
-            />
-          {:else if logoLoaded && media.poster_path}
-            <img
-              src={media.poster_path}
-              alt={title}
-              class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
-                ? 'opacity-35'
-                : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
-            />
-          {:else}
-            <div
-              class="flex aspect-2/3 w-full items-center justify-center rounded-md"
+      <div bind:this={posterEl} class="relative">
+        {#if logoLoaded && images.posters.length > 0}
+          <img
+            src={getImageOpt(images, "posters", {
+              iso: "en",
+              voteAverage: 5,
+              randomize: true,
+            })}
+            alt={title}
+            class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
+              ? 'opacity-35'
+              : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
+          />
+        {:else if logoLoaded && media.poster_path}
+          <img
+            src={media.poster_path}
+            alt={title}
+            class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
+              ? 'opacity-35'
+              : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
+          />
+        {:else}
+          <div
+            class="flex aspect-2/3 w-full items-center justify-center rounded-md"
+          >
+            <Spinner class="size-10" />
+          </div>
+        {/if}
+        {#if newEpisodes}
+          <div
+            class="absolute inset-x-0 bottom-0 rounded-b-md"
+            style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 55%, transparent 100%)"
+          >
+            <p
+              class="px-2 pt-6 pb-2 text-[11px] font-semibold tracking-wide text-white"
             >
-              <Spinner class="size-10" />
-            </div>
-          {/if}
-          {#if quality}
-            <span
-              class="absolute bottom-1.5 left-1.5 rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
-                quality,
-              )}"
-            >
-              {quality.toUpperCase()}
-            </span>
-          {/if}
-          {#if newEpisodes}
-            <div
-              class="absolute inset-x-0 bottom-0 rounded-b-md"
-              style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 55%, transparent 100%)"
-            >
-              <p
-                class="px-2 pt-6 pb-2 text-[11px] font-semibold tracking-wide text-white"
-              >
-                New Episodes
-              </p>
-            </div>
-          {/if}
-          {#if isWatched}
-            <div
-              class="absolute inset-0 flex items-center justify-center rounded-md"
-              style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
-            >
-              <CircleCheckBig class="size-12 text-white/80" />
-            </div>
-          {/if}
-          {#if isDropped}
-            <div
-              class="absolute inset-0 flex items-center justify-center rounded-md"
-              style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
-            >
-              <HeartOff class="size-12 text-red-600/80" />
-            </div>
-          {/if}
-          {#if media.media_type === "tv" && numberOfSeasons !== null}
-            <span
-              class="absolute top-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
-            >
-              {numberOfSeasons}S
-            </span>
-          {/if}
-        </div>
-      {/if}
+              New Episodes
+            </p>
+          </div>
+        {/if}
+        {#if isWatched}
+          <div
+            class="absolute inset-0 flex items-center justify-center rounded-md"
+            style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+          >
+            <CircleCheckBig class="size-12 text-white/80" />
+          </div>
+        {/if}
+        {#if isDropped}
+          <div
+            class="absolute inset-0 flex items-center justify-center rounded-md"
+            style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+          >
+            <HeartOff class="size-12 text-red-600/80" />
+          </div>
+        {/if}
+      </div>
     </div>
   </ContextMenu.Trigger>
   <ContextMenu.Content>
@@ -388,7 +306,7 @@
   </ContextMenu.Content>
 </ContextMenu.Root>
 
-{#if hovered && !expanded}
+{#if hovered}
   <MediaHoverCard
     bind:this={hoverCardInstance}
     {media}
@@ -405,35 +323,8 @@
     {quality}
     onmouseleave={onLeave}
     onwatch={(season, episode) =>
-      onwatch ? onwatch(media, season, episode) : onclick(media)}
-    onexpand={expand}
+      onwatch ? onwatch(media, season, episode) : openOverlay()}
+    onexpand={openOverlay}
     onpopoverchange={(open) => (popoverOpen = open)}
-  />
-{/if}
-
-{#if expanded}
-  <MediaExpandedModal
-    {media}
-    {videoUrl}
-    {overviewParagraphs}
-    {genres}
-    {runtime}
-    {ageRating}
-    {originCountry}
-    {numberOfSeasons}
-    {numberOfEpisodes}
-    {lastAiredSeason}
-    {lastAiredEpisode}
-    {cast}
-    {keywords}
-    {similar}
-    {quality}
-    onwatch={(season, episode) =>
-      onwatch ? onwatch(media, season, episode) : onclick(media)}
-    onclose={closeExpanded}
-    onsimilar={(m) => {
-      closeExpanded();
-      onsimilar?.(m);
-    }}
   />
 {/if}

@@ -10,6 +10,7 @@
     });
   }
 </script>
+
 <script lang="ts">
   import "vidstack/bundle";
   import "vidstack/svelte";
@@ -48,9 +49,48 @@
     void p.play().catch(() => {});
   }
 
+  // Apply the current `muted` value to whatever provider is in use.
+  //
+  // TMDB clips are YouTube videos, so Vidstack mounts its YouTube provider,
+  // which is an <iframe> — there is no <video> element and no `.muted` to
+  // set. We drive it through the YouTube IFrame API via postMessage
+  // (enablejsapi=1 is already on the embed URL, and the iframe lives in the
+  // light DOM so we can reach it). For native providers (HLS / file), fall
+  // back to the real media element behind the provider's shadow root.
+  function applyMuted(): void {
+    const p = player;
+    if (!p) return;
+
+    const iframe = p.querySelector(
+      "iframe.vds-youtube",
+    ) as HTMLIFrameElement | null;
+    if (iframe?.contentWindow) {
+      iframe.contentWindow.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: muted ? "mute" : "unMute",
+          args: [],
+        }),
+        "*",
+      );
+      return;
+    }
+
+    const media = p
+      .querySelector("media-provider")
+      ?.shadowRoot?.querySelector("video, audio") as HTMLMediaElement | null;
+    if (media) media.muted = muted;
+  }
+
   $effect(() => {
     const p = player;
     if (!p) return undefined;
+
+    // Vidstack's YouTube provider emits a volume-change reflecting its
+    // default (muted:false) during init. Ignore volume events until we've
+    // asserted our intended muted state at can-play, or that event clobbers
+    // the bindable `muted` value via the parent binding.
+    let muteApplied = false;
 
     const handleDuration = () => {
       if (p.duration > 0) onDuration(p.duration);
@@ -59,16 +99,28 @@
       if (p.duration > 0) onProgress(p.currentTime, p.duration);
     };
     const handleEnded = () => onEnded();
+    const handleProvider = () => applyMuted();
     const handleCanPlay = () => {
+      applyMuted();
+      muteApplied = true;
       if (autoplay) safePlay(p);
     };
-    const handlePlay = () => (paused = false);
+    // Re-assert at play — this is the moment audio would otherwise start,
+    // and YouTube ignores mute commands sent before its API is ready.
+    const handlePlay = () => {
+      applyMuted();
+      paused = false;
+    };
     const handlePause = () => (paused = true);
-    const handleVolume = () => (muted = p.muted);
+    const handleVolume = () => {
+      if (!muteApplied) return; // drop Vidstack's init volume-change
+      muted = p.muted;
+    };
 
     p.addEventListener("duration-change", handleDuration);
     p.addEventListener("time-update", handleTime);
     p.addEventListener("ended", handleEnded);
+    p.addEventListener("provider-change", handleProvider);
     p.addEventListener("can-play", handleCanPlay);
     p.addEventListener("play", handlePlay);
     p.addEventListener("pause", handlePause);
@@ -78,6 +130,7 @@
       p.removeEventListener("duration-change", handleDuration);
       p.removeEventListener("time-update", handleTime);
       p.removeEventListener("ended", handleEnded);
+      p.removeEventListener("provider-change", handleProvider);
       p.removeEventListener("can-play", handleCanPlay);
       p.removeEventListener("play", handlePlay);
       p.removeEventListener("pause", handlePause);
@@ -85,10 +138,16 @@
     };
   });
 
+  // Keep the player muted-state in sync with the `muted` prop. Forcing the
+  // attribute (not the property) gives Vidstack the value before the YouTube
+  // iframe is built, so it embeds with mute=1; applyMuted() then enforces it
+  // at runtime and when the parent's mute button toggles.
   $effect(() => {
     const p = player;
     if (!p) return;
-    if (p.muted !== muted) p.muted = muted;
+    if (muted) p.setAttribute("muted", "");
+    else p.removeAttribute("muted");
+    applyMuted();
   });
 
   // Apply parent-driven play/pause to the player.
@@ -104,7 +163,6 @@
   <media-player
     bind:this={player}
     {src}
-    {muted}
     {loop}
     playsinline
     class="group/player relative h-full w-full bg-black {Class}"

@@ -88,9 +88,9 @@
   // player no longer unmounts it while a stream is active.
   const alreadyPlayingThisSelection = $derived(
     streamActive &&
-    (!isTV ||
-      (selectedSeason === activeSeason &&
-        selectedEpisode?.episode_number === activeEpisode)),
+      (!isTV ||
+        (selectedSeason === activeSeason &&
+          selectedEpisode?.episode_number === activeEpisode)),
   );
 
   // fetchStreams sets autoPicking = true right before kicking off playback,
@@ -253,7 +253,7 @@
 
   const selectedSeasonLabel = $derived(
     seasons.find((s) => s.season_number === selectedSeason)?.name ??
-    (selectedSeason !== null ? `Season ${selectedSeason}` : "Season"),
+      (selectedSeason !== null ? `Season ${selectedSeason}` : "Season"),
   );
 
   function clearPoll(): void {
@@ -269,10 +269,10 @@
         media.id,
         isTV
           ? {
-            type: "tv",
-            season: selectedSeason!,
-            episode: selectedEpisode!.episode_number,
-          }
+              type: "tv",
+              season: selectedSeason!,
+              episode: selectedEpisode!.episode_number,
+            }
           : {},
       )
       .then((res: Stream[]) => {
@@ -290,7 +290,7 @@
           const best = pickBestStream(
             streams,
             ($settings.streamSelectionMode as StreamSelectionMode) ??
-            "balanced",
+              "balanced",
             { measuredBandwidthMbps: $settings.measuredBandwidthMbps },
           );
           if (best) {
@@ -327,7 +327,7 @@
     <div class="flex-none border-b border-border p-4">
       {#if loadingSeasons}
         <span class="animate-pulse text-sm text-muted-foreground"
-        >Loading seasons…</span
+          >Loading seasons…</span
         >
       {:else}
         <Select.Root
@@ -360,7 +360,7 @@
         {#if loadingEpisodes}
           <div class="flex items-center justify-center py-12">
             <span class="animate-pulse text-sm text-muted-foreground"
-            >Loading episodes…</span
+              >Loading episodes…</span
             >
           </div>
         {:else}
@@ -442,8 +442,8 @@
                     </div>
                     <p class="text-[10px] text-muted-foreground">
                       {formatPosition(prog.position_seconds)} / {formatPosition(
-                      prog.duration_seconds,
-                    )}
+                        prog.duration_seconds,
+                      )}
                     </p>
                   </div>
                 {/if}
@@ -471,8 +471,8 @@
               </div>
               <p class="text-[11px] text-muted-foreground">
                 {formatPosition(movieProgress.position_seconds)} / {formatPosition(
-                movieProgress.duration_seconds,
-              )}
+                  movieProgress.duration_seconds,
+                )}
               </p>
             </div>
           {/if}
@@ -542,15 +542,15 @@
             <div class="flex flex-col items-center justify-center gap-3 py-12">
               <Spinner class="size-8" />
               <span class="text-sm text-muted-foreground">
-              Auto-selecting the best stream…
-            </span>
+                Auto-selecting the best stream…
+              </span>
               <Button
                 variant="outline"
                 size="sm"
                 onclick={() => {
-                autoPickCancelled = true;
-                autoPicking = false;
-              }}
+                  autoPickCancelled = true;
+                  autoPicking = false;
+                }}
               >
                 Choose manually instead
               </Button>
@@ -559,21 +559,21 @@
             <div class="flex flex-col items-center justify-center gap-2 py-12">
               <Spinner class="size-8" />
               <span class="animate-pulse text-sm text-muted-foreground">
-              Finding streams…
-            </span>
+                Finding streams…
+              </span>
             </div>
           {:else if streams.length === 0}
             <div class="flex flex-col items-center justify-center gap-2 py-12">
               <Spinner class="size-8" />
               <span class="animate-pulse text-sm text-muted-foreground">
-              No streams found — retrying…
-            </span>
+                No streams found — retrying…
+              </span>
             </div>
           {:else if filteredStreams.length === 0}
             <div class="flex items-center justify-center py-12">
-            <span class="text-sm text-muted-foreground"
-            >No streams match this filter.</span
-            >
+              <span class="text-sm text-muted-foreground"
+                >No streams match this filter.</span
+              >
             </div>
           {:else}
             <div class="flex flex-col gap-3">
@@ -581,48 +581,48 @@
                 <button
                   class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
                   onclick={() => {
-                  console.log(
-                    `[stream-select] manual: "${stream.name}" — ${formatStreamSummary(stream)}`,
-                    stream,
-                  );
-                  onPlayStream(
-                    stream,
-                    selectedSeason ?? undefined,
-                    selectedEpisode?.episode_number,
-                    selectedEpisode?.name,
-                  );
-                }}
+                    console.log(
+                      `[stream-select] manual: "${stream.name}" — ${formatStreamSummary(stream)}`,
+                      stream,
+                    );
+                    onPlayStream(
+                      stream,
+                      selectedSeason ?? undefined,
+                      selectedEpisode?.episode_number,
+                      selectedEpisode?.name,
+                    );
+                  }}
                 >
-                <span class="flex items-center justify-between gap-2">
-                  <span class="text-sm font-medium text-foreground"
-                  >{stream.name}</span
-                  >
-                  <Play
-                    class="size-3 text-foreground opacity-0 transition-opacity group-hover:opacity-100"
-                  />
-                </span>
+                  <span class="flex items-center justify-between gap-2">
+                    <span class="text-sm font-medium text-foreground"
+                      >{stream.name}</span
+                    >
+                    <Play
+                      class="size-3 text-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                    />
+                  </span>
 
                   <span
                     class="line-clamp-2 text-xs whitespace-pre-line text-muted-foreground"
                   >
-                  {stream.title}
-                </span>
+                    {stream.title}
+                  </span>
 
                   <span
                     class="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"
                   >
-                  <span class="rounded bg-background/70 px-1.5 py-0.5">
-                    👤 {getSeeders(stream)}
+                    <span class="rounded bg-background/70 px-1.5 py-0.5">
+                      👤 {getSeeders(stream)}
+                    </span>
+                    <span class="rounded bg-background/70 px-1.5 py-0.5">
+                      💾 {getSizeBytes(stream) / 1024 ** 3 >= 1
+                        ? `${(getSizeBytes(stream) / 1024 ** 3).toFixed(2)} GB`
+                        : `${(getSizeBytes(stream) / 1024 ** 2).toFixed(0)} MB`}
+                    </span>
+                    <span class="rounded bg-background/70 px-1.5 py-0.5">
+                      {inferQuality(stream)}
+                    </span>
                   </span>
-                  <span class="rounded bg-background/70 px-1.5 py-0.5">
-                    💾 {getSizeBytes(stream) / 1024 ** 3 >= 1
-                    ? `${(getSizeBytes(stream) / 1024 ** 3).toFixed(2)} GB`
-                    : `${(getSizeBytes(stream) / 1024 ** 2).toFixed(0)} MB`}
-                  </span>
-                  <span class="rounded bg-background/70 px-1.5 py-0.5">
-                    {inferQuality(stream)}
-                  </span>
-                </span>
                 </button>
               {/each}
             </div>

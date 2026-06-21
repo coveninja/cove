@@ -1,10 +1,9 @@
 <script lang="ts">
   import TopBar from "./components/TopBar.svelte";
   import { ModeWatcher } from "mode-watcher";
-  import MediaCard from "./components/MediaCard.svelte";
+  import MediaExpandedModal from "./components/MediaExpandedModal.svelte";
   import type { Media } from "$lib/types/tmdb";
   import type { Stream } from "$lib/types/addons";
-  import MediaPage from "./components/MediaPage.svelte";
   import Player from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Maximize2, X } from "lucide-svelte";
@@ -15,7 +14,7 @@
   import SettingsPage from "./components/SettingsPage.svelte";
   import MyListPage from "./components/MyListPage.svelte";
   import { settings } from "$lib/stores/settings";
-  import { onMount, tick } from "svelte";
+  import { onMount, setContext, tick } from "svelte";
   import { animate, JSAnimation } from "animejs";
   import { scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
@@ -28,8 +27,11 @@
 
   let query = $state("");
 
+  // The media whose detail overlay (the single app-level MediaExpandedModal)
+  // is currently open. Opening one no longer navigates to a page — the overlay
+  // floats over whatever page is underneath, Netflix-style. Cards request it
+  // via the "openMediaDetail" context provided below.
   let selectedMedia: Media | null = $state(null);
-  let selectedSimilar = $state<Media | null>(null);
 
   let loading = $state(false);
 
@@ -103,6 +105,9 @@
   });
 
   function changePage(page: Page): void {
+    // Navigating away dismisses the detail overlay.
+    selectedMedia = null;
+
     // Leaving the page a "full" player is overlaying — pop it out into PiP
     // instead of leaving it behind to be destroyed.
     if (playerMode === "full") {
@@ -118,6 +123,9 @@
   }
 
   function goBack(): void {
+    // Navigating away dismisses the detail overlay.
+    selectedMedia = null;
+
     // While the player is shown full-size, "back" means "leave the player
     // and reveal the media page underneath," not "go to whatever page was
     // open before the media page." The media page was never actually left.
@@ -129,19 +137,24 @@
     const previousPage = pageHistory.pop();
     if (previousPage) {
       currentPage = previousPage;
-      if (previousPage.type === "mediaView") {
-        selectedMedia = previousPage.media;
-      }
       if (previousPage.type === "query") {
         query = previousPage.query;
       }
     }
   }
 
-  async function selectMedia(media: Media): Promise<void> {
+  function selectMedia(media: Media): void {
     selectedMedia = media;
-    changePage({ type: "mediaView", media });
   }
+
+  // Any MediaCard, anywhere in the tree (including inside HomePage's
+  // recommendation rows), opens the single detail overlay through this —
+  // no prop drilling, no per-page wiring.
+  setContext("openMediaDetail", selectMedia);
+
+  // Same idea for "play now" (auto-pick best stream), so the hero card's
+  // Watch button and similar entry points can start playback directly.
+  setContext("watchMedia", quickPlay);
 
   // Short synthesized "thud" played whenever a stream actually starts —
   // the same kind of confirmation chime Netflix plays on play. No audio
@@ -277,8 +290,6 @@
     season?: number,
     episode?: number,
   ): Promise<void> {
-    selectedMedia = media;
-
     const isTV = media.media_type === "tv";
     const targetSeason = isTV ? (season ?? 1) : undefined;
     const targetEpisode = isTV ? (episode ?? 1) : undefined;
@@ -365,15 +376,6 @@
 
   function expandPlayer(): void {
     if (!playerSession) return;
-
-    const alreadyOnMediaPage =
-      currentPage.type === "mediaView" &&
-      selectedMedia?.id === playerSession.media.id &&
-      selectedMedia?.media_type === playerSession.media.media_type;
-
-    if (!alreadyOnMediaPage) {
-      selectMedia(playerSession.media);
-    }
     setPlayerMode("full");
   }
 
@@ -384,26 +386,40 @@
 </script>
 
 <Tooltip.Provider>
-  <TopBar
-    bind:query
-    bind:loading
-    onSelectPage={changePage}
-    {canGoBack}
-    onGoBack={goBack}
-    {fullscreenInfo}
-    onMinimizePlayer={() => setPlayerMode("pip")}
-    onCloseStream={closePlayer}
-    {currentPage}
-  />
-  {#if selectedSimilar}
-    {#key selectedSimilar.id}
-      <MediaCard
-        media={selectedSimilar}
-        onclick={() => {}}
-        initialExpanded={true}
-        onclose={() => (selectedSimilar = null)}
-        onsimilar={(m) => (selectedSimilar = m)}
-        onwatch={quickPlay}
+  <!-- Any interaction with the top bar dismisses the open detail overlay.
+       `contents` keeps this layout-neutral; the handler still fires via DOM
+       event bubbling from the fixed TopBar inside it. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="contents" onpointerdown={() => (selectedMedia = null)}>
+    <TopBar
+      bind:query
+      bind:loading
+      onSelectPage={changePage}
+      {canGoBack}
+      onGoBack={goBack}
+      {fullscreenInfo}
+      onMinimizePlayer={() => setPlayerMode("pip")}
+      onCloseStream={closePlayer}
+      {currentPage}
+    />
+  </div>
+  {#if selectedMedia}
+    {#key selectedMedia.id}
+      <MediaExpandedModal
+        media={selectedMedia}
+        onwatch={(season, episode) => {
+          const m = selectedMedia;
+          if (m) quickPlay(m, season, episode);
+        }}
+        onplaystream={(stream, season, episode, episodeName) => {
+          const m = selectedMedia;
+          if (m) startPlayback(m, stream, season, episode, episodeName);
+        }}
+        onsimilar={(m) => selectMedia(m)}
+        onclose={() => (selectedMedia = null)}
+        streamActive={streamActiveForSelectedMedia}
+        activeSeason={activePlaybackSeason}
+        activeEpisode={activePlaybackEpisode}
       />
     {/key}
   {/if}
@@ -411,27 +427,6 @@
     <main class="relative min-h-0 flex-1 overflow-hidden">
       {#if currentPage.type === "settings"}
         <SettingsPage />
-      {:else if selectedMedia && currentPage.type === "mediaView"}
-        <MediaPage
-          media={selectedMedia}
-          onsimilar={(m) => {
-            selectMedia(m);
-          }}
-          onPlay={(stream, season, episode, episodeName) => {
-            if (selectedMedia) {
-              startPlayback(
-                selectedMedia,
-                stream,
-                season,
-                episode,
-                episodeName,
-              );
-            }
-          }}
-          streamActive={streamActiveForSelectedMedia}
-          activeSeason={activePlaybackSeason}
-          activeEpisode={activePlaybackEpisode}
-        />
       {:else if currentPage.type === "query"}
         <QueryPage
           bind:query
