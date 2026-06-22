@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -230,7 +229,7 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 	// Run ffmpeg at lower OS priority so it yields to the Go server and the
 	// browser under load.  Nice 10 still gives plenty of CPU when idle.
 	if s.cmd.Process != nil {
-		_ = syscall.Setpriority(syscall.PRIO_PROCESS, s.cmd.Process.Pid, 10)
+		_ = lowerPriority(s.cmd.Process.Pid)
 	}
 
 	go func(cmd *exec.Cmd, sess *hlsSession, ch chan struct{}) {
