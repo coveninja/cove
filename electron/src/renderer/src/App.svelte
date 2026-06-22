@@ -11,6 +11,7 @@
   import Player from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Maximize2, X } from "lucide-svelte";
+  import { setMode } from "mode-watcher";
 
   import type { Page } from "$lib/types/types";
   import QueryPage from "./components/QueryPage.svelte";
@@ -110,6 +111,7 @@
 
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
+    setMode("dark");
     settings.load();
 
     // The media player (vidstack/maverick) aborts internal signals when its
@@ -580,4 +582,4 @@
     </main>
   </div>
 </Tooltip.Provider>
-<ModeWatcher />
+<ModeWatcher defaultMode="dark" />
