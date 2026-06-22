@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,11 +222,11 @@ type Library struct {
 
 // ── New ────────────────────────────────────────────────────────────────────────
 
-// New loads library.json from the same directory as the binary, creating it
-// with empty maps if it doesn't exist yet. It always returns a usable (non-nil)
-// *Library even on error, so the caller can still register handlers against an
-// empty store rather than crashing — matching the old Init's best-effort
-// behaviour.
+// New loads library.json from the per-user config directory (see
+// utils.ConfigPath), creating it with empty maps if it doesn't exist yet. It
+// always returns a usable (non-nil) *Library even on error, so the caller can
+// still register handlers against an empty store rather than crashing —
+// matching the old Init's best-effort behaviour.
 func New() (*Library, error) {
 	l := &Library{
 		db: diskStore{
@@ -237,11 +236,11 @@ func New() (*Library, error) {
 		},
 	}
 
-	ex, err := os.Executable()
+	path, err := utils.ConfigPath("library.json")
 	if err != nil {
 		return l, err
 	}
-	l.path = filepath.Join(filepath.Dir(ex), "library.json")
+	l.path = path
 
 	raw, err := os.ReadFile(l.path)
 	if os.IsNotExist(err) {

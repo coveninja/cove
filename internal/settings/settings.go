@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/Arcadyi/cove/internal/utils"
@@ -75,18 +74,18 @@ type Store struct {
 	path   string
 }
 
-// New resolves settings.json (next to the binary) and loads it, or writes the
-// defaults on first run. It always returns a usable (non-nil) *Store even on
-// error, so the caller can register handlers against in-memory defaults rather
-// than crashing.
+// New resolves settings.json in the per-user config directory (see
+// utils.ConfigPath) and loads it, or writes the defaults on first run. It always
+// returns a usable (non-nil) *Store even on error, so the caller can register
+// handlers against in-memory defaults rather than crashing.
 func New() (*Store, error) {
 	s := &Store{cached: defaultSettings}
 
-	ex, err := os.Executable()
+	path, err := utils.ConfigPath("settings.json")
 	if err != nil {
 		return s, err
 	}
-	s.path = filepath.Join(filepath.Dir(ex), "settings.json")
+	s.path = path
 
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
