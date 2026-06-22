@@ -43,5 +43,6 @@ publish:
   provider: github
   owner: Arcadyi
   repo: cove
+  releaseType: release
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/
