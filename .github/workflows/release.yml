@@ -59,6 +59,18 @@ jobs:
       - name: Build renderer + main
         run: npm run build
 
+      - name: Provide API keys (.env)
+        working-directory: electron
+        shell: bash
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+        run: |
+          {
+            echo "TMDB_API_KEY=${TMDB_API_KEY}"
+            echo "OPENSUBTITLES_API_KEY=${OPENSUBTITLES_API_KEY}"
+          } > ../.env
+
       - name: Build installer and publish to Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
