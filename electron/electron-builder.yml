@@ -19,7 +19,7 @@ extraResources:
   - from: ../.env
     to: .env
 win:
-  executableName: electron
+  executableName: cove
   extraResources:
     - from: ../cove.exe
       to: cove.exe
