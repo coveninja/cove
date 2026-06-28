@@ -1,7 +1,9 @@
 /.env
 /electron/build/
 /cove
+/cove.exe
 /library.json
 /qt/build/
 /web/dist/
 /web/node_modules/
+/CLAUDE.md

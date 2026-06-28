@@ -1,37 +1,23 @@
-name: Release
+name: CI
 
-# Build + publish a release when a version tag is pushed, e.g.:
-#   npm version patch        # bumps electron/package.json
-#   git push --follow-tags
-# (electron-builder names the GitHub release from package.json's version, so
-# keep the tag and that version in sync — v1.0.1 ⇄ "version": "1.0.1".)
+# Run on every push/PR to catch regressions. On tag pushes the same checks
+# run — a real release/packaging step needs to be added here once the Qt
+# shell has a distributable format (AppImage, NSIS installer, etc.).
 on:
   push:
+    branches: [master, main]
     tags:
       - 'v*'
+  pull_request:
+    branches: [master, main]
 
 permissions:
-  contents: write # needed for GITHUB_TOKEN to create/upload releases
+  contents: read
 
 jobs:
-  release:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            binary: cove
-            ebuilder: --linux
-          - os: windows-latest
-            binary: cove.exe
-            ebuilder: --win
-    runs-on: ${{ matrix.os }}
-
-    # The Electron app lives in ./electron; the Go module is at the repo root.
-    defaults:
-      run:
-        working-directory: electron
-
+  go:
+    name: Go build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -39,39 +25,63 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Build the Go sidecar at the repo root into the name electron-builder
-      # expects (../cove or ../cove.exe). CGO off → static, no C toolchain.
-      - name: Build Go sidecar
-        working-directory: .
+      - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -o ${{ matrix.binary }} .
+        run: go build -o cove .
+
+      - name: Vet
+        run: go vet ./...
+
+  web:
+    name: Web build + typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: electron/package-lock.json
+          cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build renderer + main
+      - name: Build
         run: npm run build
 
-      - name: Provide API keys (.env)
-        working-directory: electron
-        shell: bash
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
-        run: |
-          {
-            echo "TMDB_API_KEY=${TMDB_API_KEY}"
-            echo "OPENSUBTITLES_API_KEY=${OPENSUBTITLES_API_KEY}"
-          } > ../.env
+      - name: Type-check
+        run: npm run check
 
-      - name: Build installer and publish to Releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx --no-install electron-builder ${{ matrix.ebuilder }} --publish always
+      - name: Lint
+        run: npm run lint
+
+  qt:
+    name: Qt shell build (Linux, best-effort)
+    runs-on: ubuntu-24.04
+    # Qt6 WebEngine and libmpv availability in CI runners can vary — treat as
+    # non-blocking until the build is known stable in this environment.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt6 + mpv + build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-webengine-dev \
+            libqt6webchannel6-dev \
+            libmpv-dev
+
+      - name: Configure
+        run: cmake -S qt -B qt/build -G Ninja
+
+      - name: Build
+        run: cmake --build qt/build

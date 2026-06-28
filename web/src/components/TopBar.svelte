@@ -1,7 +1,5 @@
 <script lang="ts">
   import {
-    Minus,
-    Square,
     X,
     Search,
     House,
@@ -11,23 +9,11 @@
     Bookmark,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
-  import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import CoveIcon from "../assets/CoveIcon.svelte";
   import { animate, JSAnimation } from "animejs";
   import type { Page } from "$lib/types/types";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-
-  // Electron-only window controls; absent in the Qt shell (which uses native
-  // window decorations). Guarded so they no-op instead of throwing there.
-  function minimize(): void {
-  }
-
-  function maximize(): void {
-  }
-
-  function close(): void {
-  }
 
   let {
     query = $bindable(""),
@@ -328,17 +314,6 @@
           <p>Explore</p>
         </Tooltip.Content>
       </Tooltip.Root>
-      <ButtonGroup.Root>
-        <Button variant="outline" size="icon-sm" onclick={minimize}>
-          <Minus />
-        </Button>
-        <Button variant="outline" size="icon-sm" onclick={maximize}>
-          <Square />
-        </Button>
-        <Button variant="outline" size="icon-sm" onclick={close}>
-          <X />
-        </Button>
-      </ButtonGroup.Root>
     {/if}
   </div>
 </div>

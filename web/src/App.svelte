@@ -1,5 +1,4 @@
 <script lang="ts">
-  // Located in cove/src/renderer/App.svelte
   import TopBar from "./components/TopBar.svelte";
   import { ModeWatcher } from "mode-watcher";
   import MediaExpandedModal from "./components/MediaExpandedModal.svelte";

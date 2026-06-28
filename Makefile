@@ -38,7 +38,6 @@ qt:
 	cmake --build $(QT_BUILD)
 
 ## Regenerate TypeScript types from Go structs (tygo).
-## NOTE: update tygo.yaml's output path from electron/src/... to web/src/...
 generate:
 	tygo generate
 
