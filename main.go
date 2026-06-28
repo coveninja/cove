@@ -41,16 +41,7 @@ func main() {
 		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
 	}
 
-	// Addon registration is best-effort. A transient network failure reaching
-	// an addon at startup must not prevent the server from booting — the addon
-	// is re-contacted on each stream request and can recover then.
 	addonMgr := addons.New()
-	if _, err := addonMgr.AddAddon("https://torrentio.strem.fun"); err != nil {
-		log.Println("torrentio addon unavailable:", err)
-	}
-	if _, err := addonMgr.AddAddon("https://opensubtitles-v3.strem.io"); err != nil {
-		log.Println("opensubtitles addon unavailable:", err)
-	}
 
 	st, err := settings.New()
 	if err != nil {

@@ -6,8 +6,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/Arcadyi/cove/internal/utils"
+)
+
+type AddonKind string
+type AddonSource string
+
+const (
+	KindProvider AddonKind = "provider"
+	KindSubtitle AddonKind = "subtitle"
+
+	SourceOfficial AddonSource = "official"
+	SourceStremio  AddonSource = "stremio"
 )
 
 type ManifestResource struct {
@@ -25,6 +37,15 @@ type Manifest struct {
 	Types       []string           `json:"types"`
 }
 
+type AddonEntry struct {
+	ID       string      `json:"id"`
+	URL      string      `json:"url,omitempty"`
+	Manifest Manifest    `json:"manifest"`
+	Kind     AddonKind   `json:"kind"`
+	Source   AddonSource `json:"source"`
+	Enabled  bool        `json:"enabled"`
+}
+
 type Subtitle struct {
 	ID   string `json:"id"`
 	URL  string `json:"url"`
@@ -40,9 +61,13 @@ type Stream struct {
 	Subtitles []Subtitle `json:"subtitles,omitempty"`
 }
 
-type Addon struct {
-	URL      string
-	Manifest Manifest
+// WatchOption represents a streaming service availability entry from JustWatch.
+type WatchOption struct {
+	ProviderID   int    `json:"providerId"`
+	ProviderName string `json:"providerName"`
+	LogoPath     string `json:"logoPath"`
+	Type         string `json:"type"` // "flatrate", "rent", or "buy"
+	Link         string `json:"link"` // JustWatch/provider page to open in browser
 }
 
 func (r *ManifestResource) UnmarshalJSON(data []byte) error {
@@ -53,8 +78,8 @@ func (r *ManifestResource) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	// Fall back to object form
-	type Alias ManifestResource
-	var obj Alias
+	type alias ManifestResource
+	var obj alias
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return err
 	}
@@ -72,22 +97,35 @@ func (m *Manager) addonRequest(url string) (*http.Response, error) {
 	return m.client.Do(req)
 }
 
+// normalizeAddonURL strips a trailing /manifest.json so users can paste either
+// the base URL or the full manifest URL and get the same result.
+func normalizeAddonURL(raw string) string {
+	u := strings.TrimRight(raw, "/")
+	u = strings.TrimSuffix(u, "/manifest.json")
+	return strings.TrimRight(u, "/")
+}
+
 func (m *Manager) FetchManifest(addonURL string) (Manifest, error) {
 	res, err := m.addonRequest(addonURL + "/manifest.json")
 	if err != nil {
 		return Manifest{}, err
 	}
 	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
+		if err := Body.Close(); err != nil {
 			log.Println(err)
 		}
 	}(res.Body)
 
+	if res.StatusCode != http.StatusOK {
+		return Manifest{}, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
+	}
+
 	var manifest Manifest
-	err = json.NewDecoder(res.Body).Decode(&manifest)
-	if err != nil {
+	if err := json.NewDecoder(res.Body).Decode(&manifest); err != nil {
 		return Manifest{}, err
+	}
+	if manifest.ID == "" {
+		return Manifest{}, fmt.Errorf("addon manifest has no id — check the URL")
 	}
 	return manifest, nil
 }
@@ -100,8 +138,7 @@ func (m *Manager) FetchStreams(addonURL string, mediaType string, imdbID string)
 		return nil, err
 	}
 	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
+		if err := Body.Close(); err != nil {
 			log.Println(err)
 		}
 	}(res.Body)
@@ -109,8 +146,7 @@ func (m *Manager) FetchStreams(addonURL string, mediaType string, imdbID string)
 	var data struct {
 		Streams []Stream `json:"streams"`
 	}
-	err = json.NewDecoder(res.Body).Decode(&data)
-	if err != nil {
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
 		return nil, err
 	}
 	return data.Streams, nil
@@ -123,8 +159,7 @@ func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) (
 		return nil, err
 	}
 	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
+		if err := Body.Close(); err != nil {
 			log.Println(err)
 		}
 	}(res.Body)
@@ -139,27 +174,94 @@ func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) (
 }
 
 func (m *Manager) SetupHandlers() {
+	// GET  /api/addons          — list all addons
+	// POST /api/addons          — add stremio addon (body: {"url":"..."})
+	// PATCH /api/addons?id=X   — toggle enabled (body: {"enabled":true})
+	// DELETE /api/addons?id=X  — remove stremio addon
 	http.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		err := json.NewEncoder(w).Encode(m.GetAddons())
-		if err != nil {
-			log.Println(err)
-			return
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(m.GetEntries()); err != nil {
+				log.Println("addons list:", err)
+			}
+
+		case http.MethodPost:
+			var body struct {
+				URL string `json:"url"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
+				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
+				return
+			}
+			entry, err := m.AddStremioAddon(body.URL)
+			if err != nil {
+				http.Error(w, "could not add addon: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(entry); err != nil {
+				log.Println("addons add:", err)
+			}
+
+		case http.MethodPatch:
+			id := r.URL.Query().Get("id")
+			addonURL := r.URL.Query().Get("url")
+			if id == "" && addonURL == "" {
+				http.Error(w, "missing ?id= or ?url=", http.StatusBadRequest)
+				return
+			}
+			var body struct {
+				Enabled bool `json:"enabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid body", http.StatusBadRequest)
+				return
+			}
+			if err := m.SetEnabled(id, addonURL, body.Enabled); err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+
+		case http.MethodDelete:
+			id := r.URL.Query().Get("id")
+			addonURL := r.URL.Query().Get("url")
+			if id == "" && addonURL == "" {
+				http.Error(w, "missing ?id= or ?url=", http.StatusBadRequest)
+				return
+			}
+			if err := m.RemoveAddon(id, addonURL); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
 
-	http.HandleFunc("/api/addons/add", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		url := r.URL.Query().Get("url")
-		addon, err := m.AddAddon(url)
-		if err != nil {
-			http.Error(w, "could not fetch addon manifest: "+err.Error(), http.StatusBadRequest)
+	// GET /api/watch-options?id=<tmdbID>&type=movie|tv
+	http.HandleFunc("/api/watch-options", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		err = json.NewEncoder(w).Encode(addon)
-		if err != nil {
-			log.Println(err)
+		tmdbID := r.URL.Query().Get("id")
+		mediaType := r.URL.Query().Get("type")
+		if tmdbID == "" || mediaType == "" {
+			http.Error(w, "missing ?id= or ?type=", http.StatusBadRequest)
 			return
+		}
+		options, err := m.GetWatchOptions(mediaType, tmdbID)
+		if err != nil {
+			log.Println("watch-options:", err)
+			options = []WatchOption{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(options); err != nil {
+			log.Println("watch-options encode:", err)
 		}
 	}))
 }

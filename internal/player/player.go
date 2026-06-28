@@ -305,14 +305,7 @@ func (p *Player) SetupHandlers() {
 			}
 		}
 
-		var allSubs []addons.Subtitle
-		for _, addon := range p.addonMgr.GetAddons() {
-			subs, err := p.addonMgr.FetchSubtitles(addon.URL, mediaType, stremioID)
-			if err != nil {
-				continue
-			}
-			allSubs = append(allSubs, subs...)
-		}
+		allSubs := p.addonMgr.GetAllSubtitles(mediaType, stremioID)
 		if allSubs == nil {
 			allSubs = []addons.Subtitle{}
 		}

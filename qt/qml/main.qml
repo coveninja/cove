@@ -54,5 +54,12 @@ Window {
         url: launchUrl
         // window.QWebChannel is injected from C++ (installBridgeScript) onto the
         // default profile this view uses — see src/main.cpp.
+
+        // Open window.open() links (e.g. JustWatch provider pages) in the
+        // system browser rather than a new Qt window.
+        onNewWindowRequested: function(request) {
+            Qt.openUrlExternally(request.requestedUrl)
+            request.action = WebEngineNewWindowRequest.IgnoreRequest
+        }
     }
 }

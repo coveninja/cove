@@ -3,6 +3,12 @@
 //////////
 // source: addon.go
 
+export type AddonKind = string;
+export type AddonSource = string;
+export const KindProvider: AddonKind = "provider";
+export const KindSubtitle: AddonKind = "subtitle";
+export const SourceOfficial: AddonSource = "official";
+export const SourceStremio: AddonSource = "stremio";
 export interface ManifestResource {
   name: string;
   types: string[];
@@ -15,6 +21,14 @@ export interface Manifest {
   version: string;
   resources: ManifestResource[];
   types: string[];
+}
+export interface AddonEntry {
+  id: string;
+  url?: string;
+  manifest: Manifest;
+  kind: AddonKind;
+  source: AddonSource;
+  enabled: boolean;
 }
 export interface Subtitle {
   id: string;
@@ -29,26 +43,29 @@ export interface Stream {
   addonName: string;
   subtitles?: Subtitle[];
 }
-export interface Addon {
-  URL: string;
-  Manifest: Manifest;
-}
 /**
- * Fall back to object form
+ * WatchOption represents a streaming service availability entry from JustWatch.
  */
-export type Alias = ManifestResource;
+export interface WatchOption {
+  providerId: number /* int */;
+  providerName: string;
+  logoPath: string;
+  type: string; // "flatrate", "rent", or "buy"
+  link: string; // JustWatch/provider page to open in browser
+}
 
 //////////
 // source: manager.go
 
 /**
  * Manager owns the configured addon registry and the HTTP client used to talk
- * to addons. This state used to live in package globals; holding it on a struct
- * lets callers construct independent managers (and tests inject a custom client
- * or pre-seed the registry). Fields are unexported, so tygo emits nothing for
- * Manager — only the data types (Manifest, Stream, Subtitle, Addon) cross into
+ * to addons. Fields are unexported, so tygo emits nothing for Manager — only
+ * the data types (AddonEntry, Stream, Subtitle, WatchOption, etc.) cross into
  * the generated TS.
- * in memory for now, will move to SQLite later
  */
 export interface Manager {
 }
+
+//////////
+// source: store.go
+

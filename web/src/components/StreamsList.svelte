@@ -7,7 +7,7 @@
     progressPct,
   } from "$lib/utils";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-  import type { Stream } from "$lib/types/addons";
+  import type { Stream, WatchOption } from "$lib/types/addons";
   import * as Select from "$lib/components/ui/select/index.js";
   import {
     ListFilter,
@@ -69,6 +69,7 @@
 
   // Stream state
   let streams = $state<Stream[]>([]);
+  let watchOptions = $state<WatchOption[]>([]);
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -136,6 +137,14 @@
         movieProgress = p;
       })
       .catch(console.error);
+  });
+
+  // Fetch streaming availability (JustWatch) — runs once per media item
+  $effect(() => {
+    api
+      .getWatchOptions(media.id, media.media_type)
+      .then((opts) => (watchOptions = opts))
+      .catch(() => (watchOptions = []));
   });
 
   // Data fetching
@@ -519,6 +528,38 @@
     <!-- Stream rows -->
     <ScrollArea class="min-h-0 flex-1">
       <div class="p-4">
+        <!-- Where to Watch (JustWatch) -->
+        {#if watchOptions.length > 0}
+          <div class="mb-4">
+            <p class="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Where to Watch
+            </p>
+            <div class="flex flex-wrap gap-2">
+              {#each watchOptions as opt (opt.providerId + opt.type)}
+                <button
+                  onclick={() => window.open(opt.link, "_blank")}
+                  class="flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2.5 py-1.5 text-xs transition-colors hover:bg-secondary"
+                  title="{opt.providerName} ({opt.type})"
+                >
+                  {#if opt.logoPath}
+                    <img
+                      src="https://image.tmdb.org/t/p/w45{opt.logoPath}"
+                      alt={opt.providerName}
+                      class="size-5 rounded-sm object-contain"
+                    />
+                  {/if}
+                  <span class="font-medium">{opt.providerName}</span>
+                  {#if opt.type !== "flatrate"}
+                    <span class="text-muted-foreground capitalize">
+                      · {opt.type}
+                    </span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
         {#if alreadyPlayingThisSelection}
           <div
             class="flex items-center justify-between gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-accent"

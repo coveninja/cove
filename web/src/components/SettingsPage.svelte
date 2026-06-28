@@ -11,6 +11,9 @@
   import * as Tabs from "$lib/components/ui/tabs/index.js";
   import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
   import { api } from "$lib/api";
+  import type { AddonEntry } from "$lib/types/addons";
+  import { KindProvider, SourceOfficial } from "$lib/types/addons";
+  import { Trash2, Plus, ToggleLeft, ToggleRight } from "lucide-svelte";
 
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
@@ -22,6 +25,7 @@
       if (!draft) draft = { ...v };
     });
     unsub();
+    loadAddons();
   });
 
   function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -47,10 +51,46 @@
     });
   }
 
-  const PROVIDERS = [
-    { value: "torrentio", label: "Torrentio" },
-    { value: "debrid", label: "Debrid (Real-Debrid / AllDebrid)" },
-  ];
+  // ── Addon management ─────────────────────────────────────────────────────────
+  let addons = $state<AddonEntry[]>([]);
+  let addAddonUrl = $state("");
+  let addAddonError = $state<string | null>(null);
+  let addAddonLoading = $state(false);
+
+  async function loadAddons() {
+    addons = await api.getAddons();
+  }
+
+  async function handleAddAddon() {
+    if (!addAddonUrl.trim()) return;
+    addAddonLoading = true;
+    addAddonError = null;
+    try {
+      const entry = await api.addAddon(addAddonUrl.trim());
+      addons = [...addons.filter((a) => a.id !== entry.id), entry];
+      addAddonUrl = "";
+    } catch (e) {
+      addAddonError = e instanceof Error ? e.message : "Failed to add addon";
+    } finally {
+      addAddonLoading = false;
+    }
+  }
+
+  async function handleToggleAddon(addon: AddonEntry) {
+    await api.toggleAddon(addon.id, !addon.enabled, addon.url);
+    addons = addons.map((a) =>
+      a.id === addon.id && a.url === addon.url
+        ? { ...a, enabled: !a.enabled }
+        : a,
+    );
+  }
+
+  async function handleRemoveAddon(addon: AddonEntry) {
+    await api.removeAddon(addon.id, addon.url);
+    addons = addons.filter(
+      (a) => !(a.id === addon.id && a.url === addon.url),
+    );
+  }
 
   const LANGUAGES = [
     { value: "en", label: "English" },
@@ -68,10 +108,6 @@
 
   function langLabel(value: string) {
     return LANGUAGES.find((l) => l.value === value)?.label ?? value;
-  }
-
-  function providerLabel(value: string) {
-    return PROVIDERS.find((p) => p.value === value)?.label ?? value;
   }
 
   let testingSpeed = $state(false);
@@ -114,6 +150,7 @@
         <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
         <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
         <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
+        <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
       </Tabs.List>
 
       <!-- ── Playback ── -->
@@ -195,25 +232,6 @@
 
       <!-- ── Streaming ── -->
       <Tabs.Content value="streaming" class="mt-4 space-y-1">
-        <div class="flex items-center justify-between py-3">
-          <div>
-            <Label class="text-sm font-medium">Default provider</Label>
-            <p class="text-xs text-muted-foreground">
-              Which addon to prefer when multiple streams are available.
-            </p>
-          </div>
-          <Select.Root type="single" bind:value={draft.defaultProvider}>
-            <Select.Trigger class="w-52"
-            >{providerLabel(draft.defaultProvider)}</Select.Trigger
-            >
-            <Select.Content>
-              {#each PROVIDERS as p}
-                <Select.Item value={p.value}>{p.label}</Select.Item>
-              {/each}
-            </Select.Content>
-          </Select.Root>
-        </div>
-        <Separator />
 
         <div class="flex items-center justify-between py-3">
           <div>
@@ -463,6 +481,102 @@
             checked={draft.hideSpoilers}
             onCheckedChange={(v) => patch("hideSpoilers", v)}
           />
+        </div>
+      </Tabs.Content>
+
+      <!-- ── Addons ── -->
+      <Tabs.Content value="addons" class="mt-4 space-y-4">
+        <!-- Add new addon -->
+        <div class="rounded-lg border border-border p-4">
+          <Label class="mb-2 block text-sm font-medium">Add Stremio addon</Label>
+          <p class="mb-3 text-xs text-muted-foreground">
+            Paste a Stremio-compatible addon URL (e.g.
+            https://torrentio.strem.fun).
+          </p>
+          <div class="flex gap-2">
+            <input
+              type="url"
+              placeholder="https://..."
+              bind:value={addAddonUrl}
+              class="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              onkeydown={(e) => e.key === "Enter" && handleAddAddon()}
+            />
+            <Button
+              onclick={handleAddAddon}
+              disabled={addAddonLoading || !addAddonUrl.trim()}
+              size="sm"
+            >
+              <Plus class="mr-1 size-4" />
+              {addAddonLoading ? "Adding…" : "Add"}
+            </Button>
+          </div>
+          {#if addAddonError}
+            <p class="mt-2 text-xs text-red-500">{addAddonError}</p>
+          {/if}
+        </div>
+
+        <!-- Addon list -->
+        <div class="space-y-2">
+          {#each addons as addon (addon.id)}
+            <div
+              class="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3"
+            >
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium"
+                    >{addon.manifest.name || addon.url || addon.id || "Unknown addon"}</span
+                  >
+                  <span
+                    class="rounded-full px-2 py-0.5 text-[10px] {addon.kind ===
+                    KindProvider
+                      ? 'bg-blue-500/20 text-blue-400'
+                      : 'bg-purple-500/20 text-purple-400'}"
+                  >
+                    {addon.kind === KindProvider ? "Provider" : "Subtitles"}
+                  </span>
+                  {#if addon.source === SourceOfficial}
+                    <span
+                      class="rounded-full bg-green-500/20 px-2 py-0.5 text-[10px] text-green-400"
+                      >Built-in</span
+                    >
+                  {/if}
+                </div>
+                {#if addon.manifest.description}
+                  <p class="mt-0.5 text-xs text-muted-foreground">
+                    {addon.manifest.description}
+                  </p>
+                {/if}
+              </div>
+
+              <!-- Toggle -->
+              <button
+                onclick={() => handleToggleAddon(addon)}
+                class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                title={addon.enabled ? "Disable" : "Enable"}
+              >
+                {#if addon.enabled}
+                  <ToggleRight class="size-6 text-accent" />
+                {:else}
+                  <ToggleLeft class="size-6" />
+                {/if}
+              </button>
+
+              <!-- Remove (stremio only) -->
+              {#if addon.source !== SourceOfficial}
+                <button
+                  onclick={() => handleRemoveAddon(addon)}
+                  class="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
+                  title="Remove"
+                >
+                  <Trash2 class="size-4" />
+                </button>
+              {/if}
+            </div>
+          {:else}
+            <p class="py-4 text-center text-sm text-muted-foreground">
+              No addons yet. Add a Stremio-compatible addon above.
+            </p>
+          {/each}
         </div>
       </Tabs.Content>
     </Tabs.Root>

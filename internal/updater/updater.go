@@ -29,9 +29,14 @@ const RestartExitCode = 42
 // silently returns available=false. Both sides are pinned here as the source
 // of truth — keep in sync with the "Package" job in release.yml.
 func assetName() string {
-	ext := ".tar.gz"
-	if runtime.GOOS == "windows" {
+	var ext string
+	switch runtime.GOOS {
+	case "windows":
 		ext = ".zip"
+	case "linux":
+		ext = ".AppImage"
+	default:
+		ext = ".tar.gz"
 	}
 	return fmt.Sprintf("cove-%s-%s%s", runtime.GOOS, runtime.GOARCH, ext)
 }

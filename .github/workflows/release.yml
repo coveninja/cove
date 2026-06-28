@@ -86,9 +86,9 @@ jobs:
         run: cmake --build qt/build
 
   package:
-    name: Package release asset
+    name: Package release asset (AppImage)
     needs: [go, web]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
@@ -103,29 +103,103 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Install Qt6 + mpv + build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-webengine-dev \
+            libqt6webchannel6-dev \
+            libmpv-dev \
+            librsvg2-bin
+
       - name: Install web deps
         working-directory: web
         run: npm ci
 
-      - name: Build
+      - name: Build Go backend
         env:
           CGO_ENABLED: '0'
-        run: |
-          go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
-          cd web && npm run build
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
 
-      - name: Package Linux amd64
-        # The asset name MUST match the value returned by assetName() in
-        # internal/updater/updater.go: "cove-linux-amd64.tar.gz".
-        # The tarball layout must be: ./cove + ./web/dist/ (relative paths so
-        # extraction works regardless of install location).
+      - name: Build web frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Build Qt shell
         run: |
-          mkdir -p dist/web
-          cp cove dist/cove
-          cp -r web/dist dist/web/dist
-          tar -czf cove-linux-amd64.tar.gz -C dist .
+          cmake -S qt -B qt/build -G Ninja
+          cmake --build qt/build
+
+      - name: Download AppImage tools
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage appimagetool-x86_64.AppImage
+
+      - name: Convert icon SVG → PNG
+        run: rsvg-convert -w 256 -h 256 web/src/assets/CoveIcon.svg -o cove.png
+
+      - name: Assemble AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/lib/cove
+          mkdir -p AppDir/usr/share/cove/web
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+
+          cp qt/build/cove_shell AppDir/usr/bin/cove_shell
+          cp cove AppDir/usr/lib/cove/cove
+          cp -r web/dist AppDir/usr/share/cove/web/dist
+          cp cove.png AppDir/usr/share/icons/hicolor/256x256/apps/cove.png
+
+          cat > AppDir/usr/share/applications/cove.desktop << 'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=Cove
+          Exec=cove_shell
+          Icon=cove
+          Categories=AudioVideo;Video;Player;
+          Terminal=false
+          DESKTOP
+
+      - name: Bundle Qt + system libraries
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          export QMAKE=$(which qmake6)
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/cove_shell \
+            --desktop-file AppDir/usr/share/applications/cove.desktop \
+            --icon-file cove.png \
+            --plugin qt
+
+      - name: Install custom AppRun
+        # linuxdeploy creates a generic AppRun; replace it with one that passes
+        # the correct --backend and --webroot paths to cove_shell.
+        run: |
+          cat > AppDir/AppRun << 'APPRUN'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/cove_shell" \
+            --backend "$HERE/usr/lib/cove/cove" \
+            --webroot "$HERE/usr/share/cove/web/dist" \
+            "$@"
+          APPRUN
+          chmod +x AppDir/AppRun
+
+      - name: Create AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          VERSION: ${{ github.ref_name }}
+        run: |
+          ./appimagetool-x86_64.AppImage AppDir cove-linux-amd64.AppImage
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: cove-linux-amd64.tar.gz
+          files: cove-linux-amd64.AppImage

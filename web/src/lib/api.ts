@@ -5,7 +5,7 @@ import type {
   MediaVideos,
   TVEpisode,
 } from "$lib/types/tmdb";
-import type { Stream } from "$lib/types/addons";
+import type { AddonEntry, Stream, WatchOption } from "$lib/types/addons";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
 
@@ -405,6 +405,37 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
     }),
+
+  // ── Addons ───────────────────────────────────────────────────────────────────
+  getAddons: (): Promise<AddonEntry[]> => request(`/addons`),
+
+  addAddon: (url: string): Promise<AddonEntry> =>
+    request(`/addons`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }),
+
+  removeAddon: (id: string, url?: string): Promise<void> => {
+    const p = new URLSearchParams();
+    if (id) p.set("id", id);
+    else if (url) p.set("url", url);
+    return request(`/addons?${p}`, { method: "DELETE" });
+  },
+
+  toggleAddon: (id: string, enabled: boolean, url?: string): Promise<void> => {
+    const p = new URLSearchParams();
+    if (id) p.set("id", id);
+    else if (url) p.set("url", url);
+    return request(`/addons?${p}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
+  getWatchOptions: (tmdbId: number, mediaType: string): Promise<WatchOption[]> =>
+    request(`/watch-options?id=${tmdbId}&type=${mediaType}`),
 
   // ── Library ──────────────────────────────────────────────────────────────────
   libraryList: (status?: LibraryStatus): Promise<LibraryEntry[]> =>

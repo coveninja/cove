@@ -70,6 +70,12 @@ class MpvPlayer {
 
   #mpv: MpvBridge | null = null;
   #resolveReady!: () => void;
+
+  // After seek() we ignore incoming positionChanged events until this timestamp
+  // passes. mpv queues position events before it processes the seek command, so
+  // those arrive via the WebChannel and would overwrite the optimistic position,
+  // causing the seek bar to snap back to the pre-seek position briefly.
+  #seekLockUntil = 0;
   /** Resolves once the bridge is connected; never resolves outside the shell. */
   readonly whenReady: Promise<void> = new Promise((r) => {
     this.#resolveReady = r;
@@ -89,7 +95,16 @@ class MpvPlayer {
       const mpv = channel.objects.mpv;
       this.#mpv = mpv;
 
-      mpv.positionChanged.connect((s) => (this.position = s));
+      mpv.positionChanged.connect((s) => {
+        // Discard stale pre-seek events that arrive in the 500 ms window after
+        // seek() sets the lock. Accept early if mpv already confirmed a position
+        // within 3 s of the seek target (it snaps to the nearest keyframe).
+        if (Date.now() < this.#seekLockUntil) {
+          if (Math.abs(s - this.position) > 3.0) return;
+          this.#seekLockUntil = 0;
+        }
+        this.position = s;
+      });
       mpv.durationChanged.connect((s) => (this.duration = s));
       mpv.pausedChanged.connect((p) => (this.paused = p));
       mpv.volumeChanged.connect((v) => (this.volume = v));
@@ -122,6 +137,7 @@ class MpvPlayer {
   play(url: string): void {
     this.ended = false;
     this.position = 0;
+    this.#seekLockUntil = 0; // clear any lock left over from the previous stream
     this.#mpv?.play(url);
   }
 
@@ -149,6 +165,7 @@ class MpvPlayer {
         ? Math.max(0, Math.min(seconds, this.duration))
         : Math.max(0, seconds);
     this.position = clamped; // optimistic; positionChanged confirms
+    this.#seekLockUntil = Date.now() + 500; // suppress stale pre-seek events
     this.#mpv?.seek(clamped);
   }
 
