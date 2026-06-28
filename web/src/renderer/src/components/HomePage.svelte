@@ -6,6 +6,7 @@
   import { api, type DiscoverInsights, type LibraryStats } from "$lib/api";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { onMount } from "svelte";
+  import { tick } from "svelte";
 
   // Same contract as MyListPage: parent hands down how to open a title and
   // (optionally) how to start watching it. We forward both into every row.
@@ -91,6 +92,20 @@
     return specs;
   }
 
+  let areVideosPaused = $state(false)
+
+  async function handleOnWatch(m: Media, season?: number, episode?: number): Promise<void> {
+    areVideosPaused = true;
+    await tick();
+    onWatch(m, season, episode);
+  }
+
+  async function handleSelectMedia(m: Media): Promise<void> {
+    areVideosPaused = true;
+    await tick();
+    onSelectMedia(m);
+  }
+
   onMount(() => {
     // Blended personalized row first — always present, even for a brand-new
     // library (the backend falls back to popular titles when signal is thin).
@@ -118,17 +133,17 @@
 
 <ScrollArea class="mb-24 h-full w-full">
   <div class="flex w-full flex-col justify-start gap-2 pb-8">
-    <LargeRecommendationsCard />
+    <LargeRecommendationsCard bind:isPaused={areVideosPaused}/>
 
-    <ContinueWatching {onWatch} {onSelectMedia} />
+    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
 
     {#each rows as row (row.key)}
       <SmallRecommendations
         header={row.header}
         medias={row.medias}
         loading={row.loading}
-        onSelect={onSelectMedia}
-        {onWatch}
+        onSelect={handleSelectMedia}
+        onWatch={handleOnWatch}
       />
     {/each}
   </div>

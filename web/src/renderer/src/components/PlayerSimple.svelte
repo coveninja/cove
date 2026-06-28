@@ -103,7 +103,7 @@
     const handleCanPlay = () => {
       applyMuted();
       muteApplied = true;
-      if (autoplay) safePlay(p);
+      if (autoplay && !paused) safePlay(p);
     };
     // Re-assert at play — this is the moment audio would otherwise start,
     // and YouTube ignores mute commands sent before its API is ready.
@@ -156,6 +156,25 @@
     if (!p) return;
     if (paused && !p.paused) void Promise.resolve(p.pause()).catch(() => {});
     else if (!paused && p.paused) safePlay(p);
+  });
+
+  $effect(() => {
+    const p = player;
+    if (!p) return;
+
+    const observer = new IntersectionObserver(
+            ([entry]) => {
+              if (entry.isIntersecting) {
+                if (!paused) safePlay(p); // only resume if not manually paused
+              } else {
+                void Promise.resolve(p.pause()).catch(() => {});
+              }
+            },
+            { threshold: 0.5 }
+    );
+
+    observer.observe(p);
+    return () => observer.disconnect();
   });
 </script>
 

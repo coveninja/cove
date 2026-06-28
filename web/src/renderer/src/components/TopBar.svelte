@@ -135,7 +135,7 @@
       </div>
     {:else}
       <span class="text-2xl font-bold tracking-wider text-accent">
-        <CoveIcon size={45} />
+        <CoveIcon size={32} />
       </span>
     {/if}
   </div>

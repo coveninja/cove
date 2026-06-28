@@ -21,7 +21,7 @@
     getVideoOpt,
   } from "$lib/utils";
   import { animate, splitText, stagger } from "animejs";
-  import { getContext, onDestroy } from "svelte";
+  import {getContext, onDestroy, tick} from "svelte";
   import { fly } from "svelte/transition";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import type { LibraryEntry } from "$lib/types/library";
@@ -30,7 +30,8 @@
   let mediaIndex = $state<number>(0);
   let medias = $state<Media[]>([]);
   let isMuted = $state(true);
-  let isPaused = $state(true);
+
+  let { isPaused = $bindable(false) } = $props();
 
   // Starts playback (auto-picking the best stream) for the current item.
   // Provided by App.svelte via context, so no prop threading through HomePage.
@@ -38,14 +39,16 @@
     ((m: Media, season?: number, episode?: number) => void) | undefined
   >("watchMedia");
 
-  function watchCurrent(): void {
+  async function watchCurrent(): Promise<void> {
     const media = medias[mediaIndex];
     if (!media) return;
     const entry = libraryEntries[mediaIndex];
+    isPaused = true;
+    await tick();
     watchMedia?.(
-      media,
-      entry?.last_watched_season ?? undefined,
-      entry?.last_watched_episode ?? undefined,
+            media,
+            entry?.last_watched_season ?? undefined,
+            entry?.last_watched_episode ?? undefined,
     );
   }
 

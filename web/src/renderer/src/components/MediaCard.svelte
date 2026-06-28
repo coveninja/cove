@@ -320,18 +320,6 @@
             <Spinner class="size-10" />
           </div>
         {/if}
-        {#if newEpisodes}
-          <div
-            class="absolute inset-x-0 bottom-0 rounded-b-md"
-            style="background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 55%, transparent 100%)"
-          >
-            <p
-              class="px-2 pt-6 pb-2 text-[11px] font-semibold tracking-wide text-white"
-            >
-              New Episodes
-            </p>
-          </div>
-        {/if}
         {#if isWatched}
           <div
             class="absolute inset-0 flex items-center justify-center rounded-md"

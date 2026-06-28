@@ -47,8 +47,8 @@ declare global {
   interface Window {
     qt?: { webChannelTransport: unknown };
     QWebChannel?: new (
-      transport: unknown,
-      cb: (channel: { objects: { mpv: MpvBridge } }) => void,
+        transport: unknown,
+        cb: (channel: { objects: { mpv: MpvBridge } }) => void,
     ) => void;
   }
 }
@@ -126,10 +126,12 @@ class MpvPlayer {
   }
 
   pause(): void {
+    this.paused = true; // optimistic; pausedChanged confirms
     this.#mpv?.pause();
   }
 
   resume(): void {
+    this.paused = false; // optimistic; pausedChanged confirms
     this.#mpv?.resume();
   }
 
@@ -144,8 +146,8 @@ class MpvPlayer {
 
   seek(seconds: number): void {
     const clamped = this.duration
-      ? Math.max(0, Math.min(seconds, this.duration))
-      : Math.max(0, seconds);
+        ? Math.max(0, Math.min(seconds, this.duration))
+        : Math.max(0, seconds);
     this.position = clamped; // optimistic; positionChanged confirms
     this.#mpv?.seek(clamped);
   }
