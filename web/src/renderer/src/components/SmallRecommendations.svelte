@@ -3,6 +3,7 @@
   import MediaCard from "./MediaCard.svelte";
   import { ChevronLeft, ChevronRight } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { animate } from "animejs";
 
   // Purely presentational: the parent owns data fetching and the select/watch
   // handlers, so the same row backs "Based on your tastes", per-genre rows,
@@ -22,12 +23,18 @@
   }>();
 
   let trackEl = $state<HTMLElement | null>(null);
+  let activeAnim: ReturnType<typeof animate> | null = null;
 
   function scrollByCards(direction: 1 | -1): void {
     if (!trackEl) return;
-    trackEl.scrollBy({
-      left: direction * (trackEl.clientWidth * 0.9),
-      behavior: "smooth",
+    activeAnim?.pause();
+
+    const target = trackEl.scrollLeft + direction * (trackEl.clientWidth * 0.9);
+
+    activeAnim = animate(trackEl, {
+      scrollLeft: target,
+      duration: 400,
+      ease: "inOutQuad",
     });
   }
 </script>
@@ -54,7 +61,6 @@
       <div
         bind:this={trackEl}
         class="flex min-w-0 flex-1 gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
-        style="scroll-snap-type: x mandatory;"
       >
         {#if loading}
           {#each { length: 8 } as _, i (i)}

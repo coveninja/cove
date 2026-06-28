@@ -56,11 +56,20 @@
 
   $effect(() => {
     if (!src || !Player.available) return;
+    switching = true;
+    scrubbing = false;
+    scrubValue = 0;
     appliedAudioDefault = false;
     appliedSubDefault = false;
     addedExternal.clear();
     subSelection = { kind: "off" };
     Player.play(api.playUrl(src));
+  });
+
+  $effect(() => {
+    if (switching && Player.ready && Player.duration > 0) {
+      switching = false;
+    }
   });
 
   // Stop playback when the player closes so video/audio don't keep running
@@ -81,8 +90,9 @@
     }
     Player.stop();
   });
+  let switching = $state(false);
 
-  const canPlay = $derived(Player.ready && Player.duration > 0);
+  const canPlay = $derived(!switching && Player.ready && Player.duration > 0)
 
   // ─── Watch progress (mpv-driven) ─────────────────────────────────────────────
 
