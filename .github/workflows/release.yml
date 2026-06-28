@@ -1,8 +1,7 @@
 name: CI
 
 # Run on every push/PR to catch regressions. On tag pushes the same checks
-# run — a real release/packaging step needs to be added here once the Qt
-# shell has a distributable format (AppImage, NSIS installer, etc.).
+# run plus the `package` job, which bundles a release asset and uploads it.
 on:
   push:
     branches: [master, main]
@@ -12,7 +11,7 @@ on:
     branches: [master, main]
 
 permissions:
-  contents: read
+  contents: write  # needed for the package job to upload release assets
 
 jobs:
   go:
@@ -28,7 +27,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -o cove .
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
 
       - name: Vet
         run: go vet ./...
@@ -85,3 +84,48 @@ jobs:
 
       - name: Build
         run: cmake --build qt/build
+
+  package:
+    name: Package release asset
+    needs: [go, web]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
+          cd web && npm run build
+
+      - name: Package Linux amd64
+        # The asset name MUST match the value returned by assetName() in
+        # internal/updater/updater.go: "cove-linux-amd64.tar.gz".
+        # The tarball layout must be: ./cove + ./web/dist/ (relative paths so
+        # extraction works regardless of install location).
+        run: |
+          mkdir -p dist/web
+          cp cove dist/cove
+          cp -r web/dist dist/web/dist
+          tar -czf cove-linux-amd64.tar.gz -C dist .
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cove-linux-amd64.tar.gz

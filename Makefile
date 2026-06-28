@@ -7,6 +7,7 @@
 #   make web-dev    # Vite dev server (browser only — no mpv bridge)
 #   make clean      # remove build artifacts
 
+VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 GO_BIN    := cove
 WEB_DIR   := web
 QT_DIR    := qt
@@ -22,7 +23,7 @@ build: go web qt
 
 ## Go backend binary (repo root). Static build — no cgo.
 go:
-	CGO_ENABLED=0 go build -o $(GO_BIN) .
+	CGO_ENABLED=0 go build -ldflags "-X main.Version=$(VERSION)" -o $(GO_BIN) .
 
 ## Frontend → web/dist (Vite).
 web:

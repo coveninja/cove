@@ -14,9 +14,14 @@ import (
 	"github.com/Arcadyi/cove/internal/player"
 	"github.com/Arcadyi/cove/internal/settings"
 	"github.com/Arcadyi/cove/internal/tmdb"
+	"github.com/Arcadyi/cove/internal/updater"
 	"github.com/Arcadyi/cove/internal/utils"
 	"github.com/joho/godotenv"
 )
+
+// Version is injected at build time via -ldflags "-X main.Version=vX.Y.Z".
+// The zero value "dev" disables the auto-update check on development builds.
+var Version = "dev"
 
 func main() {
 	// Load .env if present. A missing .env is NOT fatal: env vars may be set
@@ -70,6 +75,7 @@ func main() {
 	p.SetupHandlers()
 	st.SetupHandlers()
 	lib.SetupHandlers()
+	updater.SetupHandlers(Version)
 
 	disc := discover.New(tmdbClient, lib)
 	disc.SetupHandlers()

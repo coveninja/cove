@@ -335,6 +335,23 @@ int main(int argc, char *argv[]) {
         backend->kill();
     });
 
+    // Exit code 42 signals that the backend applied an update and wants the
+    // shell to restart so the new binaries are loaded. Re-exec this process
+    // with the same arguments, then quit the current instance.
+    // arguments().mid(1) strips argv[0] (the program path), which
+    // startDetached takes as its first argument separately.
+    QObject::connect(
+        backend,
+        QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+        [&app](int exitCode, QProcess::ExitStatus) {
+          if (exitCode == 42) {
+            const QStringList args = QCoreApplication::arguments().mid(1);
+            QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                    args);
+            app.quit();
+          }
+        });
+
 waitForBackend(apiPort, [loadScene, baseUrl, isDev]() {
       qInfo().noquote() << "[shell] backend up — loading UI";
       if (isDev) {

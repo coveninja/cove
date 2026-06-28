@@ -253,6 +253,16 @@ export interface PersonDetails {
   credits: Media[];
 }
 
+// ── Update ────────────────────────────────────────────────────────────────────
+
+// Mirrors internal/updater/updater.go CheckResult.
+export interface UpdateCheckResult {
+  available: boolean;
+  current_version: string;
+  latest_version: string;
+  release_name: string;
+}
+
 // ── API ────────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -559,4 +569,22 @@ export const api = {
   libraryStats: (): Promise<LibraryStats> => request(`/library/stats`),
 
   discoverInsights: (): Promise<DiscoverInsights> => request(`/discover/insights`),
+
+  // ── Auto-update ──────────────────────────────────────────────────────────────
+
+  checkUpdate: (): Promise<UpdateCheckResult> => request(`/update/check`),
+
+  // Bypasses the concurrency limiter — this blocks for the full download +
+  // extraction (potentially 30–60 s). On success the backend exits with code 42
+  // and the Qt shell restarts; the connection drop is expected.
+  applyUpdate: async (): Promise<void> => {
+    const res = await fetch(`${BASE}/update/apply`, { method: "POST" });
+    if (!res.ok) {
+      throw new ApiError(
+        res.status,
+        await res.text().catch(() => ""),
+        "/update/apply",
+      );
+    }
+  },
 };

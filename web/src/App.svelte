@@ -24,10 +24,12 @@
     pickBestStream,
     type StreamSelectionMode,
   } from "$lib/streamSelection";
-  import { api } from "$lib/api";
+  import { api, type UpdateCheckResult } from "$lib/api";
   import InsightsPage from "./components/InsightsPage.svelte";
+  import UpdateModal from "./components/UpdateModal.svelte";
 
   let query = $state("");
+  let updateInfo = $state<UpdateCheckResult | null>(null);
 
   // The media whose detail overlay (the single app-level MediaExpandedModal)
   // is currently open. Opening one no longer navigates to a page — the overlay
@@ -108,6 +110,16 @@
   onMount(() => {
     setMode("dark");
     settings.load();
+
+    // Non-blocking background update check. Failures are silently swallowed
+    // since the user may be offline or on a dev build (which skips the check
+    // server-side anyway).
+    api
+      .checkUpdate()
+      .then((result) => {
+        if (result.available) updateInfo = result;
+      })
+      .catch(() => {});
 
     // The media player (vidstack/maverick) aborts internal signals when its
     // element unmounts — closing the detail modal, re-keying it, or swapping it
@@ -501,4 +513,9 @@
     </main>
   </div>
 </Tooltip.Provider>
+
+{#if updateInfo}
+  <UpdateModal info={updateInfo} ondismiss={() => (updateInfo = null)} />
+{/if}
+
 <ModeWatcher defaultMode="dark" />
