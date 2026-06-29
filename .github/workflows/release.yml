@@ -119,11 +119,15 @@ jobs:
         working-directory: web
         run: npm run build
 
-      - name: Install Flatpak build tools
+      - name: Install Flatpak build tools and runtimes
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y flatpak flatpak-builder
-          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y --noninteractive flathub \
+            org.kde.Sdk//6.9 \
+            org.kde.Platform//6.9 \
+            io.qt.qtwebengine.BaseApp//6.9
 
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
