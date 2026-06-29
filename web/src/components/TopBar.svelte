@@ -247,7 +247,7 @@
               <Button
                       variant="outline"
                       size="icon"
-                      class="rounded-none border-l-0{currentPage?.type === 'explore'
+                      class="rounded-none border-l-0 {currentPage?.type === 'explore'
                 ? 'text-accent hover:text-accent/75'
                 : 'bg-foreground'}"
                       onclick={() => {
@@ -355,7 +355,7 @@
           </Button>
         </Tooltip.Trigger>
         <Tooltip.Content>
-          <p>Explore</p>
+          <p>Settings</p>
         </Tooltip.Content>
       </Tooltip.Root>
     {/if}

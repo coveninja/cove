@@ -27,6 +27,7 @@
   } from "$lib/streamSelection";
   import { api, type UpdateCheckResult } from "$lib/api";
   import InsightsPage from "./components/InsightsPage.svelte";
+  import ExplorePage from "./components/ExplorePage.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
 
   let query = $state("");
@@ -484,6 +485,9 @@
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
             <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
+          </div>
+          <div class="h-full" class:hidden={currentPage.type !== "explore"}>
+            <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
         </div>
       </div>
