@@ -53,10 +53,6 @@ modules:
 
   # libplacebo: GPU shader / rendering library required by mpv >= 0.37.0.
   # Vulkan disabled to avoid pulling in glslang/SPIRV-Tools.
-  # Meson downloads its subprojects (jinja2, glad2, fast_float) via wrap files
-  # at build time; the flatpak-builder sandbox has network access for this.
-  # libplacebo: GPU shader / rendering library required by mpv >= 0.37.0.
-  # Vulkan disabled to avoid pulling in glslang/SPIRV-Tools.
   # -Dlibdir forces installation to /app/lib instead of /app/lib64; the
   # flatpak-builder default PKG_CONFIG_PATH only includes /app/lib/pkgconfig
   # so without this mpv (and later cmake) can't find the installed .pc file.
