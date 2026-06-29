@@ -106,6 +106,15 @@ jobs:
       # Build Go backend and web frontend outside the Flatpak sandbox (both
       # require network/tools not available inside it). The Flatpak manifest
       # picks them up via the type:dir source and copies them into /app.
+      # The Qt shell is also built here for the PKGBUILD tarball.
+      - name: Install Qt6 + mpv build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config \
+            qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
+            libqt6webchannel6-dev libmpv-dev
+
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
@@ -118,6 +127,43 @@ jobs:
       - name: Build web frontend
         working-directory: web
         run: npm run build
+
+      - name: Build Qt shell (native, for PKGBUILD tarball)
+        run: |
+          cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build qt/build
+
+      - name: Assemble PKGBUILD tarball
+        run: |
+          mkdir -p _pkg/bin _pkg/lib/cove _pkg/share/cove \
+                   _pkg/share/applications \
+                   "_pkg/share/icons/hicolor/scalable/apps"
+
+          # Launcher — uses system paths, no QTWEBENGINEPROCESS_PATH needed
+          cat > _pkg/bin/cove << 'EOF'
+#!/bin/sh
+exec /usr/lib/cove/cove_shell --backend /usr/lib/cove/cove --webroot /usr/share/cove/web "$@"
+EOF
+          chmod +x _pkg/bin/cove
+
+          cp cove                   _pkg/lib/cove/cove
+          cp qt/build/cove_shell    _pkg/lib/cove/cove_shell
+          cp -r web/dist            _pkg/share/cove/web
+          cp flatpak/io.github.arcadyi.Cove.desktop \
+             _pkg/share/applications/
+          cp web/src/assets/CoveIcon.svg \
+             "_pkg/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg"
+
+          tar -czf cove-linux-amd64.tar.gz -C _pkg .
+
+      - name: Generate PKGBUILD
+        run: |
+          PKG_VER="${{ github.ref_name }}"
+          PKG_VER="${PKG_VER#v}"
+          SHA256=$(sha256sum cove-linux-amd64.tar.gz | cut -d' ' -f1)
+          sed -e "s/__VERSION__/${PKG_VER}/" \
+              -e "s/__SHA256__/${SHA256}/" \
+              packaging/PKGBUILD > PKGBUILD
 
       - name: Install Flatpak build tools and runtimes
         run: |
@@ -137,7 +183,10 @@ jobs:
           cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.arcadyi.Cove.yml') }}
           upload-artifact: false
 
-      - name: Upload release asset
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: cove-linux-amd64.flatpak
+          files: |
+            cove-linux-amd64.flatpak
+            cove-linux-amd64.tar.gz
+            PKGBUILD
