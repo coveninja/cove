@@ -52,19 +52,22 @@ modules:
         tag: n7.1
 
   # mpv: video player library used by the Qt shell (MpvObject).
-  # 0.37.0 uses meson but libplacebo is still optional there (required since
-  # 0.38.0). Without libplacebo installed, meson skips it rather than failing,
-  # so we avoid the subproject-download issue that broke 0.38.0 in CI.
+  # 0.36.0 is the last release that ships the waf build tool; waf makes
+  # libplacebo optional, sidestepping the meson subproject-download issue
+  # (libplacebo's meson build fetches jinja2/glad/etc. via wrap files that
+  # need internet access, which is blocked in the Flatpak build sandbox).
+  # waf was removed in 0.37.0 and libplacebo became hard-required in meson.
   - name: mpv
-    buildsystem: meson
-    config-opts:
-      - -Dlibmpv=true
-      - -Dbuild-date=false
-      - -Dvapoursynth=disabled
+    buildsystem: simple
+    build-commands:
+      - python3 waf configure --prefix=/app --enable-libmpv-shared
+          --disable-alsa --disable-manpage-build --disable-pdf-build
+      - python3 waf -j4
+      - python3 waf install
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git
-        tag: v0.37.0
+        tag: v0.36.0
 
   # cove: Go backend + web frontend + Qt shell, assembled in one module.
   # The Go backend (cove) and web/dist are pre-built in CI before
