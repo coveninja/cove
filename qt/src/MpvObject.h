@@ -2,6 +2,7 @@
 
 #include <QtQuick/QQuickFramebufferObject>
 #include <QString>
+#include <QTimer>
 #include <QVariant>
 
 #include <mpv/client.h>
@@ -41,6 +42,11 @@ public slots:
                    const QString &lang = QString()); // external (e.g. OpenSubtitles)
   void setVolume(double volume);     // 0–100
 
+  // Request the shell window to enter or leave fullscreen. The slot emits
+  // fullscreenRequested(), which QML catches and forwards to win.showFullScreen()
+  // / win.showNormal(). Roundtripping via a signal keeps C++ decoupled from QML.
+  void setFullscreen(bool fullscreen);
+
   // Re-emit the current playback state. The web client calls this right after
   // it connects, because mpv emits the initial values of observed properties
   // (pause, duration, …) before the QWebChannel bridge has attached its signal
@@ -49,10 +55,6 @@ public slots:
   void requestState();
 
 signals:
-  // Emitted from mpv's render thread; connected queued to update() on the GUI
-  // thread (QQuickFramebufferObject::update() must run there).
-  void mpvUpdated();
-
   // Playback state, from observed mpv properties / events.
   void positionChanged(double seconds);
   void durationChanged(double seconds);
@@ -62,6 +64,7 @@ signals:
   void endReached();
   // Each entry: {id, type:"video"|"audio"|"sub", title, lang, selected}.
   void tracksChanged(const QVariantList &tracks);
+  void fullscreenRequested(bool fullscreen);
 
 private slots:
   // Invoked (queued) once the GL render context exists; flushes any load that
@@ -69,6 +72,9 @@ private slots:
   void handleRenderReady();
   // Drains mpv's event queue on the GUI thread (woken by on_events).
   void onMpvEvents();
+  // Fallback position poll — fires every 500 ms for streams where mpv does not
+  // emit time-pos property-change events (e.g. some HTTP or TS sources).
+  void pollPosition();
 
 private:
   static void on_update(void *ctx);
@@ -80,4 +86,5 @@ private:
   mpv_render_context *m_mpvGl = nullptr;
   bool m_renderReady = false;
   QString m_pendingUrl;
+  QTimer *m_pollTimer = nullptr;
 };

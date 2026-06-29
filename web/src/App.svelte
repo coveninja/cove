@@ -1,5 +1,6 @@
 <script lang="ts">
   import TopBar from "./components/TopBar.svelte";
+  import { Player } from "$lib/player/player.svelte";
   import { ModeWatcher } from "mode-watcher";
   import MediaExpandedModal from "./components/MediaExpandedModal.svelte";
   import PersonExpandedModal from "./components/modals/PersonExpandedModal.svelte";
@@ -7,7 +8,7 @@
   import type { Media } from "$lib/types/tmdb";
   import type { Person, Provider } from "$lib/api";
   import type { Stream } from "$lib/types/addons";
-  import Player from "./components/Player.svelte";
+  import PlayerComponent from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { setMode } from "mode-watcher";
 
@@ -384,6 +385,7 @@
   });
 
   function closePlayer(): void {
+    Player.setFullscreen(false);
     playerSession = null;
     playerMode = null;
   }
@@ -501,7 +503,7 @@
             easing: cubicOut,
           }}
         >
-          <Player
+          <PlayerComponent
             src={playerSession.stream.infoHash || playerSession.stream.url}
             media={playerSession.media}
             externalSubtitles={playerSession.subtitles}

@@ -140,10 +140,6 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
     return;
   }
 
-  // on_update fires on mpv's render thread → marshal to the GUI thread.
-  connect(this, &MpvObject::mpvUpdated, this,
-          [this]() { update(); }, Qt::QueuedConnection);
-
   // Observe the properties we surface as signals, and wake us on mpv events.
   mpv_observe_property(m_mpv, 0, "time-pos", MPV_FORMAT_DOUBLE);
   mpv_observe_property(m_mpv, 0, "duration", MPV_FORMAT_DOUBLE);
@@ -153,6 +149,15 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   // NONE = notify on change without delivering the (complex) node; we re-query.
   mpv_observe_property(m_mpv, 0, "track-list", MPV_FORMAT_NONE);
   mpv_set_wakeup_callback(m_mpv, on_events, this);
+
+  // Fallback: poll position every 250 ms so the seek bar stays live for
+  // streams that don't emit MPV_EVENT_PROPERTY_CHANGE for time-pos (some HTTP
+  // or TS sources never trigger the observation callback).  A shorter interval
+  // also ensures we catch position after the seek-lock window expires.
+  m_pollTimer = new QTimer(this);
+  m_pollTimer->setInterval(250);
+  connect(m_pollTimer, &QTimer::timeout, this, &MpvObject::pollPosition);
+  m_pollTimer->start();
 }
 
 MpvObject::~MpvObject() {
@@ -169,7 +174,13 @@ QQuickFramebufferObject::Renderer *MpvObject::createRenderer() const {
 }
 
 void MpvObject::on_update(void *ctx) {
-  emit static_cast<MpvObject *>(ctx)->mpvUpdated();
+  // Fired on mpv's render thread. Do NOT emit a signal here — emitting a signal
+  // on a QWebChannel-registered object from the wrong thread corrupts WebChannel's
+  // signal dispatch for ALL signals, including positionChanged. Marshal to GUI
+  // thread first, then call update() safely.
+  auto *obj = static_cast<MpvObject *>(ctx);
+  QMetaObject::invokeMethod(obj, [obj]() { obj->update(); },
+                            Qt::QueuedConnection);
 }
 
 void MpvObject::command(const QVariant &args) {
@@ -254,6 +265,10 @@ void MpvObject::setVolume(double volume) {
   setMpvProperty("volume", QString::number(volume));
 }
 
+void MpvObject::setFullscreen(bool fullscreen) {
+  emit fullscreenRequested(fullscreen);
+}
+
 void MpvObject::requestState() {
   if (!m_mpv)
     return;
@@ -270,6 +285,17 @@ void MpvObject::requestState() {
   if (mpv_get_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &vol) >= 0)
     emit volumeChanged(vol);
   emit tracksChanged(readTrackList());
+}
+
+void MpvObject::pollPosition() {
+  if (!m_mpv) return;
+  double pos = 0;
+  // playback-time is "always defined" once playback starts (unlike time-pos,
+  // which can be undefined when the audio clock stalls on broken streams).
+  if (mpv_get_property(m_mpv, "playback-time", MPV_FORMAT_DOUBLE, &pos) >= 0 ||
+      mpv_get_property(m_mpv, "time-pos",      MPV_FORMAT_DOUBLE, &pos) >= 0) {
+    emit positionChanged(pos);
+  }
 }
 
 // ── Events / property observation ────────────────────────────────────────────

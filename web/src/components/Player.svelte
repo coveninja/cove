@@ -4,7 +4,7 @@
   import * as Popover from "$lib/components/ui/popover";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Button } from "$lib/components/ui/button";
-  import { Slider } from "$lib/components/ui/slider";
+  import { Slider } from "$lib/components/ui/slider/index.js";
   import {
     Play,
     Pause,
@@ -162,6 +162,17 @@
                   : "Buffering…",
   );
 
+  let logoUrl = $state<string | null>(null);
+
+  $effect(() => {
+    const m = media;
+    if (!m) { logoUrl = null; return; }
+    logoUrl = null;
+    api.getLogos(m.id, m.media_type).then((logos) => {
+      logoUrl = logos[0] ?? null;
+    }).catch(() => {});
+  });
+
   // ─── Auto-select preferred audio track ──────────────────────────────────────
 
   $effect(() => {
@@ -222,14 +233,33 @@
     }
   }
 
-  function onSeekChange(v: number): void {
-    scrubbing = true;
-    scrubValue = v;
+  // ─── Custom seek bar (pointer-based, no third-party slider) ────────────────
+  let seekTrackEl = $state<HTMLDivElement | null>(null);
+
+  function seekFraction(e: PointerEvent): number {
+    if (!seekTrackEl || !Player.duration) return 0;
+    const { left, width } = seekTrackEl.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - left) / width));
   }
-  function onSeekCommit(v: number): void {
-    Player.seek(v);
+
+  function onSeekPointerDown(e: PointerEvent): void {
+    if (!Player.duration) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    scrubbing = true;
+    scrubValue = seekFraction(e) * Player.duration;
+  }
+
+  function onSeekPointerMove(e: PointerEvent): void {
+    if (!scrubbing) return;
+    scrubValue = seekFraction(e) * Player.duration;
+  }
+
+  function onSeekPointerUp(e: PointerEvent): void {
+    if (!scrubbing) return;
+    Player.seek(seekFraction(e) * Player.duration);
     scrubbing = false;
   }
+
   function onVolumeChange(v: number): void {
     Player.setVolume(v);
   }
@@ -575,17 +605,31 @@
               class="flex w-full flex-col gap-2 px-4 pb-4 text-white"
               onclick={(e) => e.stopPropagation()}
       >
-        <!-- Seek bar (full width) -->
-        <Slider
-                type="single"
-                value={displayPos}
-                max={Player.duration || 0}
-                step={0.1}
-                onValueChange={onSeekChange}
-                onValueCommit={onSeekCommit}
+        <!-- Seek bar (full width, custom — no third-party slider) -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div
+                role="slider"
                 aria-label="Seek"
-                class="w-full"
-        />
+                aria-valuemin={0}
+                aria-valuemax={Player.duration || 0}
+                aria-valuenow={displayPos}
+                tabindex={0}
+                class="relative flex h-2 w-full cursor-pointer items-center rounded-full bg-white/20"
+                bind:this={seekTrackEl}
+                onpointerdown={onSeekPointerDown}
+                onpointermove={onSeekPointerMove}
+                onpointerup={onSeekPointerUp}
+                onpointercancel={onSeekPointerUp}
+        >
+          <div
+                  class="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-white"
+                  style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
+          ></div>
+          <div
+                  class="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/10"
+                  style="left: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
+          ></div>
+        </div>
 
         <!-- Transport + tracks -->
         <div class="flex items-center gap-1">
@@ -794,19 +838,28 @@
 
   <!-- ── Loading screen ─────────────────────────────────────────────────────── -->
   {#if Player.available && !canPlay}
-    <div class="absolute inset-0 z-20 flex flex-col items-center justify-center">
+    <div class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black">
       {#if media?.poster_path}
         <div
                 class="absolute inset-0 scale-110 bg-cover bg-center"
-                style="background-image: url('{media.poster_path}'); filter: blur(40px); opacity: 0.4;"
+                style="background-image: url('{media.poster_path}'); filter: blur(60px); opacity: 0.35;"
         ></div>
       {/if}
-      <div class="absolute inset-0 bg-black/70"></div>
-      {#if title}
-        <span
-                class="relative z-10 px-8 text-center text-3xl font-bold tracking-widest text-white md:text-5xl"
-        >{title}</span
-        >
+      <div class="absolute inset-0 bg-black/65"></div>
+      {#if logoUrl}
+        <img
+                src={logoUrl}
+                alt={title}
+                class="relative z-10 max-h-40 max-w-xs object-contain drop-shadow-2xl"
+        />
+      {:else if media?.poster_path}
+        <img
+                src={media.poster_path}
+                alt={title}
+                class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
+        />
+      {:else if title}
+        <span class="relative z-10 px-8 text-center text-3xl font-bold text-white">{title}</span>
       {/if}
       <Spinner class="relative z-10 mt-6 size-10" />
       <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>

@@ -7,6 +7,8 @@
     Flame,
     Cog,
     Bookmark,
+    Maximize2,
+    Minimize2,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -14,6 +16,7 @@
   import { animate, JSAnimation } from "animejs";
   import type { Page } from "$lib/types/types";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+  import { Player } from "$lib/player/player.svelte";
 
   let {
     query = $bindable(""),
@@ -40,6 +43,33 @@
   let searchFocused = $state<boolean>(false);
   let topbarHovered = $state<boolean>(false);
   let debounceTimer: ReturnType<typeof setTimeout>;
+
+  // Auto-hide when a stream is playing; reappear on any mouse movement.
+  let topbarVisible = $state(true);
+  let hideTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function revealTopbar(): void {
+    topbarVisible = true;
+    clearTimeout(hideTimer);
+    if (fullscreenInfo) {
+      hideTimer = setTimeout(() => { topbarVisible = false; }, 3000);
+    }
+  }
+
+  $effect(() => {
+    if (fullscreenInfo) {
+      revealTopbar();
+      document.addEventListener("mousemove", revealTopbar);
+      return () => {
+        document.removeEventListener("mousemove", revealTopbar);
+        clearTimeout(hideTimer);
+        topbarVisible = true;
+      };
+    } else {
+      clearTimeout(hideTimer);
+      topbarVisible = true;
+    }
+  });
 
   // Animation states
   let rectEl = $state<SVGRectElement>();
@@ -96,7 +126,7 @@
 </script>
 
 <div
-  class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag]"
+  class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag] transition-opacity duration-300 {fullscreenInfo && !topbarVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}"
   role="menubar"
   tabindex="0"
   onmouseenter={() => {
@@ -287,6 +317,20 @@
     class="flex w-48 items-center justify-end gap-1 [webkit-app-region:no-drag]"
   >
     {#if fullscreenInfo}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          <Button variant="outline" size="icon" onclick={() => Player.toggleFullscreen()}>
+            {#if Player.isFullscreen}
+              <Minimize2 />
+            {:else}
+              <Maximize2 />
+            {/if}
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <p>{Player.isFullscreen ? "Exit fullscreen" : "Fullscreen"}</p>
+        </Tooltip.Content>
+      </Tooltip.Root>
       <Tooltip.Root>
         <Tooltip.Trigger>
           <Button variant="outline" size="icon" onclick={onCloseStream}>
