@@ -38,8 +38,11 @@ Window {
     Connections {
         target: mpv
         function onFullscreenRequested(fs) {
-            if (fs) win.showFullScreen();
-            else win.showNormal();
+            if (fs) {
+                win.showFullScreen();
+            } else if (win.visibility === Window.FullScreen) {
+                win.showNormal();
+            }
         }
     }
 

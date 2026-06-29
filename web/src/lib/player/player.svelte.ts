@@ -214,6 +214,7 @@ class MpvPlayer {
   }
 
   setFullscreen(fullscreen: boolean): void {
+    if (this.isFullscreen === fullscreen) return;
     this.isFullscreen = fullscreen;
     this.#mpv?.setFullscreen(fullscreen);
   }
