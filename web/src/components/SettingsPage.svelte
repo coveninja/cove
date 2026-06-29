@@ -13,7 +13,9 @@
   import { api } from "$lib/api";
   import type { AddonEntry } from "$lib/types/addons";
   import { KindProvider, KindTimestamps, SourceOfficial } from "$lib/types/addons";
-  import { Trash2, Plus, ToggleLeft, ToggleRight } from "lucide-svelte";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Trash2, Plus } from "lucide-svelte";
 
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
@@ -451,11 +453,11 @@
             https://torrentio.strem.fun).
           </p>
           <div class="flex gap-2">
-            <input
+            <Input
               type="url"
               placeholder="https://..."
               bind:value={addAddonUrl}
-              class="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              class="flex-1"
               onkeydown={(e) => e.key === "Enter" && handleAddAddon()}
             />
             <Button
@@ -483,24 +485,22 @@
                   <span class="text-sm font-medium"
                     >{addon.manifest.name || addon.url || addon.id || "Unknown addon"}</span
                   >
-                  <span
-                    class="rounded-full px-2 py-0.5 text-[10px] {addon.kind === KindProvider
-                      ? 'bg-blue-500/20 text-blue-400'
+                  <Badge
+                    variant="outline"
+                    class={addon.kind === KindProvider
+                      ? "border-blue-500/30 bg-blue-500/20 text-blue-400"
                       : addon.kind === KindTimestamps
-                        ? 'bg-amber-500/20 text-amber-400'
-                        : 'bg-purple-500/20 text-purple-400'}"
+                        ? "border-amber-500/30 bg-amber-500/20 text-amber-400"
+                        : "border-purple-500/30 bg-purple-500/20 text-purple-400"}
                   >
                     {addon.kind === KindProvider
                       ? "Provider"
                       : addon.kind === KindTimestamps
                         ? "Timestamps"
                         : "Subtitles"}
-                  </span>
+                  </Badge>
                   {#if addon.source === SourceOfficial}
-                    <span
-                      class="rounded-full bg-green-500/20 px-2 py-0.5 text-[10px] text-green-400"
-                      >Built-in</span
-                    >
+                    <Badge variant="outline" class="border-green-500/30 bg-green-500/20 text-green-400">Built-in</Badge>
                   {/if}
                 </div>
                 {#if addon.manifest.description}
@@ -511,27 +511,23 @@
               </div>
 
               <!-- Toggle -->
-              <button
-                onclick={() => handleToggleAddon(addon)}
-                class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                title={addon.enabled ? "Disable" : "Enable"}
-              >
-                {#if addon.enabled}
-                  <ToggleRight class="size-6 text-accent" />
-                {:else}
-                  <ToggleLeft class="size-6" />
-                {/if}
-              </button>
+              <Switch
+                checked={addon.enabled}
+                onCheckedChange={() => handleToggleAddon(addon)}
+                class="shrink-0"
+              />
 
               <!-- Remove (stremio only) -->
               {#if addon.source !== SourceOfficial}
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="shrink-0 text-muted-foreground hover:text-destructive"
                   onclick={() => handleRemoveAddon(addon)}
-                  class="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
                   title="Remove"
                 >
                   <Trash2 class="size-4" />
-                </button>
+                </Button>
               {/if}
             </div>
           {:else}
