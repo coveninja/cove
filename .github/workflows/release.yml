@@ -140,10 +140,8 @@ jobs:
                    "_pkg/share/icons/hicolor/scalable/apps"
 
           # Launcher — uses system paths, no QTWEBENGINEPROCESS_PATH needed
-          cat > _pkg/bin/cove << 'EOF'
-#!/bin/sh
-exec /usr/lib/cove/cove_shell --backend /usr/lib/cove/cove --webroot /usr/share/cove/web "$@"
-EOF
+          printf '#!/bin/sh\nexec /usr/lib/cove/cove_shell --backend /usr/lib/cove/cove --webroot /usr/share/cove/web "$@"\n' \
+            > _pkg/bin/cove
           chmod +x _pkg/bin/cove
 
           cp cove                   _pkg/lib/cove/cove
