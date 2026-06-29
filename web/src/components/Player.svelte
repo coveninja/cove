@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Media } from "$lib/types/tmdb";
+  import type { TimestampData, TimestampSegment } from "$lib/types/addons";
   import { Spinner } from "$lib/components/ui/spinner";
   import * as Popover from "$lib/components/ui/popover";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -16,7 +17,7 @@
     Check,
     Keyboard,
   } from "lucide-svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { fade } from "svelte/transition";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
@@ -62,7 +63,18 @@
     appliedAudioDefault = false;
     appliedSubDefault = false;
     addedExternal.clear();
+    autoSkippedSegments.clear();
     subSelection = { kind: "off" };
+    // Apply volume settings at stream start. Read inside untrack so that a
+    // settings change while watching doesn't re-run this effect and restart
+    // the stream.
+    untrack(() => {
+      if ($settings?.openOnMute) {
+        Player.setVolume(0);
+      } else if ($settings?.defaultVolume != null) {
+        Player.setVolume(Math.round($settings.defaultVolume * 100));
+      }
+    });
     Player.play(api.playUrl(src));
   });
 
@@ -172,6 +184,145 @@
       logoUrl = logos[0] ?? null;
     }).catch(() => {});
   });
+
+  // ─── IntroDB timestamps ──────────────────────────────────────────────────────
+
+  let timestamps = $state<TimestampData | null>(null);
+  const autoSkippedSegments = new Set<string>();
+
+  $effect(() => {
+    const m = media;
+    if (!m) { timestamps = null; return; }
+    timestamps = null;
+    console.log(`[introdb] fetching tmdbId=${m.id} season=${season} episode=${episode}`);
+    api.getTimestamps(m.id, { season, episode }).then((data) => {
+      console.log("[introdb] response:", JSON.stringify(data));
+      timestamps = data;
+    }).catch((e) => {
+      console.warn("[introdb] fetch failed:", e);
+    });
+  });
+
+  // The segment the player is currently inside (checked by position in ms).
+  const activeSegment = $derived.by(() => {
+    if (!timestamps || !canPlay) return null;
+    const posMs = Player.position * 1000;
+
+    const check = (
+      segs: TimestampSegment[] | undefined,
+      type: string,
+      label: string,
+    ) => {
+      if (!segs?.length) return null;
+      for (const seg of segs) {
+        const start = seg.start_ms ?? 0;
+        const end = seg.end_ms ?? Player.duration * 1000;
+        if (posMs >= start && posMs < end) return { type, label, seg };
+      }
+      return null;
+    };
+
+    return (
+      check(timestamps.recap, "recap", "Recap") ||
+      check(timestamps.intro, "intro", "Intro") ||
+      check(timestamps.credits, "credits", "Credits") ||
+      check(timestamps.preview, "preview", "Preview")
+    );
+  });
+
+  // Auto-skip segments when the matching setting is enabled.
+  // Uses autoSkippedSegments to avoid re-skipping if the user seeks back.
+  $effect(() => {
+    const seg = activeSegment;
+    if (!seg || !$settings) return;
+
+    const segKey = `${seg.type}-${seg.seg.start_ms ?? 0}`;
+    if (autoSkippedSegments.has(segKey)) return;
+
+    const shouldSkip =
+      (seg.type === "intro" && $settings.autoSkipIntro) ||
+      (seg.type === "recap" && $settings.autoSkipRecap) ||
+      (seg.type === "credits" && $settings.autoSkipCredits) ||
+      (seg.type === "preview" && $settings.autoSkipPreview);
+
+    if (shouldSkip) {
+      autoSkippedSegments.add(segKey);
+      Player.seek((seg.seg.end_ms ?? Player.duration * 1000) / 1000);
+    }
+  });
+
+  function skipSegment(seg: { seg: TimestampSegment }): void {
+    Player.seek((seg.seg.end_ms ?? Player.duration * 1000) / 1000);
+  }
+
+  // ─── Seek bar chapter markers ────────────────────────────────────────────────
+
+  type ChapterBar = {
+    startFrac: number;
+    endFrac: number;
+    type: "content" | "intro" | "recap" | "credits" | "preview";
+  };
+
+  // Splits the timeline into content + named segment chapters whenever we have
+  // both timestamp data and a known duration. Returns null when unified bar is
+  // needed (no data, or all segments collapsed to a single chapter).
+  const chapterBars = $derived.by((): ChapterBar[] | null => {
+    if (!timestamps) { console.log("[introdb] chapterBars: no timestamps yet"); return null; }
+    if (!Player.duration) { console.log("[introdb] chapterBars: duration=0"); return null; }
+    const durMs = Player.duration * 1000;
+
+    const named: { startMs: number; endMs: number; type: string }[] = [];
+    const addAll = (arr: TimestampSegment[] | undefined, type: string) =>
+      arr?.forEach((s) =>
+        named.push({ startMs: s.start_ms ?? 0, endMs: s.end_ms ?? durMs, type }),
+      );
+    addAll(timestamps.intro, "intro");
+    addAll(timestamps.recap, "recap");
+    addAll(timestamps.credits, "credits");
+    addAll(timestamps.preview, "preview");
+    if (named.length === 0) { console.log("[introdb] chapterBars: timestamps present but all arrays empty"); return null; }
+
+    named.sort((a, b) => a.startMs - b.startMs);
+
+    const bars: ChapterBar[] = [];
+    let pos = 0;
+    for (const seg of named) {
+      if (seg.startMs > pos)
+        bars.push({ startFrac: pos / durMs, endFrac: seg.startMs / durMs, type: "content" });
+      bars.push({
+        startFrac: seg.startMs / durMs,
+        endFrac: Math.min(seg.endMs / durMs, 1),
+        type: seg.type as ChapterBar["type"],
+      });
+      pos = seg.endMs;
+    }
+    if (pos < durMs) bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
+
+    const result = bars.length > 1 ? bars : null;
+    console.log("[introdb] chapterBars:", result ? `${result.length} chapters` : "null (single chapter)");
+    return result;
+  });
+
+  function segmentBgClass(type: ChapterBar["type"]): string {
+    switch (type) {
+      case "intro":   return "bg-amber-400/50";
+      case "recap":   return "bg-blue-400/50";
+      case "credits": return "bg-purple-400/50";
+      case "preview": return "bg-green-400/50";
+      default:        return "";
+    }
+  }
+
+  let hoveredChapter = $state<ChapterBar | null>(null);
+
+  // Fraction (0–100) of a chapter pill that should be filled white by the progress bar.
+  function chapterFill(chapter: ChapterBar): number {
+    if (!Player.duration) return 0;
+    const posFrac = displayPos / Player.duration;
+    if (posFrac >= chapter.endFrac) return 100;
+    if (posFrac <= chapter.startFrac) return 0;
+    return ((posFrac - chapter.startFrac) / (chapter.endFrac - chapter.startFrac)) * 100;
+  }
 
   // ─── Auto-select preferred audio track ──────────────────────────────────────
 
@@ -614,17 +765,52 @@
                 aria-valuemax={Player.duration || 0}
                 aria-valuenow={displayPos}
                 tabindex={0}
-                class="relative flex h-2 w-full cursor-pointer items-center rounded-full bg-white/20"
+                class="relative flex h-2 w-full cursor-pointer items-center"
                 bind:this={seekTrackEl}
                 onpointerdown={onSeekPointerDown}
                 onpointermove={onSeekPointerMove}
                 onpointerup={onSeekPointerUp}
                 onpointercancel={onSeekPointerUp}
         >
-          <div
-                  class="pointer-events-none absolute inset-y-0 left-0 rounded-full bg-white"
-                  style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-          ></div>
+          {#if chapterBars}
+            <!-- Segmented: each chapter is its own rounded pill with a gap -->
+            <div class="flex h-full w-full gap-0.5">
+              {#each chapterBars as chapter (chapter.startFrac)}
+                <div
+                  class="relative h-full overflow-hidden rounded-full {chapter.type !== 'content'
+                    ? segmentBgClass(chapter.type)
+                    : 'bg-white/20'}"
+                  style="flex: {chapter.endFrac - chapter.startFrac}"
+                  onmouseenter={() => chapter.type !== 'content' && (hoveredChapter = chapter)}
+                  onmouseleave={() => hoveredChapter = null}
+                >
+                  <div
+                    class="pointer-events-none absolute inset-y-0 left-0 bg-white"
+                    style="width: {chapterFill(chapter)}%"
+                  ></div>
+                </div>
+              {/each}
+            </div>
+            <!-- Chapter label tooltip, centered over the hovered pill -->
+            {#if hoveredChapter}
+              <div
+                class="pointer-events-none absolute -top-6 -translate-x-1/2 rounded bg-black/80 px-2 py-0.5 text-xs font-medium capitalize text-white"
+                style="left: {(hoveredChapter.startFrac + hoveredChapter.endFrac) / 2 * 100}%"
+                transition:fade={{ duration: 100 }}
+              >
+                {hoveredChapter.type}
+              </div>
+            {/if}
+          {:else}
+            <!-- Unified bar (no timestamp data) -->
+            <div class="absolute inset-0 overflow-hidden rounded-full bg-white/20">
+              <div
+                class="pointer-events-none absolute inset-y-0 left-0 bg-white"
+                style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
+              ></div>
+            </div>
+          {/if}
+          <!-- Scrubber thumb (not inside any overflow-hidden clip) -->
           <div
                   class="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/10"
                   style="left: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
@@ -836,13 +1022,25 @@
     </div>
   {/if}
 
+  <!-- ── Skip segment button (IntroDB) ────────────────────────────────────── -->
+  {#if activeSegment}
+    <!-- svelte-ignore a11y_consider_explicit_label -->
+    <button
+      class="absolute bottom-20 right-6 z-20 rounded border border-white/50 bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
+      onclick={(e) => { e.stopPropagation(); skipSegment(activeSegment!); }}
+      transition:fade={{ duration: 150 }}
+    >
+      Skip {activeSegment.label}
+    </button>
+  {/if}
+
   <!-- ── Loading screen ─────────────────────────────────────────────────────── -->
   {#if Player.available && !canPlay}
     <div class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black">
       {#if media?.poster_path}
         <div
                 class="absolute inset-0 scale-110 bg-cover bg-center"
-                style="background-image: url('{media.poster_path}'); filter: blur(60px); opacity: 0.35;"
+                style="background-image: url('{media.poster_path}'); filter: blur(5px); opacity: 0.35;"
         ></div>
       {/if}
       <div class="absolute inset-0 bg-black/65"></div>

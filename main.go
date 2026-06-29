@@ -68,7 +68,13 @@ func main() {
 		log.Fatal("could not init torrent client:", err)
 	}
 
-	addonMgr.SetupHandlers()
+	addonMgr.SetupHandlers(func(tmdbID int) string {
+		id, err := tmdbClient.GetTVIMDBId(tmdbID)
+		if err != nil {
+			return ""
+		}
+		return id
+	})
 	tmdbClient.SetupHandlers(addonMgr)
 	p.SetupHandlers()
 	st.SetupHandlers()

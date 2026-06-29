@@ -40,6 +40,13 @@ export interface Settings {
    */
   showStreamDetails: boolean; // show codec/resolution badges on stream list
   hideSpoilers: boolean;
+  /**
+   * Segment skip (via IntroDB)
+   */
+  autoSkipIntro: boolean;
+  autoSkipRecap: boolean;
+  autoSkipCredits: boolean;
+  autoSkipPreview: boolean;
 }
 /**
  * Store ── Service ──────────────────────────────────────────────────────────────────

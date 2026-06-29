@@ -21,6 +21,10 @@ const DEFAULTS: Settings = {
   subtitlePosition: 8,
   subtitleBackground: true,
   hideSpoilers: false,
+  autoSkipIntro: false,
+  autoSkipRecap: false,
+  autoSkipCredits: false,
+  autoSkipPreview: false,
 };
 
 function createSettingsStore(): {
@@ -60,6 +64,5 @@ export const settings = createSettingsStore();
 
 // Convenience derived stores for single-flag subscriptions.
 export const openOnMute = derived(settings, ($s) => $s.openOnMute);
-export const preferHLS = derived(settings, ($s) => $s.preferHLS);
 export const defaultProvider = derived(settings, ($s) => $s.defaultProvider);
 export const autoPlay = derived(settings, ($s) => $s.autoPlay);

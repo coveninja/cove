@@ -39,6 +39,12 @@ type Settings struct {
 	// UI
 	ShowStreamDetails bool `json:"showStreamDetails"` // show codec/resolution badges on stream list
 	HideSpoilers      bool `json:"hideSpoilers"`
+
+	// Segment skip (via IntroDB)
+	AutoSkipIntro   bool `json:"autoSkipIntro"`
+	AutoSkipRecap   bool `json:"autoSkipRecap"`
+	AutoSkipCredits bool `json:"autoSkipCredits"`
+	AutoSkipPreview bool `json:"autoSkipPreview"`
 }
 
 var defaultSettings = Settings{
@@ -59,6 +65,10 @@ var defaultSettings = Settings{
 	SubtitleBackground:    true,
 	ShowStreamDetails:     true,
 	HideSpoilers:          false,
+	AutoSkipIntro:         false,
+	AutoSkipRecap:         false,
+	AutoSkipCredits:       false,
+	AutoSkipPreview:       false,
 }
 
 // Store ── Service ──────────────────────────────────────────────────────────────────

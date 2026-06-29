@@ -7,6 +7,7 @@ export type AddonKind = string;
 export type AddonSource = string;
 export const KindProvider: AddonKind = "provider";
 export const KindSubtitle: AddonKind = "subtitle";
+export const KindTimestamps: AddonKind = "timestamps";
 export const SourceOfficial: AddonSource = "official";
 export const SourceStremio: AddonSource = "stremio";
 export interface ManifestResource {
@@ -52,6 +53,27 @@ export interface WatchOption {
   logoPath: string;
   type: string; // "flatrate", "rent", or "buy"
   link: string; // JustWatch/provider page to open in browser
+}
+
+//////////
+// source: introdb.go
+
+/**
+ * TimestampSegment is a single timed segment (intro, recap, credits, or preview).
+ * StartMs or EndMs may be nil: nil start means beginning of file, nil end means end of file.
+ */
+export interface TimestampSegment {
+  start_ms?: number /* int64 */;
+  end_ms?: number /* int64 */;
+}
+/**
+ * TimestampData holds all segment timestamps for a media item or episode.
+ */
+export interface TimestampData {
+  intro?: TimestampSegment[];
+  recap?: TimestampSegment[];
+  credits?: TimestampSegment[];
+  preview?: TimestampSegment[];
 }
 
 //////////

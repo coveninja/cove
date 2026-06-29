@@ -5,7 +5,7 @@ import type {
   MediaVideos,
   TVEpisode,
 } from "$lib/types/tmdb";
-import type { AddonEntry, Stream, WatchOption } from "$lib/types/addons";
+import type { AddonEntry, Stream, TimestampData, WatchOption } from "$lib/types/addons";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
 
@@ -436,6 +436,16 @@ export const api = {
 
   getWatchOptions: (tmdbId: number, mediaType: string): Promise<WatchOption[]> =>
     request(`/watch-options?id=${tmdbId}&type=${mediaType}`),
+
+  getTimestamps: (
+    tmdbId: number,
+    opts: { season?: number; episode?: number } = {},
+  ): Promise<TimestampData> => {
+    const p = new URLSearchParams({ id: String(tmdbId) });
+    if (opts.season != null) p.set("season", String(opts.season));
+    if (opts.episode != null) p.set("episode", String(opts.episode));
+    return request(`/timestamps?${p}`);
+  },
 
   // ── Library ──────────────────────────────────────────────────────────────────
   libraryList: (status?: LibraryStatus): Promise<LibraryEntry[]> =>

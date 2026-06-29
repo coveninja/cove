@@ -15,8 +15,9 @@ type AddonKind string
 type AddonSource string
 
 const (
-	KindProvider AddonKind = "provider"
-	KindSubtitle AddonKind = "subtitle"
+	KindProvider   AddonKind = "provider"
+	KindSubtitle   AddonKind = "subtitle"
+	KindTimestamps AddonKind = "timestamps"
 
 	SourceOfficial AddonSource = "official"
 	SourceStremio  AddonSource = "stremio"
@@ -173,7 +174,8 @@ func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) (
 	return data.Subtitles, nil
 }
 
-func (m *Manager) SetupHandlers() {
+func (m *Manager) SetupHandlers(imdbLookup func(tmdbID int) string) {
+	m.imdbLookup = imdbLookup
 	// GET  /api/addons          — list all addons
 	// POST /api/addons          — add stremio addon (body: {"url":"..."})
 	// PATCH /api/addons?id=X   — toggle enabled (body: {"enabled":true})
@@ -239,6 +241,48 @@ func (m *Manager) SetupHandlers() {
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// GET /api/timestamps?id=<tmdbID>&season=1&episode=2
+	http.HandleFunc("/api/timestamps", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		tmdbIDStr := r.URL.Query().Get("id")
+		if tmdbIDStr == "" {
+			http.Error(w, "missing ?id=", http.StatusBadRequest)
+			return
+		}
+		var tmdbID int
+		if _, err := fmt.Sscanf(tmdbIDStr, "%d", &tmdbID); err != nil {
+			http.Error(w, "invalid ?id=", http.StatusBadRequest)
+			return
+		}
+
+		var season, episode *int
+		if s := r.URL.Query().Get("season"); s != "" {
+			var sv int
+			if _, err := fmt.Sscanf(s, "%d", &sv); err == nil {
+				season = &sv
+			}
+		}
+		if e := r.URL.Query().Get("episode"); e != "" {
+			var ev int
+			if _, err := fmt.Sscanf(e, "%d", &ev); err == nil {
+				episode = &ev
+			}
+		}
+
+		data, err := m.GetTimestamps(tmdbID, season, episode)
+		if err != nil {
+			log.Println("timestamps:", err)
+			data = &TimestampData{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(data); err != nil {
+			log.Println("timestamps encode:", err)
 		}
 	}))
 
