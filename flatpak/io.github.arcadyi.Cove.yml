@@ -51,23 +51,38 @@ modules:
         url: https://github.com/FFmpeg/FFmpeg.git
         tag: n7.1
 
+  # libplacebo: GPU shader / rendering library required by mpv >= 0.37.0.
+  # Vulkan disabled to avoid pulling in glslang/SPIRV-Tools.
+  # Meson downloads its subprojects (jinja2, glad2, fast_float) via wrap files
+  # at build time; the flatpak-builder sandbox has network access for this.
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=disabled
+      - -Dtests=false
+      - -Ddemos=false
+    sources:
+      - type: git
+        url: https://github.com/haasn/libplacebo.git
+        tag: v7.349.0
+
   # mpv: video player library used by the Qt shell (MpvObject).
-  # 0.36.0 is the last release that ships the waf build tool; waf makes
-  # libplacebo optional, sidestepping the meson subproject-download issue
-  # (libplacebo's meson build fetches jinja2/glad/etc. via wrap files that
-  # need internet access, which is blocked in the Flatpak build sandbox).
-  # waf was removed in 0.37.0 and libplacebo became hard-required in meson.
+  # PKG_CONFIG_PATH is set explicitly because flatpak-builder's default
+  # environment may not include /app/lib/pkgconfig when running the meson
+  # configure step, causing "libplacebo not found" even after it is installed.
   - name: mpv
-    buildsystem: simple
-    build-commands:
-      - python3 waf configure --prefix=/app --enable-libmpv-shared
-          --disable-alsa --disable-manpage-build --disable-pdf-build
-      - python3 waf -j4
-      - python3 waf install
+    buildsystem: meson
+    build-options:
+      env:
+        PKG_CONFIG_PATH: /app/lib/pkgconfig:/app/lib64/pkgconfig
+    config-opts:
+      - -Dlibmpv=true
+      - -Dbuild-date=false
+      - -Dvapoursynth=disabled
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git
-        tag: v0.36.0
+        tag: v0.38.0
 
   # cove: Go backend + web frontend + Qt shell, assembled in one module.
   # The Go backend (cove) and web/dist are pre-built in CI before
