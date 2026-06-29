@@ -1,0 +1,115 @@
+app-id: io.github.arcadyi.Cove
+# Qt WebEngine (Chromium) is too large for the KDE runtime; it's distributed
+# as a separate BaseApp layer that provides libQt6WebEngineQuick and cmake
+# config files at both build time and runtime.
+base: io.qt.qtwebengine.BaseApp
+base-version: '6.9'
+runtime: org.kde.Platform
+runtime-version: '6.9'
+sdk: org.kde.Sdk
+command: cove
+
+# Permissions needed for a network media streaming + video player app.
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=home
+
+modules:
+  # libass: subtitle rendering for mpv
+  - name: libass
+    config-opts:
+      - --disable-static
+    sources:
+      - type: git
+        url: https://github.com/libass/libass.git
+        tag: '0.17.3'
+
+  # ffmpeg: audio/video decoding for mpv.
+  # Built with GPL so libass can be enabled.
+  # no-autogen: ffmpeg ships its own ./configure (not autoconf-generated).
+  - name: ffmpeg
+    buildsystem: autotools
+    no-autogen: true
+    config-opts:
+      - --enable-shared
+      - --disable-static
+      - --disable-doc
+      - --disable-programs
+      - --disable-debug
+      - --enable-gpl
+      - --enable-version3
+      - --enable-libass
+    build-options:
+      no-debuginfo: true
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/FFmpeg.git
+        tag: n7.1
+
+  # libplacebo: GPU shader / rendering library required by mpv >= 0.38.0.
+  # Vulkan disabled to avoid needing glslang/SPIRV-Tools in the build.
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=disabled
+      - -Dtests=false
+      - -Ddemos=false
+    sources:
+      - type: git
+        url: https://github.com/haasn/libplacebo.git
+        tag: v7.349.0
+
+  # mpv: video player library used by the Qt shell (MpvObject).
+  # Only libmpv is needed; the standalone player binary is skipped.
+  - name: mpv
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dbuild-date=false
+      - -Dvapoursynth=disabled
+    sources:
+      - type: git
+        url: https://github.com/mpv-player/mpv.git
+        tag: v0.38.0
+
+  # cove: Go backend + web frontend + Qt shell, assembled in one module.
+  # The Go backend (cove) and web/dist are pre-built in CI before
+  # flatpak-builder runs; this module just copies them in and builds
+  # the Qt shell against Qt6 from the KDE SDK.
+  - name: cove
+    buildsystem: simple
+    build-commands:
+      # Go backend (pre-built static binary)
+      - install -Dm755 cove /app/lib/cove/cove
+
+      # Web frontend (pre-built by npm)
+      - mkdir -p /app/share/cove
+      - cp -r web/dist /app/share/cove/web
+
+      # Qt shell: built inside sandbox so it links against Qt from org.kde.Sdk
+      - cmake -S qt -B qt_build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - cmake --build qt_build
+      - install -Dm755 qt_build/cove_shell /app/lib/cove/cove_shell
+
+      # Launcher that wires backend + webroot paths together
+      - install -Dm755 flatpak/cove.sh /app/bin/cove
+
+      # Icon (SVG scales better than PNG for HiDPI)
+      - install -Dm644 web/src/assets/CoveIcon.svg
+          /app/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg
+
+      # Desktop entry and AppStream metadata
+      - install -Dm644 flatpak/io.github.arcadyi.Cove.desktop
+          /app/share/applications/io.github.arcadyi.Cove.desktop
+      - install -Dm644 flatpak/io.github.arcadyi.Cove.metainfo.xml
+          /app/share/metainfo/io.github.arcadyi.Cove.metainfo.xml
+
+    sources:
+      # Whole repo (including pre-built cove binary and web/dist)
+      - type: dir
+        path: ..

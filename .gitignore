@@ -4,6 +4,8 @@
 /cove.exe
 /library.json
 /qt/build/
+/.flatpak-builder/
+/*.flatpak
 /web/dist/
 /web/node_modules/
 /CLAUDE.md

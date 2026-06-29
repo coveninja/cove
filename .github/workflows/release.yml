@@ -86,7 +86,7 @@ jobs:
         run: cmake --build qt/build
 
   package:
-    name: Package release asset (AppImage)
+    name: Package release asset (Flatpak)
     needs: [go, web]
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
@@ -103,140 +103,31 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Install Qt6 + mpv + build tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            cmake ninja-build pkg-config \
-            qt6-base-dev \
-            qt6-declarative-dev \
-            qt6-webengine-dev \
-            libqt6webchannel6-dev \
-            qt6-wayland \
-            libmpv-dev \
-            librsvg2-bin
-
-      - name: Install web deps
-        working-directory: web
-        run: npm ci
-
+      # Build Go backend and web frontend outside the Flatpak sandbox (both
+      # require network/tools not available inside it). The Flatpak manifest
+      # picks them up via the type:dir source and copies them into /app.
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
         run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
 
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
       - name: Build web frontend
         working-directory: web
         run: npm run build
 
-      - name: Build Qt shell
-        run: |
-          cmake -S qt -B qt/build -G Ninja
-          cmake --build qt/build
-
-      - name: Download AppImage tools
-        run: |
-          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage appimagetool-x86_64.AppImage
-
-      - name: Convert icon SVG → PNG
-        run: rsvg-convert -w 256 -h 256 web/src/assets/CoveIcon.svg -o cove.png
-
-      - name: Assemble AppDir
-        run: |
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/lib/cove
-          mkdir -p AppDir/usr/share/cove/web
-          mkdir -p AppDir/usr/share/applications
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-
-          cp qt/build/cove_shell AppDir/usr/bin/cove_shell
-          cp cove AppDir/usr/lib/cove/cove
-          cp -r web/dist AppDir/usr/share/cove/web/dist
-          cp cove.png AppDir/usr/share/icons/hicolor/256x256/apps/cove.png
-
-          # Thin launcher that passes --backend / --webroot to cove_shell.
-          # $APPDIR is set unconditionally by the AppImage runtime to the
-          # squashfs mount point, so it's more reliable than readlink-of-$0.
-          # linuxdeploy's generated AppRun reads Exec= from the .desktop file
-          # and invokes this script; linuxdeploy therefore handles all the
-          # LD_LIBRARY_PATH / Qt plugin path setup — we leave AppRun alone.
-          # exec is kept on a single line to avoid shell line-continuation.
-          printf '%s\n%s\n' \
-            '#!/bin/bash' \
-            'exec "$(dirname "$(readlink -f "$0")")/cove_shell" --backend "$APPDIR/usr/lib/cove/cove" --webroot "$APPDIR/usr/share/cove/web/dist" "$@"' \
-            > AppDir/usr/bin/cove_launcher
-          chmod +x AppDir/usr/bin/cove_launcher
-
-          printf '%s\n' \
-            '[Desktop Entry]' \
-            'Type=Application' \
-            'Name=Cove' \
-            'Exec=cove_launcher' \
-            'Icon=cove' \
-            'Categories=AudioVideo;Video;Player;' \
-            'Terminal=false' \
-            > AppDir/usr/share/applications/cove.desktop
-
-      - name: Bundle Qt + system libraries
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: |
-          export QMAKE=$(which qmake6)
-          export QMLPATHS=$(pwd)/qt/qml
-          LIB_DIR=$(qmake6 -query QT_INSTALL_LIBS)
-          QML_DIR=$(qmake6 -query QT_INSTALL_QML)
-          PLUGINS_DIR=$(qmake6 -query QT_INSTALL_PLUGINS)
-
-          # Pre-copy WebEngine QML module directories before linuxdeploy runs.
-          # cove_shell doesn't directly link libQt6WebEngineQuick — Qt loads it
-          # at runtime via the QML plugin system — so ELF scanning alone misses
-          # it. We also pass the libraries explicitly via --library below so
-          # linuxdeploy resolves their transitive deps (e.g. WebEngineCore).
-          mkdir -p AppDir/usr/qml
-          for mod in QtWebEngine QtWebEngineQuick QtWebEngineCore; do
-            [ -d "$QML_DIR/$mod" ] && cp -r "$QML_DIR/$mod" AppDir/usr/qml/
-          done
-
-          # Pre-copy Wayland Qt plugins. The libwayland-* system libraries are
-          # intentionally excluded below (compositor ABI — must be system libs).
-          mkdir -p AppDir/usr/plugins/platforms \
-                   AppDir/usr/plugins/wayland-decoration-client \
-                   AppDir/usr/plugins/wayland-graphics-integration-client \
-                   AppDir/usr/plugins/wayland-shell-integration
-          cp "$PLUGINS_DIR/platforms"/libqwayland*.so \
-               AppDir/usr/plugins/platforms/ 2>/dev/null || true
-          for dir in wayland-decoration-client \
-                     wayland-graphics-integration-client \
-                     wayland-shell-integration; do
-            [ -d "$PLUGINS_DIR/$dir" ] && \
-              cp -rn "$PLUGINS_DIR/$dir/." "AppDir/usr/plugins/$dir/"
-          done
-
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --executable AppDir/usr/bin/cove_shell \
-            --library "$LIB_DIR/libQt6WebEngineQuick.so.6" \
-            --library "$LIB_DIR/libQt6WebEngineCore.so.6" \
-            --desktop-file AppDir/usr/share/applications/cove.desktop \
-            --icon-file cove.png \
-            --plugin qt
-
-          # libwayland-* has compositor-version coupling: bundling the wrong
-          # version breaks socket protocol with the running compositor. Remove
-          # any copies linuxdeploy pulled in; the system provides these.
-          rm -f AppDir/usr/lib/libwayland*.so* 2>/dev/null || true
-
-      - name: Create AppImage
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-          VERSION: ${{ github.ref_name }}
-        run: |
-          ./appimagetool-x86_64.AppImage AppDir cove-linux-amd64.AppImage
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: cove-linux-amd64.flatpak
+          manifest-path: flatpak/io.github.arcadyi.Cove.yml
+          cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.arcadyi.Cove.yml') }}
+          upload-artifact: false
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: cove-linux-amd64.AppImage
+          files: cove-linux-amd64.flatpak

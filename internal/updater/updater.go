@@ -134,9 +134,9 @@ func fetchLatest() (*ghRelease, error) {
 func check(currentVersion string) (*CheckResult, error) {
 	result := &CheckResult{CurrentVersion: currentVersion}
 
-	// AppImage distributions mount the app read-only; replacing binaries inside
-	// would fail. Detect the APPIMAGE env set by the AppImage runtime and skip.
-	if os.Getenv("APPIMAGE") != "" {
+	// Managed distributions (AppImage, Flatpak) handle updates outside the app.
+	// AppImage runtime sets APPIMAGE; Flatpak sets FLATPAK_ID.
+	if os.Getenv("APPIMAGE") != "" || os.Getenv("FLATPAK_ID") != "" {
 		return result, nil
 	}
 

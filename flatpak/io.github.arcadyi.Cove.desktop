@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cove
+GenericName=Media Streaming App
+Comment=Stream movies and TV shows
+Exec=cove
+Icon=io.github.arcadyi.Cove
+Categories=AudioVideo;Video;Player;
+Terminal=false
+StartupWMClass=cove_shell
