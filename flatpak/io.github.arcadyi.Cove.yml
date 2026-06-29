@@ -51,31 +51,22 @@ modules:
         url: https://github.com/FFmpeg/FFmpeg.git
         tag: n7.1
 
-  # libplacebo: GPU shader / rendering library required by mpv >= 0.38.0.
-  # Vulkan disabled to avoid needing glslang/SPIRV-Tools in the build.
-  - name: libplacebo
-    buildsystem: meson
-    config-opts:
-      - -Dvulkan=disabled
-      - -Dtests=false
-      - -Ddemos=false
-    sources:
-      - type: git
-        url: https://github.com/haasn/libplacebo.git
-        tag: v7.349.0
-
   # mpv: video player library used by the Qt shell (MpvObject).
-  # Only libmpv is needed; the standalone player binary is skipped.
+  # 0.37.0 uses waf and does not hard-require libplacebo (required since 0.38.0).
+  # libplacebo ≥ 0.38.0 pulls in meson subprojects (jinja2, glad, …) via wrap
+  # files that download from the internet at build time, which is unavailable
+  # inside the Flatpak sandbox on CI runners.
   - name: mpv
-    buildsystem: meson
-    config-opts:
-      - -Dlibmpv=true
-      - -Dbuild-date=false
-      - -Dvapoursynth=disabled
+    buildsystem: simple
+    build-commands:
+      - python3 waf configure --prefix=/app --enable-libmpv-shared
+          --disable-alsa --disable-manpage-build --disable-pdf-build
+      - python3 waf -j4
+      - python3 waf install
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git
-        tag: v0.38.0
+        tag: v0.37.0
 
   # cove: Go backend + web frontend + Qt shell, assembled in one module.
   # The Go backend (cove) and web/dist are pre-built in CI before

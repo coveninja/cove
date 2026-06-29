@@ -103,7 +103,10 @@
     const handleCanPlay = () => {
       applyMuted();
       muteApplied = true;
-      if (autoplay && !paused) safePlay(p);
+      if (autoplay) {
+        paused = false;
+        safePlay(p);
+      }
     };
     // Re-assert at play — this is the moment audio would otherwise start,
     // and YouTube ignores mute commands sent before its API is ready.
