@@ -156,15 +156,28 @@ jobs:
           cp -r web/dist AppDir/usr/share/cove/web/dist
           cp cove.png AppDir/usr/share/icons/hicolor/256x256/apps/cove.png
 
-          cat > AppDir/usr/share/applications/cove.desktop << 'DESKTOP'
-          [Desktop Entry]
-          Type=Application
-          Name=Cove
-          Exec=cove_shell
-          Icon=cove
-          Categories=AudioVideo;Video;Player;
-          Terminal=false
-          DESKTOP
+          # Thin launcher that passes --backend / --webroot to cove_shell.
+          # $APPDIR is set unconditionally by the AppImage runtime to the
+          # squashfs mount point, so it's more reliable than readlink-of-$0.
+          # linuxdeploy's generated AppRun reads Exec= from the .desktop file
+          # and invokes this script; linuxdeploy therefore handles all the
+          # LD_LIBRARY_PATH / Qt plugin path setup — we leave AppRun alone.
+          # exec is kept on a single line to avoid shell line-continuation.
+          printf '%s\n%s\n' \
+            '#!/bin/bash' \
+            'exec "$(dirname "$(readlink -f "$0")")/cove_shell" --backend "$APPDIR/usr/lib/cove/cove" --webroot "$APPDIR/usr/share/cove/web/dist" "$@"' \
+            > AppDir/usr/bin/cove_launcher
+          chmod +x AppDir/usr/bin/cove_launcher
+
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=Cove' \
+            'Exec=cove_launcher' \
+            'Icon=cove' \
+            'Categories=AudioVideo;Video;Player;' \
+            'Terminal=false' \
+            > AppDir/usr/share/applications/cove.desktop
 
       - name: Bundle Qt + system libraries
         env:
@@ -177,20 +190,6 @@ jobs:
             --desktop-file AppDir/usr/share/applications/cove.desktop \
             --icon-file cove.png \
             --plugin qt
-
-      - name: Install custom AppRun
-        # linuxdeploy creates a generic AppRun; replace it with one that passes
-        # the correct --backend and --webroot paths to cove_shell.
-        run: |
-          cat > AppDir/AppRun << 'APPRUN'
-          #!/bin/bash
-          HERE="$(dirname "$(readlink -f "$0")")"
-          exec "$HERE/usr/bin/cove_shell" \
-            --backend "$HERE/usr/lib/cove/cove" \
-            --webroot "$HERE/usr/share/cove/web/dist" \
-            "$@"
-          APPRUN
-          chmod +x AppDir/AppRun
 
       - name: Create AppImage
         env:
