@@ -27,7 +27,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }}" -o cove .
 
       - name: Vet
         run: go vet ./...
@@ -109,7 +109,7 @@ jobs:
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o cove .
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }}" -o cove .
 
       - name: Install web deps
         working-directory: web
@@ -118,6 +118,12 @@ jobs:
       - name: Build web frontend
         working-directory: web
         run: npm run build
+
+      - name: Install Flatpak build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6

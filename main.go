@@ -23,11 +23,14 @@ import (
 // The zero value "dev" disables the auto-update check on development builds.
 var Version = "dev"
 
+// TmdbApiKey is injected at build time via -ldflags "-X main.TmdbApiKey=...".
+// Release builds have it compiled in so no .env or runtime env var is needed.
+// During local development, set TMDB_API_KEY in a .env file instead.
+var TmdbApiKey = ""
+
 func main() {
-	// Load .env if present. A missing .env is NOT fatal: env vars may be set
-	// externally (Docker, systemd, CI), and returning here would ignore them
-	// and silently kill startup with no log line. Treat a load failure as a
-	// warning only.
+	// Load .env if present — for local development only.
+	// Release builds have TmdbApiKey compiled in via ldflags.
 	if ex, err := os.Executable(); err == nil {
 		if err := godotenv.Load(filepath.Join(filepath.Dir(ex), ".env")); err != nil {
 			log.Println("no .env next to binary; relying on the environment:", err)
@@ -36,7 +39,11 @@ func main() {
 		log.Println("no .env in working dir; relying on the environment:", err)
 	}
 
+	// Env var overrides the compiled-in key (useful for dev/testing).
 	apiKey := os.Getenv("TMDB_API_KEY")
+	if apiKey == "" {
+		apiKey = TmdbApiKey
+	}
 	if apiKey == "" {
 		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
 	}
