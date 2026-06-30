@@ -101,7 +101,7 @@ public:
     QOpenGLFramebufferObject *fbo = framebufferObject();
     mpv_opengl_fbo mpfbo{static_cast<int>(fbo->handle()), fbo->width(),
                          fbo->height(), 0};
-    int flipY = 0; // if the picture is upside down, set this to 1
+    int flipY = 0;
     mpv_render_param params[]{
         {MPV_RENDER_PARAM_OPENGL_FBO, &mpfbo},
         {MPV_RENDER_PARAM_FLIP_Y, &flipY},
@@ -130,7 +130,7 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
 
   // Render via the embedded (libmpv) video output; hardware decode where safe.
   mpv_set_option_string(m_mpv, "vo", "libmpv");
-  mpv_set_option_string(m_mpv, "hwdec", "auto-safe"); // HW decode (VAAPI on your AMD); falls back to SW
+  mpv_set_option_string(m_mpv, "hwdec", "auto-safe"); // prefer hardware decode; falls back to software
   // Surface only real errors; flip to terminal=yes + msg-level=all=v to debug.
   mpv_set_option_string(m_mpv, "terminal", "yes");
   mpv_set_option_string(m_mpv, "msg-level", "all=error");

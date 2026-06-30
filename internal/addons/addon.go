@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 type AddonKind string

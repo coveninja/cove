@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // RestartExitCode is the exit code the Go backend uses to signal the Qt shell

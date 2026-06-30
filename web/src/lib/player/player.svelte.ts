@@ -72,7 +72,6 @@ class MpvPlayer {
 
   #mpv: MpvBridge | null = null;
   #resolveReady!: () => void;
-  #dbgLastPos = -99; // throttle for diagnostic console log (intentionally far from 0)
 
   // After seek() we ignore incoming positionChanged events until this timestamp
   // passes. mpv queues position events before it processes the seek command, so
@@ -95,25 +94,11 @@ class MpvPlayer {
     this.available = true;
 
     new Channel(transport, (channel) => {
-      console.warn('[player] channel cb — objects:', Object.keys(channel.objects));
       const mpv = channel.objects.mpv;
-      if (!mpv) { console.warn('[player] mpv MISSING from channel'); return; }
+      if (!mpv) { console.error('[player] mpv missing from channel'); return; }
       this.#mpv = mpv;
 
-      // Log which properties on the proxy look like signals (have .connect)
-      const sigs = Object.keys(mpv).filter(
-        (k) => mpv[k as keyof typeof mpv] && typeof (mpv[k as keyof typeof mpv] as { connect?: unknown }).connect === 'function'
-      );
-      console.warn('[player] mpv signals visible to JS:', sigs.join(', '));
-
       mpv.positionChanged.connect((s) => {
-        // Diagnostic: log every ~1 s of position change so we can see whether
-        // signals are reaching JS at all. Remove once the bug is understood.
-        if (Math.abs(s - this.#dbgLastPos) >= 1.0) {
-          const locked = Date.now() < this.#seekLockUntil;
-          console.warn(`[player] posChanged: ${s.toFixed(1)}s locked=${locked}`);
-          this.#dbgLastPos = s;
-        }
         // Discard stale pre-seek events that arrive in the 500 ms window after
         // seek() sets the lock. Accept early if mpv already confirmed a position
         // within 3 s of the seek target (it snaps to the nearest keyframe).
@@ -123,13 +108,10 @@ class MpvPlayer {
         }
         this.position = s;
       });
-      mpv.durationChanged.connect((s) => {
-        console.warn(`[player] durationChanged: ${s.toFixed(1)}s`);
-        this.duration = s;
-      });
+      mpv.durationChanged.connect((s) => { this.duration = s; });
       mpv.pausedChanged.connect((p) => (this.paused = p));
       mpv.volumeChanged.connect((v) => (this.volume = v));
-      mpv.fileLoaded.connect(() => { console.warn('[player] fileLoaded signal!'); this.ended = false; });
+      mpv.fileLoaded.connect(() => { this.ended = false; });
       mpv.endReached.connect(() => (this.ended = true));
       mpv.tracksChanged.connect((tracks) => this.#applyTracks(tracks));
 

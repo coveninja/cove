@@ -10,10 +10,6 @@
 
 // mpv rendered into a Quick scene-graph FBO. Placed behind a transparent
 // WebEngineView in main.qml so the web UI composites on top of the video.
-//
-// Phase 2a scope: enough to render and load a file (compositing proof). The
-// QWebChannel bridge + property/event signals come in Phase 2b — the control
-// slots below are already shaped for it.
 class MpvObject : public QQuickFramebufferObject {
   Q_OBJECT
   friend class MpvRenderer;
@@ -72,7 +68,7 @@ private slots:
   void handleRenderReady();
   // Drains mpv's event queue on the GUI thread (woken by on_events).
   void onMpvEvents();
-  // Fallback position poll — fires every 500 ms for streams where mpv does not
+  // Fallback position poll — fires every 250 ms for streams where mpv does not
   // emit time-pos property-change events (e.g. some HTTP or TS sources).
   void pollPosition();
 

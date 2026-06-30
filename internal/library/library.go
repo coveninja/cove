@@ -13,13 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 //
-// All struct fields use JSON snake_case to match future Supabase column names
-// directly — no transformation needed when syncing.
+// All struct fields use JSON snake_case to match Supabase column names directly.
 
 type Status = string
 
@@ -33,7 +32,7 @@ const (
 // LibraryEntry mirrors the `library_entries` Supabase table.
 type LibraryEntry struct {
 	ID        string  `json:"id"`         // UUIDv4
-	ProfileID *string `json:"profile_id"` // null until profile is wired up
+	ProfileID *string `json:"profile_id"`
 	TmdbID    int     `json:"tmdb_id"`
 	MediaType   string   `json:"media_type"` // "movie" | "tv"
 	Title       string   `json:"title"`
@@ -94,9 +93,6 @@ type TasteSignal struct {
 	Dismissed  bool
 }
 
-// TasteSignals returns one signal per title the user has any history with —
-// every library entry, plus titles with completed watch history even if the
-// entry was later removed. Safe to call concurrently.
 // AllEntries returns a snapshot of all library entries. Used for sync.
 func (l *Library) AllEntries() []*LibraryEntry {
 	l.mu.RLock()
@@ -169,6 +165,9 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	l.gen.Add(1)
 }
 
+// TasteSignals returns one signal per title the user has any history with —
+// every library entry, plus titles with completed watch history even if the
+// entry was later removed. Safe to call concurrently.
 func (l *Library) TasteSignals() []TasteSignal {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -278,13 +277,9 @@ func (l *Library) Stats() Stats {
 
 // Library ── Service ──────────────────────────────────────────────────────────────────
 //
-// Library owns all of the package's mutable state. It used to live in package
-// globals; holding it on a struct lets callers construct (and tests spin up)
-// independent instances, and removes the hidden coupling between Init and the
-// handlers. Fields are unexported on purpose: nothing outside this package
-// touches them, and keeping them unexported means tygo emits nothing for this
-// type — only the JSON data types (LibraryEntry, WatchProgress, diskStore)
-// cross into the generated TS.
+// Library owns all of the package's mutable state. Fields are unexported, so
+// tygo emits nothing for this type — only the JSON data types (LibraryEntry,
+// WatchProgress, diskStore) cross into the generated TS.
 type Library struct {
 	mu   sync.RWMutex
 	db   diskStore
@@ -475,9 +470,8 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 			entry.LastAiredEpisode = body.LastAiredEpisode
 		}
 		entry.UpdatedAt = now
-		// Re-link any progress records that became orphaned when the entry was
-		// previously removed. This keeps library_entry_id consistent for a
-		// future Supabase sync where it may be used as a foreign key.
+		// Re-link any progress records orphaned when the entry was previously
+		// removed — keeps library_entry_id consistent for Supabase sync.
 		if !exists {
 			for _, p := range l.db.Progress {
 				if p.TmdbID == body.TmdbID && p.MediaType == body.MediaType {
@@ -604,7 +598,6 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			entry.LastAiredEpisode = body.LastAiredEpisode
 		}
 
-		// Upsert the progress record.
 		pKey := progressKey(body.TmdbID, body.MediaType, body.Season, body.Episode)
 		prog, progExists := l.db.Progress[pKey]
 		if !progExists {

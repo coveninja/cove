@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/library"
-	"github.com/Arcadyi/cove/internal/settings"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/settings"
 )
 
 // remoteProfile is the `profiles` table row on Supabase.

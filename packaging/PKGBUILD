@@ -18,8 +18,8 @@ package() {
     install -Dm755 "${srcdir}/lib/cove/cove_shell"     "${pkgdir}/usr/lib/cove/cove_shell"
     mkdir -p "${pkgdir}/usr/share/cove"
     cp -r "${srcdir}/share/cove/web"                   "${pkgdir}/usr/share/cove/"
-    install -Dm644 "${srcdir}/share/applications/io.github.arcadyi.Cove.desktop" \
-                   "${pkgdir}/usr/share/applications/io.github.arcadyi.Cove.desktop"
-    install -Dm644 "${srcdir}/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg" \
-                   "${pkgdir}/usr/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg"
+    install -Dm644 "${srcdir}/share/applications/io.github.coveninja.Cove.desktop" \
+                   "${pkgdir}/usr/share/applications/io.github.coveninja.Cove.desktop"
+    install -Dm644 "${srcdir}/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg" \
+                   "${pkgdir}/usr/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg"
 }

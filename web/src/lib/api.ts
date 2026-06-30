@@ -137,8 +137,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /**
  * Like request, but treats 404 / empty body as a normal `null` rather than an
  * error — for endpoints where "nothing saved yet" is an expected outcome.
- * Note: unlike the old inline handlers, a 500 now throws instead of silently
- * returning null, so genuine server errors surface.
+ * A non-404 error status still throws so genuine server errors surface.
  */
 async function requestOrNull<T>(
   path: string,
@@ -356,8 +355,8 @@ export const api = {
 
   // ── Player: source URL builders ───────────────────────────────────────────────
   //
-  // These return strings rather than fetching, because the result is handed to
-  // <video src>, hls.js, <track src>, or EventSource, which do their own loading.
+  // These return strings rather than fetching — the URL is handed to mpv, a
+  // <track src>, or EventSource, which handle their own loading.
 
   /** Direct torrent stream (or the original URL if src is already absolute). */
   playUrl: (src: string): string =>
@@ -382,7 +381,7 @@ export const api = {
 
   // ── Player: probe & HLS session ───────────────────────────────────────────────
 
-  /** ffprobe the source. Generic so the caller supplies the result shape. */
+  /** Generic probe endpoint; caller supplies the result shape. */
   probe: <T = unknown>(src: string, signal?: AbortSignal): Promise<T> => {
     const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
     return request(`/probe?${q}`, signal ? { signal } : undefined);

@@ -1,4 +1,4 @@
-module github.com/Arcadyi/cove
+module github.com/coveninja/cove
 
 go 1.26.4
 

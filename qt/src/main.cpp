@@ -1,15 +1,11 @@
-// Cove — Qt/QtWebEngine shell, Phase 2a (mpv compositing proof).
+// Cove — Qt/QtWebEngine shell.
 //
-// Builds on Phase 1 (spawn Go backend, serve renderer over http) but moves the
-// UI into a QML scene so an mpv video surface can sit BEHIND a transparent
-// WebEngineView and the web UI can draw on top — the in-window playback Electron
-// couldn't do.
+// An mpv surface sits below a transparent WebEngineView; the web UI composites
+// on top for in-window playback.
 //
 // Two modes:
-//   ./cove_shell                 → loads the real app (mpv idle, looks like P1)
-//   ./cove_shell --play <file>   → loads a translucent test overlay and plays
-//                                  <file> in mpv, so you can confirm the video
-//                                  shows through with HTML on top.
+//   ./cove_shell                 → loads the real app (mpv idle)
+//   ./cove_shell --play <file>   → plays <file> behind a translucent test overlay
 
 #include <QCommandLineParser>
 #include <QDir>
@@ -36,7 +32,7 @@
 
 #include "MpvObject.h"
 
-// ── Tiny static file server (unchanged from Phase 1) ─────────────────────────
+// ── Static file server ───────────────────────────────────────────────────────
 class StaticServer : public QTcpServer {
 public:
   explicit StaticServer(const QString &root, QObject *parent = nullptr)
@@ -190,12 +186,10 @@ static void installBridgeScript() {
   QWebEngineProfile::defaultProfile()->scripts()->insert(script);
 }
 
-// Translucent test overlay written to a temp file. Beyond the compositing proof
-// (transparent HTML over video), it also exercises the QWebChannel bridge: it
-// connects to the registered `mpv` object (QWebChannel is provided globally by
-// the injected user script — see main()), shows live position/duration/track
-// data pushed from C++ signals, and calls mpv.pause()/resume() on a timer so you
-// can watch JS drive native playback.
+// Translucent test overlay: exercises the QWebChannel bridge by connecting to
+// the registered `mpv` object (injected globally — see main()), showing live
+// position/duration/track data from C++ signals, and calling mpv.pause()/resume()
+// on a timer to verify JS→C++ slot calls.
 static QString testOverlayUrl() {
   // The bridge bootstrap: connect, wire signals to the DOM, and exercise slots.
   const QString bootstrap = QStringLiteral(R"JS(
@@ -312,7 +306,7 @@ int main(int argc, char *argv[]) {
   };
 
   if (!testFile.isEmpty()) {
-    // Compositing proof — no backend needed for a local file.
+    // Test mode — no backend needed for a local file.
     qInfo().noquote() << "[shell] compositing test, playing:" << testFile;
     loadScene(testOverlayUrl(), testFile);
   } else {

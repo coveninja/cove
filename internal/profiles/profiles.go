@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // Profile is one named identity within a Cove installation. A single Supabase

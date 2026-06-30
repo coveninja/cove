@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/library"
-	"github.com/Arcadyi/cove/internal/tmdb"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // Service ── Personalized discovery ──────────────────────────────────────────

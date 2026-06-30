@@ -8,16 +8,16 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/discover"
-	"github.com/Arcadyi/cove/internal/library"
-	"github.com/Arcadyi/cove/internal/player"
-	"github.com/Arcadyi/cove/internal/profiles"
-	"github.com/Arcadyi/cove/internal/settings"
-	supapkg "github.com/Arcadyi/cove/internal/supabase"
-	"github.com/Arcadyi/cove/internal/tmdb"
-	"github.com/Arcadyi/cove/internal/updater"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/discover"
+	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/player"
+	"github.com/coveninja/cove/internal/profiles"
+	"github.com/coveninja/cove/internal/settings"
+	supapkg "github.com/coveninja/cove/internal/supabase"
+	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/updater"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/joho/godotenv"
 )
 
@@ -39,7 +39,6 @@ var SupabaseJWTSecret = ""
 
 func main() {
 	// Load .env if present — for local development only.
-	// Release builds have TmdbApiKey compiled in via ldflags.
 	if ex, err := os.Executable(); err == nil {
 		if err := godotenv.Load(filepath.Join(filepath.Dir(ex), ".env")); err != nil {
 			log.Println("no .env next to binary; relying on the environment:", err)

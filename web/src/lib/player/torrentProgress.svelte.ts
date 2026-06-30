@@ -1,9 +1,7 @@
 // $lib/player/torrentProgress.svelte.ts
 //
 // Tracks live torrent download stats (progress %, peer count, download speed)
-// for a hash source via the backend's SSE progress stream. Extracted from
-// Player.svelte so the component no longer owns the EventSource plumbing — it
-// just instantiates this and reads the reactive fields.
+// for a hash source via the backend's SSE progress stream.
 //
 // This is a .svelte.ts module so it can use runes ($state) in a plain class;
 // the fields stay reactive when read from a component's template or $derived.

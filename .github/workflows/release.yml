@@ -1,14 +1,9 @@
 name: CI
 
-# Run on every push/PR to catch regressions. On tag pushes the same checks
-# run plus the `package` job, which bundles a release asset and uploads it.
 on:
   push:
-    branches: [master, main]
     tags:
       - 'v*'
-  pull_request:
-    branches: [master, main]
 
 permissions:
   contents: write  # needed for the package job to upload release assets
@@ -153,10 +148,10 @@ jobs:
           cp cove                   _pkg/lib/cove/cove
           cp qt/build/cove_shell    _pkg/lib/cove/cove_shell
           cp -r web/dist            _pkg/share/cove/web
-          cp flatpak/io.github.arcadyi.Cove.desktop \
+          cp flatpak/io.github.coveninja.Cove.desktop \
              _pkg/share/applications/
           cp web/src/assets/CoveIcon.svg \
-             "_pkg/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg"
+             "_pkg/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg"
 
           tar -czf cove-linux-amd64.tar.gz -C _pkg .
 
@@ -183,8 +178,8 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: cove-linux-amd64.flatpak
-          manifest-path: flatpak/io.github.arcadyi.Cove.yml
-          cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.arcadyi.Cove.yml') }}
+          manifest-path: flatpak/io.github.coveninja.Cove.yml
+          cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.coveninja.Cove.yml') }}
           upload-artifact: false
 
       - name: Upload release assets

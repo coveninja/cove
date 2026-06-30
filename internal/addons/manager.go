@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // Manager owns the configured addon registry and the HTTP client used to talk

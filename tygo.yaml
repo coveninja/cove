@@ -1,13 +1,13 @@
 packages:
-  - path: "github.com/Arcadyi/cove/internal/tmdb"
+  - path: "github.com/coveninja/cove/internal/tmdb"
     output_path: "web/src/lib/types/tmdb.ts"
-  - path: "github.com/Arcadyi/cove/internal/addons"
+  - path: "github.com/coveninja/cove/internal/addons"
     output_path: "web/src/lib/types/addons.ts"
-  - path: "github.com/Arcadyi/cove/internal/player"
+  - path: "github.com/coveninja/cove/internal/player"
     output_path: "web/src/lib/types/player.ts"
-  - path: "github.com/Arcadyi/cove/internal/settings"
+  - path: "github.com/coveninja/cove/internal/settings"
     output_path: "web/src/lib/types/settings.ts"
-  - path: "github.com/Arcadyi/cove/internal/library"
+  - path: "github.com/coveninja/cove/internal/library"
     output_path: "web/src/lib/types/library.ts"
     type_mappings:
       time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity

@@ -14,17 +14,14 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/utils"
 	"golang.org/x/text/unicode/norm"
 )
 
-// Client talks to the TMDB API. It owns the API key (previously threaded
-// through every function as a parameter) and the HTTP client (previously a
-// package global). Holding both on a struct lets callers construct independent
-// clients and inject a custom HTTP client in tests. Fields are unexported, so
-// tygo emits nothing for Client — only the data types (Media, Details,
-// MediaImages, ...) cross into the generated TS.
+// Client talks to the TMDB API. Fields are unexported, so tygo emits nothing
+// for Client — only the data types (Media, Details, MediaImages, ...) cross
+// into the generated TS.
 type Client struct {
 	apiKey string
 	client *http.Client
@@ -84,9 +81,6 @@ type TVEpisode struct {
 }
 
 type Details struct {
-	// Overview was missing entirely — TMDB always returns it, but Go's JSON
-	// decoder silently drops any source field with no matching destination
-	// field, so it never survived the unmarshal in GetDetails below.
 	Overview string `json:"overview"`
 	Genres   []struct {
 		ID   int    `json:"id"`
@@ -847,17 +841,9 @@ func (c *Client) GetDetails(tmdbID int, mediaType string) (*Details, error) {
 	return &details, nil
 }
 
-// GetMediaByID fetches a single movie or TV show directly by ID and maps it
-// into the same Media shape Search/GetSimilar already return — title,
-// overview, poster, vote average, all genuinely populated from TMDB.
-//
-// This exists specifically so callers that only have a bare tmdb_id (e.g. a
-// LibraryEntry, which intentionally doesn't persist a full copy of TMDB's
-// metadata) can get a real Media object instead of reconstructing a partial
-// stand-in client-side. A hand-built stand-in is a leaky abstraction: it's
-// indistinguishable from a real Media object by type, but quietly missing
-// fields a real one always has — which is exactly how the overview-text bug
-// happened. Every consumer of Media should be able to trust it's complete.
+// GetMediaByID fetches a single movie or TV show directly by ID. Exists so
+// callers that only have a tmdb_id (e.g. a LibraryEntry) can get a fully-
+// populated Media instead of reconstructing a partial one client-side.
 func (c *Client) GetMediaByID(tmdbID int, mediaType string) (*Media, error) {
 	url := fmt.Sprintf("%s/%s/%d?api_key=%s", baseURL, mediaType, tmdbID, c.apiKey)
 	res, err := c.client.Get(url)

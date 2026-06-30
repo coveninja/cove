@@ -5,11 +5,11 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/library"
-	"github.com/Arcadyi/cove/internal/profiles"
-	"github.com/Arcadyi/cove/internal/settings"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/profiles"
+	"github.com/coveninja/cove/internal/settings"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // Server wires together all the auth + sync HTTP handlers.

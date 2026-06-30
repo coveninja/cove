@@ -14,17 +14,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/tmdb"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/anacrolix/torrent"
 )
 
 // Player owns all of the package's mutable state — the torrent client and the
 // active-torrent registry — plus the injected TMDB client and addon manager.
-// Decode, track enumeration, and subtitle rendering now happen in the mpv-based
-// client, so the old HLS session table, ffprobe results, and subtitle cache are
-// gone. Fields are unexported, so tygo emits nothing for Player.
+// Fields are unexported, so tygo emits nothing for Player.
 type Player struct {
 	client *torrent.Client
 
@@ -37,7 +35,7 @@ type Player struct {
 
 // torrentDataDir is where the anacrolix client writes downloaded pieces. The
 // reaper removes per-torrent subdirectories under here when a torrent is
-// dropped, so Init and CleanupTorrents must agree on the path.
+// dropped, so New() and CleanupTorrents must agree on the path.
 const torrentDataDir = "/tmp/cove-torrents"
 
 type torrentState struct {
@@ -86,8 +84,7 @@ func largestFile(t *torrent.Torrent) (*torrent.File, error) {
 	return largest, nil
 }
 
-// addReader adjusts the live-reader count for a torrent and refreshes its idle
-// timer. delta is +1 when a stream handler opens, -1 when it returns.
+// addReader adjusts readers (+1 on open, -1 on return) and refreshes lastUsed.
 func (p *Player) addReader(infoHash string, delta int) {
 	p.activeTorrentsMu.Lock()
 	if st, ok := p.activeTorrents[infoHash]; ok {
@@ -262,14 +259,12 @@ func formatSpeed(bytesPerSec int64) string {
 	}
 }
 
-// NewServer returns a pre-configured *http.Server. Callers should use this
-// instead of http.ListenAndServe so that ReadHeaderTimeout is always set.
+// NewServer returns a pre-configured *http.Server with ReadHeaderTimeout set.
 func NewServer(addr string) *http.Server {
 	return &http.Server{
 		Addr: addr,
-		// Guards against slow-loris style attacks. Streaming responses
-		// (HLS segments, torrent) legitimately run for minutes, so we
-		// do NOT set WriteTimeout or IdleTimeout here.
+		// Guards against slow-loris attacks. Torrent streaming runs for minutes,
+		// so WriteTimeout and IdleTimeout are intentionally not set.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 }
@@ -332,7 +327,6 @@ func (p *Player) SetupHandlers() {
 			return
 		}
 
-		// Resolve IMDB ID based on media type
 		var imdbID string
 		if mediaType == "tv" {
 			imdbID, err = p.tmdbClient.GetTVIMDBId(id)
