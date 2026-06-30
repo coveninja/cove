@@ -77,7 +77,7 @@ hot-debug: go qt
 patch:
 	cd $(WEB_DIR) && npm version patch --no-git-tag-version
 	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
-	git add $(WEB_DIR)/package.json && \
+	git add $(WEB_DIR)/package.json $(WEB_DIR)/package-lock.json && \
 	git commit -m "chore: bump version to v$$NEW_VER" && \
 	git tag "v$$NEW_VER" && \
 	echo "" && \
