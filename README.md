@@ -3,11 +3,11 @@
 
   # Cove
 
-  A media streaming desktop app for Linux. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio-compatible addons, and a built-in mpv player.
+  A media streaming desktop app for Linux and Windows. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio-compatible addons, and a built-in mpv player.
 
-  [![CI](https://github.com/Arcadyi/cove/actions/workflows/release.yml/badge.svg)](https://github.com/Arcadyi/cove/actions/workflows/release.yml)
-  [![Latest Release](https://img.shields.io/github/v/release/Arcadyi/cove?label=release)](https://github.com/Arcadyi/cove/releases/latest)
-  [![Platform](https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white)](https://github.com/Arcadyi/cove/releases/latest)
+  [![CI](https://github.com/coveninja/cove/actions/workflows/release.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/release.yml)
+  [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
+  [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
   [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://go.dev)
   [![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
   [![Qt](https://img.shields.io/badge/Qt-6-41CD52?logo=qt&logoColor=white)](https://www.qt.io)
@@ -22,33 +22,39 @@
 - **Explore** — browse trending, upcoming releases, genres, and curated categories
 - **Insights** — view your watch stats and genre/actor taste breakdown
 - **Search** — find any movie or TV show by title
-- **Accounts & sync** — optional sign-in syncs your library and preferences across devices.
+- **Accounts & sync** — optional sign-in syncs your library and preferences across devices
 
 ## Install
 
+### Arch / CachyOS (PKGBUILD)
+
+One-liner install:
+
+```sh
+cd "$(mktemp -d)" && curl -LO https://github.com/coveninja/cove/releases/latest/download/PKGBUILD && makepkg -si
+```
+
+Or download `PKGBUILD` from the [latest release](https://github.com/coveninja/cove/releases/latest) manually and run `makepkg -si` in the same directory. To update, repeat with the new release's `PKGBUILD`.
+
 ### Flatpak — any Linux distro
 
-Download `cove-linux-amd64.flatpak` from the [latest release](https://github.com/Arcadyi/cove/releases/latest), then:
+Download `cove-linux-amd64.flatpak` from the [latest release](https://github.com/coveninja/cove/releases/latest), then:
 
 ```sh
 flatpak install --user cove-linux-amd64.flatpak
-flatpak run io.github.arcadyi.Cove
+flatpak run io.github.coveninja.Cove
 ```
 
-### Arch / CachyOS (PKGBUILD)
-One-Liner: Download and install
-```sh
-cd "$(mktemp -d)" && curl -LO https://github.com/Arcadyi/cove/releases/latest/download/PKGBUILD && makepkg -si
-```
+### Windows
 
-Or download `PKGBUILD` from the [latest release](https://github.com/Arcadyi/cove/releases/latest) manually and run `makepkg -si` in the same directory. To update, repeat with the new release's `PKGBUILD`.
+Download `cove-windows-amd64-setup.exe` from the [latest release](https://github.com/coveninja/cove/releases/latest) and run the installer. Or grab `cove-windows-amd64.zip` for a portable install.
 
 ## Build from source
 
 **Prerequisites:** Go 1.21+, Node.js 20+, Qt 6 with QtWebEngine, libmpv, cmake
 
 ```sh
-git clone https://github.com/Arcadyi/cove
+git clone https://github.com/coveninja/cove
 cd cove
 echo "TMDB_API_KEY=your_key_here" > .env
 make run  # builds everything and launches the app
