@@ -219,7 +219,7 @@ jobs:
           version: '6.9.*'
           host: windows
           arch: win64_msvc2022_64
-          modules: qtwebengine qtwebchannel
+          modules: qtwebengine qtwebchannel qtpositioning
 
       - name: Download mpv-dev SDK (shinchiro)
         shell: bash
