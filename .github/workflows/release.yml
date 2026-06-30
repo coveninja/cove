@@ -223,10 +223,19 @@ jobs:
 
       - name: Download mpv-dev SDK (shinchiro)
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ASSET_URL=$(curl -s https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest \
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest)
+          ASSET_URL=$(echo "$RESPONSE" \
             | jq -r '.assets[] | select(.name | test("mpv-dev-x86_64.*\\.7z$")) | .browser_download_url' \
             | head -1)
+          if [ -z "$ASSET_URL" ]; then
+            echo "Failed to find asset; API response:"
+            echo "$RESPONSE" | head -c 500
+            exit 1
+          fi
           echo "Downloading $ASSET_URL"
           curl -L "$ASSET_URL" -o mpv-dev.7z
           7z x mpv-dev.7z -ompv-sdk -y
