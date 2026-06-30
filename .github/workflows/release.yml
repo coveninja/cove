@@ -310,6 +310,9 @@ jobs:
         run: |
           Compress-Archive -Path staging/* -DestinationPath cove-windows-amd64.zip
 
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
       - name: Create NSIS installer
         shell: pwsh
         run: |
