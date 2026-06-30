@@ -1,5 +1,6 @@
 import type { Profile, AuthSession } from "$lib/types/auth";
 import { supabase } from "$lib/supabase";
+import { api } from "$lib/api";
 
 class AuthStore {
   session = $state<AuthSession | null>(null);
@@ -17,9 +18,7 @@ class AuthStore {
     return this.#token;
   }
 
-  async init(api: {
-    profilesList: () => Promise<{ profiles: Profile[]; active_profile_id: string }>;
-  }): Promise<void> {
+  async init(): Promise<void> {
     try {
       const data = await api.profilesList();
       this.profiles = data.profiles;
@@ -28,46 +27,72 @@ class AuthStore {
         data.profiles[0] ??
         null;
     } catch (e) {
-      console.error("auth init: load profiles:", e);
+      console.error("[auth] init: load profiles:", e);
+    }
+
+    // Restore session from the Go backend's persistent file store.
+    // More reliable than Qt WebEngine localStorage, which may be in-memory.
+    try {
+      const saved = await api.clientSessionGet();
+      console.log("[auth] init: restoring session for", saved.email);
+      this.#token = saved.accessToken;
+      this.session = { accessToken: saved.accessToken, email: saved.email };
+
+      // Hand to Supabase JS for background token refresh management.
+      if (supabase) {
+        supabase.auth
+          .setSession({ access_token: saved.accessToken, refresh_token: saved.refreshToken })
+          .catch((e) => console.error("[auth] init: supabase.auth.setSession failed:", e));
+      }
+    } catch {
+      console.log("[auth] init: no persisted session");
     }
 
     if (!supabase) return;
 
-    const { data } = await supabase.auth.getSession();
-    if (data.session) {
-      this.#token = data.session.access_token;
-      this.session = {
-        accessToken: data.session.access_token,
-        email: data.session.user.email ?? "",
-      };
-    }
-
-    supabase.auth.onAuthStateChange((_event, s) => {
+    // Keep the backend file in sync when Supabase refreshes the access token.
+    // Only clear on explicit SIGNED_OUT.
+    supabase.auth.onAuthStateChange((event, s) => {
+      console.log(`[auth] onAuthStateChange: event=${event}, session=${s ? s.user.email : "null"}`);
       if (s) {
         this.#token = s.access_token;
         this.session = { accessToken: s.access_token, email: s.user.email ?? "" };
-      } else {
+        api.clientSessionSave({
+          accessToken: s.access_token,
+          refreshToken: s.refresh_token,
+          email: s.user.email ?? "",
+        }).catch(console.error);
+      } else if (event === "SIGNED_OUT") {
         this.#token = null;
         this.session = null;
+        api.clientSessionDelete().catch(console.error);
       }
     });
   }
 
-  setSession(
+  async setSession(
     accessToken: string,
     email: string,
     profs: Profile[],
     active: Profile,
     refreshToken?: string,
-  ): void {
+  ): Promise<void> {
     this.#token = accessToken;
     this.session = { accessToken, email };
     this.profiles = profs;
     this.activeProfile = active;
-    // Persist through the Supabase JS client so getSession() restores on restart
-    // and the client handles token auto-refresh.
-    if (supabase && refreshToken) {
-      supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+    if (refreshToken) {
+      console.log("[auth] setSession: saving session for", email);
+      await api.clientSessionSave({ accessToken, refreshToken, email });
+      console.log("[auth] setSession: session saved");
+      // Also tell Supabase JS so it can set up its refresh timer.
+      if (supabase) {
+        supabase.auth
+          .setSession({ access_token: accessToken, refresh_token: refreshToken })
+          .catch(console.error);
+      }
+    } else {
+      console.warn("[auth] setSession: no refreshToken — session will not persist");
     }
   }
 
@@ -79,6 +104,7 @@ class AuthStore {
   async logout(): Promise<void> {
     this.#token = null;
     this.session = null;
+    await api.clientSessionDelete().catch(console.error);
     if (supabase) await supabase.auth.signOut();
   }
 }

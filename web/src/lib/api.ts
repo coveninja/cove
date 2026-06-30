@@ -735,4 +735,14 @@ export const api = {
 
   authSync: (): Promise<{ status: string }> =>
     request(`/auth/sync`, { method: "POST" }),
+
+  // Persistent client session — stored by the Go backend as a JSON file in
+  // the OS user-config dir (~/.config/cove/session.json). More reliable than
+  // Qt WebEngine localStorage, which may use in-memory storage.
+  clientSessionGet: (): Promise<{ accessToken: string; refreshToken: string; email: string }> =>
+    request(`/client-session`),
+  clientSessionSave: (data: { accessToken: string; refreshToken: string; email: string }): Promise<void> =>
+    request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
+  clientSessionDelete: (): Promise<void> =>
+    request(`/client-session`, { method: "DELETE" }),
 };

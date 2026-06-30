@@ -15,6 +15,18 @@ QT_DIR    := qt
 QT_BUILD  := $(QT_DIR)/build
 SHELL_BIN := $(QT_BUILD)/cove_shell
 
+# Auto-detect injected private implementations and compose build tags.
+# After `make inject-private`, client.go and/or discover.go are present
+# and the real implementations compile in automatically.
+_empty :=
+_space := $(_empty) $(_empty)
+, := ,
+_PRIVATE_TAGS := $(strip \
+  $(if $(wildcard internal/supabase/client.go),supabase) \
+  $(if $(wildcard internal/discover/discover.go),discover))
+_BUILD_TAGS := $(subst $(_space),$(,),$(_PRIVATE_TAGS))
+_TAG_FLAGS  := $(if $(_BUILD_TAGS),-tags $(_BUILD_TAGS))
+
 .PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean
 
 all: build
@@ -23,8 +35,10 @@ all: build
 build: go web qt
 
 ## Go backend binary (repo root). Static build — no cgo.
+## Private build tags (supabase, discover) are added automatically when the
+## corresponding implementation files are present (run `make inject-private` first).
 go:
-	CGO_ENABLED=0 go build -ldflags "-X main.Version=$(VERSION)" -o $(GO_BIN) .
+	CGO_ENABLED=0 go build $(_TAG_FLAGS) -ldflags "-X main.Version=$(VERSION)" -o $(GO_BIN) .
 
 ## Frontend → web/dist (Vite).
 web:

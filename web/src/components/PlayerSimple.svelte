@@ -103,10 +103,11 @@
     const handleCanPlay = () => {
       applyMuted();
       muteApplied = true;
-      if (autoplay) {
-        paused = false;
-        safePlay(p);
-      }
+      // Don't set `paused = false` here — that triggers the paused-watcher
+      // $effect which would call safePlay() again before this one resolves,
+      // causing "[vidstack] play request failed / media is not ready". Let
+      // handlePlay set `paused = false` once play actually starts.
+      if (autoplay) safePlay(p);
     };
     // Re-assert at play — this is the moment audio would otherwise start,
     // and YouTube ignores mute commands sent before its API is ready.

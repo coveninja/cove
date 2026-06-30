@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/clientsession"
 	"github.com/coveninja/cove/internal/discover"
 	"github.com/coveninja/cove/internal/library"
 	"github.com/coveninja/cove/internal/player"
@@ -126,6 +127,8 @@ func main() {
 
 	disc := discover.New(tmdbClient, lib)
 	disc.SetupHandlers(mux)
+
+	clientsession.SetupHandlers(mux)
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)

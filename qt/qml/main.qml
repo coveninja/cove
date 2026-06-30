@@ -52,14 +52,21 @@ Window {
         backgroundColor: "transparent"
         webChannel: coveChannel
         url: launchUrl
-        // window.QWebChannel is injected from C++ (installBridgeScript) onto the
-        // default profile this view uses — see src/main.cpp.
 
         // Open window.open() links (e.g. JustWatch provider pages) in the
         // system browser rather than a new Qt window.
         onNewWindowRequested: function(request) {
             Qt.openUrlExternally(request.requestedUrl)
             request.action = WebEngineNewWindowRequest.IgnoreRequest
+        }
+
+        // Forward JS console output to the Qt process stdout so it's visible
+        // in the terminal alongside Go backend logs.
+        onJavaScriptConsoleMessage: function(level, message, lineNumber, sourceID) {
+            var prefix = "[js] "
+            if (level === 1) prefix = "[js:warn] "
+            else if (level >= 2) prefix = "[js:err] "
+            console.log(prefix + message)
         }
     }
 }

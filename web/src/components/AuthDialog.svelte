@@ -52,7 +52,7 @@
     loading = true; error = "";
     try {
       const res = await api.authLogin(email, password);
-      auth.setSession(res.access_token, email, res.profiles, res.active, res.refresh_token);
+      await auth.setSession(res.access_token, email, res.profiles, res.active, res.refresh_token);
       libraryChanged.update((n) => n + 1);
       onclose();
     } catch (e) {
@@ -81,7 +81,7 @@
     loading = true; error = "";
     try {
       const res = await api.authVerifyOTP(otpEmail, otpCode);
-      auth.setSession(res.access_token, otpEmail, res.profiles, res.active, res.refresh_token);
+      await auth.setSession(res.access_token, otpEmail, res.profiles, res.active, res.refresh_token);
       libraryChanged.update((n) => n + 1);
       onclose();
     } catch (e) {
@@ -98,20 +98,14 @@
     try {
       const res = await api.authRegister(email, password, profileName || undefined);
 
-      if ("confirmation_required" in res) {
-        pendingEmail = email;
-        pendingPassword = password;
-        pendingProfileName = profileName;
-        otpCode = "";
-        error = "";
-        loading = false;
-        view = "register-otp";
-        return;
-      }
-
-      auth.setSession(res.access_token, email, [res.profile], res.profile);
-      libraryChanged.update((n) => n + 1);
-      onclose();
+      pendingEmail = email;
+      pendingPassword = password;
+      pendingProfileName = profileName;
+      otpCode = "";
+      error = "";
+      loading = false;
+      view = "register-otp";
+      return;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -129,7 +123,7 @@
         pendingPassword,
         pendingProfileName || undefined,
       );
-      auth.setSession(res.access_token, pendingEmail, [res.profile], res.profile, res.refresh_token);
+      await auth.setSession(res.access_token, pendingEmail, [res.profile], res.profile, res.refresh_token);
       libraryChanged.update((n) => n + 1);
       view = "success";
     } catch (e) {

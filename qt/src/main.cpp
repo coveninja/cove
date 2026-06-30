@@ -32,6 +32,19 @@
 
 #include "MpvObject.h"
 
+// Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
+// properties (data, resources, states, transform, etc.) that don't have notify
+// signals. WebChannel's introspection emits one per property at startup; they
+// have no effect on functionality.
+static QtMessageHandler s_defaultMsgHandler = nullptr;
+static void msgFilter(QtMsgType type, const QMessageLogContext &ctx,
+                      const QString &msg) {
+  if (type == QtWarningMsg &&
+      msg.contains(QLatin1String("has no notify signal")))
+    return;
+  s_defaultMsgHandler(type, ctx, msg);
+}
+
 // ── Static file server ───────────────────────────────────────────────────────
 class StaticServer : public QTcpServer {
 public:
@@ -39,7 +52,7 @@ public:
       : QTcpServer(parent), m_root(QDir(root).absolutePath()) {}
 
   QUrl start() {
-    if (!listen(QHostAddress::LocalHost, 0)) {
+    if (!listen(QHostAddress::LocalHost, 5174)) {
       qWarning() << "[shell] static server failed to listen:" << errorString();
       return {};
     }
@@ -169,11 +182,9 @@ static QString readQWebChannelJs() {
 }
 
 // Inject qwebchannel.js into every page at document creation so window.QWebChannel
-// exists before the app's JS runs. Installed on the default profile (which the
-// QML WebEngineView uses) BEFORE the engine loads, so it covers the first
-// navigation too. WebEngineScript isn't creatable from QML in Qt 6, so this is
-// done here where QWebEngineScript is a proper value type.
-static void installBridgeScript() {
+// exists before the app's JS runs. WebEngineScript isn't creatable from QML in
+// Qt 6, so this is done in C++ where QWebEngineScript is a proper value type.
+static void installBridgeScript(QWebEngineProfile *profile) {
   const QString src = readQWebChannelJs();
   if (src.isEmpty())
     return;
@@ -183,7 +194,7 @@ static void installBridgeScript() {
   script.setInjectionPoint(QWebEngineScript::DocumentCreation);
   script.setWorldId(QWebEngineScript::MainWorld);
   script.setRunsOnSubFrames(false);
-  QWebEngineProfile::defaultProfile()->scripts()->insert(script);
+  profile->scripts()->insert(script);
 }
 
 // Translucent test overlay: exercises the QWebChannel bridge by connecting to
@@ -248,6 +259,10 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
 }
 
 int main(int argc, char *argv[]) {
+  // Suppress noisy-but-benign Qt WebChannel property warnings before anything
+  // else logs. The returned pointer is the Qt default handler.
+  s_defaultMsgHandler = qInstallMessageHandler(msgFilter);
+
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
   // (mpv renders via OpenGL), and give the default surface an alpha channel so
   // the transparent web layer can composite.
@@ -301,7 +316,8 @@ int main(int argc, char *argv[]) {
 
   // Must run before the WebEngineView navigates so the script covers the first
   // load (the QML view uses the default profile this installs onto).
-  installBridgeScript();
+  // WebEngineScript isn't creatable from QML in Qt 6, so this is done here.
+  installBridgeScript(QWebEngineProfile::defaultProfile());
 
   auto loadScene = [&](const QString &url, const QString &mpvFile) {
     engine.rootContext()->setContextProperty("launchUrl", url);

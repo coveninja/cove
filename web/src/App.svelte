@@ -121,7 +121,7 @@
     settings.load();
 
     // Initialize auth: load local profiles + restore any existing Supabase session.
-    auth.init(api).catch(console.error);
+    auth.init().catch(console.error);
 
     // Non-blocking background update check. Failures are silently swallowed
     // since the user may be offline or on a dev build (which skips the check
