@@ -5,6 +5,7 @@
 #   make dev        # regenerate TS types, build everything, launch the shell
 #   make go|web|qt  # build a single component
 #   make web-dev    # Vite dev server (browser only — no mpv bridge)
+#   make patch      # bump patch version, commit, tag (then: git push origin master v<ver>)
 #   make clean      # remove build artifacts
 
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -14,7 +15,7 @@ QT_DIR    := qt
 QT_BUILD  := $(QT_DIR)/build
 SHELL_BIN := $(QT_BUILD)/cove_shell
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell clean
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean
 
 all: build
 
@@ -70,6 +71,17 @@ hot: go qt
 ## Same as `hot`, with QtWebEngine remote devtools on :9222 (open in a browser).
 hot-debug: go qt
 	QTWEBENGINE_REMOTE_DEBUGGING=9222 bash scripts/dev-hot.sh
+
+## Bump patch version in web/package.json, commit, and tag for release.
+## Then push with: git push origin master v<version>
+patch:
+	cd $(WEB_DIR) && npm version patch --no-git-tag-version
+	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
+	git add $(WEB_DIR)/package.json && \
+	git commit -m "chore: bump version to v$$NEW_VER" && \
+	git tag "v$$NEW_VER" && \
+	echo "" && \
+	echo "  Tagged v$$NEW_VER — push with: git push origin master v$$NEW_VER"
 
 ## Remove build artifacts.
 clean:
