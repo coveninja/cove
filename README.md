@@ -15,7 +15,7 @@
 
 ## Features
 
-- **Stream anything** — connects to Stremio-compatible addon sources (torrentio, etc.) and streams directly in the app
+- **Stream anything** — connects to Stremio-compatible addon sources and streams directly in the app
 - **Built-in player** — hardware-accelerated mpv playback with subtitle support and progress saving
 - **Discover** — personalized recommendations based on your watch history, ratings, and taste profile
 - **Library** — track what you've watched, mark favorites, and pick up where you left off with continue watching
