@@ -30,6 +30,13 @@ var Version = "dev"
 // During local development, set TMDB_API_KEY in a .env file instead.
 var TmdbApiKey = ""
 
+// Supabase credentials are injected at build time via -ldflags for release builds.
+// During local development, set them in a .env file instead.
+var SupabaseURL = ""
+var SupabaseAnonKey = ""
+var SupabaseServiceKey = ""
+var SupabaseJWTSecret = ""
+
 func main() {
 	// Load .env if present — for local development only.
 	// Release builds have TmdbApiKey compiled in via ldflags.
@@ -107,7 +114,9 @@ func main() {
 	updater.SetupHandlers(Version)
 
 	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
-	supaCfg := supapkg.ConfigFromEnv()
+	// Env vars take precedence; compiled-in ldflags values are the fallback for
+	// release builds where no .env file is present.
+	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey, SupabaseServiceKey, SupabaseJWTSecret)
 	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
 	supaServer.SetupHandlers()
 

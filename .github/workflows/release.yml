@@ -27,7 +27,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }}" -o cove .
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
 
       - name: Vet
         run: go vet ./...
@@ -121,7 +121,7 @@ jobs:
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }}" -o cove .
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
 
       - name: Install web deps
         working-directory: web

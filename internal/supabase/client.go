@@ -30,18 +30,25 @@ type Config struct {
 	JWTSecret  string // from Supabase → Settings → API → JWT Secret
 }
 
-// ConfigFromEnv reads Supabase credentials from environment variables.
-// Returns nil if the project URL is not set (i.e. Supabase not configured).
-func ConfigFromEnv() *Config {
-	url := os.Getenv("SUPABASE_URL")
+// ConfigFromEnv reads Supabase credentials from environment variables, falling
+// back to the compiled-in defaults when an env var is absent. Returns nil if
+// the project URL is not set by either source (i.e. Supabase not configured).
+func ConfigFromEnv(defaultURL, defaultAnonKey, defaultServiceKey, defaultJWTSecret string) *Config {
+	pick := func(envKey, dflt string) string {
+		if v := os.Getenv(envKey); v != "" {
+			return v
+		}
+		return dflt
+	}
+	url := pick("SUPABASE_URL", defaultURL)
 	if url == "" {
 		return nil
 	}
 	return &Config{
 		URL:        strings.TrimRight(url, "/"),
-		AnonKey:    os.Getenv("SUPABASE_PUBLISHABLE_KEY"),
-		ServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
-		JWTSecret:  os.Getenv("SUPABASE_JWT_SECRET"),
+		AnonKey:    pick("SUPABASE_PUBLISHABLE_KEY", defaultAnonKey),
+		ServiceKey: pick("SUPABASE_SERVICE_KEY", defaultServiceKey),
+		JWTSecret:  pick("SUPABASE_JWT_SECRET", defaultJWTSecret),
 	}
 }
 
