@@ -35,13 +35,24 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Checkout Supabase implementation
+        uses: actions/checkout@v4
+        with:
+          repository: coveninja/cove-auth
+          token: ${{ secrets.COVE_AUTH_TOKEN }}
+          path: cove-auth
+
+      - name: Inject Supabase implementation
+        shell: bash
+        run: cp cove-auth/*.go internal/supabase/
+
       - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
+        run: go build -tags supabase -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
 
       - name: Vet
-        run: go vet ./...
+        run: go vet -tags supabase ./...
 
   web:
     name: Web build + typecheck
@@ -131,10 +142,20 @@ jobs:
             qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
             libqt6webchannel6-dev libmpv-dev
 
+      - name: Checkout Supabase implementation
+        uses: actions/checkout@v4
+        with:
+          repository: coveninja/cove-auth
+          token: ${{ secrets.COVE_AUTH_TOKEN }}
+          path: cove-auth
+
+      - name: Inject Supabase implementation
+        run: cp cove-auth/*.go internal/supabase/
+
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
+        run: go build -tags supabase -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
 
       - name: Install web deps
         working-directory: web
@@ -279,12 +300,23 @@ jobs:
           lib /def:"$dir\mpv.def" /machine:x64 /out:"$dir\mpv.lib"
           Write-Host "Done: $dir\mpv.lib"
 
+      - name: Checkout Supabase implementation
+        uses: actions/checkout@v4
+        with:
+          repository: coveninja/cove-auth
+          token: ${{ secrets.COVE_AUTH_TOKEN }}
+          path: cove-auth
+
+      - name: Inject Supabase implementation
+        shell: bash
+        run: cp cove-auth/*.go internal/supabase/
+
       - name: Build Go backend (Windows)
         env:
           CGO_ENABLED: '0'
           GOOS: windows
           GOARCH: amd64
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove.exe .
+        run: go build -tags supabase -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove.exe .
 
       - name: Install web deps
         working-directory: web
