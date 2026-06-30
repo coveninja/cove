@@ -12,8 +12,10 @@
   import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
   import { api } from "$lib/api";
   import type { AddonEntry } from "$lib/types/addons";
-  import { KindProvider, SourceOfficial } from "$lib/types/addons";
-  import { Trash2, Plus, ToggleLeft, ToggleRight } from "lucide-svelte";
+  import { KindProvider, KindTimestamps, SourceOfficial } from "$lib/types/addons";
+  import { Badge } from "$lib/components/ui/badge/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
+  import { Trash2, Plus } from "lucide-svelte";
 
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
@@ -228,28 +230,52 @@
             onCheckedChange={(v) => patch("rememberPosition", v)}
           />
         </div>
+        <Separator />
+
+        <div class="py-3">
+          <Label class="text-sm font-medium">Auto-skip segments</Label>
+          <p class="mb-3 text-xs text-muted-foreground">
+            Automatically skip segments when timestamps are available via IntroDB. A skip button always appears when inside a segment.
+          </p>
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <Label for="skip-intro" class="text-sm text-muted-foreground">Skip intro</Label>
+              <Switch
+                id="skip-intro"
+                checked={draft.autoSkipIntro}
+                onCheckedChange={(v) => patch("autoSkipIntro", v)}
+              />
+            </div>
+            <div class="flex items-center justify-between">
+              <Label for="skip-recap" class="text-sm text-muted-foreground">Skip recap</Label>
+              <Switch
+                id="skip-recap"
+                checked={draft.autoSkipRecap}
+                onCheckedChange={(v) => patch("autoSkipRecap", v)}
+              />
+            </div>
+            <div class="flex items-center justify-between">
+              <Label for="skip-credits" class="text-sm text-muted-foreground">Skip credits</Label>
+              <Switch
+                id="skip-credits"
+                checked={draft.autoSkipCredits}
+                onCheckedChange={(v) => patch("autoSkipCredits", v)}
+              />
+            </div>
+            <div class="flex items-center justify-between">
+              <Label for="skip-preview" class="text-sm text-muted-foreground">Skip preview</Label>
+              <Switch
+                id="skip-preview"
+                checked={draft.autoSkipPreview}
+                onCheckedChange={(v) => patch("autoSkipPreview", v)}
+              />
+            </div>
+          </div>
+        </div>
       </Tabs.Content>
 
       <!-- ── Streaming ── -->
       <Tabs.Content value="streaming" class="mt-4 space-y-1">
-
-        <div class="flex items-center justify-between py-3">
-          <div>
-            <Label for="prefer-hls" class="text-sm font-medium"
-            >Use HLS pipeline</Label
-            >
-            <p class="text-xs text-muted-foreground">
-              Re-mux via ffmpeg before playing. Better seek support, higher CPU
-              usage.
-            </p>
-          </div>
-          <Switch
-            id="prefer-hls"
-            checked={draft.preferHLS}
-            onCheckedChange={(v) => patch("preferHLS", v)}
-          />
-        </div>
-        <Separator />
 
         <div class="flex items-center justify-between py-3">
           <div>
@@ -381,73 +407,6 @@
             </Select.Content>
           </Select.Root>
         </div>
-        <Separator />
-
-        <div class="flex items-center justify-between py-3">
-          <div>
-            <Label class="text-sm font-medium">Subtitle size</Label>
-            <p class="text-xs text-muted-foreground">
-              Default text size for subtitles in the player.
-            </p>
-          </div>
-          <div class="flex items-center gap-3">
-            <Slider
-              type="multiple"
-              value={[draft.subtitleSize]}
-              min={50}
-              max={200}
-              step={10}
-              class="w-32"
-              onValueChange={([v]) => patch("subtitleSize", v)}
-            />
-            <span
-              class="w-9 text-right text-sm text-muted-foreground tabular-nums"
-            >{draft.subtitleSize}%</span
-            >
-          </div>
-        </div>
-        <Separator />
-
-        <div class="flex items-center justify-between py-3">
-          <div>
-            <Label class="text-sm font-medium">Subtitle position</Label>
-            <p class="text-xs text-muted-foreground">
-              Vertical placement from the bottom of the screen.
-            </p>
-          </div>
-          <div class="flex items-center gap-3">
-            <Slider
-              type="multiple"
-              value={[draft.subtitlePosition]}
-              min={2}
-              max={90}
-              step={1}
-              class="w-32"
-              onValueChange={([v]) => patch("subtitlePosition", v)}
-            />
-            <span
-              class="w-9 text-right text-sm text-muted-foreground tabular-nums"
-            >{draft.subtitlePosition}%</span
-            >
-          </div>
-        </div>
-        <Separator />
-
-        <div class="flex items-center justify-between py-3">
-          <div>
-            <Label for="subtitle-bg" class="text-sm font-medium"
-            >Subtitle background</Label
-            >
-            <p class="text-xs text-muted-foreground">
-              Show a dark box behind subtitle text for readability.
-            </p>
-          </div>
-          <Switch
-            id="subtitle-bg"
-            checked={draft.subtitleBackground}
-            onCheckedChange={(v) => patch("subtitleBackground", v)}
-          />
-        </div>
       </Tabs.Content>
 
       <!-- ── Interface ── -->
@@ -494,11 +453,11 @@
             https://torrentio.strem.fun).
           </p>
           <div class="flex gap-2">
-            <input
+            <Input
               type="url"
               placeholder="https://..."
               bind:value={addAddonUrl}
-              class="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              class="flex-1"
               onkeydown={(e) => e.key === "Enter" && handleAddAddon()}
             />
             <Button
@@ -526,19 +485,22 @@
                   <span class="text-sm font-medium"
                     >{addon.manifest.name || addon.url || addon.id || "Unknown addon"}</span
                   >
-                  <span
-                    class="rounded-full px-2 py-0.5 text-[10px] {addon.kind ===
-                    KindProvider
-                      ? 'bg-blue-500/20 text-blue-400'
-                      : 'bg-purple-500/20 text-purple-400'}"
+                  <Badge
+                    variant="outline"
+                    class={addon.kind === KindProvider
+                      ? "border-blue-500/30 bg-blue-500/20 text-blue-400"
+                      : addon.kind === KindTimestamps
+                        ? "border-amber-500/30 bg-amber-500/20 text-amber-400"
+                        : "border-purple-500/30 bg-purple-500/20 text-purple-400"}
                   >
-                    {addon.kind === KindProvider ? "Provider" : "Subtitles"}
-                  </span>
+                    {addon.kind === KindProvider
+                      ? "Provider"
+                      : addon.kind === KindTimestamps
+                        ? "Timestamps"
+                        : "Subtitles"}
+                  </Badge>
                   {#if addon.source === SourceOfficial}
-                    <span
-                      class="rounded-full bg-green-500/20 px-2 py-0.5 text-[10px] text-green-400"
-                      >Built-in</span
-                    >
+                    <Badge variant="outline" class="border-green-500/30 bg-green-500/20 text-green-400">Built-in</Badge>
                   {/if}
                 </div>
                 {#if addon.manifest.description}
@@ -549,27 +511,23 @@
               </div>
 
               <!-- Toggle -->
-              <button
-                onclick={() => handleToggleAddon(addon)}
-                class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                title={addon.enabled ? "Disable" : "Enable"}
-              >
-                {#if addon.enabled}
-                  <ToggleRight class="size-6 text-accent" />
-                {:else}
-                  <ToggleLeft class="size-6" />
-                {/if}
-              </button>
+              <Switch
+                checked={addon.enabled}
+                onCheckedChange={() => handleToggleAddon(addon)}
+                class="shrink-0"
+              />
 
               <!-- Remove (stremio only) -->
               {#if addon.source !== SourceOfficial}
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="shrink-0 text-muted-foreground hover:text-destructive"
                   onclick={() => handleRemoveAddon(addon)}
-                  class="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
                   title="Remove"
                 >
                   <Trash2 class="size-4" />
-                </button>
+                </Button>
               {/if}
             </div>
           {:else}

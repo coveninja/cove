@@ -8,14 +8,16 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/discover"
-	"github.com/Arcadyi/cove/internal/library"
-	"github.com/Arcadyi/cove/internal/player"
-	"github.com/Arcadyi/cove/internal/settings"
-	"github.com/Arcadyi/cove/internal/tmdb"
-	"github.com/Arcadyi/cove/internal/updater"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/discover"
+	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/player"
+	"github.com/coveninja/cove/internal/profiles"
+	"github.com/coveninja/cove/internal/settings"
+	supapkg "github.com/coveninja/cove/internal/supabase"
+	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/updater"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/joho/godotenv"
 )
 
@@ -28,10 +30,19 @@ var Version = "dev"
 // During local development, set TMDB_API_KEY in a .env file instead.
 var TmdbApiKey = ""
 
+// Supabase credentials are injected at build time via -ldflags for release builds.
+// During local development, set them in a .env file instead.
+var SupabaseURL = ""
+var SupabaseAnonKey = ""
+var SupabaseServiceKey = ""
+var SupabaseJWTSecret = ""
+
 func main() {
 	// Load .env if present — for local development only.
-	// Release builds have TmdbApiKey compiled in via ldflags.
 	if ex, err := os.Executable(); err == nil {
+		// Clean up stale .new / .old sidecars left by a previous self-update.
+		os.Remove(ex + ".new")
+		os.Remove(ex + ".old")
 		if err := godotenv.Load(filepath.Join(filepath.Dir(ex), ".env")); err != nil {
 			log.Println("no .env next to binary; relying on the environment:", err)
 		}
@@ -48,13 +59,35 @@ func main() {
 		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
 	}
 
-	addonMgr := addons.New()
+	// Profiles must be initialised first — all other packages are profile-scoped.
+	var addonMgr *addons.Manager
+	var st *settings.Store
+	var lib *library.Library
 
-	st, err := settings.New()
+	profileStore, err := profiles.New(func(profileID string) {
+		// Reload all data stores when the active profile switches.
+		if err := lib.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload library:", err)
+		}
+		if err := st.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload settings:", err)
+		}
+		if err := addonMgr.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload addons:", err)
+		}
+	})
+	if err != nil {
+		log.Fatal("could not init profiles:", err)
+	}
+	activeID := profileStore.ActiveProfileID()
+
+	addonMgr = addons.New(activeID)
+
+	st, err = settings.New(activeID)
 	if err != nil {
 		log.Println("could not load settings:", err)
 	}
-	lib, err := library.New()
+	lib, err = library.New(activeID)
 	if err != nil {
 		log.Println("could not load library:", err)
 	}
@@ -68,15 +101,31 @@ func main() {
 		log.Fatal("could not init torrent client:", err)
 	}
 
-	addonMgr.SetupHandlers()
-	tmdbClient.SetupHandlers(addonMgr)
-	p.SetupHandlers()
-	st.SetupHandlers()
-	lib.SetupHandlers()
-	updater.SetupHandlers(Version)
+	mux := http.DefaultServeMux
+
+	addonMgr.SetupHandlers(mux, func(tmdbID int) string {
+		id, err := tmdbClient.GetTVIMDBId(tmdbID)
+		if err != nil {
+			return ""
+		}
+		return id
+	})
+	tmdbClient.SetupHandlers(mux, addonMgr)
+	p.SetupHandlers(mux)
+	st.SetupHandlers(mux)
+	lib.SetupHandlers(mux)
+	profileStore.SetupHandlers(mux)
+	updater.SetupHandlers(mux, Version)
+
+	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
+	// Env vars take precedence; compiled-in ldflags values are the fallback for
+	// release builds where no .env file is present.
+	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey, SupabaseServiceKey, SupabaseJWTSecret)
+	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
+	supaServer.SetupHandlers(mux)
 
 	disc := discover.New(tmdbClient, lib)
-	disc.SetupHandlers()
+	disc.SetupHandlers(mux)
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
@@ -86,7 +135,7 @@ func main() {
 		}
 	}()
 
-	http.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		if err != nil {

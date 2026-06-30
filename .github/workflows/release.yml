@@ -1,21 +1,18 @@
 name: CI
 
-# Run on every push/PR to catch regressions. On tag pushes the same checks
-# run plus the `package` job, which bundles a release asset and uploads it.
 on:
   push:
-    branches: [master, main]
+    branches:
+      - '**'
     tags:
       - 'v*'
-  pull_request:
-    branches: [master, main]
 
 permissions:
   contents: write  # needed for the package job to upload release assets
 
 jobs:
-  go:
-    name: Go build
+  test:
+    name: Go test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,17 +21,41 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Test
+        run: go test ./...
+
+  go:
+    name: Go build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.COVE_PRIVATE_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Inject private implementations
+        shell: bash
+        run: |
+          cp _private/cove-auth/*.go internal/supabase/
+          cp _private/cove-discover/*.go internal/discover/
+
       - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }}" -o cove .
+        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
 
       - name: Vet
-        run: go vet ./...
+        run: go vet -tags supabase,discover ./...
 
   web:
     name: Web build + typecheck
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     defaults:
       run:
         working-directory: web
@@ -51,6 +72,9 @@ jobs:
         run: npm ci
 
       - name: Build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
         run: npm run build
 
       - name: Type-check
@@ -62,6 +86,7 @@ jobs:
   qt:
     name: Qt shell build (Linux, best-effort)
     runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
     # Qt6 WebEngine and libmpv availability in CI runners can vary — treat as
     # non-blocking until the build is known stable in this environment.
     continue-on-error: true
@@ -92,6 +117,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.COVE_PRIVATE_TOKEN }}
 
       - uses: actions/setup-go@v5
         with:
@@ -115,10 +143,15 @@ jobs:
             qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
             libqt6webchannel6-dev libmpv-dev
 
+      - name: Inject private implementations
+        run: |
+          cp _private/cove-auth/*.go internal/supabase/
+          cp _private/cove-discover/*.go internal/discover/
+
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }}" -o cove .
+        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
 
       - name: Install web deps
         working-directory: web
@@ -126,6 +159,9 @@ jobs:
 
       - name: Build web frontend
         working-directory: web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
         run: npm run build
 
       - name: Build Qt shell (native, for PKGBUILD tarball)
@@ -147,10 +183,10 @@ jobs:
           cp cove                   _pkg/lib/cove/cove
           cp qt/build/cove_shell    _pkg/lib/cove/cove_shell
           cp -r web/dist            _pkg/share/cove/web
-          cp flatpak/io.github.arcadyi.Cove.desktop \
+          cp flatpak/io.github.coveninja.Cove.desktop \
              _pkg/share/applications/
           cp web/src/assets/CoveIcon.svg \
-             "_pkg/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg"
+             "_pkg/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg"
 
           tar -czf cove-linux-amd64.tar.gz -C _pkg .
 
@@ -177,8 +213,8 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: cove-linux-amd64.flatpak
-          manifest-path: flatpak/io.github.arcadyi.Cove.yml
-          cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.arcadyi.Cove.yml') }}
+          manifest-path: flatpak/io.github.coveninja.Cove.yml
+          cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.coveninja.Cove.yml') }}
           upload-artifact: false
 
       - name: Upload release assets
@@ -188,3 +224,150 @@ jobs:
             cove-linux-amd64.flatpak
             cove-linux-amd64.tar.gz
             PKGBUILD
+
+  package-windows:
+    name: Package release asset (Windows)
+    needs: [go, web]
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.COVE_PRIVATE_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # Set up MSVC toolchain — required for Qt WebEngine and to run dumpbin/lib
+      # to generate an MSVC-compatible mpv.lib from the shinchiro DLL.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.*'
+          host: windows
+          arch: win64_msvc2022_64
+          modules: qtwebengine qtwebchannel qtpositioning
+
+      - name: Download mpv-dev SDK (shinchiro)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest)
+          ASSET_URL=$(echo "$RESPONSE" \
+            | jq -r '.assets[] | select(.name | test("mpv-dev-x86_64.*\\.7z$")) | .browser_download_url' \
+            | head -1)
+          if [ -z "$ASSET_URL" ]; then
+            echo "Failed to find asset; API response:"
+            echo "$RESPONSE" | head -c 500
+            exit 1
+          fi
+          echo "Downloading $ASSET_URL"
+          curl -L "$ASSET_URL" -o mpv-dev.7z
+          7z x mpv-dev.7z -ompv-sdk -y
+
+      # The shinchiro dev package ships libmpv.dll.a (MinGW format), which MSVC
+      # can't link against. Locate the DLL (handles flat and nested archives),
+      # generate a proper mpv.lib from its exports, and export MPV_SDK for CMake.
+      - name: Generate MSVC import library for mpv
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem mpv-sdk -Filter "mpv-2.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem mpv-sdk -Filter "libmpv-2.dll" -Recurse | Select-Object -First 1 }
+          $dir = $dll.DirectoryName
+          Write-Host "mpv root: $dir"
+          # Export for subsequent CMake and staging steps
+          "MPV_SDK=$dir"     | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "MPV_DLL=$($dll.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Generating mpv.lib from $($dll.FullName)"
+          $lines = dumpbin /exports $dll.FullName
+          $funcs = $lines | Where-Object { $_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\w+)' } |
+                   ForEach-Object { [regex]::Match($_, '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\w+)').Groups[1].Value }
+          Set-Content "$dir\mpv.def" -Value (@("EXPORTS") + $funcs) -Encoding ASCII
+          lib /def:"$dir\mpv.def" /machine:x64 /out:"$dir\mpv.lib"
+          Write-Host "Done: $dir\mpv.lib"
+
+      - name: Inject private implementations
+        shell: bash
+        run: |
+          cp _private/cove-auth/*.go internal/supabase/
+          cp _private/cove-discover/*.go internal/discover/
+
+      - name: Build Go backend (Windows)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove.exe .
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Build web frontend
+        working-directory: web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+        run: npm run build
+
+      - name: Build Qt shell (Windows/MSVC)
+        shell: cmd
+        run: |
+          cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build qt/build
+
+      - name: Bundle Qt DLLs (windeployqt)
+        shell: pwsh
+        run: |
+          windeployqt --qmldir qt/qml qt/build/cove_shell.exe
+          # MPV_DLL was set by the Generate MSVC import library step
+          Copy-Item "${{ env.MPV_DLL }}" qt/build/mpv-2.dll
+
+      - name: Assemble staging directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force staging/web | Out-Null
+          Copy-Item cove.exe staging/
+          Copy-Item qt/build/cove_shell.exe staging/
+          # DLLs and Qt plugin subdirs placed by windeployqt
+          Get-ChildItem qt/build -Filter "*.dll" | Copy-Item -Destination staging/
+          foreach ($d in @("platforms","imageformats","iconengines","styles","tls","translations","resources")) {
+            if (Test-Path "qt/build/$d") { Copy-Item -Recurse "qt/build/$d" staging/ }
+          }
+          Copy-Item -Recurse web/dist/* staging/web/
+
+      - name: Create zip (for auto-updater)
+        shell: pwsh
+        run: |
+          Compress-Archive -Path staging/* -DestinationPath cove-windows-amd64.zip
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          echo "C:\Program Files (x86)\NSIS" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Create NSIS installer
+        shell: pwsh
+        run: |
+          makensis /DVERSION="${{ github.ref_name }}" /DOUTDIR="${{ github.workspace }}" packaging/windows/cove.nsi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cove-windows-amd64-setup.exe
+            cove-windows-amd64.zip

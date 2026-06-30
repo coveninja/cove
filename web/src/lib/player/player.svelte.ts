@@ -40,6 +40,7 @@ interface MpvBridge {
   setSubtitleTrack(id: number): void;
   addSubtitle(url: string, title: string, lang: string): void;
   setVolume(volume: number): void;
+  setFullscreen(fullscreen: boolean): void;
   requestState(): void;
 }
 
@@ -64,6 +65,7 @@ class MpvPlayer {
   paused = $state(true);
   volume = $state(100); // 0–100
   ended = $state(false);
+  isFullscreen = $state(false);
 
   audioTracks = $state<MpvTrack[]>([]);
   subtitleTracks = $state<MpvTrack[]>([]);
@@ -93,6 +95,7 @@ class MpvPlayer {
 
     new Channel(transport, (channel) => {
       const mpv = channel.objects.mpv;
+      if (!mpv) { console.error('[player] mpv missing from channel'); return; }
       this.#mpv = mpv;
 
       mpv.positionChanged.connect((s) => {
@@ -105,10 +108,10 @@ class MpvPlayer {
         }
         this.position = s;
       });
-      mpv.durationChanged.connect((s) => (this.duration = s));
+      mpv.durationChanged.connect((s) => { this.duration = s; });
       mpv.pausedChanged.connect((p) => (this.paused = p));
       mpv.volumeChanged.connect((v) => (this.volume = v));
-      mpv.fileLoaded.connect(() => (this.ended = false));
+      mpv.fileLoaded.connect(() => { this.ended = false; });
       mpv.endReached.connect(() => (this.ended = true));
       mpv.tracksChanged.connect((tracks) => this.#applyTracks(tracks));
 
@@ -157,6 +160,8 @@ class MpvPlayer {
   }
 
   stop(): void {
+    this.position = 0;
+    this.duration = 0;
     this.#mpv?.stop();
   }
 
@@ -189,6 +194,28 @@ class MpvPlayer {
   addSubtitle(url: string, title = "", lang = ""): void {
     this.#mpv?.addSubtitle(url, title, lang);
   }
+
+  setFullscreen(fullscreen: boolean): void {
+    if (this.isFullscreen === fullscreen) return;
+    this.isFullscreen = fullscreen;
+    this.#mpv?.setFullscreen(fullscreen);
+  }
+
+  toggleFullscreen(): void {
+    this.setFullscreen(!this.isFullscreen);
+  }
 }
 
-export const Player = new MpvPlayer();
+// Preserve the Player instance across Vite HMR module re-evaluations.
+// Creating a second QWebChannel with the same transport overwrites the
+// transport's onmessage handler, which silently breaks signal delivery for
+// both channels (positionChanged stops reaching JS even though C++ emits it).
+// import.meta.hot.data persists across HMR boundary; reuse the same instance.
+function makeOrReusePlayer(): MpvPlayer {
+  if (import.meta.hot) {
+    import.meta.hot.data.player ??= new MpvPlayer();
+    return import.meta.hot.data.player as MpvPlayer;
+  }
+  return new MpvPlayer();
+}
+export const Player = makeOrReusePlayer();

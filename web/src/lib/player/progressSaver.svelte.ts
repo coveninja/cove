@@ -4,13 +4,9 @@
 // it once when playback is ready, and saving the current position (throttled)
 // while playing plus on completion.
 //
-// Adapted for the mpv bridge: there's no <video> element anymore, so instead of
-// attaching DOM listeners this exposes value-driven methods the player drives
-// from mpvPlayer's reactive state (position/duration) and seek().
-//
-// The save payload needs live media metadata (title, season, …) which changes
-// as the user navigates, so the save methods take a context *getter* called at
-// save time rather than a snapshot captured up front.
+// Save methods take a context *getter* called at save time rather than a snapshot
+// captured up front, so they always read the current media metadata (title,
+// season, …) even as the user navigates.
 
 import { api } from "$lib/api";
 

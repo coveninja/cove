@@ -13,13 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 //
-// All struct fields use JSON snake_case to match future Supabase column names
-// directly — no transformation needed when syncing.
+// All struct fields use JSON snake_case to match Supabase column names directly.
 
 type Status = string
 
@@ -32,9 +31,9 @@ const (
 
 // LibraryEntry mirrors the `library_entries` Supabase table.
 type LibraryEntry struct {
-	ID          string   `json:"id"`      // UUIDv4
-	UserID      *string  `json:"user_id"` // null until Supabase auth is wired up
-	TmdbID      int      `json:"tmdb_id"`
+	ID        string  `json:"id"`         // UUIDv4
+	ProfileID *string `json:"profile_id"`
+	TmdbID    int     `json:"tmdb_id"`
 	MediaType   string   `json:"media_type"` // "movie" | "tv"
 	Title       string   `json:"title"`
 	PosterPath  string   `json:"poster_path"`
@@ -55,9 +54,9 @@ type LibraryEntry struct {
 // WatchProgress mirrors the `watch_progress` Supabase table.
 // One row per unique (tmdb_id, media_type, season, episode) tuple.
 type WatchProgress struct {
-	ID              string    `json:"id"`
-	UserID          *string   `json:"user_id"`
-	LibraryEntryID  string    `json:"library_entry_id"`
+	ID             string  `json:"id"`
+	ProfileID      *string `json:"profile_id"`
+	LibraryEntryID string  `json:"library_entry_id"`
 	TmdbID          int       `json:"tmdb_id"`
 	MediaType       string    `json:"media_type"`
 	Season          *int      `json:"season"`  // null for movies
@@ -92,6 +91,78 @@ type TasteSignal struct {
 	UserRating *float64 // user's 0–5 rating; nil if unrated
 	Completed  bool     // any progress record for this title is completed
 	Dismissed  bool
+}
+
+// AllEntries returns a snapshot of all library entries. Used for sync.
+func (l *Library) AllEntries() []*LibraryEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*LibraryEntry, 0, len(l.db.Entries))
+	for _, e := range l.db.Entries {
+		cp := *e
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// AllProgress returns a snapshot of all watch progress records. Used for sync.
+func (l *Library) AllProgress() []*WatchProgress {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*WatchProgress, 0, len(l.db.Progress))
+	for _, p := range l.db.Progress {
+		cp := *p
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// AllDismissals returns a snapshot of all dismissal records. Used for sync.
+func (l *Library) AllDismissals() []*Dismissal {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*Dismissal, 0, len(l.db.Dismissed))
+	for _, d := range l.db.Dismissed {
+		cp := *d
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// MergeFrom merges remote data (pulled from Supabase) into the local store.
+// Remote entries replace local ones for the same (tmdb_id, media_type) key.
+// Watch progress takes the max position_seconds. Dismissals are unioned.
+func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal) {
+	l.mu.Lock()
+	for _, e := range entries {
+		key := entryKey(e.TmdbID, e.MediaType)
+		if local, ok := l.db.Entries[key]; ok {
+			if e.UpdatedAt.After(local.UpdatedAt) {
+				l.db.Entries[key] = e
+			}
+		} else {
+			l.db.Entries[key] = e
+		}
+	}
+	for _, p := range progress {
+		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
+		if local, ok := l.db.Progress[key]; ok {
+			if p.PositionSeconds > local.PositionSeconds {
+				l.db.Progress[key] = p
+			}
+		} else {
+			l.db.Progress[key] = p
+		}
+	}
+	for _, d := range dismissals {
+		key := entryKey(d.TmdbID, d.MediaType)
+		if _, ok := l.db.Dismissed[key]; !ok {
+			l.db.Dismissed[key] = d
+		}
+	}
+	l.mu.Unlock()
+	_ = l.persist()
+	l.gen.Add(1)
 }
 
 // TasteSignals returns one signal per title the user has any history with —
@@ -206,13 +277,9 @@ func (l *Library) Stats() Stats {
 
 // Library ── Service ──────────────────────────────────────────────────────────────────
 //
-// Library owns all of the package's mutable state. It used to live in package
-// globals; holding it on a struct lets callers construct (and tests spin up)
-// independent instances, and removes the hidden coupling between Init and the
-// handlers. Fields are unexported on purpose: nothing outside this package
-// touches them, and keeping them unexported means tygo emits nothing for this
-// type — only the JSON data types (LibraryEntry, WatchProgress, diskStore)
-// cross into the generated TS.
+// Library owns all of the package's mutable state. Fields are unexported, so
+// tygo emits nothing for this type — only the JSON data types (LibraryEntry,
+// WatchProgress, diskStore) cross into the generated TS.
 type Library struct {
 	mu   sync.RWMutex
 	db   diskStore
@@ -222,12 +289,12 @@ type Library struct {
 
 // ── New ────────────────────────────────────────────────────────────────────────
 
-// New loads library.json from the per-user config directory (see
+// New loads library-{profileID}.json from the per-user config directory (see
 // utils.ConfigPath), creating it with empty maps if it doesn't exist yet. It
 // always returns a usable (non-nil) *Library even on error, so the caller can
 // still register handlers against an empty store rather than crashing —
 // matching the old Init's best-effort behaviour.
-func New() (*Library, error) {
+func New(profileID string) (*Library, error) {
 	l := &Library{
 		db: diskStore{
 			Entries:   make(map[string]*LibraryEntry),
@@ -236,7 +303,7 @@ func New() (*Library, error) {
 		},
 	}
 
-	path, err := utils.ConfigPath("library.json")
+	path, err := utils.ConfigPath(fmt.Sprintf("library-%s.json", profileID))
 	if err != nil {
 		return l, err
 	}
@@ -270,6 +337,35 @@ func (l *Library) persist() error {
 
 func (l *Library) Generation() uint64 { return l.gen.Load() }
 
+// SetProfile reloads the library from the given profile's data file.
+// Safe to call while handlers are live — takes the write lock while swapping.
+func (l *Library) SetProfile(profileID string) error {
+	path, err := utils.ConfigPath(fmt.Sprintf("library-%s.json", profileID))
+	if err != nil {
+		return err
+	}
+	newDB := diskStore{
+		Entries:   make(map[string]*LibraryEntry),
+		Progress:  make(map[string]*WatchProgress),
+		Dismissed: make(map[string]*Dismissal),
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(raw, &newDB); err != nil {
+			return err
+		}
+	}
+	l.mu.Lock()
+	l.db = newDB
+	l.path = path
+	l.mu.Unlock()
+	l.gen.Add(1)
+	return nil
+}
+
 // ── Key helpers ───────────────────────────────────────────────────────────────
 
 func entryKey(tmdbID int, mediaType string) string {
@@ -296,14 +392,14 @@ func newUUID() string {
 
 // ── SetupHandlers ─────────────────────────────────────────────────────────────
 
-func (l *Library) SetupHandlers() {
+func (l *Library) SetupHandlers(mux *http.ServeMux) {
 	// /api/library/progress must be registered before /api/library/ so Go's mux
 	// matches it as the more-specific fixed path.
-	http.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
-	http.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
-	http.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
-	http.HandleFunc("/api/library/dismiss", utils.CorsMiddleware(l.handleDismiss))
-	http.HandleFunc("/api/library/stats", utils.CorsMiddleware(l.handleStats))
+	mux.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
+	mux.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
+	mux.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
+	mux.HandleFunc("/api/library/dismiss", utils.CorsMiddleware(l.handleDismiss))
+	mux.HandleFunc("/api/library/stats", utils.CorsMiddleware(l.handleStats))
 }
 
 // ── Handler: /api/library ─────────────────────────────────────────────────────
@@ -374,9 +470,8 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 			entry.LastAiredEpisode = body.LastAiredEpisode
 		}
 		entry.UpdatedAt = now
-		// Re-link any progress records that became orphaned when the entry was
-		// previously removed. This keeps library_entry_id consistent for a
-		// future Supabase sync where it may be used as a foreign key.
+		// Re-link any progress records orphaned when the entry was previously
+		// removed — keeps library_entry_id consistent for Supabase sync.
 		if !exists {
 			for _, p := range l.db.Progress {
 				if p.TmdbID == body.TmdbID && p.MediaType == body.MediaType {
@@ -503,7 +598,6 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			entry.LastAiredEpisode = body.LastAiredEpisode
 		}
 
-		// Upsert the progress record.
 		pKey := progressKey(body.TmdbID, body.MediaType, body.Season, body.Episode)
 		prog, progExists := l.db.Progress[pKey]
 		if !progExists {
@@ -581,6 +675,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "" && r.Method == http.MethodGet:
 		l.mu.RLock()
 		entry := l.db.Entries[key]
+		_, dismissed := l.db.Dismissed[key]
 		var progList []*WatchProgress
 		for _, p := range l.db.Progress {
 			if p.TmdbID == tmdbID && p.MediaType == mediaType {
@@ -596,7 +691,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		if progList == nil {
 			progList = []*WatchProgress{}
 		}
-		jsonOK(w, map[string]any{"entry": entry, "progress": progList})
+		jsonOK(w, map[string]any{"entry": entry, "progress": progList, "dismissed": dismissed})
 
 	// ── DELETE /api/library/{id}/{type} ───────────────────────────────────────
 	case sub == "" && r.Method == http.MethodDelete:

@@ -1,4 +1,4 @@
-app-id: io.github.arcadyi.Cove
+app-id: io.github.coveninja.Cove
 # Qt WebEngine (Chromium) is too large for the KDE runtime; it's distributed
 # as a separate BaseApp layer that provides libQt6WebEngineQuick and cmake
 # config files at both build time and runtime.
@@ -51,22 +51,37 @@ modules:
         url: https://github.com/FFmpeg/FFmpeg.git
         tag: n7.1
 
+  # libplacebo: GPU shader / rendering library required by mpv >= 0.37.0.
+  # Vulkan disabled to avoid pulling in glslang/SPIRV-Tools.
+  # -Dlibdir forces installation to /app/lib instead of /app/lib64; the
+  # flatpak-builder default PKG_CONFIG_PATH only includes /app/lib/pkgconfig
+  # so without this mpv (and later cmake) can't find the installed .pc file.
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=disabled
+      - -Dtests=false
+      - -Ddemos=false
+      - -Dlibdir=/app/lib
+    sources:
+      - type: git
+        url: https://github.com/haasn/libplacebo.git
+        tag: v7.349.0
+
   # mpv: video player library used by the Qt shell (MpvObject).
-  # 0.37.0 uses waf and does not hard-require libplacebo (required since 0.38.0).
-  # libplacebo ≥ 0.38.0 pulls in meson subprojects (jinja2, glad, …) via wrap
-  # files that download from the internet at build time, which is unavailable
-  # inside the Flatpak sandbox on CI runners.
+  # Same libdir fix as libplacebo so mpv.pc lands in /app/lib/pkgconfig
+  # where the cove cmake step can find it without extra PKG_CONFIG_PATH.
   - name: mpv
-    buildsystem: simple
-    build-commands:
-      - python3 waf configure --prefix=/app --enable-libmpv-shared
-          --disable-alsa --disable-manpage-build --disable-pdf-build
-      - python3 waf -j4
-      - python3 waf install
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dbuild-date=false
+      - -Dvapoursynth=disabled
+      - -Dlibdir=/app/lib
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git
-        tag: v0.37.0
+        tag: v0.38.0
 
   # cove: Go backend + web frontend + Qt shell, assembled in one module.
   # The Go backend (cove) and web/dist are pre-built in CI before
@@ -92,13 +107,13 @@ modules:
 
       # Icon (SVG scales better than PNG for HiDPI)
       - install -Dm644 web/src/assets/CoveIcon.svg
-          /app/share/icons/hicolor/scalable/apps/io.github.arcadyi.Cove.svg
+          /app/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg
 
       # Desktop entry and AppStream metadata
-      - install -Dm644 flatpak/io.github.arcadyi.Cove.desktop
-          /app/share/applications/io.github.arcadyi.Cove.desktop
-      - install -Dm644 flatpak/io.github.arcadyi.Cove.metainfo.xml
-          /app/share/metainfo/io.github.arcadyi.Cove.metainfo.xml
+      - install -Dm644 flatpak/io.github.coveninja.Cove.desktop
+          /app/share/applications/io.github.coveninja.Cove.desktop
+      - install -Dm644 flatpak/io.github.coveninja.Cove.metainfo.xml
+          /app/share/metainfo/io.github.coveninja.Cove.metainfo.xml
 
     sources:
       # Whole repo (including pre-built cove binary and web/dist)

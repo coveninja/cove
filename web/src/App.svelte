@@ -1,5 +1,6 @@
 <script lang="ts">
   import TopBar from "./components/TopBar.svelte";
+  import { Player } from "$lib/player/player.svelte";
   import { ModeWatcher } from "mode-watcher";
   import MediaExpandedModal from "./components/MediaExpandedModal.svelte";
   import PersonExpandedModal from "./components/modals/PersonExpandedModal.svelte";
@@ -7,7 +8,7 @@
   import type { Media } from "$lib/types/tmdb";
   import type { Person, Provider } from "$lib/api";
   import type { Stream } from "$lib/types/addons";
-  import Player from "./components/Player.svelte";
+  import PlayerComponent from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { setMode } from "mode-watcher";
 
@@ -24,9 +25,17 @@
     pickBestStream,
     type StreamSelectionMode,
   } from "$lib/streamSelection";
-  import { api, type UpdateCheckResult } from "$lib/api";
+  import { api, type UpdateCheckResult, setTokenSource } from "$lib/api";
   import InsightsPage from "./components/InsightsPage.svelte";
+  import ExplorePage from "./components/ExplorePage.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
+  import { auth } from "$lib/stores/auth.svelte";
+  import { libraryChanged } from "$lib/stores/library";
+
+  // Wire api.ts to read the JWT directly from the auth store on every request,
+  // avoiding any $effect timing gap between auth state changing and the token
+  // being available for the next fetch.
+  setTokenSource(() => auth.authToken);
 
   let query = $state("");
   let updateInfo = $state<UpdateCheckResult | null>(null);
@@ -111,6 +120,9 @@
     setMode("dark");
     settings.load();
 
+    // Initialize auth: load local profiles + restore any existing Supabase session.
+    auth.init(api).catch(console.error);
+
     // Non-blocking background update check. Failures are silently swallowed
     // since the user may be offline or on a dev build (which skips the check
     // server-side anyway).
@@ -145,9 +157,21 @@
     };
     window.addEventListener("unhandledrejection", onRejection);
     window.addEventListener("error", onError);
+
+    // Pull remote changes on window focus when signed in.
+    const onFocus = () => {
+      if (!auth.isGuest) {
+        api.authSync().then(() => {
+          libraryChanged.update((n) => n + 1);
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener("focus", onFocus);
+
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
+      window.removeEventListener("focus", onFocus);
     };
   });
 
@@ -384,6 +408,7 @@
   });
 
   function closePlayer(): void {
+    Player.setFullscreen(false);
     playerSession = null;
     playerMode = null;
   }
@@ -483,6 +508,9 @@
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
             <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
+          <div class="h-full" class:hidden={currentPage.type !== "explore"}>
+            <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />
+          </div>
         </div>
       </div>
 
@@ -501,7 +529,7 @@
             easing: cubicOut,
           }}
         >
-          <Player
+          <PlayerComponent
             src={playerSession.stream.infoHash || playerSession.stream.url}
             media={playerSession.media}
             externalSubtitles={playerSession.subtitles}

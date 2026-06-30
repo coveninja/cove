@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // Manager owns the configured addon registry and the HTTP client used to talk
@@ -20,6 +20,7 @@ type Manager struct {
 	officialEnabled map[string]bool // persisted enabled-state overrides for official addons
 	client          *http.Client
 	storePath       string
+	imdbLookup      func(tmdbID int) string // returns IMDB ID for a TV show, or "" on failure
 }
 
 // officialAddons lists the built-in addons that ship with Cove. Their definitions
@@ -36,16 +37,27 @@ var officialAddons = []AddonEntry{
 		},
 		Enabled: true,
 	},
+	{
+		ID:     "cove.introdb",
+		Kind:   KindTimestamps,
+		Source: SourceOfficial,
+		Manifest: Manifest{
+			ID:          "cove.introdb",
+			Name:        "IntroSkip",
+			Description: "Intro, recap, credits, and preview timestamps. Sources: theintrodb.org (TMDB-based, all segment types) and introdb.app (IMDB-based, higher coverage for TV shows). Results are merged, with theintrodb.org taking priority.",
+		},
+		Enabled: true,
+	},
 }
 
-// New returns a Manager loaded from disk (or empty on first run).
-func New() *Manager {
+// New returns a Manager loaded from the profile-scoped store (or empty on first run).
+func New(profileID string) *Manager {
 	m := &Manager{
 		client:          &http.Client{Timeout: 30 * time.Second},
 		officialEnabled: make(map[string]bool),
 	}
 
-	path, err := utils.ConfigPath("addons.json")
+	path, err := utils.ConfigPath(fmt.Sprintf("addons-%s.json", profileID))
 	if err != nil {
 		log.Println("addons: could not determine config path:", err)
 		return m
@@ -62,6 +74,28 @@ func New() *Manager {
 		m.officialEnabled = store.OfficialEnabled
 	}
 	return m
+}
+
+// SetProfile reloads addon configuration from the given profile's data file.
+func (m *Manager) SetProfile(profileID string) error {
+	path, err := utils.ConfigPath(fmt.Sprintf("addons-%s.json", profileID))
+	if err != nil {
+		return err
+	}
+	store, err := loadStore(path)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.storePath = path
+	m.stremioAddons = store.StremioAddons
+	if store.OfficialEnabled != nil {
+		m.officialEnabled = store.OfficialEnabled
+	} else {
+		m.officialEnabled = make(map[string]bool)
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 // GetEntries returns all addons (official + stremio) with current enabled state.
@@ -197,6 +231,35 @@ func (m *Manager) GetAllSubtitles(mediaType string, stremioID string) []Subtitle
 		all = append(all, subs...)
 	}
 	return all
+}
+
+// GetTimestamps returns merged intro/recap/credits/preview timestamps.
+// It queries theintrodb.org first (TMDB IDs, all segment types), then
+// supplements any missing segments from introdb.app (IMDB IDs, TV-only).
+func (m *Manager) GetTimestamps(tmdbID int, season, episode *int) (*TimestampData, error) {
+	m.mu.RLock()
+	enabled := m.isOfficialEnabledL("cove.introdb")
+	lookup := m.imdbLookup
+	m.mu.RUnlock()
+
+	if !enabled {
+		return &TimestampData{}, nil
+	}
+
+	base, err := fetchTimestamps(m.client, tmdbID, season, episode)
+	if err != nil {
+		base = &TimestampData{}
+	}
+
+	// Supplement with introdb.app for TV episodes when an IMDB lookup is wired up.
+	if lookup != nil && season != nil && episode != nil {
+		if imdbID := lookup(tmdbID); imdbID != "" {
+			if fill, err2 := fetchIntroDBApp(m.client, imdbID, *season, *episode); err2 == nil {
+				base = mergeTimestamps(base, fill)
+			}
+		}
+	}
+	return base, nil
 }
 
 // GetWatchOptions returns streaming availability from JustWatch (via TMDB) if

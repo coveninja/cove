@@ -35,15 +35,15 @@ Window {
         registeredObjects: [mpv]
     }
 
-    // Step 1 verification: log mpv state changes (position omitted — too noisy).
     Connections {
         target: mpv
-        function onFileLoaded() { console.log("[mpv] file loaded") }
-        function onDurationChanged(d) { console.log("[mpv] duration:", d.toFixed(2), "s") }
-        function onPausedChanged(p) { console.log("[mpv] paused:", p) }
-        function onVolumeChanged(v) { console.log("[mpv] volume:", v) }
-        function onEndReached() { console.log("[mpv] end reached") }
-        function onTracksChanged(tracks) { console.log("[mpv] tracks:", JSON.stringify(tracks)) }
+        function onFullscreenRequested(fs) {
+            if (fs) {
+                win.showFullScreen();
+            } else if (win.visibility === Window.FullScreen) {
+                win.showNormal();
+            }
+        }
     }
 
     WebEngineView {

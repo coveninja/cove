@@ -1,9 +1,8 @@
 // $lib/player/subtitleCues.svelte.ts
 //
 // Owns the subtitle *cue pipeline*: fetching a WebVTT track, parsing it, and
-// tracking which cue is current as playback advances. Extracted from
-// Player.svelte. Track-selection UI (which track is chosen, the language menu)
-// and styling stay in the component — this controller only answers "what text
+// tracking which cue is current as playback advances. Track-selection UI and
+// styling stay in the component — this controller only answers "what text
 // should be on screen right now".
 
 export interface Cue {

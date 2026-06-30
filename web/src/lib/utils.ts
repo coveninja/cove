@@ -47,7 +47,6 @@ const qualityOrder = [
 export function inferQuality(stream: Stream): string | null {
   const qualityLine = stream.name.split("\n")[1]?.trim().toLowerCase();
   if (qualityLine) {
-    // Extract the best known quality from the line rather than returning it raw
     for (const q of qualityOrder) {
       if (qualityLine.includes(q)) return q;
     }
@@ -138,7 +137,6 @@ export function getImageOpt(
 
   const list = images[type];
 
-  // 1. Filter all images that meet the criteria
   const matches = list.filter((img) => {
     if (opts.iso && img.iso_639_1 !== null && img.iso_639_1 !== opts.iso)
       return false;
@@ -155,7 +153,6 @@ export function getImageOpt(
     return !(opts.minWidth !== undefined && img.width < opts.minWidth);
   });
 
-  // 2. Handle the selection
   if (matches.length > 0) {
     if (opts.randomize) {
       const randomIndex = Math.floor(Math.random() * matches.length);
@@ -164,7 +161,6 @@ export function getImageOpt(
     return matches[0].url;
   }
 
-  // 3. Fallback: Return the first available image if nothing matches criteria
   return list[0]?.url ?? "";
 }
 

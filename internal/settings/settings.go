@@ -2,16 +2,16 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"sync"
 
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 // Settings holds all user-configurable preferences persisted to disk.
-// Add new fields here; they'll be zero-valued on first load and safe to extend.
 type Settings struct {
 	// Playback
 	OpenOnMute       bool    `json:"openOnMute"`       // start videos muted
@@ -39,6 +39,12 @@ type Settings struct {
 	// UI
 	ShowStreamDetails bool `json:"showStreamDetails"` // show codec/resolution badges on stream list
 	HideSpoilers      bool `json:"hideSpoilers"`
+
+	// Segment skip (via IntroDB)
+	AutoSkipIntro   bool `json:"autoSkipIntro"`
+	AutoSkipRecap   bool `json:"autoSkipRecap"`
+	AutoSkipCredits bool `json:"autoSkipCredits"`
+	AutoSkipPreview bool `json:"autoSkipPreview"`
 }
 
 var defaultSettings = Settings{
@@ -59,29 +65,28 @@ var defaultSettings = Settings{
 	SubtitleBackground:    true,
 	ShowStreamDetails:     true,
 	HideSpoilers:          false,
+	AutoSkipIntro:         false,
+	AutoSkipRecap:         false,
+	AutoSkipCredits:       false,
+	AutoSkipPreview:       false,
 }
 
-// Store ── Service ──────────────────────────────────────────────────────────────────
-//
-// Store owns the package's mutable state (previously package globals). The
-// data type is already named Settings, so the service is named Store; New
-// returns *Store and the handlers hang off it. Fields are unexported, so tygo
-// emits nothing for Store — only the Settings data type crosses into the
-// generated TS.
+// Store owns the package's mutable state. Fields are unexported, so tygo emits
+// nothing for Store — only the Settings data type crosses into the generated TS.
 type Store struct {
 	mu     sync.RWMutex
 	cached Settings
 	path   string
 }
 
-// New resolves settings.json in the per-user config directory (see
+// New resolves settings-{profileID}.json in the per-user config directory (see
 // utils.ConfigPath) and loads it, or writes the defaults on first run. It always
 // returns a usable (non-nil) *Store even on error, so the caller can register
 // handlers against in-memory defaults rather than crashing.
-func New() (*Store, error) {
+func New(profileID string) (*Store, error) {
 	s := &Store{cached: defaultSettings}
 
-	path, err := utils.ConfigPath("settings.json")
+	path, err := utils.ConfigPath(fmt.Sprintf("settings-%s.json", profileID))
 	if err != nil {
 		return s, err
 	}
@@ -112,9 +117,50 @@ func (s *Store) write() error {
 	return utils.AtomicWriteFile(s.path, data, 0o644)
 }
 
-// SetupHandlers registers GET/PUT /api/settings.
-func (s *Store) SetupHandlers() {
-	http.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+// Get returns the current settings value. Safe for concurrent use.
+func (s *Store) Get() Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cached
+}
+
+// MergeFrom replaces the cached settings with incoming (from a Supabase pull).
+func (s *Store) MergeFrom(incoming Settings) {
+	s.mu.Lock()
+	s.cached = incoming
+	err := s.write()
+	s.mu.Unlock()
+	if err != nil {
+		log.Println("settings: merge write:", err)
+	}
+}
+
+// SetProfile reloads settings from the given profile's data file.
+func (s *Store) SetProfile(profileID string) error {
+	path, err := utils.ConfigPath(fmt.Sprintf("settings-%s.json", profileID))
+	if err != nil {
+		return err
+	}
+	cur := defaultSettings
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &cur); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.cached = cur
+	s.path = path
+	s.mu.Unlock()
+	return nil
+}
+
+// SetupHandlers registers GET/PUT /api/settings on mux.
+func (s *Store) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")

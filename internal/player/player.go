@@ -14,17 +14,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Arcadyi/cove/internal/addons"
-	"github.com/Arcadyi/cove/internal/tmdb"
-	"github.com/Arcadyi/cove/internal/utils"
+	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/anacrolix/torrent"
 )
 
 // Player owns all of the package's mutable state — the torrent client and the
 // active-torrent registry — plus the injected TMDB client and addon manager.
-// Decode, track enumeration, and subtitle rendering now happen in the mpv-based
-// client, so the old HLS session table, ffprobe results, and subtitle cache are
-// gone. Fields are unexported, so tygo emits nothing for Player.
+// Fields are unexported, so tygo emits nothing for Player.
 type Player struct {
 	client *torrent.Client
 
@@ -37,8 +35,8 @@ type Player struct {
 
 // torrentDataDir is where the anacrolix client writes downloaded pieces. The
 // reaper removes per-torrent subdirectories under here when a torrent is
-// dropped, so Init and CleanupTorrents must agree on the path.
-const torrentDataDir = "/tmp/cove-torrents"
+// dropped, so New() and CleanupTorrents must agree on the path.
+var torrentDataDir = filepath.Join(os.TempDir(), "cove-torrents")
 
 type torrentState struct {
 	torrent      *torrent.Torrent
@@ -86,8 +84,7 @@ func largestFile(t *torrent.Torrent) (*torrent.File, error) {
 	return largest, nil
 }
 
-// addReader adjusts the live-reader count for a torrent and refreshes its idle
-// timer. delta is +1 when a stream handler opens, -1 when it returns.
+// addReader adjusts readers (+1 on open, -1 on return) and refreshes lastUsed.
 func (p *Player) addReader(infoHash string, delta int) {
 	p.activeTorrentsMu.Lock()
 	if st, ok := p.activeTorrents[infoHash]; ok {
@@ -262,20 +259,18 @@ func formatSpeed(bytesPerSec int64) string {
 	}
 }
 
-// NewServer returns a pre-configured *http.Server. Callers should use this
-// instead of http.ListenAndServe so that ReadHeaderTimeout is always set.
+// NewServer returns a pre-configured *http.Server with ReadHeaderTimeout set.
 func NewServer(addr string) *http.Server {
 	return &http.Server{
 		Addr: addr,
-		// Guards against slow-loris style attacks. Streaming responses
-		// (HLS segments, torrent) legitimately run for minutes, so we
-		// do NOT set WriteTimeout or IdleTimeout here.
+		// Guards against slow-loris attacks. Torrent streaming runs for minutes,
+		// so WriteTimeout and IdleTimeout are intentionally not set.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 }
 
-func (p *Player) SetupHandlers() {
-	http.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+func (p *Player) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		id := 0
@@ -318,7 +313,7 @@ func (p *Player) SetupHandlers() {
 	}))
 
 	// /api/streams?id=<tmdbID>&type=movie|tv[&season=N&episode=N]
-	http.HandleFunc("/api/streams", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/streams", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		if mediaType == "" {
@@ -332,7 +327,6 @@ func (p *Player) SetupHandlers() {
 			return
 		}
 
-		// Resolve IMDB ID based on media type
 		var imdbID string
 		if mediaType == "tv" {
 			imdbID, err = p.tmdbClient.GetTVIMDBId(id)
@@ -371,7 +365,7 @@ func (p *Player) SetupHandlers() {
 		}
 	}))
 
-	http.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
 
@@ -392,7 +386,7 @@ func (p *Player) SetupHandlers() {
 	}))
 
 	// Legacy polling endpoint — kept for compatibility; prefer /api/progress/stream (SSE).
-	http.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		err := json.NewEncoder(w).Encode(p.GetProgress(hash))
 		if err != nil {
@@ -400,7 +394,7 @@ func (p *Player) SetupHandlers() {
 		}
 	}))
 
-	http.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -432,7 +426,7 @@ func (p *Player) SetupHandlers() {
 	// measure raw download throughput for the "Match My Internet Speed"
 	// stream-selection mode. Not a rigorous benchmark (single connection,
 	// no compression, local network only) but good enough as a rough guide.
-	http.HandleFunc("/api/speedtest", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/speedtest", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		const payloadSize = 25 * 1024 * 1024 // 25 MiB
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
@@ -455,7 +449,7 @@ func (p *Player) SetupHandlers() {
 		}
 	}))
 
-	http.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		rawURL := r.URL.Query().Get("url")
 		if rawURL == "" {
 			http.Error(w, "missing url", http.StatusBadRequest)
