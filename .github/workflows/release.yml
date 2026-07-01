@@ -295,7 +295,7 @@ jobs:
           $lines = dumpbin /exports $dll.FullName
           $funcs = $lines | Where-Object { $_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\w+)' } |
                    ForEach-Object { [regex]::Match($_, '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\w+)').Groups[1].Value }
-          Set-Content "$dir\mpv.def" -Value (@("EXPORTS") + $funcs) -Encoding ASCII
+          Set-Content "$dir\mpv.def" -Value (@("LIBRARY mpv-2.dll", "EXPORTS") + $funcs) -Encoding ASCII
           lib /def:"$dir\mpv.def" /machine:x64 /out:"$dir\mpv.lib"
           Write-Host "Done: $dir\mpv.lib"
 
