@@ -1,9 +1,12 @@
 // Package updater implements self-update via GitHub releases. The check is
-// skipped entirely on managed distributions (APPIMAGE/FLATPAK_ID env vars
-// set, since those have their own update mechanism) and on dev builds
-// (non-semver version string). Applying an update exits the process with
-// code 42, a sentinel the Qt shell watches for to know it should restart the
-// backend rather than treating the exit as a crash.
+// skipped entirely on Linux (the only distribution channels there are
+// Flatpak and the AUR PKGBUILD package, both of which own their own updates
+// — Flatpak via flatpak/Flathub, PKGBUILD via pacman; self-extracting a
+// release tarball over either would corrupt the package manager's view of
+// installed files) and on dev builds (non-semver version string). Applying
+// an update exits the process with code 42, a sentinel the Qt shell watches
+// for to know it should restart the backend rather than treating the exit
+// as a crash.
 package updater
 
 import (
@@ -139,9 +142,13 @@ func fetchLatest() (*ghRelease, error) {
 func check(currentVersion string) (*CheckResult, error) {
 	result := &CheckResult{CurrentVersion: currentVersion}
 
-	// Managed distributions (AppImage, Flatpak) handle updates outside the app.
-	// AppImage runtime sets APPIMAGE; Flatpak sets FLATPAK_ID.
-	if os.Getenv("APPIMAGE") != "" || os.Getenv("FLATPAK_ID") != "" {
+	// Linux has no portable/self-contained distribution channel — only
+	// Flatpak and the AUR PKGBUILD package, both of which manage their own
+	// updates (flatpak/Flathub, pacman respectively). Self-extracting the
+	// release tarball in place would either be a no-op (Flatpak's read-only
+	// /app) or silently desync a pacman-owned install from its package
+	// database, so self-update never offers itself here.
+	if runtime.GOOS == "linux" {
 		return result, nil
 	}
 

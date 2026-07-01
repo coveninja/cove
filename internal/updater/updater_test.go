@@ -15,14 +15,14 @@ func TestNewerThan(t *testing.T) {
 		current string
 		want    bool
 	}{
-		{"v0.10.0", "v0.9.0", true},   // minor bump, double-digit vs single
-		{"v1.0.0", "v0.9.9", true},    // major bump
-		{"v0.9.1", "v0.9.0", true},    // patch bump
-		{"v0.9.0", "v0.9.0", false},   // equal
-		{"v0.9.0", "v0.10.0", false},  // older
-		{"v1.0.0", "v1.0.0", false},   // exact equal with v prefix
+		{"v0.10.0", "v0.9.0", true},    // minor bump, double-digit vs single
+		{"v1.0.0", "v0.9.9", true},     // major bump
+		{"v0.9.1", "v0.9.0", true},     // patch bump
+		{"v0.9.0", "v0.9.0", false},    // equal
+		{"v0.9.0", "v0.10.0", false},   // older
+		{"v1.0.0", "v1.0.0", false},    // exact equal with v prefix
 		{"v0.9.0-rc1", "v0.8.0", true}, // pre-release suffix stripped from latest
-		{"v1.2.3", "v1.2.4", false},   // patch regression
+		{"v1.2.3", "v1.2.4", false},    // patch regression
 	}
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("%s_vs_%s", tc.latest, tc.current), func(t *testing.T) {
@@ -50,6 +50,17 @@ func TestIsCleanSemver(t *testing.T) {
 			assert.Equal(t, tc.want, isCleanSemver(tc.v))
 		})
 	}
+}
+
+func TestCheckSkipsOnLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only behavior")
+	}
+	// No network call should happen: the linux skip returns before fetchLatest.
+	result, err := check("v1.0.0")
+	assert.NoError(t, err)
+	assert.False(t, result.Available)
+	assert.Empty(t, result.LatestVersion)
 }
 
 func TestAssetName(t *testing.T) {
