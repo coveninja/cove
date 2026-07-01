@@ -12,7 +12,7 @@
     lastAiredSeason = null,
     lastAiredEpisode = null,
   } = $props<{
-    libraryEntry: LibraryEntry;
+    libraryEntry: LibraryEntry | null;
     media: Media;
     lastAiredSeason?: number | null;
     lastAiredEpisode?: number | null;

@@ -98,9 +98,9 @@
       <div class="px-3 py-2">
         <p class="pb-1 text-xs font-medium text-muted-foreground">Profiles</p>
         {#each auth.profiles as profile (profile.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-          <div
-            class="flex cursor-pointer items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+          <button
+            type="button"
+            class="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
             onclick={() => switchProfile(profile.id)}
           >
             <span class="flex items-center gap-2">
@@ -112,12 +112,13 @@
             {#if auth.activeProfile?.id === profile.id}
               <Check class="size-3.5 shrink-0 text-accent" />
             {/if}
-          </div>
+          </button>
         {/each}
 
         <!-- New profile input -->
         {#if showNewProfileInput}
           <div class="mt-1 flex items-center gap-1">
+            <!-- svelte-ignore a11y_autofocus -->
             <input
               type="text"
               placeholder="Profile name"

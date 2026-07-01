@@ -208,7 +208,7 @@
     {/if}
 
     <span class="flex w-full items-center justify-between gap-1 pt-0.5">
-      <span class="contents" onclick={(e) => e.stopPropagation()}>
+      <span class="contents" role="presentation" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
         <StarRating
           {libraryEntry}
           {media}

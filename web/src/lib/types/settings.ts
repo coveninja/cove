@@ -5,7 +5,6 @@
 
 /**
  * Settings holds all user-configurable preferences persisted to disk.
- * Add new fields here; they'll be zero-valued on first load and safe to extend.
  */
 export interface Settings {
   /**
@@ -47,14 +46,14 @@ export interface Settings {
   autoSkipRecap: boolean;
   autoSkipCredits: boolean;
   autoSkipPreview: boolean;
+  /**
+   * Onboarding
+   */
+  onboardingDone: boolean;
 }
 /**
- * Store ── Service ──────────────────────────────────────────────────────────────────
- * Store owns the package's mutable state (previously package globals). The
- * data type is already named Settings, so the service is named Store; New
- * returns *Store and the handlers hang off it. Fields are unexported, so tygo
- * emits nothing for Store — only the Settings data type crosses into the
- * generated TS.
+ * Store owns the package's mutable state. Fields are unexported, so tygo emits
+ * nothing for Store — only the Settings data type crosses into the generated TS.
  */
 export interface Store {
 }

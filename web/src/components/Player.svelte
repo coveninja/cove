@@ -721,6 +721,7 @@
         class="relative h-full w-full overflow-hidden"
         onmousemove={showControls}
         onclick={() => Player.togglePause()}
+        onkeydown={() => {}}
 >
   <!-- ── Bridge unavailable (running outside the Cove shell) ─────────────────── -->
   {#if !Player.available}
@@ -755,6 +756,7 @@
       <div
               class="flex w-full flex-col gap-2 px-4 pb-4 text-white"
               onclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => e.stopPropagation()}
       >
         <!-- Seek bar (full width, custom — no third-party slider) -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

@@ -19,7 +19,7 @@
   import MyListPage from "./components/MyListPage.svelte";
   import { settings } from "$lib/stores/settings";
   import { onMount, setContext } from "svelte";
-  import { scale } from "svelte/transition";
+  import { scale, fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import {
     pickBestStream,
@@ -29,6 +29,8 @@
   import InsightsPage from "./components/InsightsPage.svelte";
   import ExplorePage from "./components/ExplorePage.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
+  import OnboardingPage from "./components/OnboardingPage.svelte";
+  import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import { libraryChanged } from "$lib/stores/library";
 
@@ -39,6 +41,8 @@
 
   let query = $state("");
   let updateInfo = $state<UpdateCheckResult | null>(null);
+  let splashVisible = $state(true);
+  let showOnboarding = $state(false);
 
   // The media whose detail overlay (the single app-level MediaExpandedModal)
   // is currently open. Opening one no longer navigates to a page — the overlay
@@ -118,10 +122,16 @@
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
     setMode("dark");
-    settings.load();
-
-    // Initialize auth: load local profiles + restore any existing Supabase session.
-    auth.init().catch(console.error);
+    // Wait for both settings and auth to resolve before revealing the app.
+    Promise.all([
+      settings.load(),
+      auth.init().catch(console.error),
+    ]).then(() => {
+      splashVisible = false;
+      if (!$settings.onboardingDone) {
+        showOnboarding = true;
+      }
+    });
 
     // Non-blocking background update check. Failures are silently swallowed
     // since the user may be offline or on a dev build (which skips the check
@@ -544,6 +554,19 @@
 
 {#if updateInfo}
   <UpdateModal info={updateInfo} ondismiss={() => (updateInfo = null)} />
+{/if}
+
+{#if showOnboarding}
+  <div
+    transition:fade={{ duration: 200 }}
+    class="fixed inset-0 z-50 flex items-center justify-center bg-background"
+  >
+    <OnboardingPage onclose={() => (showOnboarding = false)} />
+  </div>
+{/if}
+
+{#if splashVisible}
+  <SplashScreen />
 {/if}
 
 <ModeWatcher defaultMode="dark" />

@@ -33,7 +33,7 @@
 
   let data = $state<SearchResults>(empty());
   let keywords: { id: number; name: string }[] = $state([]);
-  let qualityMap = new SvelteMap<number, string>();
+  let qualityMap = $state(new SvelteMap<number, string>());
 
   // ── Controls ──────────────────────────────────────────────────────────────────
   const sortOptions = [

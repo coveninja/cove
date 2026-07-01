@@ -25,6 +25,7 @@ const DEFAULTS: Settings = {
   autoSkipRecap: false,
   autoSkipCredits: false,
   autoSkipPreview: false,
+  onboardingDone: false,
 };
 
 function createSettingsStore(): {

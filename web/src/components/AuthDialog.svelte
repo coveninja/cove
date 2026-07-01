@@ -135,11 +135,13 @@
   }
 </script>
 
-<!-- Backdrop -->
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<!-- Backdrop: click-outside-to-close. role="presentation" = decorative overlay;
+     Escape closes via the inner dialog's natural keyboard flow. -->
 <div
   class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+  role="presentation"
   onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onkeydown={(e) => { if (e.key === "Escape") onclose(); }}
 >
   <div class="relative w-full max-w-sm rounded-xl border border-border bg-background p-6 shadow-2xl">
     {#if view !== "success"}

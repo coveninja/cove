@@ -42,12 +42,29 @@
   } = $props();
 
   let player = $state<MediaPlayerElement | null>(null);
+  // True once the current player element has fired can-play. Reset whenever
+  // {#key src} recreates the element (via the player-change effect below).
+  // Gates the paused-watcher so it never calls play() on a not-yet-ready element.
+  let mediaReady = $state(false);
 
   // play() rejects with "provider destroyed" if the player is torn down
   // before it resolves. These rejections are safe to ignore.
   function safePlay(p: MediaPlayerElement): void {
     void p.play().catch(() => {});
   }
+
+  // Reset readiness whenever the underlying element is replaced ({#key src}).
+  $effect(() => {
+    player; // establish dependency
+    mediaReady = false;
+  });
+
+  // Reset paused intent when the source changes so the old play-state doesn't
+  // bleed into a new element that isn't loaded yet.
+  $effect(() => {
+    src; // establish dependency
+    paused = true;
+  });
 
   // Apply the current `muted` value to whatever provider is in use.
   //
@@ -103,11 +120,10 @@
     const handleCanPlay = () => {
       applyMuted();
       muteApplied = true;
-      // Don't set `paused = false` here — that triggers the paused-watcher
-      // $effect which would call safePlay() again before this one resolves,
-      // causing "[vidstack] play request failed / media is not ready". Let
-      // handlePlay set `paused = false` once play actually starts.
-      if (autoplay) safePlay(p);
+      // Signal that this element is ready. The native `autoplay` attribute on
+      // <media-player> handles the actual play() call so we never call it here
+      // — vidstack knows the exact safe moment, avoiding "media is not ready".
+      mediaReady = true;
     };
     // Re-assert at play — this is the moment audio would otherwise start,
     // and YouTube ignores mute commands sent before its API is ready.
@@ -154,10 +170,12 @@
     applyMuted();
   });
 
-  // Apply parent-driven play/pause to the player.
+  // Apply parent-driven play/pause — but only after the element is ready.
+  // Gated on `mediaReady` so a stale `paused = false` from a previous source
+  // never triggers play() on a freshly-created, not-yet-loaded element.
   $effect(() => {
     const p = player;
-    if (!p) return;
+    if (!p || !mediaReady) return;
     if (paused && !p.paused) void Promise.resolve(p.pause()).catch(() => {});
     else if (!paused && p.paused) safePlay(p);
   });
@@ -187,6 +205,7 @@
     bind:this={player}
     {src}
     {loop}
+    autoplay={autoplay}
     playsinline
     class="group/player relative h-full w-full bg-black {Class}"
   >

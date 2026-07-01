@@ -13,7 +13,7 @@ export const StatusDropped: Status = "dropped";
  */
 export interface LibraryEntry {
   id: string; // UUIDv4
-  profile_id?: string; // null until profile is wired up
+  profile_id?: string;
   tmdb_id: number /* int */;
   media_type: string; // "movie" | "tv"
   title: string;
@@ -84,13 +84,9 @@ export interface Stats {
 }
 /**
  * Library ── Service ──────────────────────────────────────────────────────────────────
- * Library owns all of the package's mutable state. It used to live in package
- * globals; holding it on a struct lets callers construct (and tests spin up)
- * independent instances, and removes the hidden coupling between Init and the
- * handlers. Fields are unexported on purpose: nothing outside this package
- * touches them, and keeping them unexported means tygo emits nothing for this
- * type — only the JSON data types (LibraryEntry, WatchProgress, diskStore)
- * cross into the generated TS.
+ * Library owns all of the package's mutable state. Fields are unexported, so
+ * tygo emits nothing for this type — only the JSON data types (LibraryEntry,
+ * WatchProgress, diskStore) cross into the generated TS.
  */
 export interface Library {
 }

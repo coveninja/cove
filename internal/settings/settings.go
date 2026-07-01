@@ -20,8 +20,8 @@ type Settings struct {
 	RememberPosition bool    `json:"rememberPosition"` // resume from last position
 
 	// Provider / streams
-	DefaultProvider string `json:"defaultProvider"` // e.g. "torrentio", "debrid"
-	PreferHLS       bool   `json:"preferHLS"`       // use HLS pipeline over direct stream
+	DefaultProvider string `json:"defaultProvider"`
+	PreferHLS       bool   `json:"preferHLS"`
 
 	// Stream auto-selection
 	AutoSelectStream      bool    `json:"autoSelectStream"`      // skip the manual stream list and play immediately
@@ -45,6 +45,9 @@ type Settings struct {
 	AutoSkipRecap   bool `json:"autoSkipRecap"`
 	AutoSkipCredits bool `json:"autoSkipCredits"`
 	AutoSkipPreview bool `json:"autoSkipPreview"`
+
+	// Onboarding
+	OnboardingDone bool `json:"onboardingDone"`
 }
 
 var defaultSettings = Settings{

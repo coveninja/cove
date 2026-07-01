@@ -6,9 +6,7 @@
 /**
  * Player owns all of the package's mutable state — the torrent client and the
  * active-torrent registry — plus the injected TMDB client and addon manager.
- * Decode, track enumeration, and subtitle rendering now happen in the mpv-based
- * client, so the old HLS session table, ffprobe results, and subtitle cache are
- * gone. Fields are unexported, so tygo emits nothing for Player.
+ * Fields are unexported, so tygo emits nothing for Player.
  */
 export interface Player {
 }

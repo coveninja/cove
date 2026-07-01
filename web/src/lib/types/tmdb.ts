@@ -4,12 +4,9 @@
 // source: tmdb.go
 
 /**
- * Client talks to the TMDB API. It owns the API key (previously threaded
- * through every function as a parameter) and the HTTP client (previously a
- * package global). Holding both on a struct lets callers construct independent
- * clients and inject a custom HTTP client in tests. Fields are unexported, so
- * tygo emits nothing for Client — only the data types (Media, Details,
- * MediaImages, ...) cross into the generated TS.
+ * Client talks to the TMDB API. Fields are unexported, so tygo emits nothing
+ * for Client — only the data types (Media, Details, MediaImages, ...) cross
+ * into the generated TS.
  */
 export interface Client {
 }
@@ -56,11 +53,6 @@ export interface TVEpisode {
   air_date: string;
 }
 export interface Details {
-  /**
-   * Overview was missing entirely — TMDB always returns it, but Go's JSON
-   * decoder silently drops any source field with no matching destination
-   * field, so it never survived the unmarshal in GetDetails below.
-   */
   overview: string;
   genres: {
     id: number /* int */;
