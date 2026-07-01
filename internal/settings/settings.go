@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/coveninja/cove/internal/utils"
 )
@@ -57,6 +58,10 @@ type Settings struct {
 	// Discovery
 	DiscoveryAlgorithm string `json:"discoveryAlgorithm"` // "smart" | "popularity" | "custom"
 	CustomAlgorithmURL string `json:"customAlgorithmUrl"` // used when discoveryAlgorithm == "custom"
+
+	// Sync bookkeeping — stamped server-side on every local write, used to resolve
+	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 var defaultSettings = Settings{
@@ -136,13 +141,18 @@ func (s *Store) Get() Settings {
 	return s.cached
 }
 
-// MergeFrom replaces the cached settings with incoming (from a Supabase pull).
+// MergeFrom replaces the cached settings with incoming (from a Supabase pull), but
+// only if incoming is actually newer — otherwise a stale pull would silently revert
+// a local edit that hasn't been pushed to Supabase yet (see library.MergeFrom for
+// the same pattern applied to library entries).
 func (s *Store) MergeFrom(incoming Settings) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !incoming.UpdatedAt.After(s.cached.UpdatedAt) {
+		return
+	}
 	s.cached = incoming
-	err := s.write()
-	s.mu.Unlock()
-	if err != nil {
+	if err := s.write(); err != nil {
 		log.Println("settings: merge write:", err)
 	}
 }
@@ -200,6 +210,7 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 				http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 				return
 			}
+			incoming.UpdatedAt = time.Now().UTC()
 
 			s.mu.Lock()
 			s.cached = incoming

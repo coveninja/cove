@@ -7,6 +7,8 @@ packages:
     output_path: "web/src/lib/types/player.ts"
   - path: "github.com/coveninja/cove/internal/settings"
     output_path: "web/src/lib/types/settings.ts"
+    type_mappings:
+      time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity
   - path: "github.com/coveninja/cove/internal/library"
     output_path: "web/src/lib/types/library.ts"
     type_mappings:

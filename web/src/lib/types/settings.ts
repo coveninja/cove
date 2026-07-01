@@ -62,6 +62,11 @@ export interface Settings {
    */
   discoveryAlgorithm: string; // "smart" | "popularity" | "custom"
   customAlgorithmUrl: string; // used when discoveryAlgorithm == "custom"
+  /**
+   * Sync bookkeeping — stamped server-side on every local write, used to resolve
+   * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
+   */
+  updatedAt: string;
 }
 /**
  * Store owns the package's mutable state. Fields are unexported, so tygo emits
