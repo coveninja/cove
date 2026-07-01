@@ -33,7 +33,8 @@
 
   let data = $state<SearchResults>(empty());
   let keywords: { id: number; name: string }[] = $state([]);
-  let qualityMap = $state(new SvelteMap<number, string>());
+  // svelte-ignore non_reactive_update
+    let qualityMap = new SvelteMap<number, string>();
 
   // ── Controls ──────────────────────────────────────────────────────────────────
   const sortOptions = [

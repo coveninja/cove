@@ -27,6 +27,7 @@
     type ProgressContext,
   } from "$lib/player/progressSaver.svelte.js";
   import { TorrentProgress } from "$lib/player/torrentProgress.svelte.js";
+  import {SvelteMap, SvelteSet} from "svelte/reactivity";
 
   // ─── Props (unchanged from the old Player) ──────────────────────────────────
 
@@ -53,7 +54,7 @@
   // just consumes it over http with range requests for seeking.
   let appliedAudioDefault = false;
   let appliedSubDefault = false;
-  const addedExternal = new Set<string>(); // external sub ids already sub-add'd
+  const addedExternal = new SvelteSet<string>(); // external sub ids already sub-add'd
 
   $effect(() => {
     if (!src || !Player.available) return;
@@ -188,7 +189,7 @@
   // ─── IntroDB timestamps ──────────────────────────────────────────────────────
 
   let timestamps = $state<TimestampData | null>(null);
-  const autoSkippedSegments = new Set<string>();
+  const autoSkippedSegments = new SvelteSet<string>();
 
   $effect(() => {
     const m = media;
@@ -617,7 +618,7 @@
   const OTHER = "Other";
 
   const subtitleGroups = $derived.by(() => {
-    const groups = new Map<string, SubMenuItem[]>();
+    const groups = new SvelteMap<string, SubMenuItem[]>();
     const push = (g: string, item: SubMenuItem) => {
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g)!.push(item);

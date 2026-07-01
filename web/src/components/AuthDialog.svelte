@@ -96,7 +96,9 @@
     if (!email || !password) { error = "Email and password are required."; return; }
     loading = true; error = "";
     try {
-      const res = await api.authRegister(email, password, profileName || undefined);
+      api.authRegister(email, password, profileName || undefined).then((e) => {
+        console.log(e)
+      });
 
       pendingEmail = email;
       pendingPassword = password;
