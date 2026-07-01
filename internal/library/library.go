@@ -31,9 +31,9 @@ const (
 
 // LibraryEntry mirrors the `library_entries` Supabase table.
 type LibraryEntry struct {
-	ID        string  `json:"id"`         // UUIDv4
-	ProfileID *string `json:"profile_id"`
-	TmdbID    int     `json:"tmdb_id"`
+	ID          string   `json:"id"` // UUIDv4
+	ProfileID   *string  `json:"profile_id"`
+	TmdbID      int      `json:"tmdb_id"`
 	MediaType   string   `json:"media_type"` // "movie" | "tv"
 	Title       string   `json:"title"`
 	PosterPath  string   `json:"poster_path"`
@@ -54,9 +54,9 @@ type LibraryEntry struct {
 // WatchProgress mirrors the `watch_progress` Supabase table.
 // One row per unique (tmdb_id, media_type, season, episode) tuple.
 type WatchProgress struct {
-	ID             string  `json:"id"`
-	ProfileID      *string `json:"profile_id"`
-	LibraryEntryID string  `json:"library_entry_id"`
+	ID              string    `json:"id"`
+	ProfileID       *string   `json:"profile_id"`
+	LibraryEntryID  string    `json:"library_entry_id"`
 	TmdbID          int       `json:"tmdb_id"`
 	MediaType       string    `json:"media_type"`
 	Season          *int      `json:"season"`  // null for movies
@@ -91,6 +91,11 @@ type TasteSignal struct {
 	UserRating *float64 // user's 0–5 rating; nil if unrated
 	Completed  bool     // any progress record for this title is completed
 	Dismissed  bool
+	// LastInteractionAt is the most recent time the user touched this title
+	// (rated/status change, a watch, or a dismissal). Lets discover decay old
+	// signals instead of weighing a five-year-old favorite the same as
+	// yesterday's.
+	LastInteractionAt time.Time
 }
 
 // AllEntries returns a snapshot of all library entries. Used for sync.
@@ -172,10 +177,16 @@ func (l *Library) TasteSignals() []TasteSignal {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	completed := make(map[string]bool)
+	// Latest WatchedAt among completed progress rows per title, so both the
+	// completed flag and its timestamp come from the same pass.
+	completed := make(map[string]time.Time)
 	for _, p := range l.db.Progress {
-		if p.Completed {
-			completed[entryKey(p.TmdbID, p.MediaType)] = true
+		if !p.Completed {
+			continue
+		}
+		key := entryKey(p.TmdbID, p.MediaType)
+		if p.WatchedAt.After(completed[key]) {
+			completed[key] = p.WatchedAt
 		}
 	}
 
@@ -184,12 +195,20 @@ func (l *Library) TasteSignals() []TasteSignal {
 	for _, e := range l.db.Entries {
 		key := entryKey(e.TmdbID, e.MediaType)
 		seen[key] = true
+		ts := e.UpdatedAt
+		if e.LastWatchedAt != nil && e.LastWatchedAt.After(ts) {
+			ts = *e.LastWatchedAt
+		}
+		if watchedAt, ok := completed[key]; ok && watchedAt.After(ts) {
+			ts = watchedAt
+		}
 		out = append(out, TasteSignal{
-			TmdbID:     e.TmdbID,
-			MediaType:  e.MediaType,
-			Status:     e.Status,
-			UserRating: e.Rating,
-			Completed:  completed[key],
+			TmdbID:            e.TmdbID,
+			MediaType:         e.MediaType,
+			Status:            e.Status,
+			UserRating:        e.Rating,
+			Completed:         !completed[key].IsZero(),
+			LastInteractionAt: ts,
 		})
 	}
 
@@ -205,9 +224,10 @@ func (l *Library) TasteSignals() []TasteSignal {
 		}
 		seen[key] = true
 		out = append(out, TasteSignal{
-			TmdbID:    p.TmdbID,
-			MediaType: p.MediaType,
-			Completed: true, // no entry => no status
+			TmdbID:            p.TmdbID,
+			MediaType:         p.MediaType,
+			Completed:         true, // no entry => no status
+			LastInteractionAt: completed[key],
 		})
 	}
 	for key, d := range l.db.Dismissed {
@@ -216,9 +236,10 @@ func (l *Library) TasteSignals() []TasteSignal {
 		}
 		seen[key] = true
 		out = append(out, TasteSignal{
-			TmdbID:    d.TmdbID,
-			MediaType: d.MediaType,
-			Dismissed: true,
+			TmdbID:            d.TmdbID,
+			MediaType:         d.MediaType,
+			Dismissed:         true,
+			LastInteractionAt: d.DismissedAt,
 		})
 	}
 	return out

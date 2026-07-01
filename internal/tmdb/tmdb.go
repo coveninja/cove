@@ -90,8 +90,15 @@ type Details struct {
 	EpisodeRunTime []int `json:"episode_run_time"`
 	Credits        struct {
 		Cast []struct {
-			Name string `json:"name"`
+			ID    int    `json:"id"`
+			Name  string `json:"name"`
+			Order int    `json:"order"`
 		} `json:"cast"`
+		Crew []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+			Job  string `json:"job"`
+		} `json:"crew"`
 	} `json:"credits"`
 	ReleaseDates struct {
 		Results []struct {
@@ -991,18 +998,20 @@ func (c *Client) GetLogos(tmdbID int, mediaType string) ([]string, error) {
 // are OR'd (pipe) to broaden recall; without_genres is comma-joined to exclude
 // all listed.
 type DiscoverParams struct {
-	MediaType      string // "movie" | "tv" (required)
-	Page           int    // 1-based; 0 lets TMDB default to 1
-	SortBy         string // default "popularity.desc"
-	WithGenres     []int
-	WithoutGenres  []int
-	WithKeywords   []int
-	MinVoteCount   float64
-	MinVoteAverage float64
-	IncludeAdult   bool
-	Region         string
-	CertCountry    string // movie-only; e.g. "US"
-	CertLTE        string // movie-only; e.g. "PG"
+	MediaType       string // "movie" | "tv" (required)
+	Page            int    // 1-based; 0 lets TMDB default to 1
+	SortBy          string // default "popularity.desc"
+	WithGenres      []int
+	WithoutGenres   []int
+	WithKeywords    []int
+	WithoutKeywords []int
+	WithPeople      []int // matches either cast or crew credits
+	MinVoteCount    float64
+	MinVoteAverage  float64
+	IncludeAdult    bool
+	Region          string
+	CertCountry     string // movie-only; e.g. "US"
+	CertLTE         string // movie-only; e.g. "PG"
 }
 
 type DiscoverResult struct {
@@ -1045,6 +1054,12 @@ func (c *Client) Discover(p DiscoverParams) (*DiscoverResult, error) {
 	}
 	if len(p.WithKeywords) > 0 {
 		q.Set("with_keywords", joinIDs(p.WithKeywords, "|"))
+	}
+	if len(p.WithoutKeywords) > 0 {
+		q.Set("without_keywords", joinIDs(p.WithoutKeywords, ","))
+	}
+	if len(p.WithPeople) > 0 {
+		q.Set("with_people", joinIDs(p.WithPeople, "|"))
 	}
 	if p.MinVoteCount > 0 {
 		q.Set("vote_count.gte", strconv.FormatFloat(p.MinVoteCount, 'f', -1, 64))
