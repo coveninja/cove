@@ -233,6 +233,7 @@ export interface DiscoverInsights {
   top_tv_genres: Taste[];
   disliked_genres: Taste[];
   top_keywords: Taste[];
+  top_people: Taste[];
   signals_used: number;
 }
 

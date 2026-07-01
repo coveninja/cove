@@ -4,9 +4,11 @@
     type LibraryStats,
     type DiscoverInsights,
     type Taste,
+    type Person,
   } from "$lib/api";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import PersonCard from "./cards/PersonCard.svelte";
   import {
     Film,
     Tv,
@@ -15,7 +17,10 @@
     Tag,
     Info,
     Activity,
+    Users,
   } from "lucide-svelte";
+
+  let { onSelectPerson }: { onSelectPerson: (p: Person) => void } = $props();
 
   let stats = $state<LibraryStats | null>(null);
   let insights = $state<DiscoverInsights | null>(null);
@@ -27,12 +32,63 @@
       .then(([s, i]) => {
         stats = s;
         insights = i;
+        loadPeople(i.top_people);
       })
       .catch((e) => (loadError = e instanceof Error ? e.message : String(e)))
       .finally(() => (loading = false));
   });
 
   let hasProfile = $derived((insights?.signals_used ?? 0) > 0);
+
+  // ── Top people ───────────────────────────────────────────────────────────────
+  //
+  // Taste only carries {id, name, score} — no photo — so each top person's
+  // card is hydrated with a separate api.getPerson() call. Seed a slot per
+  // person immediately and patch it in as its own fetch resolves, the same
+  // progressive pattern HomePage uses for its rows: a slow or failed lookup
+  // never blocks the rest of the grid.
+  type PeopleSlot = { id: number; name: string; person: Person | null };
+  let peopleSlots = $state<PeopleSlot[]>([]);
+
+  function loadPeople(tastes: Taste[]): void {
+    peopleSlots = tastes.map((t) => ({ id: t.id, name: t.name, person: null }));
+    for (const t of tastes) {
+      api
+        .getPerson(t.id)
+        .then((d) => {
+          const i = peopleSlots.findIndex((s) => s.id === t.id);
+          if (i === -1) return;
+          peopleSlots[i] = {
+            ...peopleSlots[i],
+            person: {
+              id: d.id,
+              name: d.name,
+              profile_path: d.profile_path,
+              known_for_department: d.known_for_department,
+              popularity: 0,
+              known_for: [],
+            },
+          };
+        })
+        .catch(() => {}); // leave person null — displayPerson() falls back to an icon
+    }
+  }
+
+  // PersonCard needs a Person, not a nullable one — while a slot's fetch is
+  // pending (or failed), fall back to a stub with an empty profile_path so
+  // PersonCard's existing no-photo icon renders instead of nothing.
+  function displayPerson(slot: PeopleSlot): Person {
+    return (
+      slot.person ?? {
+        id: slot.id,
+        name: slot.name,
+        profile_path: "",
+        known_for_department: "",
+        popularity: 0,
+        known_for: [],
+      }
+    );
+  }
 
   // ── Chart plumbing ────────────────────────────────────────────────────────
   type Slice = { label: string; value: number; color: string; count?: number };
@@ -155,8 +211,8 @@
             <span class="truncate">{s.label}</span>
             <span class="ml-auto shrink-0 text-muted-foreground">
               {Math.round((s.value / total) * 100)}%{s.count != null
-              ? ` · ${s.count}`
-              : ""}
+                ? ` · ${s.count}`
+                : ""}
             </span>
           </li>
         {/each}
@@ -299,6 +355,34 @@
       </Card.Root>
     </section>
 
+    <!-- ── Top people ────────────────────────────────────────────────────────── -->
+    {#if peopleSlots.length > 0}
+      <Card.Root>
+        <Card.Header>
+          <Card.Title class="flex items-center gap-2 text-sm">
+            <Users class="size-4" />
+            Cast &amp; crew you gravitate to
+          </Card.Title>
+        </Card.Header>
+        <Card.Content>
+          <div class="grid grid-cols-4 gap-4 sm:grid-cols-6 md:grid-cols-8">
+            {#each peopleSlots as slot (slot.id)}
+              <!-- PersonExpandedModal reads its hero photo straight off the
+                   passed-in Person prop rather than its own detail fetch, so
+                   only allow the click through once we actually have a
+                   photo-bearing Person — otherwise a click during the brief
+                   loading window would open the modal with a permanently
+                   blank hero image. -->
+              <PersonCard
+                person={displayPerson(slot)}
+                onclick={slot.person ? onSelectPerson : undefined}
+              />
+            {/each}
+          </div>
+        </Card.Content>
+      </Card.Root>
+    {/if}
+
     <Card.Root class="bg-muted/20">
       <Card.Header>
         <Card.Title class="flex items-center gap-2 text-sm">
@@ -310,7 +394,7 @@
         <p>
           Your profile is built from
           <span class="font-medium text-foreground"
-          >{insights.signals_used}</span
+            >{insights.signals_used}</span
           >
           titles you've actively engaged with. Each becomes a like/dislike weight,
           which is spread across that title's genres and keywords:
@@ -324,6 +408,18 @@
             </div>
           {/each}
         </div>
+
+        <p>
+          Older signals fade over time — a favorite from a year ago still counts
+          at roughly half strength, leveling off at a floor so a multi-year-old
+          favorite is never fully forgotten.
+        </p>
+
+        <p>
+          A single dropped or "not interested" title needs to be a much stronger
+          signal before it steers you away from an entire genre; once two or
+          more titles agree, a milder signal is enough.
+        </p>
       </Card.Content>
     </Card.Root>
   {/if}

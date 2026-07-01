@@ -123,15 +123,14 @@
   onMount(() => {
     setMode("dark");
     // Wait for both settings and auth to resolve before revealing the app.
-    Promise.all([
-      settings.load(),
-      auth.init().catch(console.error),
-    ]).then(() => {
-      splashVisible = false;
-      if (!$settings.onboardingDone) {
-        showOnboarding = true;
-      }
-    });
+    Promise.all([settings.load(), auth.init().catch(console.error)]).then(
+      () => {
+        splashVisible = false;
+        if (!$settings.onboardingDone) {
+          showOnboarding = true;
+        }
+      },
+    );
 
     // Non-blocking background update check. Failures are silently swallowed
     // since the user may be offline or on a dev build (which skips the check
@@ -171,9 +170,12 @@
     // Pull remote changes on window focus when signed in.
     const onFocus = () => {
       if (!auth.isGuest) {
-        api.authSync().then(() => {
-          libraryChanged.update((n) => n + 1);
-        }).catch(() => {});
+        api
+          .authSync()
+          .then(() => {
+            libraryChanged.update((n) => n + 1);
+          })
+          .catch(() => {});
       }
     };
     window.addEventListener("focus", onFocus);
@@ -493,30 +495,43 @@
       <!-- Hidden (not unmounted) while the player is full, so its opaque page
            background doesn't block the transparent player from revealing mpv,
            and page state/scroll survive opening and closing the player. -->
-      <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
-        <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
+      <div
+        class="h-full w-full bg-background"
+        class:invisible={playerMode === "full"}
+      >
+        <div
+          class="h-full w-full bg-background"
+          class:invisible={playerMode === "full"}
+        >
           <div class="h-full" class:hidden={currentPage.type !== "settings"}>
             <SettingsPage />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "query"}>
             <QueryPage
-                    bind:query
-                    bind:loading
-                    onSelectMedia={selectMedia}
-                    onSuggested={(name) => { query = name; changePage({ type: "query", query: name }); }}
-                    onWatch={quickPlay}
-                    onSelectPerson={(p) => (selectedPerson = p)}
-                    onSelectProvider={(p) => (selectedProvider = p)}
+              bind:query
+              bind:loading
+              onSelectMedia={selectMedia}
+              onSuggested={(name) => {
+                query = name;
+                changePage({ type: "query", query: name });
+              }}
+              onWatch={quickPlay}
+              onSelectPerson={(p) => (selectedPerson = p)}
+              onSelectProvider={(p) => (selectedProvider = p)}
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
             <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "insights"}>
-            <InsightsPage />
+            <InsightsPage onSelectPerson={(p) => (selectedPerson = p)} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
-            <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
+            <MyListPage
+              onSelectMedia={selectMedia}
+              onWatch={quickPlay}
+              onSelectPerson={(p) => (selectedPerson = p)}
+            />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
             <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />
