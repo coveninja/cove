@@ -1,3 +1,10 @@
+// Package player owns the torrent client and streams playback sources as
+// seekable HTTP: torrents stream their largest file directly via
+// http.ServeContent (mpv's Range requests just work, no transcoding
+// involved), and direct-URL sources get a redirect straight to the origin.
+// A background reaper (CleanupTorrents) drops idle torrents and their
+// on-disk pieces after 30 minutes of no active readers, so a long-running
+// process doesn't accumulate downloaded data forever.
 package player
 
 import (
@@ -14,10 +21,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anacrolix/torrent"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/tmdb"
 	"github.com/coveninja/cove/internal/utils"
-	"github.com/anacrolix/torrent"
 )
 
 // Player owns all of the package's mutable state — the torrent client and the

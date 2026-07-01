@@ -1,3 +1,9 @@
+// Package tmdb wraps The Movie Database API and registers the largest single
+// group of HTTP routes in the app (search, details, images, videos,
+// providers, similar-titles, genre lists, a batched quality-probe endpoint).
+// TMDB concerns only live here — anything resembling personalization or
+// taste scoring belongs in internal/discover instead, which depends on this
+// package for raw metadata but never the reverse.
 package tmdb
 
 import (

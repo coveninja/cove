@@ -10,9 +10,14 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
   import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
+  import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
   import { api } from "$lib/api";
   import type { AddonEntry } from "$lib/types/addons";
-  import { KindProvider, KindTimestamps, SourceOfficial } from "$lib/types/addons";
+  import {
+    KindProvider,
+    KindTimestamps,
+    SourceOfficial,
+  } from "$lib/types/addons";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { Trash2, Plus } from "lucide-svelte";
@@ -89,9 +94,31 @@
 
   async function handleRemoveAddon(addon: AddonEntry) {
     await api.removeAddon(addon.id, addon.url);
-    addons = addons.filter(
-      (a) => !(a.id === addon.id && a.url === addon.url),
-    );
+    addons = addons.filter((a) => !(a.id === addon.id && a.url === addon.url));
+  }
+
+  // ── Discovery algorithm ───────────────────────────────────────────────────────
+  let testingAlgorithm = $state(false);
+  let algorithmTestResult = $state<{ ok: boolean; error?: string } | null>(
+    null,
+  );
+
+  async function handleTestAlgorithm() {
+    if (!draft?.customAlgorithmUrl.trim()) return;
+    testingAlgorithm = true;
+    algorithmTestResult = null;
+    try {
+      algorithmTestResult = await api.testDiscoveryAlgorithm(
+        draft.customAlgorithmUrl.trim(),
+      );
+    } catch (e) {
+      algorithmTestResult = {
+        ok: false,
+        error: e instanceof Error ? e.message : "Test failed",
+      };
+    } finally {
+      testingAlgorithm = false;
+    }
   }
 
   const LANGUAGES = [
@@ -160,7 +187,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="open-muted" class="text-sm font-medium"
-            >Open videos muted</Label
+              >Open videos muted</Label
             >
             <p class="text-xs text-muted-foreground">
               Start every video with audio muted.
@@ -201,7 +228,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="autoplay" class="text-sm font-medium"
-            >Autoplay next episode</Label
+              >Autoplay next episode</Label
             >
             <p class="text-xs text-muted-foreground">
               Automatically start the next episode when one finishes.
@@ -218,7 +245,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="remember-pos" class="text-sm font-medium"
-            >Remember position</Label
+              >Remember position</Label
             >
             <p class="text-xs text-muted-foreground">
               Resume from where you left off.
@@ -235,11 +262,14 @@
         <div class="py-3">
           <Label class="text-sm font-medium">Auto-skip segments</Label>
           <p class="mb-3 text-xs text-muted-foreground">
-            Automatically skip segments when timestamps are available via IntroDB. A skip button always appears when inside a segment.
+            Automatically skip segments when timestamps are available via
+            IntroDB. A skip button always appears when inside a segment.
           </p>
           <div class="space-y-2">
             <div class="flex items-center justify-between">
-              <Label for="skip-intro" class="text-sm text-muted-foreground">Skip intro</Label>
+              <Label for="skip-intro" class="text-sm text-muted-foreground"
+                >Skip intro</Label
+              >
               <Switch
                 id="skip-intro"
                 checked={draft.autoSkipIntro}
@@ -247,7 +277,9 @@
               />
             </div>
             <div class="flex items-center justify-between">
-              <Label for="skip-recap" class="text-sm text-muted-foreground">Skip recap</Label>
+              <Label for="skip-recap" class="text-sm text-muted-foreground"
+                >Skip recap</Label
+              >
               <Switch
                 id="skip-recap"
                 checked={draft.autoSkipRecap}
@@ -255,7 +287,9 @@
               />
             </div>
             <div class="flex items-center justify-between">
-              <Label for="skip-credits" class="text-sm text-muted-foreground">Skip credits</Label>
+              <Label for="skip-credits" class="text-sm text-muted-foreground"
+                >Skip credits</Label
+              >
               <Switch
                 id="skip-credits"
                 checked={draft.autoSkipCredits}
@@ -263,7 +297,9 @@
               />
             </div>
             <div class="flex items-center justify-between">
-              <Label for="skip-preview" class="text-sm text-muted-foreground">Skip preview</Label>
+              <Label for="skip-preview" class="text-sm text-muted-foreground"
+                >Skip preview</Label
+              >
               <Switch
                 id="skip-preview"
                 checked={draft.autoSkipPreview}
@@ -276,11 +312,10 @@
 
       <!-- ── Streaming ── -->
       <Tabs.Content value="streaming" class="mt-4 space-y-1">
-
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="auto-select-stream" class="text-sm font-medium"
-            >Automatically pick best stream</Label
+              >Automatically pick best stream</Label
             >
             <p class="text-xs text-muted-foreground">
               Skip the stream list — start playing immediately when you press
@@ -353,7 +388,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="subs-enabled" class="text-sm font-medium"
-            >Enable subtitles by default</Label
+              >Enable subtitles by default</Label
             >
             <p class="text-xs text-muted-foreground">
               Show subtitles automatically when available.
@@ -370,7 +405,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label class="text-sm font-medium"
-            >Preferred subtitle language</Label
+              >Preferred subtitle language</Label
             >
             <p class="text-xs text-muted-foreground">
               Auto-select this language when subtitles are available.
@@ -378,7 +413,7 @@
           </div>
           <Select.Root type="single" bind:value={draft.defaultSubtitleLang}>
             <Select.Trigger class="w-36"
-            >{langLabel(draft.defaultSubtitleLang)}</Select.Trigger
+              >{langLabel(draft.defaultSubtitleLang)}</Select.Trigger
             >
             <Select.Content>
               {#each LANGUAGES as l}
@@ -398,7 +433,7 @@
           </div>
           <Select.Root type="single" bind:value={draft.defaultAudioLang}>
             <Select.Trigger class="w-36"
-            >{langLabel(draft.defaultAudioLang)}</Select.Trigger
+              >{langLabel(draft.defaultAudioLang)}</Select.Trigger
             >
             <Select.Content>
               {#each LANGUAGES as l}
@@ -414,7 +449,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="stream-details" class="text-sm font-medium"
-            >Show stream details</Label
+              >Show stream details</Label
             >
             <p class="text-xs text-muted-foreground">
               Display codec, resolution, and size badges on the stream list.
@@ -429,7 +464,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="thumbnail-previes" class="text-sm font-medium"
-            >Hide Spoilers</Label
+              >Hide Spoilers</Label
             >
             <p class="text-xs text-muted-foreground">
               Hide not-seen episode thumbnails, descriptions, and episode names;
@@ -441,13 +476,79 @@
             onCheckedChange={(v) => patch("hideSpoilers", v)}
           />
         </div>
+
+        <Separator class="my-2" />
+
+        <div class="flex items-center justify-between py-3">
+          <div class="pr-4">
+            <Label class="text-sm font-medium">Discovery algorithm</Label>
+            <p class="text-xs text-muted-foreground">
+              {DISCOVERY_ALGORITHMS.find(
+                (a) => a.value === draft.discoveryAlgorithm,
+              )?.description ?? ""}
+            </p>
+          </div>
+          <Select.Root type="single" bind:value={draft.discoveryAlgorithm}>
+            <Select.Trigger class="w-56 shrink-0">
+              {DISCOVERY_ALGORITHMS.find(
+                (a) => a.value === draft.discoveryAlgorithm,
+              )?.label ?? "Choose…"}
+            </Select.Trigger>
+            <Select.Content>
+              {#each DISCOVERY_ALGORITHMS as a (a.value)}
+                <Select.Item value={a.value}>{a.label}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
+
+        {#if draft.discoveryAlgorithm === "custom"}
+          <div class="rounded-lg border border-border p-4">
+            <Label class="mb-2 block text-sm font-medium"
+              >Custom algorithm URL</Label
+            >
+            <p class="mb-3 text-xs text-muted-foreground">
+              Cove POSTs your taste profile and a pre-filtered candidate list to
+              this URL and expects relevance scores back. Falls back to Cove
+              Smart if the endpoint is unreachable or errors.
+            </p>
+            <div class="flex gap-2">
+              <Input
+                type="url"
+                placeholder="https://..."
+                bind:value={draft.customAlgorithmUrl}
+                class="flex-1"
+              />
+              <Button
+                variant="outline"
+                onclick={handleTestAlgorithm}
+                disabled={testingAlgorithm || !draft.customAlgorithmUrl.trim()}
+                size="sm"
+              >
+                {testingAlgorithm ? "Testing…" : "Test connection"}
+              </Button>
+            </div>
+            {#if algorithmTestResult}
+              <p
+                class="mt-2 text-xs {algorithmTestResult.ok
+                  ? 'text-green-500'
+                  : 'text-red-500'}"
+              >
+                {algorithmTestResult.ok
+                  ? "Connected successfully."
+                  : `Failed: ${algorithmTestResult.error}`}
+              </p>
+            {/if}
+          </div>
+        {/if}
       </Tabs.Content>
 
       <!-- ── Addons ── -->
       <Tabs.Content value="addons" class="mt-4 space-y-4">
         <!-- Add new addon -->
         <div class="rounded-lg border border-border p-4">
-          <Label class="mb-2 block text-sm font-medium">Add Stremio addon</Label>
+          <Label class="mb-2 block text-sm font-medium">Add Stremio addon</Label
+          >
           <p class="mb-3 text-xs text-muted-foreground">
             Paste a Stremio-compatible addon URL (e.g.
             https://torrentio.strem.fun).
@@ -483,7 +584,10 @@
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium"
-                    >{addon.manifest.name || addon.url || addon.id || "Unknown addon"}</span
+                    >{addon.manifest.name ||
+                      addon.url ||
+                      addon.id ||
+                      "Unknown addon"}</span
                   >
                   <Badge
                     variant="outline"
@@ -500,7 +604,11 @@
                         : "Subtitles"}
                   </Badge>
                   {#if addon.source === SourceOfficial}
-                    <Badge variant="outline" class="border-green-500/30 bg-green-500/20 text-green-400">Built-in</Badge>
+                    <Badge
+                      variant="outline"
+                      class="border-green-500/30 bg-green-500/20 text-green-400"
+                      >Built-in</Badge
+                    >
                   {/if}
                 </div>
                 {#if addon.manifest.description}

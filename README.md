@@ -89,3 +89,9 @@ npm run format  # prettier
 ## Configuration
 
 Addon URLs can be configured in the app's Settings page. The default setup includes some built-in addons but provides no streams apart from official sources.
+
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the Go backend, Svelte frontend, and Qt shell fit together, the playback data flow, and the open-source/proprietary build-tag split
+- [docs/API.md](docs/API.md) — HTTP endpoint reference
+- [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup and code style for contributors

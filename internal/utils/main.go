@@ -1,3 +1,8 @@
+// Package utils holds small helpers shared across internal packages: per-OS
+// config-directory resolution, crash-safe atomic file writes for the JSON
+// stores, SRT-to-VTT subtitle conversion, and CorsMiddleware, which wraps
+// nearly every HTTP handler in the app and auto-answers OPTIONS requests
+// with 204 before the wrapped handler ever runs.
 package utils
 
 import (

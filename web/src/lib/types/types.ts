@@ -9,7 +9,6 @@ export type Page =
   | { type: "query"; query: string }
   | { type: "mediaView"; media: Media };
 
-
 export interface UpcomingItem {
   tmdbId: number;
   title: string;

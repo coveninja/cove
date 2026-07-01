@@ -70,12 +70,19 @@ export interface TasteSignal {
   UserRating?: number /* float64 */; // user's 0–5 rating; nil if unrated
   Completed: boolean; // any progress record for this title is completed
   Dismissed: boolean;
+  /**
+   * LastInteractionAt is the most recent time the user touched this title
+   * (rated/status change, a watch, or a dismissal). Lets discover decay old
+   * signals instead of weighing a five-year-old favorite the same as
+   * yesterday's.
+   */
+  LastInteractionAt: string;
 }
 export interface Stats {
   total: number /* int */; // library entries (dismissals excluded)
-  by_type: { [key: string]: number /* int */}; // entries per media type
-  by_status: { [key: string]: number /* int */}; // status -> count
-  finished: { [key: string]: number /* int */}; // finished entries per type
+  by_type: { [key: string]: number /* int */ }; // entries per media type
+  by_status: { [key: string]: number /* int */ }; // status -> count
+  finished: { [key: string]: number /* int */ }; // finished entries per type
   dismissed: number /* int */;
   rated: number /* int */;
   avg_rating: number /* float64 */; // mean user rating over rated titles, 0–5
@@ -88,5 +95,4 @@ export interface Stats {
  * tygo emits nothing for this type — only the JSON data types (LibraryEntry,
  * WatchProgress, diskStore) cross into the generated TS.
  */
-export interface Library {
-}
+export interface Library {}

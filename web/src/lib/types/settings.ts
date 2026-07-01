@@ -17,8 +17,8 @@ export interface Settings {
   /**
    * Provider / streams
    */
-  defaultProvider: string; // e.g. "torrentio", "debrid"
-  preferHLS: boolean; // use HLS pipeline over direct stream
+  defaultProvider: string;
+  preferHLS: boolean;
   /**
    * Stream auto-selection
    */
@@ -50,10 +50,14 @@ export interface Settings {
    * Onboarding
    */
   onboardingDone: boolean;
+  /**
+   * Discovery
+   */
+  discoveryAlgorithm: string; // "smart" | "popularity" | "custom"
+  customAlgorithmUrl: string; // used when discoveryAlgorithm == "custom"
 }
 /**
  * Store owns the package's mutable state. Fields are unexported, so tygo emits
  * nothing for Store — only the Settings data type crosses into the generated TS.
  */
-export interface Store {
-}
+export interface Store {}

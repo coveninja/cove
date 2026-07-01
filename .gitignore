@@ -14,3 +14,5 @@
 # Proprietary — sourced from the _private/cove-discover submodule via `make inject-private`
 /internal/discover/discover.go
 /internal/discover/discover_test.go
+/internal/discover/algorithm.go
+/internal/discover/algorithm_test.go

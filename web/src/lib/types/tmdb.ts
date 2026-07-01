@@ -8,8 +8,7 @@
  * for Client — only the data types (Media, Details, MediaImages, ...) cross
  * into the generated TS.
  */
-export interface Client {
-}
+export interface Client {}
 export interface Media {
   id: number /* int */;
   title: string;
@@ -62,7 +61,14 @@ export interface Details {
   episode_run_time: number /* int */[];
   credits: {
     cast: {
+      id: number /* int */;
       name: string;
+      order: number /* int */;
+    }[];
+    crew: {
+      id: number /* int */;
+      name: string;
+      job: string;
     }[];
   };
   release_dates: {
@@ -208,6 +214,8 @@ export interface DiscoverParams {
   WithGenres: number /* int */[];
   WithoutGenres: number /* int */[];
   WithKeywords: number /* int */[];
+  WithoutKeywords: number /* int */[];
+  WithPeople: number /* int */[]; // matches either cast or crew credits
   MinVoteCount: number /* float64 */;
   MinVoteAverage: number /* float64 */;
   IncludeAdult: boolean;

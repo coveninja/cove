@@ -1,3 +1,9 @@
+// Package profiles manages local, Netflix-style user profiles — not to be
+// confused with content-rating/kid-mode, which is a separate, unrelated
+// concept inside internal/discover. Switching the active profile reloads
+// library, settings, and addons in place via an onChange callback the caller
+// registers in New(), so those packages never need their own profile-
+// switching logic.
 package profiles
 
 import (

@@ -1,3 +1,9 @@
+// Package updater implements self-update via GitHub releases. The check is
+// skipped entirely on managed distributions (APPIMAGE/FLATPAK_ID env vars
+// set, since those have their own update mechanism) and on dev builds
+// (non-semver version string). Applying an update exits the process with
+// code 42, a sentinel the Qt shell watches for to know it should restart the
+// backend rather than treating the exit as a crash.
 package updater
 
 import (

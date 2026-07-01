@@ -5,7 +5,12 @@ import type {
   MediaVideos,
   TVEpisode,
 } from "$lib/types/tmdb";
-import type { AddonEntry, Stream, TimestampData, WatchOption } from "$lib/types/addons";
+import type {
+  AddonEntry,
+  Stream,
+  TimestampData,
+  WatchOption,
+} from "$lib/types/addons";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
 import type { Profile } from "$lib/types/auth";
@@ -423,6 +428,15 @@ export const api = {
       body: JSON.stringify(s),
     }),
 
+  testDiscoveryAlgorithm: (
+    url: string,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    request(`/discover/algorithm/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }),
+
   // ── Addons ───────────────────────────────────────────────────────────────────
   getAddons: (): Promise<AddonEntry[]> => request(`/addons`),
 
@@ -451,7 +465,10 @@ export const api = {
     });
   },
 
-  getWatchOptions: (tmdbId: number, mediaType: string): Promise<WatchOption[]> =>
+  getWatchOptions: (
+    tmdbId: number,
+    mediaType: string,
+  ): Promise<WatchOption[]> =>
     request(`/watch-options?id=${tmdbId}&type=${mediaType}`),
 
   getTimestamps: (
@@ -627,7 +644,8 @@ export const api = {
   // ── Profile / insights ───────────────────────────────────────────────────────
   libraryStats: (): Promise<LibraryStats> => request(`/library/stats`),
 
-  discoverInsights: (): Promise<DiscoverInsights> => request(`/discover/insights`),
+  discoverInsights: (): Promise<DiscoverInsights> =>
+    request(`/discover/insights`),
 
   // ── Auto-update ──────────────────────────────────────────────────────────────
 
@@ -648,8 +666,10 @@ export const api = {
   },
 
   // ── Profiles ──────────────────────────────────────────────────────────────────
-  profilesList: (): Promise<{ profiles: Profile[]; active_profile_id: string }> =>
-    request(`/profiles`),
+  profilesList: (): Promise<{
+    profiles: Profile[];
+    active_profile_id: string;
+  }> => request(`/profiles`),
 
   profileCreate: (name: string): Promise<Profile> =>
     request(`/profiles`, {
@@ -658,7 +678,10 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
-  profileRename: (id: string, name: string): Promise<{ id: string; name: string }> =>
+  profileRename: (
+    id: string,
+    name: string,
+  ): Promise<{ id: string; name: string }> =>
     request(`/profiles/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -679,7 +702,9 @@ export const api = {
     email: string,
     password: string,
     profile_name?: string,
-  ): Promise<{ access_token: string; profile: Profile } | { confirmation_required: true }> =>
+  ): Promise<
+    { access_token: string; profile: Profile } | { confirmation_required: true }
+  > =>
     request(`/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -693,7 +718,11 @@ export const api = {
     token: string,
     password: string,
     profile_name?: string,
-  ): Promise<{ access_token: string; refresh_token: string; profile: Profile }> =>
+  ): Promise<{
+    access_token: string;
+    refresh_token: string;
+    profile: Profile;
+  }> =>
     request(`/auth/register/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -703,7 +732,12 @@ export const api = {
   authLogin: (
     email: string,
     password: string,
-  ): Promise<{ access_token: string; refresh_token: string; profiles: Profile[]; active: Profile }> =>
+  ): Promise<{
+    access_token: string;
+    refresh_token: string;
+    profiles: Profile[];
+    active: Profile;
+  }> =>
     request(`/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -720,7 +754,12 @@ export const api = {
   authVerifyOTP: (
     email: string,
     token: string,
-  ): Promise<{ access_token: string; refresh_token: string; profiles: Profile[]; active: Profile }> =>
+  ): Promise<{
+    access_token: string;
+    refresh_token: string;
+    profiles: Profile[];
+    active: Profile;
+  }> =>
     request(`/auth/verify-otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -739,9 +778,16 @@ export const api = {
   // Persistent client session — stored by the Go backend as a JSON file in
   // the OS user-config dir (~/.config/cove/session.json). More reliable than
   // Qt WebEngine localStorage, which may use in-memory storage.
-  clientSessionGet: (): Promise<{ accessToken: string; refreshToken: string; email: string }> =>
-    request(`/client-session`),
-  clientSessionSave: (data: { accessToken: string; refreshToken: string; email: string }): Promise<void> =>
+  clientSessionGet: (): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    email: string;
+  }> => request(`/client-session`),
+  clientSessionSave: (data: {
+    accessToken: string;
+    refreshToken: string;
+    email: string;
+  }): Promise<void> =>
     request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
   clientSessionDelete: (): Promise<void> =>
     request(`/client-session`, { method: "DELETE" }),

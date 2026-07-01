@@ -85,9 +85,7 @@ export interface TimestampData {
  * the data types (AddonEntry, Stream, Subtitle, WatchOption, etc.) cross into
  * the generated TS.
  */
-export interface Manager {
-}
+export interface Manager {}
 
 //////////
 // source: store.go
-

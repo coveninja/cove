@@ -8,5 +8,4 @@
  * active-torrent registry — plus the injected TMDB client and addon manager.
  * Fields are unexported, so tygo emits nothing for Player.
  */
-export interface Player {
-}
+export interface Player {}

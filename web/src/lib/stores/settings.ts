@@ -26,6 +26,8 @@ const DEFAULTS: Settings = {
   autoSkipCredits: false,
   autoSkipPreview: false,
   onboardingDone: false,
+  discoveryAlgorithm: "smart",
+  customAlgorithmUrl: "",
 };
 
 function createSettingsStore(): {

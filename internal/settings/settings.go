@@ -1,3 +1,9 @@
+// Package settings persists a single flat Settings struct per profile as
+// JSON, served whole-object over GET/PUT with no partial-merge semantics —
+// a PUT that omits a field writes its Go zero value, not the previous
+// value. Select-style preferences (e.g. streamSelectionMode,
+// discoveryAlgorithm) are plain strings with no server-side enum
+// validation; the frontend owns the allowed-value metadata and UI.
 package settings
 
 import (
@@ -48,6 +54,10 @@ type Settings struct {
 
 	// Onboarding
 	OnboardingDone bool `json:"onboardingDone"`
+
+	// Discovery
+	DiscoveryAlgorithm string `json:"discoveryAlgorithm"` // "smart" | "popularity" | "custom"
+	CustomAlgorithmURL string `json:"customAlgorithmUrl"` // used when discoveryAlgorithm == "custom"
 }
 
 var defaultSettings = Settings{
@@ -72,6 +82,7 @@ var defaultSettings = Settings{
 	AutoSkipRecap:         false,
 	AutoSkipCredits:       false,
 	AutoSkipPreview:       false,
+	DiscoveryAlgorithm:    "smart",
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits

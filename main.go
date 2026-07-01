@@ -125,7 +125,7 @@ func main() {
 	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
 	supaServer.SetupHandlers(mux)
 
-	disc := discover.New(tmdbClient, lib)
+	disc := discover.New(tmdbClient, lib, st)
 	disc.SetupHandlers(mux)
 
 	clientsession.SetupHandlers(mux)

@@ -1,3 +1,10 @@
+// Package library is the local watch-history store: library entries (status,
+// rating), per-episode watch progress, and "not interested" dismissals,
+// persisted as JSON per profile under the OS config directory. It exposes
+// TasteSignals() and Generation() as the sole interface the recommendation
+// engine (internal/discover) consumes — neither package imports the other,
+// so a personalization feature can evolve independently of how watch history
+// is stored.
 package library
 
 import (
