@@ -27,7 +27,7 @@
 - **Insights** — view your watch stats and genre/actor taste breakdown
 - **Search** — find any movie or TV show by title
 - **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
-- **Multiple profiles** — local, Netflix-style profile switching, works fully offline with no sign-in required
+- **Multiple profiles** — profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
 
 ## Install
