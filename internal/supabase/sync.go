@@ -118,6 +118,9 @@ func (c *Config) PushSettings(profileID string, st *settings.Store) error {
 }
 
 // PushAddons uploads current addon configuration for the profile.
+// PushAddons syncs Stremio-addon config cross-device. Nuvio repo/scraper
+// config (internal/nuvio) is a conscious, documented gap for this iteration —
+// it is not covered by cross-device sync yet.
 func (c *Config) PushAddons(profileID string, mgr *addons.Manager) error {
 	entries := mgr.GetEntries()
 	data, err := json.Marshal(entries)

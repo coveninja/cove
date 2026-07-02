@@ -1505,6 +1505,11 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
+	// Nuvio scrapers are intentionally excluded from this endpoint: unlike
+	// internal/player's single-title /api/streams, this fans out across
+	// every title in a discovery grid, and running goja + third-party network
+	// scrapers per grid tile would be far too slow/heavy for a quality badge.
+	// Don't "fix" this into consistency with /api/streams later.
 	mux.HandleFunc("/api/quality/batch", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		idsParam := r.URL.Query().Get("ids")
 		if idsParam == "" {

@@ -25,6 +25,7 @@
   import {
     getSeeders,
     getSizeBytes,
+    isTorrentStream,
     pickBestStream,
     formatStreamSummary,
     type StreamSelectionMode,
@@ -540,7 +541,9 @@
         <!-- Where to Watch (JustWatch) -->
         {#if watchOptions.length > 0}
           <div class="mb-4">
-            <p class="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <p
+              class="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide"
+            >
               Where to Watch
             </p>
             <div class="flex flex-wrap gap-2">
@@ -661,14 +664,16 @@
                   <span
                     class="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"
                   >
-                    <span class="rounded bg-background/70 px-1.5 py-0.5">
-                      👤 {getSeeders(stream)}
-                    </span>
-                    <span class="rounded bg-background/70 px-1.5 py-0.5">
-                      💾 {getSizeBytes(stream) / 1024 ** 3 >= 1
-                        ? `${(getSizeBytes(stream) / 1024 ** 3).toFixed(2)} GB`
-                        : `${(getSizeBytes(stream) / 1024 ** 2).toFixed(0)} MB`}
-                    </span>
+                    {#if isTorrentStream(stream)}
+                      <span class="rounded bg-background/70 px-1.5 py-0.5">
+                        👤 {getSeeders(stream)}
+                      </span>
+                      <span class="rounded bg-background/70 px-1.5 py-0.5">
+                        💾 {getSizeBytes(stream) / 1024 ** 3 >= 1
+                          ? `${(getSizeBytes(stream) / 1024 ** 3).toFixed(2)} GB`
+                          : `${(getSizeBytes(stream) / 1024 ** 2).toFixed(0)} MB`}
+                      </span>
+                    {/if}
                     <span class="rounded bg-background/70 px-1.5 py-0.5">
                       {inferQuality(stream)}
                     </span>

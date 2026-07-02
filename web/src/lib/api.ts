@@ -11,6 +11,7 @@ import type {
   TimestampData,
   WatchOption,
 } from "$lib/types/addons";
+import type { Repo as NuvioRepo } from "$lib/types/nuvio";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
 import type { Profile } from "$lib/types/auth";
@@ -423,6 +424,44 @@ export const api = {
       body: JSON.stringify({ enabled }),
     });
   },
+
+  // ── Nuvio plugin repos ───────────────────────────────────────────────────────
+  getNuvioRepos: (): Promise<NuvioRepo[]> => request(`/nuvio/repos`),
+
+  addNuvioRepo: (url: string): Promise<NuvioRepo> =>
+    request(`/nuvio/repos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }),
+
+  removeNuvioRepo: (id: string): Promise<void> =>
+    request(`/nuvio/repos?${new URLSearchParams({ id })}`, {
+      method: "DELETE",
+    }),
+
+  setNuvioRepoEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/nuvio/repos?${new URLSearchParams({ id })}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+
+  refreshNuvioRepo: (id: string): Promise<void> =>
+    request(`/nuvio/repos/refresh?${new URLSearchParams({ id })}`, {
+      method: "POST",
+    }),
+
+  setNuvioScraperEnabled: (
+    repoId: string,
+    scraperId: string,
+    enabled: boolean,
+  ): Promise<void> =>
+    request(`/nuvio/scrapers?${new URLSearchParams({ repoId, scraperId })}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
 
   getWatchOptions: (
     tmdbId: number,

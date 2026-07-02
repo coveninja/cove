@@ -12,6 +12,7 @@ import (
 	"github.com/coveninja/cove/internal/clientsession"
 	"github.com/coveninja/cove/internal/discover"
 	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/player"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
@@ -62,6 +63,7 @@ func main() {
 
 	// Profiles must be initialised first — all other packages are profile-scoped.
 	var addonMgr *addons.Manager
+	var nuvioMgr *nuvio.Manager
 	var st *settings.Store
 	var lib *library.Library
 
@@ -76,6 +78,9 @@ func main() {
 		if err := addonMgr.SetProfile(profileID); err != nil {
 			log.Println("profile switch: reload addons:", err)
 		}
+		if err := nuvioMgr.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload nuvio repos:", err)
+		}
 	})
 	if err != nil {
 		log.Fatal("could not init profiles:", err)
@@ -83,6 +88,7 @@ func main() {
 	activeID := profileStore.ActiveProfileID()
 
 	addonMgr = addons.New(activeID)
+	nuvioMgr = nuvio.New(activeID)
 
 	st, err = settings.New(activeID)
 	if err != nil {
@@ -97,7 +103,7 @@ func main() {
 
 	// The torrent client is core functionality — if it can't start, there's
 	// nothing to stream, so a New failure is fatal.
-	p, err := player.New(tmdbClient, addonMgr)
+	p, err := player.New(tmdbClient, addonMgr, nuvioMgr)
 	if err != nil {
 		log.Fatal("could not init torrent client:", err)
 	}
@@ -112,6 +118,7 @@ func main() {
 		return id
 	})
 	tmdbClient.SetupHandlers(mux, addonMgr)
+	nuvioMgr.SetupHandlers(mux)
 	p.SetupHandlers(mux)
 	st.SetupHandlers(mux)
 	lib.SetupHandlers(mux)

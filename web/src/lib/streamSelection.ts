@@ -65,6 +65,18 @@ function qualityRank(q: string | null): number {
   return QUALITY_RANK[q] ?? -1;
 }
 
+// ── Torrent vs. direct-HTTP streams ──────────────────────────────────────────
+//
+// Seeders/size are torrent-swarm concepts parsed out of addon-supplied
+// titles (see getSeeders/getSizeBytes below) — a direct HTTP stream (Nuvio
+// scrapers, or any non-torrent addon) has neither, and infoHash is the one
+// field that reliably tells them apart: it's only ever populated for
+// torrents.
+
+export function isTorrentStream(stream: Stream): boolean {
+  return !!stream.infoHash;
+}
+
 // ── Parsing ──────────────────────────────────────────────────────────────────
 //
 // Addon titles encode seeders/size as emoji-prefixed tokens, e.g.
@@ -93,7 +105,6 @@ export function getSizeBytes(stream: Stream): number {
 
 /** One-line summary for logging — "seeders / size / quality". */
 export function formatStreamSummary(stream: Stream): string {
-  const seeders = getSeeders(stream);
   const sizeBytes = getSizeBytes(stream);
   const sizeGB = sizeBytes / 1024 ** 3;
   const sizeStr =
@@ -103,11 +114,15 @@ export function formatStreamSummary(stream: Stream): string {
         : `${(sizeBytes / 1024 ** 2).toFixed(0)} MB`
       : "unknown size";
   const quality = inferQuality(stream) ?? "unknown quality";
-  return `${seeders} seeders, ${sizeStr}, ${quality}`;
+  const seedersStr = isTorrentStream(stream)
+    ? `${getSeeders(stream)} seeders`
+    : "direct stream";
+  return `${seedersStr}, ${sizeStr}, ${quality}`;
 }
 
 interface ScoredStream {
   stream: Stream;
+  isTorrent: boolean;
   seeders: number;
   sizeBytes: number;
   quality: string | null;
@@ -120,6 +135,7 @@ function scoreCandidates(
 ): ScoredStream[] {
   return streams.map((s) => ({
     stream: s,
+    isTorrent: isTorrentStream(s),
     seeders: getSeeders(s),
     sizeBytes: getSizeBytes(s),
     quality: inferQuality(s),
@@ -169,8 +185,21 @@ export function pickBestStream(
   const all = scoreCandidates(streams, opts.preferredProvider);
   // A zero-seeder torrent will likely never actually start downloading, so
   // exclude them from consideration — unless it's literally the only option.
-  const withSeeders = all.filter((c) => c.seeders > 0);
+  // Direct HTTP streams (Nuvio, etc.) have no seeder concept at all — they're
+  // never excluded by this check, torrent or not isn't a reliability signal
+  // for them one way or the other.
+  const withSeeders = all.filter((c) => !c.isTorrent || c.seeders > 0);
   const pool = withSeeders.length > 0 ? withSeeders : all;
+
+  // Normalized 0..1 "will this actually start playing" score. Torrents need
+  // peers to ramp up, so it's their seeder count relative to the best
+  // available; a direct HTTP stream has no such ramp-up, so it's scored as
+  // fully reliable rather than being penalized for lacking a metric that
+  // doesn't apply to it (previously this fell through to 0 — the same score
+  // as a dead torrent — which meant auto-select would only ever pick a Nuvio
+  // stream when literally no torrent had a single seeder).
+  const reliability = (c: ScoredStream, maxSeeders: number) =>
+    c.isTorrent ? c.seeders / maxSeeders : 1;
 
   const qualityTiebreak = (a: ScoredStream, b: ScoredStream) => {
     const qDiff = qualityRank(b.quality) - qualityRank(a.quality);
@@ -182,7 +211,7 @@ export function pickBestStream(
       const maxSeeders = Math.max(1, ...pool.map((c) => c.seeders));
       return sortByBoostedDesc(
         pool,
-        (c) => c.seeders / maxSeeders,
+        (c) => reliability(c, maxSeeders),
         (a, b) => b.seeders - a.seeders,
       ).stream;
     }
@@ -247,7 +276,7 @@ export function pickBestStream(
       return sortByBoostedDesc(
         pool,
         (c) => {
-          const seederScore = c.seeders / maxSeeders;
+          const seederScore = reliability(c, maxSeeders);
           // Streams with no parsed size aren't penalized or rewarded — treat
           // as a neutral midpoint rather than guessing.
           const sizeScore = c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5;

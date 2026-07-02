@@ -66,6 +66,11 @@ type Stream struct {
 	InfoHash  string     `json:"infoHash"`
 	AddonName string     `json:"addonName"`
 	Subtitles []Subtitle `json:"subtitles,omitempty"`
+	// Headers are extra HTTP headers (e.g. Referer/Origin) the origin CDN
+	// requires. Only Nuvio-sourced streams set this today; when present,
+	// /api/play proxies the request instead of redirecting, since a bare
+	// redirect can't carry them to the origin.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // WatchOption represents a streaming service availability entry from JustWatch.

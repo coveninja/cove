@@ -13,3 +13,7 @@ packages:
     output_path: "web/src/lib/types/library.ts"
     type_mappings:
       time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity
+  - path: "github.com/coveninja/cove/internal/nuvio"
+    output_path: "web/src/lib/types/nuvio.ts"
+    type_mappings:
+      time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity

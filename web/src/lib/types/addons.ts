@@ -51,6 +51,13 @@ export interface Stream {
   infoHash: string;
   addonName: string;
   subtitles?: Subtitle[];
+  /**
+   * Headers are extra HTTP headers (e.g. Referer/Origin) the origin CDN
+   * requires. Only Nuvio-sourced streams set this today; when present,
+   * /api/play proxies the request instead of redirecting, since a bare
+   * redirect can't carry them to the origin.
+   */
+  headers?: { [key: string]: string};
 }
 /**
  * WatchOption represents a streaming service availability entry from JustWatch.

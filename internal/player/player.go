@@ -14,6 +14,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/anacrolix/torrent"
 	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/tmdb"
 	"github.com/coveninja/cove/internal/utils"
 )
@@ -38,7 +41,23 @@ type Player struct {
 
 	tmdbClient *tmdb.Client
 	addonMgr   *addons.Manager
+	nuvioMgr   *nuvio.Manager
+
+	// streamHeaders remembers the extra HTTP headers (Referer/Origin, etc.)
+	// a Nuvio-scraped stream's origin CDN requires, keyed by stream URL, so
+	// /api/play can proxy with them instead of a bare redirect that would
+	// drop them. Entries expire after streamHeadersTTL — they only need to
+	// live from "streams were listed" to "user pressed play".
+	streamHeadersMu sync.Mutex
+	streamHeaders   map[string]streamHeaderEntry
 }
+
+type streamHeaderEntry struct {
+	headers map[string]string
+	expires time.Time
+}
+
+const streamHeadersTTL = 30 * time.Minute
 
 // torrentDataDir is where the anacrolix client writes downloaded pieces. The
 // reaper removes per-torrent subdirectories under here when a torrent is
@@ -60,9 +79,10 @@ type torrentState struct {
 }
 
 // New constructs a Player: it creates the torrent client and stores the
-// injected TMDB client and addon manager. The torrent client is core
-// functionality, so a failure here is returned for the caller to treat as fatal.
-func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager) (*Player, error) {
+// injected TMDB client, addon manager, and Nuvio plugin manager. The torrent
+// client is core functionality, so a failure here is returned for the caller
+// to treat as fatal.
+func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager) (*Player, error) {
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = torrentDataDir
 	client, err := torrent.NewClient(cfg)
@@ -74,7 +94,65 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager) (*Player, error) {
 		activeTorrents: map[string]*torrentState{},
 		tmdbClient:     tmdbClient,
 		addonMgr:       addonMgr,
+		nuvioMgr:       nuvioMgr,
+		streamHeaders:  map[string]streamHeaderEntry{},
 	}, nil
+}
+
+// rememberHeaders records the extra headers a stream URL needs for playback,
+// so /api/play can find them later by URL alone (the query string it
+// receives has no room for a headers map). Sweeps expired entries on every
+// call instead of running a background goroutine, since inserts are rare
+// enough (one per Nuvio-sourced stream returned) that this stays cheap.
+func (p *Player) rememberHeaders(streamURL string, headers map[string]string) {
+	if len(headers) == 0 {
+		return
+	}
+	p.streamHeadersMu.Lock()
+	defer p.streamHeadersMu.Unlock()
+	now := time.Now()
+	for k, v := range p.streamHeaders {
+		if now.After(v.expires) {
+			delete(p.streamHeaders, k)
+		}
+	}
+	p.streamHeaders[streamURL] = streamHeaderEntry{headers: headers, expires: now.Add(streamHeadersTTL)}
+}
+
+func (p *Player) lookupHeaders(streamURL string) map[string]string {
+	p.streamHeadersMu.Lock()
+	defer p.streamHeadersMu.Unlock()
+	entry, ok := p.streamHeaders[streamURL]
+	if !ok || time.Now().After(entry.expires) {
+		return nil
+	}
+	return entry.headers
+}
+
+// proxyStream forwards the request to streamURL with extra headers attached,
+// for origins that reject a bare redirect (no Referer/Origin) but work fine
+// when the request carries them. Uses httputil.ReverseProxy so Range
+// requests (mpv's seek mechanism), status codes, and body streaming are
+// handled correctly instead of hand-rolled.
+func (p *Player) proxyStream(streamURL string, headers map[string]string, w http.ResponseWriter, r *http.Request) {
+	target, err := url.Parse(streamURL)
+	if err != nil {
+		http.Error(w, "invalid stream url", http.StatusBadGateway)
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.URL.Path = target.Path
+			req.URL.RawQuery = target.RawQuery
+			req.Host = target.Host
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+		},
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // largestFile returns the biggest file in a torrent whose metadata is ready.
@@ -337,6 +415,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 
 		// For TV, append season:episode to build the Stremio stream ID
 		stremioID := imdbID
+		var seasonNum, episodeNum *int
 		if mediaType == "tv" {
 			season := r.URL.Query().Get("season")
 			episode := r.URL.Query().Get("episode")
@@ -345,6 +424,12 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 				return
 			}
 			stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
+			if sv, serr := strconv.Atoi(season); serr == nil {
+				seasonNum = &sv
+			}
+			if ev, eerr := strconv.Atoi(episode); eerr == nil {
+				episodeNum = &ev
+			}
 		}
 
 		streams, err := p.addonMgr.GetAllStreams(mediaType, stremioID)
@@ -355,6 +440,23 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		if streams == nil {
 			streams = []addons.Stream{}
 		}
+
+		// Skip the extra TMDB lookup entirely for the common case (no Nuvio
+		// scrapers enabled) — it exists purely to feed Nuvio's metadata.
+		if p.nuvioMgr != nil && p.nuvioMgr.HasEnabledScrapers() {
+			var title string
+			var year int
+			if media, mErr := p.tmdbClient.GetMediaByID(id, mediaType); mErr == nil && media != nil {
+				title = firstNonEmpty(media.Title, media.Name)
+				year = parseYear(firstNonEmpty(media.Released, media.FirstAir))
+			}
+			nuvioStreams := p.nuvioMgr.GetStreams(mediaType, id, imdbID, title, year, seasonNum, episodeNum)
+			for _, s := range nuvioStreams {
+				p.rememberHeaders(s.URL, s.Headers)
+			}
+			streams = append(streams, nuvioStreams...)
+		}
+
 		err = json.NewEncoder(w).Encode(streams)
 		if err != nil {
 			log.Println(err)
@@ -366,8 +468,14 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
 
-		// Direct http(s) sources: redirect mpv straight to them.
+		// Direct http(s) sources: redirect mpv straight to them, unless the
+		// origin needs extra headers (e.g. Referer) that a redirect can't
+		// carry — in that case proxy the request instead.
 		if streamURL != "" {
+			if headers := p.lookupHeaders(streamURL); headers != nil {
+				p.proxyStream(streamURL, headers, w, r)
+				return
+			}
 			http.Redirect(w, r, streamURL, http.StatusTemporaryRedirect)
 			return
 		}
@@ -484,4 +592,27 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 	}))
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// parseYear extracts the year from a TMDB-style "YYYY-MM-DD" date string.
+// Returns 0 (not an error) for an empty or malformed date, since a Nuvio
+// scraper's metadata.year is best-effort context, not something to fail over.
+func parseYear(date string) int {
+	if len(date) < 4 {
+		return 0
+	}
+	year, err := strconv.Atoi(date[:4])
+	if err != nil {
+		return 0
+	}
+	return year
 }
