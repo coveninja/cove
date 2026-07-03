@@ -17,13 +17,16 @@ import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-g
 import type { Profile } from "$lib/types/auth";
 
 // Single source of truth for the backend origin. Override per-environment with
-// VITE_API_BASE (e.g. in .env.production); falls back to the local dev server.
+// VITE_API_BASE (e.g. in .env.production); falls back to 127.0.0.1 (the same
+// host the backend embeds in its JSON) so there is one CSP entry and one
+// Chromium connection pool. localhost is kept as a fallback only in the CSP
+// for browser-dev setups that override VITE_API_BASE to point at localhost.
 // Everything in this module — fetches and the URL builders handed to <video>,
 // <track>, hls.js, and EventSource — is derived from this, so the host appears
 // exactly once in the frontend.
 const BASE =
   (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-    ?.VITE_API_BASE ?? "http://localhost:6969/api";
+    ?.VITE_API_BASE ?? "http://127.0.0.1:6969/api";
 
 // Auth token getter — set by setTokenSource() on startup; called on every request
 // so it always reads the current value without a $effect timing gap.
