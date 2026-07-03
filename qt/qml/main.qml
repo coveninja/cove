@@ -15,6 +15,25 @@ Window {
     title: "Cove"
     color: "black"
 
+    // Consecutive crash-reload counter. When the Chromium renderer terminates
+    // abnormally (OOM, GPU fault) the web overlay goes permanently dead while
+    // mpv keeps rendering — the user sees video but the entire UI is frozen.
+    // We reload the SPA to restore the overlay. This counter prevents an
+    // infinite crash–reload spin when the same fault is reproduced immediately
+    // on every renderer boot; once it exceeds rendererCrashLimit we stop.
+    property int rendererCrashCount: 0
+    readonly property int rendererCrashLimit: 3
+
+    // Deferred renderer reload. Qt recommends not calling reload() synchronously
+    // from renderProcessTerminated (the engine is mid-cleanup at that point), so
+    // we fire a single-shot timer instead.
+    Timer {
+        id: rendererReloadTimer
+        interval: 1000
+        repeat: false
+        onTriggered: web.reload()
+    }
+
     MpvObject {
         id: mpv
         anchors.fill: parent
@@ -58,6 +77,33 @@ Window {
         onNewWindowRequested: function(request) {
             Qt.openUrlExternally(request.requestedUrl)
             request.action = WebEngineNewWindowRequest.IgnoreRequest
+        }
+
+        // Reload the SPA when the Chromium renderer process terminates
+        // abnormally. NormalTerminationStatus is ignored (intentional shutdown).
+        // mpv is stopped before the reload so the reloaded home page does not
+        // have orphaned audio/video playing behind it.
+        onRenderProcessTerminated: function(terminationStatus, exitCode) {
+            if (terminationStatus === WebEngineView.NormalTerminationStatus) return
+            var name = terminationStatus === WebEngineView.AbnormalTerminationStatus ? "Abnormal"
+                     : terminationStatus === WebEngineView.CrashedTerminationStatus  ? "Crashed"
+                     : terminationStatus === WebEngineView.KilledTerminationStatus   ? "Killed"
+                     : "Unknown"
+            console.log("[shell] web renderer terminated (status=" + name + ", exit=" + exitCode + ")")
+            mpv.stop()
+            if (rendererCrashCount >= rendererCrashLimit) {
+                console.log("[shell] web renderer crashed too many times — giving up on reload")
+                return
+            }
+            rendererCrashCount++
+            rendererReloadTimer.start()
+        }
+
+        // Reset the crash counter on every successful page load so that a
+        // stable session doesn't accumulate credit toward the limit.
+        onLoadingChanged: function(loadingInfo) {
+            if (loadingInfo.status === WebEngineView.LoadSucceededStatus)
+                rendererCrashCount = 0
         }
 
         // Forward JS console output to the Qt process stdout so it's visible
