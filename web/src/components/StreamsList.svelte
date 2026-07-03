@@ -1,37 +1,25 @@
 <script lang="ts">
-  import {
-    epKey,
-    epProgress,
-    getMaxQuality,
-    inferQuality,
-    progressPct,
-  } from "$lib/utils";
-  import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-  import type { Stream, WatchOption } from "$lib/types/addons";
+  import {epKey, epProgress, getMaxQuality, inferQuality, progressPct,} from "$lib/utils";
+  import {ScrollArea} from "$lib/components/ui/scroll-area/index.js";
+  import type {Stream, WatchOption} from "$lib/types/addons";
   import * as Select from "$lib/components/ui/select/index.js";
+  import {Check, ChevronLeft, ListFilter, Play, Settings2,} from "lucide-svelte";
+  import {Button} from "$lib/components/ui/button/index.js";
+  import {Spinner} from "$lib/components/ui/spinner";
+  import {SvelteMap, SvelteSet} from "svelte/reactivity";
+  import {api, formatPosition} from "$lib/api";
+  import type {WatchProgress} from "$lib/types/library";
+  import {settings} from "$lib/stores/settings";
   import {
-    ListFilter,
-    Play,
-    Settings2,
-    ChevronLeft,
-    Check,
-  } from "lucide-svelte";
-  import { Button } from "$lib/components/ui/button/index.js";
-  import { Spinner } from "$lib/components/ui/spinner";
-  import { SvelteMap } from "svelte/reactivity";
-  import { api, formatPosition } from "$lib/api";
-  import type { WatchProgress } from "$lib/types/library";
-  import { settings } from "$lib/stores/settings";
-  import {
+    formatStreamSummary,
     getSeeders,
     getSizeBytes,
     isTorrentStream,
     rankStreams,
-    formatStreamSummary,
     type StreamSelectionMode,
   } from "$lib/streamSelection";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import type { TVEpisode } from "$lib/types/tmdb";
+  import {Skeleton} from "$lib/components/ui/skeleton";
+  import type {TVEpisode} from "$lib/types/tmdb";
   import EpisodeCard from "./EpisodeCard.svelte";
 
   let loadingStreams = $state(false);
@@ -177,12 +165,10 @@
         if (seasons.length > 0 && selectedSeason === null) {
           // Land on whatever's already playing (full or minimized to PiP)
           // instead of always defaulting to season 1.
-          const preferred =
-            activeSeason != null &&
-            seasons.some((s) => s.season_number === activeSeason)
-              ? activeSeason
-              : seasons[0].season_number;
-          selectedSeason = preferred;
+          selectedSeason = activeSeason != null &&
+          seasons.some((s) => s.season_number === activeSeason)
+                  ? activeSeason
+                  : seasons[0].season_number;
         }
       })
       .finally(() => (loadingSeasons = false));
@@ -278,6 +264,8 @@
   // and rebuilds every row's DOM (the previous key was object identity on a
   // freshly-mapped object every derive, which changed on every filter/sort
   // toggle even though the underlying stream hadn't).
+  // Some addons return identical streams (same URL/infoHash/title), which
+  // crashes Svelte's keyed {#each} block. We dedupe by `key` here.
   interface ParsedStream {
     stream: Stream;
     key: string;
@@ -286,15 +274,23 @@
     quality: string | null;
   }
 
-  const parsedStreams = $derived<ParsedStream[]>(
-    streams.map((s) => ({
-      stream: s,
-      key: s.url || s.infoHash || s.title,
-      seeders: getSeeders(s),
-      sizeBytes: getSizeBytes(s),
-      quality: inferQuality(s),
-    })),
-  );
+  const parsedStreams = $derived.by(() => {
+    const seen = new SvelteSet<string>();
+    const result: ParsedStream[] = [];
+    for (const s of streams) {
+      const key = s.url || s.infoHash || s.title;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        stream: s,
+        key,
+        seeders: getSeeders(s),
+        sizeBytes: getSizeBytes(s),
+        quality: inferQuality(s),
+      });
+    }
+    return result;
+  });
 
   const filteredStreams = $derived.by(() => {
     const filtered = parsedStreams.filter(
