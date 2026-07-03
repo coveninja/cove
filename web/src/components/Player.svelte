@@ -1106,7 +1106,7 @@
           {#if chapterBars}
             <!-- Segmented: each chapter is its own rounded pill with a gap -->
             <div class="flex h-full w-full gap-0.5">
-              {#each chapterBars as chapter (chapter.startFrac)}
+              {#each chapterBars as chapter}
                 <div
                   class="relative h-full overflow-hidden rounded-full {chapter.type !== 'content'
                     ? segmentBgClass(chapter.type)
