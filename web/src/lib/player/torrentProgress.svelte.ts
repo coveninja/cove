@@ -25,9 +25,12 @@ export class TorrentProgress {
    *     if (!isHash) return () => {};
    *     return torrent.start(src);
    *   });
+   *
+   * opts.season/episode (mirrors Player's playUrl call) scope progress to a
+   * season pack's selected episode file instead of the whole torrent.
    */
-  start(src: string): () => void {
-    const es = new EventSource(api.progressStreamUrl(src));
+  start(src: string, opts?: { season?: number; episode?: number }): () => void {
+    const es = new EventSource(api.progressStreamUrl(src, opts));
     let consecutiveErrors = 0;
 
     es.onmessage = (e) => {

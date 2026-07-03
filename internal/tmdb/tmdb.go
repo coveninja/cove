@@ -184,6 +184,11 @@ type Media struct {
 	Popularity float64  `json:"popularity"`
 	GenreIDs   []int    `json:"genre_ids,omitempty"`
 	Adult      bool     `json:"adult,omitempty"`
+	// OriginalLanguage is the ISO 639-1 code TMDB stores the title's original
+	// audio/language as (e.g. "ja" for a Japanese show). TMDB populates this on
+	// both list endpoints (search/discover) and single-item lookups
+	// (GetMediaByID), so no extra request is needed to get it.
+	OriginalLanguage string `json:"original_language,omitempty"`
 }
 
 type MediaDetails struct {
@@ -209,6 +214,10 @@ type TVEpisode struct {
 	Overview      string `json:"overview"`
 	StillPath     string `json:"still_path"`
 	AirDate       string `json:"air_date"`
+	// Runtime in minutes, as reported by TMDB's season endpoint; 0 when TMDB
+	// doesn't know it. Lets "mark as watched" record the episode's real
+	// duration instead of a placeholder.
+	Runtime int `json:"runtime"`
 }
 
 type Details struct {
@@ -371,9 +380,24 @@ type MediaVideos struct {
 // baseURL is a var (not a const) so tests can point it at an httptest.Server.
 var baseURL = "https://api.themoviedb.org/3"
 
-const imageBase = "https://image.tmdb.org/t/p/w500"
-const imageBaseOriginal = "https://image.tmdb.org/t/p/original"
-const stillBase = "https://image.tmdb.org/t/p/w300"
+// imgURL builds a URL routed through the backend's own image-cache proxy
+// (internal/imgcache) instead of pointing straight at image.tmdb.org — the
+// proxy fetches from TMDB on a cache miss and serves from local disk
+// thereafter (see that package's doc comment for why: offline support +
+// avoiding re-fetching the same bytes on every card render).
+//
+// The address is an absolute http://127.0.0.1:6969 URL, not a relative path:
+// the web UI (Vite dev server or the Qt shell's static server) runs on a
+// different origin than the Go backend, which always listens on 127.0.0.1:6969
+// regardless of install — a relative path would resolve against the wrong
+// origin. Returns "" for an empty path so callers' "does this entry have a
+// poster" checks (`!= ""` / `== ""`) keep working unchanged.
+func imgURL(size, path string) string {
+	if path == "" {
+		return ""
+	}
+	return "http://127.0.0.1:6969/api/img/" + size + path
+}
 
 func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 	normalized := normalizeQuery(query)
@@ -428,11 +452,11 @@ func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 		}
 
 		for i := range data.Results {
-			data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+			data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
 			data.Results[i].MediaType = mediaType
 		}
 		for _, m := range data.Results {
-			if m.PosterURL != imageBase {
+			if m.PosterURL != "" {
 				results = append(results, m)
 			}
 		}
@@ -506,11 +530,11 @@ func (c *Client) Search(query string) ([]Media, error) {
 			}
 
 			for i := range data.Results {
-				data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+				data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
 				data.Results[i].MediaType = mediaType
 			}
 			for _, m := range data.Results {
-				if m.PosterURL == imageBase || seen[m.ID] {
+				if m.PosterURL == "" || seen[m.ID] {
 					continue
 				}
 				seen[m.ID] = true
@@ -556,14 +580,14 @@ func (c *Client) SearchPeople(query string) ([]Person, error) {
 		if p.ProfileURL == "" {
 			continue // faceless entries are usually noise
 		}
-		p.ProfileURL = imageBase + p.ProfileURL
+		p.ProfileURL = imgURL("w500", p.ProfileURL)
 
 		kf := make([]Media, 0, len(p.KnownFor))
 		for _, m := range p.KnownFor {
 			if (m.MediaType != "movie" && m.MediaType != "tv") || m.PosterURL == "" {
 				continue
 			}
-			m.PosterURL = imageBase + m.PosterURL
+			m.PosterURL = imgURL("w500", m.PosterURL)
 			kf = append(kf, m)
 		}
 		p.KnownFor = kf
@@ -604,7 +628,7 @@ func (c *Client) SearchProviders(query string) ([]Provider, error) {
 			}
 			seen[p.ID] = true
 			if p.LogoURL != "" {
-				p.LogoURL = imageBase + p.LogoURL
+				p.LogoURL = imgURL("w500", p.LogoURL)
 			}
 			out = append(out, p)
 		}
@@ -699,7 +723,7 @@ func (c *Client) GetPerson(id int) (PersonDetails, error) {
 		Credits:            []Media{},
 	}
 	if data.ProfilePath != "" {
-		pd.ProfileURL = imageBase + data.ProfilePath
+		pd.ProfileURL = imgURL("w500", data.ProfilePath)
 	}
 
 	seen := make(map[int]bool)
@@ -708,7 +732,7 @@ func (c *Client) GetPerson(id int) (PersonDetails, error) {
 			continue
 		}
 		seen[m.ID] = true
-		m.PosterURL = imageBase + m.PosterURL
+		m.PosterURL = imgURL("w500", m.PosterURL)
 		pd.Credits = append(pd.Credits, m)
 	}
 	sort.Slice(pd.Credits, func(i, j int) bool {
@@ -744,7 +768,7 @@ func (c *Client) DiscoverByProvider(mediaType string, providerID, limit int) ([]
 		if data.Results[i].PosterURL == "" {
 			continue
 		}
-		data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+		data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
 		data.Results[i].MediaType = mediaType
 		out = append(out, data.Results[i])
 		if limit > 0 && len(out) >= limit {
@@ -858,7 +882,7 @@ func (c *Client) GetSeasons(tmdbID int) ([]TVSeason, error) {
 	for _, s := range data.Seasons {
 		if s.SeasonNumber > 0 {
 			if s.PosterPath != "" {
-				s.PosterPath = imageBase + s.PosterPath
+				s.PosterPath = imgURL("w500", s.PosterPath)
 			}
 			filtered = append(filtered, s)
 		}
@@ -889,7 +913,7 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 
 	for i := range data.Episodes {
 		if data.Episodes[i].StillPath != "" {
-			data.Episodes[i].StillPath = stillBase + data.Episodes[i].StillPath
+			data.Episodes[i].StillPath = imgURL("w300", data.Episodes[i].StillPath)
 		}
 	}
 	return data.Episodes, nil
@@ -915,15 +939,15 @@ func (c *Client) GetImages(tmdbID int, mediaType string) (*MediaImages, error) {
 	}
 
 	for i := range data.Backdrops {
-		data.Backdrops[i].URL = imageBaseOriginal + data.Backdrops[i].FilePath
+		data.Backdrops[i].URL = imgURL("original", data.Backdrops[i].FilePath)
 	}
 
 	for i := range data.Logos {
-		data.Logos[i].URL = imageBase + data.Logos[i].FilePath
+		data.Logos[i].URL = imgURL("w500", data.Logos[i].FilePath)
 	}
 
 	for i := range data.Posters {
-		data.Posters[i].URL = imageBase + data.Posters[i].FilePath
+		data.Posters[i].URL = imgURL("w500", data.Posters[i].FilePath)
 	}
 
 	return &data, nil
@@ -1026,7 +1050,7 @@ func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 		return nil, err
 	}
 	if details.NextEpisodeToAir != nil && details.NextEpisodeToAir.StillPath != "" {
-		details.NextEpisodeToAir.StillPath = stillBase + details.NextEpisodeToAir.StillPath
+		details.NextEpisodeToAir.StillPath = imgURL("w300", details.NextEpisodeToAir.StillPath)
 	}
 	return &details, nil
 }
@@ -1060,7 +1084,7 @@ func (c *Client) GetMediaByID(tmdbID int, mediaType string) (*Media, error) {
 	// results, this is a single known-type lookup, so just set it directly.
 	data.MediaType = mediaType
 	if data.PosterURL != "" {
-		data.PosterURL = imageBase + data.PosterURL
+		data.PosterURL = imgURL("w500", data.PosterURL)
 	}
 
 	return &data, nil
@@ -1125,13 +1149,13 @@ func (c *Client) GetSimilar(tmdbID int, mediaType string) ([]Media, error) {
 	}
 
 	for i := range data.Results {
-		data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+		data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
 		data.Results[i].MediaType = mediaType
 	}
 
 	var filtered []Media
 	for _, m := range data.Results {
-		if m.PosterURL == imageBase {
+		if m.PosterURL == "" {
 			continue
 		}
 		filtered = append(filtered, m)
@@ -1170,7 +1194,7 @@ func (c *Client) GetLogos(tmdbID int, mediaType string) ([]string, error) {
 		if i >= 3 {
 			break
 		}
-		urls = append(urls, "https://image.tmdb.org/t/p/w500"+l.FilePath)
+		urls = append(urls, imgURL("w500", l.FilePath))
 	}
 	return urls, nil
 }
@@ -1283,7 +1307,7 @@ func (c *Client) Discover(p DiscoverParams) (*DiscoverResult, error) {
 	for i := range data.Results {
 		data.Results[i].MediaType = p.MediaType
 		if data.Results[i].PosterURL != "" {
-			data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+			data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
 		}
 	}
 	return &data, nil

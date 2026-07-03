@@ -149,6 +149,13 @@ class MpvPlayer {
   play(url: string): void {
     this.ended = false;
     this.position = 0;
+    // duration must reset too: this is a singleton, and mpv only pushes a
+    // durationChanged once the NEW file's duration is known — leaving the old
+    // file's value here made canPlay (which gates on duration > 0) flip true
+    // the instant a new src was set, before anything had actually loaded.
+    // Everything keyed on canPlay (loading screen, resume seek, up-next
+    // resolution) then ran against the previous file's stale duration/position.
+    this.duration = 0;
     this.#seekLockUntil = 0; // clear any lock left over from the previous stream
     this.#mpv?.play(url);
   }

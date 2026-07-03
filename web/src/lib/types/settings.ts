@@ -32,12 +32,13 @@ export interface Settings {
   autoSelectStream: boolean; // skip the manual stream list and play immediately
   streamSelectionMode: string; // "balanced" | "seeders" | "quality" | "smallest" | "bandwidth"
   measuredBandwidthMbps: number /* float64 */; // from the in-app speed test; 0 = never measured
+  sourcePreference: string; // "" (none) | "torrent" | "direct" — additive ranking boost, doesn't exclude
   /**
    * Subtitles
    */
   subtitlesEnabled: boolean;
   defaultSubtitleLang: string; // ISO 639-1 e.g. "en"
-  defaultAudioLang: string; // ISO 639-1 e.g. "en"
+  defaultAudioLang: string; // ISO 639-1 e.g. "en", or "original" to match the title's original_language
   subtitleSize: number /* float64 */; // percentage, 50–200
   subtitlePosition: number /* float64 */; // percent from bottom, 2–90
   subtitleBackground: boolean; // dark box behind subtitle text
@@ -69,6 +70,12 @@ export interface Settings {
    * completion-trigger respects it too.
    */
   prefetchStreams: boolean;
+  /**
+   * PrefetchNextEpisode background-downloads the next TV episode's top-ranked
+   * torrent stream once the current episode's file finishes downloading, so
+   * playback of the next episode starts near-instantly. Default true.
+   */
+  prefetchNextEpisode: boolean;
   /**
    * Sync bookkeeping — stamped server-side on every local write, used to resolve
    * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.

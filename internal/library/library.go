@@ -143,7 +143,8 @@ func (l *Library) AllDismissals() []*Dismissal {
 
 // MergeFrom merges remote data (pulled from Supabase) into the local store.
 // Remote entries replace local ones for the same (tmdb_id, media_type) key.
-// Watch progress takes the max position_seconds. Dismissals are unioned.
+// Watch progress takes the most recent write (WatchedAt). Dismissals are
+// unioned.
 func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal) {
 	l.mu.Lock()
 	for _, e := range entries {
@@ -159,7 +160,14 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	for _, p := range progress {
 		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
 		if local, ok := l.db.Progress[key]; ok {
-			if p.PositionSeconds > local.PositionSeconds {
+			// Most-recent-write wins (same rule as entries' UpdatedAt above).
+			// This used to be "higher PositionSeconds wins", which made any
+			// position regression un-syncable: marking an episode unwatched
+			// (position 0) or rewatching from the start always lost to the
+			// remote copy's older-but-larger position — the next sync pull
+			// silently reverted the change, and the push that follows a pull
+			// then uploaded the reverted record, cementing it.
+			if p.WatchedAt.After(local.WatchedAt) {
 				l.db.Progress[key] = p
 			}
 		} else {
@@ -571,7 +579,12 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 		list := make([]*LibraryEntry, 0, len(l.db.Entries))
 		for _, e := range l.db.Entries {
 			if statusFilter == "" || e.Status == statusFilter {
-				list = append(list, e)
+				// Value copy — e is the actual pointer stored under l.mu, and
+				// rewritePosterURL's result must never leak back into it (see
+				// its doc comment).
+				entryCopy := *e
+				entryCopy.PosterPath = rewritePosterURL(entryCopy.PosterPath)
+				list = append(list, &entryCopy)
 			}
 		}
 		l.mu.RUnlock()
@@ -636,6 +649,7 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 		l.mu.Unlock()
 		l.tasteGen.Add(1) // entry upsert — taste-relevant
 
+		result.PosterPath = rewritePosterURL(result.PosterPath)
 		jsonOK(w, &result)
 
 	default:
@@ -845,7 +859,16 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		if progList == nil {
 			progList = []*WatchProgress{}
 		}
-		jsonOK(w, map[string]any{"entry": entry, "progress": progList, "dismissed": dismissed})
+		// Value copy — entry is the actual pointer stored under l.mu (see
+		// rewritePosterURL's doc comment for why this must not be mutated
+		// in place).
+		var entryOut *LibraryEntry
+		if entry != nil {
+			c := *entry
+			c.PosterPath = rewritePosterURL(c.PosterPath)
+			entryOut = &c
+		}
+		jsonOK(w, map[string]any{"entry": entryOut, "progress": progList, "dismissed": dismissed})
 
 	// ── DELETE /api/library/{id}/{type} ───────────────────────────────────────
 	case sub == "" && r.Method == http.MethodDelete:
@@ -884,6 +907,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		result := *entry
 		l.mu.Unlock()
 		l.tasteGen.Add(1) // status change — taste-relevant
+		result.PosterPath = rewritePosterURL(result.PosterPath)
 		jsonOK(w, &result)
 
 	// ── PATCH /api/library/{id}/{type}/rating ─────────────────────────────────
@@ -913,6 +937,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		result := *entry
 		l.mu.Unlock()
 		l.tasteGen.Add(1) // rating change — taste-relevant
+		result.PosterPath = rewritePosterURL(result.PosterPath)
 		jsonOK(w, &result)
 
 	default:
@@ -978,6 +1003,26 @@ func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// rewritePosterURL rewrites a legacy TMDB-hosted poster URL — one stored
+// before internal/imgcache existed, or synced down from Supabase from another
+// device on an older version — to route through the local image-cache proxy
+// instead. tmdb.go itself only ever produces already-rewritten URLs now, but
+// this covers entries written to disk (or Supabase) by a previous version of
+// the app, without needing a one-time migration pass over every stored
+// LibraryEntry.
+//
+// Serve-side view only: callers must apply this to a value COPY of the
+// entry, never mutate the stored/cached LibraryEntry in place — entries are
+// shared pointers under l.mu, and a synced-down URL must stay in its
+// original (TMDB-hosted) form so a future Supabase push doesn't propagate a
+// rewrite that only makes sense pointed at this machine's own backend.
+func rewritePosterURL(s string) string {
+	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
+		return "http://127.0.0.1:6969/api/img/" + rest
+	}
+	return s
+}
 
 func jsonOK(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")

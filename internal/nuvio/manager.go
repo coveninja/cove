@@ -252,6 +252,7 @@ func (m *Manager) GetStreams(ctx context.Context, mediaType string, tmdbID int, 
 					URL:       sc.URL,
 					AddonName: "Nuvio: " + s.Name,
 					Headers:   sc.Headers,
+					SizeBytes: sc.Size,
 				})
 			}
 			mu.Unlock()

@@ -62,22 +62,28 @@ func TestMergeFrom_LastWriteWins(t *testing.T) {
 	assert.Equal(t, StatusFinished, entries[0].Status)
 }
 
-func TestMergeFrom_MaxPosition(t *testing.T) {
+func TestMergeFrom_MostRecentProgressWins(t *testing.T) {
 	l := newLib(t)
-	p1 := &WatchProgress{ID: "p1", TmdbID: 1, MediaType: "movie", PositionSeconds: 100, WatchedAt: time.Now()}
+	base := time.Now()
+	p1 := &WatchProgress{ID: "p1", TmdbID: 1, MediaType: "movie", PositionSeconds: 100, WatchedAt: base}
 	l.MergeFrom(nil, []*WatchProgress{p1}, nil)
-	p2 := &WatchProgress{ID: "p2", TmdbID: 1, MediaType: "movie", PositionSeconds: 200, WatchedAt: time.Now()}
+
+	// A more recent write wins, even with a LOWER position — this is what
+	// makes "mark as unwatched" (position 0) and rewatch-from-start
+	// syncable. The old max-position rule reverted both.
+	p2 := &WatchProgress{ID: "p2", TmdbID: 1, MediaType: "movie", PositionSeconds: 0, Completed: false, WatchedAt: base.Add(time.Minute)}
 	l.MergeFrom(nil, []*WatchProgress{p2}, nil)
 	progs := l.AllProgress()
 	require.Len(t, progs, 1)
-	assert.Equal(t, float64(200), progs[0].PositionSeconds)
+	assert.Equal(t, float64(0), progs[0].PositionSeconds)
 
-	// Older position doesn't overwrite
-	p3 := &WatchProgress{ID: "p3", TmdbID: 1, MediaType: "movie", PositionSeconds: 50, WatchedAt: time.Now()}
+	// An older write never overwrites a newer one, regardless of position.
+	p3 := &WatchProgress{ID: "p3", TmdbID: 1, MediaType: "movie", PositionSeconds: 5000, WatchedAt: base.Add(-time.Hour)}
 	l.MergeFrom(nil, []*WatchProgress{p3}, nil)
 	progs = l.AllProgress()
 	require.Len(t, progs, 1)
-	assert.Equal(t, float64(200), progs[0].PositionSeconds)
+	assert.Equal(t, float64(0), progs[0].PositionSeconds)
+	assert.Equal(t, "p2", progs[0].ID)
 }
 
 func TestDismissal(t *testing.T) {

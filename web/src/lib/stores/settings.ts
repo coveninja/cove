@@ -16,6 +16,7 @@ const DEFAULTS: Settings = {
   autoSelectStream: true,
   streamSelectionMode: null,
   measuredBandwidthMbps: 0,
+  sourcePreference: "",
   subtitleSize: 150,
   subtitlePosition: 8,
   subtitleBackground: true,
@@ -28,6 +29,7 @@ const DEFAULTS: Settings = {
   discoveryAlgorithm: "smart",
   customAlgorithmUrl: "",
   prefetchStreams: true,
+  prefetchNextEpisode: true,
   updatedAt: "",
 };
 

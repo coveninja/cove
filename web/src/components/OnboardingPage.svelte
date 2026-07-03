@@ -43,8 +43,20 @@
     { value: "ru", label: "Russian" },
   ];
 
+  // Audio-only: "original" plays whatever track matches the title's TMDB
+  // original_language — see SettingsPage.svelte / Player.svelte for the same
+  // concept.
+  const AUDIO_LANGUAGES = [
+    { value: "original", label: "Original language" },
+    ...LANGUAGES,
+  ];
+
   function langLabel(v: string): string {
     return LANGUAGES.find((l) => l.value === v)?.label ?? v;
+  }
+
+  function audioLangLabel(v: string): string {
+    return AUDIO_LANGUAGES.find((l) => l.value === v)?.label ?? v;
   }
 
   let selectedMovieGenreIds = new SvelteSet<number>();
@@ -478,9 +490,9 @@
             <p class="text-xs text-muted-foreground">Auto-selected when multiple tracks are available</p>
           </div>
           <Select.Root type="single" bind:value={audioLang}>
-            <Select.Trigger class="w-36">{langLabel(audioLang)}</Select.Trigger>
+            <Select.Trigger class="w-36">{audioLangLabel(audioLang)}</Select.Trigger>
             <Select.Content>
-              {#each LANGUAGES as l}
+              {#each AUDIO_LANGUAGES as l}
                 <Select.Item value={l.value}>{l.label}</Select.Item>
               {/each}
             </Select.Content>

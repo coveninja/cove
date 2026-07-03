@@ -34,6 +34,13 @@ export interface Media {
   popularity: number /* float64 */;
   genre_ids?: number /* int */[];
   adult?: boolean;
+  /**
+   * OriginalLanguage is the ISO 639-1 code TMDB stores the title's original
+   * audio/language as (e.g. "ja" for a Japanese show). TMDB populates this on
+   * both list endpoints (search/discover) and single-item lookups
+   * (GetMediaByID), so no extra request is needed to get it.
+   */
+  original_language?: string;
 }
 export interface MediaDetails {
   imdb_id: string;
@@ -59,6 +66,12 @@ export interface TVEpisode {
   overview: string;
   still_path: string;
   air_date: string;
+  /**
+   * Runtime in minutes, as reported by TMDB's season endpoint; 0 when TMDB
+   * doesn't know it. Lets "mark as watched" record the episode's real
+   * duration instead of a placeholder.
+   */
+  runtime: number /* int */;
 }
 export interface Details {
   overview: string;

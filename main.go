@@ -16,6 +16,7 @@ import (
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/clientsession"
 	"github.com/coveninja/cove/internal/discover"
+	"github.com/coveninja/cove/internal/imgcache"
 	"github.com/coveninja/cove/internal/library"
 	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/player"
@@ -120,6 +121,16 @@ func main() {
 		log.Fatal("could not init torrent client:", err)
 	}
 
+	// Disk-cache proxy for TMDB images (F4) — not profile-scoped (images
+	// aren't per-profile data), so unlike the stores above it's constructed
+	// once here rather than reloaded on profile switch. Only failure mode is
+	// a broken os.UserCacheDir()/mkdir (permissions, no home dir) — not worth
+	// crashing the whole app over; images just 404 through /api/img/ if so.
+	imgCache, err := imgcache.New()
+	if err != nil {
+		log.Println("could not init image cache:", err)
+	}
+
 	mux := http.DefaultServeMux
 
 	addonMgr.SetupHandlers(mux)
@@ -130,6 +141,9 @@ func main() {
 	lib.SetupHandlers(mux)
 	profileStore.SetupHandlers(mux)
 	updater.SetupHandlers(mux, Version)
+	if imgCache != nil {
+		imgCache.SetupHandlers(mux)
+	}
 
 	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
 	// Env vars take precedence; compiled-in ldflags values are the fallback for

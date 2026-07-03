@@ -88,6 +88,10 @@ export function getSeeders(stream: Stream): number {
 }
 
 export function getSizeBytes(stream: Stream): number {
+  // Structured size (currently only Nuvio scrapers) is authoritative when
+  // present — the 💾-regex below is a fallback for addons that only ever put
+  // size in free-text titles.
+  if (stream.sizeBytes && stream.sizeBytes > 0) return stream.sizeBytes;
   const match = stream.title.match(/💾\s*([\d.]+)\s*(TB|GB|MB)/i);
   if (!match) return 0;
   const value = Number(match[1]);
@@ -127,38 +131,69 @@ interface ScoredStream {
   sizeBytes: number;
   quality: string | null;
   isPreferred: boolean;
+  /** Additive ranking bonus from preferred-provider + source-preference
+   * matches, precomputed once per candidate so rankByBoosted doesn't need to
+   * know about either concept. */
+  boost: number;
 }
 
-function scoreCandidates(
-  streams: Stream[],
-  preferredProvider?: string,
-): ScoredStream[] {
-  return streams.map((s) => ({
-    stream: s,
-    isTorrent: isTorrentStream(s),
-    seeders: getSeeders(s),
-    sizeBytes: getSizeBytes(s),
-    quality: inferQuality(s),
-    isPreferred: !!preferredProvider && s.addonName === preferredProvider,
-  }));
-}
+/** "" (none) | "torrent" | "direct" — see Settings.sourcePreference. */
+export type SourcePreference = "" | "torrent" | "direct";
+
+export const SOURCE_PREFERENCES: {
+  value: SourcePreference;
+  label: string;
+}[] = [
+  { value: "", label: "No preference" },
+  { value: "torrent", label: "Prefer torrents" },
+  { value: "direct", label: "Prefer direct streams" },
+];
 
 // A preferred-provider stream only wins a close call — this bonus is small
 // enough that a real quality/seeder gap from another provider still wins.
 const PROVIDER_BOOST = 0.15;
 
-/** Sorts by a mode's normalized 0..1 metric (higher = better), plus a small
- * bonus for the preferred provider, falling back to `tiebreak` on ties.
- * Returns the whole sorted pool — callers that only want the winner take
- * `[0]`. */
+// Same magnitude as PROVIDER_BOOST — a source-type preference is a similarly
+// soft nudge, not a hard filter. The two boosts stack, so a stream that's
+// both the preferred provider AND the preferred source type gets 0.3.
+const SOURCE_BOOST = 0.15;
+
+function scoreCandidates(
+  streams: Stream[],
+  preferredProvider?: string,
+  sourcePreference?: string,
+): ScoredStream[] {
+  return streams.map((s) => {
+    const isTorrent = isTorrentStream(s);
+    const isPreferred = !!preferredProvider && s.addonName === preferredProvider;
+    const matchesSource =
+      (sourcePreference === "torrent" && isTorrent) ||
+      (sourcePreference === "direct" && !isTorrent);
+    return {
+      stream: s,
+      isTorrent,
+      seeders: getSeeders(s),
+      sizeBytes: getSizeBytes(s),
+      quality: inferQuality(s),
+      isPreferred,
+      boost:
+        (isPreferred ? PROVIDER_BOOST : 0) + (matchesSource ? SOURCE_BOOST : 0),
+    };
+  });
+}
+
+/** Sorts by a mode's normalized 0..1 metric (higher = better), plus each
+ * candidate's precomputed boost (preferred provider / preferred source),
+ * falling back to `tiebreak` on ties. Returns the whole sorted pool —
+ * callers that only want the winner take `[0]`. */
 function rankByBoosted(
   pool: ScoredStream[],
   normalize: (c: ScoredStream) => number,
   tiebreak: (a: ScoredStream, b: ScoredStream) => number,
 ): ScoredStream[] {
   return pool.toSorted((a, b) => {
-    const boostedA = normalize(a) + (a.isPreferred ? PROVIDER_BOOST : 0);
-    const boostedB = normalize(b) + (b.isPreferred ? PROVIDER_BOOST : 0);
+    const boostedA = normalize(a) + a.boost;
+    const boostedB = normalize(b) + b.boost;
     const diff = boostedB - boostedA;
     return diff !== 0 ? diff : tiebreak(a, b);
   });
@@ -208,6 +243,8 @@ export interface PickBestOptions {
   estimatedMinutes?: number;
   /** Matched against Stream.addonName — see Settings.defaultProvider. */
   preferredProvider?: string;
+  /** "" | "torrent" | "direct" — see Settings.sourcePreference. */
+  sourcePreference?: string;
 }
 
 /**
@@ -226,7 +263,7 @@ export function rankStreams(
 ): Stream[] {
   if (streams.length === 0) return [];
 
-  const all = scoreCandidates(streams, opts.preferredProvider);
+  const all = scoreCandidates(streams, opts.preferredProvider, opts.sourcePreference);
   // A zero-seeder torrent will likely never actually start downloading, so
   // it's excluded from the primary pool — unless it's literally the only
   // option. Direct HTTP streams (Nuvio, etc.) have no seeder concept at
@@ -237,13 +274,15 @@ export function rankStreams(
 
   // Normalized 0..1 "will this actually start playing" score. Torrents need
   // peers to ramp up, so it's their seeder count relative to the best
-  // available; a direct HTTP stream has no such ramp-up, so it's scored as
-  // fully reliable rather than being penalized for lacking a metric that
-  // doesn't apply to it (previously this fell through to 0 — the same score
-  // as a dead torrent — which meant auto-select would only ever pick a Nuvio
-  // stream when literally no torrent had a single seeder).
+  // available. A direct HTTP stream has no such ramp-up but also no swarm
+  // backing it — no peer count to fall back on if the single origin server
+  // is slow or dead, unlike a torrent with many seeders. Scored as
+  // moderately (not fully) reliable: better than a middling torrent, worse
+  // than a well-seeded one, so seeders/bandwidth modes don't let an
+  // unverified HTTP link float to the top over a torrent with real swarm
+  // health just because HTTP streams used to be hardcoded to 1.0.
   const reliability = (c: ScoredStream, maxSeeders: number) =>
-    c.isTorrent ? c.seeders / maxSeeders : 1;
+    c.isTorrent ? c.seeders / maxSeeders : 0.6;
 
   const qualityTiebreak = (a: ScoredStream, b: ScoredStream) => {
     const qDiff = qualityRank(b.quality) - qualityRank(a.quality);
@@ -270,11 +309,17 @@ export function rankStreams(
       const fromPool = decent.length > 0 ? decent : pool;
       const knownSizes = fromPool.map((c) => c.sizeBytes).filter((b) => b > 0);
       const maxSize = Math.max(1, ...knownSizes);
+      // Size-unknown streams tiebreak LAST, not first — sizeBytes 0 isn't
+      // "0 bytes, smallest possible," it's "we don't know," and a mode whose
+      // entire point is picking the smallest file shouldn't gamble on an
+      // unmeasured one ranking ahead of a stream with a known small size.
+      const tiebreakSize = (c: ScoredStream) =>
+        c.sizeBytes > 0 ? c.sizeBytes : Number.MAX_SAFE_INTEGER;
       return finalizeRanking(
         fromPool,
         all,
         (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5),
-        (a, b) => a.sizeBytes - b.sizeBytes,
+        (a, b) => tiebreakSize(a) - tiebreakSize(b),
       );
     }
 
@@ -301,7 +346,16 @@ export function rankStreams(
       // saturating the link (buffering, other devices on the network, etc).
       const budgetBytes = ((mbps * 1_000_000) / 8) * seconds * 0.7;
       const withinBudget = pool.filter(
-        (c) => c.sizeBytes > 0 && c.sizeBytes <= budgetBytes,
+        (c) =>
+          (c.sizeBytes > 0 && c.sizeBytes <= budgetBytes) ||
+          // Size-unknown DIRECT streams aren't excluded — a torrent's title
+          // reliably carries a size, so an unknown-size torrent is almost
+          // always just an unparsed title on a huge file (risky to guess
+          // "fits"). A direct HTTP stream's "title" is scraper-authored free
+          // text with no size convention at all — excluding those outright
+          // would mean "bandwidth" mode drops every Nuvio-style stream
+          // regardless of actual size.
+          (c.sizeBytes === 0 && !c.isTorrent),
       );
       const fromPool = withinBudget.length > 0 ? withinBudget : pool;
       const maxRank = Math.max(

@@ -462,11 +462,50 @@ export const api = {
   playProxyUrl: (streamUrl: string): string =>
     `${BASE}/play?url=${encodeURIComponent(streamUrl)}`,
 
-  progressStreamUrl: (src: string): string =>
-    `${BASE}/progress/stream?hash=${src}`,
+  /**
+   * SSE progress endpoint. season/episode (mirrors playUrl) let the backend
+   * report progress on just the selected episode's file in a season-pack
+   * torrent, instead of the whole torrent's (misleading) aggregate.
+   */
+  progressStreamUrl: (
+    src: string,
+    opts?: { season?: number; episode?: number },
+  ): string => {
+    const p = new URLSearchParams({ hash: src });
+    if (opts?.season != null) p.set("season", String(opts.season));
+    if (opts?.episode != null) p.set("episode", String(opts.episode));
+    return `${BASE}/progress/stream?${p}`;
+  },
 
   /** Fixed-size payload endpoint for the in-app bandwidth test. Caller measures blob size vs. elapsed time. */
   speedtestUrl: (): string => `${BASE}/speedtest`,
+
+  /**
+   * Routes a raw TMDB image path (e.g. a JustWatch provider logoPath, which —
+   * unlike Media.poster_path — never goes through the backend, so it still
+   * arrives as a bare TMDB-relative path) through the backend's image-cache
+   * proxy (internal/imgcache/F4), instead of building an image.tmdb.org URL
+   * directly. BASE is module-private, so this is the one place allowed to
+   * construct an /api/img/ URL — everywhere else must go through this helper
+   * rather than hardcoding the backend origin.
+   */
+  imgUrl: (size: string, path: string): string => `${BASE}/img/${size}${path}`,
+
+  /**
+   * Fire-and-forget: tells the backend to start background-downloading a
+   * torrent's selected file (F7's next-episode prefetch). The backend starts
+   * the download in a goroutine and responds 202 immediately — this resolves
+   * as soon as the request is accepted, not when the download finishes.
+   */
+  prefetchDownload: (
+    hash: string,
+    opts?: { season?: number; episode?: number },
+  ): Promise<{ started: boolean }> => {
+    const p = new URLSearchParams({ hash });
+    if (opts?.season != null) p.set("season", String(opts.season));
+    if (opts?.episode != null) p.set("episode", String(opts.episode));
+    return request(`/prefetch-download?${p}`, { method: "POST" });
+  },
 
   // ── Settings ─────────────────────────────────────────────────────────────────
   getSettings: (): Promise<Settings> => request(`/settings`),

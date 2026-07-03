@@ -36,7 +36,20 @@
     ep.air_date && new SvelteDate(ep.air_date) > new SvelteDate(),
   );
 
+  // A manual watched/unwatched toggle should reach Supabase promptly rather
+  // than waiting for the next focus-triggered sync — if the app quits first,
+  // the toggle never leaves this machine and other devices keep the old
+  // state. authSync is pull-then-push; the pull can't revert the toggle we
+  // just wrote because the progress merge is most-recent-write-wins and our
+  // WatchedAt is newest. No-op for guests (the request just 401s — swallowed).
+  function nudgeSync(): void {
+    api.authSync().catch(() => {});
+  }
+
   async function markWatched(ep: TVEpisode): Promise<void> {
+    // Real runtime when TMDB knows it; the 1/1 placeholder still reads as
+    // 100% watched either way, it's just dishonest data.
+    const durationSecs = ep.runtime > 0 ? ep.runtime * 60 : 1;
     const p = await api.progressSave({
       tmdb_id: media.id,
       media_type: "tv",
@@ -45,11 +58,12 @@
       vote_average: media.vote_average ?? 0,
       season: selectedSeason!,
       episode: ep.episode_number,
-      position_seconds: 1,
-      duration_seconds: 1,
+      position_seconds: durationSecs,
+      duration_seconds: durationSecs,
       completed: true,
     });
     progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+    nudgeSync();
   }
 
   async function markUnwatched(ep: TVEpisode): Promise<void> {
@@ -66,6 +80,7 @@
       completed: false,
     });
     progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+    nudgeSync();
   }
 
   let hideSpoilers = $derived($settings?.hideSpoilers && !completed);

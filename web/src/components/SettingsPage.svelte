@@ -9,7 +9,7 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
-  import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
+  import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
   import { api } from "$lib/api";
   import type { AddonEntry } from "$lib/types/addons";
@@ -123,6 +123,25 @@
     nuvioRepos = await api.getNuvioRepos();
   }
 
+  // Nuvio scraper streams carry AddonName = "Nuvio: <scraper name>" (see
+  // internal/nuvio/manager.go) — an entirely separate namespace from Stremio
+  // addon manifest names, so they need their own dropdown entries in that
+  // exact string form for the preferred-provider match (streamSelection.ts,
+  // StreamsList.svelte) to ever hit. Only enabled repos/scrapers are listed,
+  // same gating as what actually produces streams. Deduped in case the same
+  // scraper name appears in more than one enabled repo.
+  const nuvioProviderOptions = $derived(
+    Array.from(
+      new Set(
+        nuvioRepos
+          .filter((r) => r.enabled)
+          .flatMap((r) =>
+            r.scrapers.filter((s) => s.enabled).map((s) => `Nuvio: ${s.name}`),
+          ),
+      ),
+    ),
+  );
+
   async function handleAddRepo() {
     if (!addRepoUrl.trim()) return;
     addRepoLoading = true;
@@ -229,8 +248,17 @@
     { value: "ru", label: "Russian" },
   ];
 
+  // Audio-only: "original" plays whatever track matches the title's TMDB
+  // original_language, instead of a fixed language — see Player.svelte's
+  // audio auto-select effect. Subtitles have no equivalent concept (TMDB
+  // doesn't publish an "original subtitle language").
+  const AUDIO_LANGUAGES = [
+    { value: "original", label: "Original language" },
+    ...LANGUAGES,
+  ];
+
   function langLabel(value: string) {
-    return LANGUAGES.find((l) => l.value === value)?.label ?? value;
+    return AUDIO_LANGUAGES.find((l) => l.value === value)?.label ?? value;
   }
 
   let testingSpeed = $state(false);
@@ -444,6 +472,24 @@
           <Separator />
 
           <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="prefetch-next-episode" class="text-sm font-medium"
+                >Pre-download next episode</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                When an episode finishes downloading, quietly download the
+                next one so it starts instantly.
+              </p>
+            </div>
+            <Switch
+              id="prefetch-next-episode"
+              checked={draft.prefetchNextEpisode}
+              onCheckedChange={(v) => patch("prefetchNextEpisode", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
             <div class="pr-4">
               <Label class="text-sm font-medium">Selection strategy</Label>
               <p class="text-xs text-muted-foreground">
@@ -469,9 +515,33 @@
 
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
+              <Label class="text-sm font-medium">Source preference</Label>
+              <p class="text-xs text-muted-foreground">
+                {draft.sourcePreference
+                  ? "Gives torrents or direct streams a small ranking boost — doesn't exclude the other kind."
+                  : "No boost — torrents and direct streams rank purely on the selection strategy above."}
+              </p>
+            </div>
+            <Select.Root type="single" bind:value={draft.sourcePreference}>
+              <Select.Trigger class="w-56 shrink-0">
+                {SOURCE_PREFERENCES.find(
+                  (p) => p.value === draft.sourcePreference,
+                )?.label ?? "No preference"}
+              </Select.Trigger>
+              <Select.Content>
+                {#each SOURCE_PREFERENCES as p (p.value)}
+                  <Select.Item value={p.value}>{p.label}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div class="pr-4">
               <Label class="text-sm font-medium">Preferred provider</Label>
               <p class="text-xs text-muted-foreground">
-                {#if providerAddons.length === 0}
+                {#if providerAddons.length === 0 && nuvioProviderOptions.length === 0}
                   Add a provider addon in the Addons tab to set a preference.
                 {:else}
                   Its streams are shown first and favored by auto-select.
@@ -481,7 +551,8 @@
             <Select.Root
               type="single"
               bind:value={draft.defaultProvider}
-              disabled={providerAddons.length === 0}
+              disabled={providerAddons.length === 0 &&
+                nuvioProviderOptions.length === 0}
             >
               <Select.Trigger class="w-56 shrink-0">
                 {draft.defaultProvider || "No preference"}
@@ -492,6 +563,9 @@
                   <Select.Item value={a.manifest.name}
                     >{a.manifest.name}</Select.Item
                   >
+                {/each}
+                {#each nuvioProviderOptions as name (name)}
+                  <Select.Item value={name}>{name}</Select.Item>
                 {/each}
               </Select.Content>
             </Select.Root>
@@ -581,7 +655,7 @@
                 >{langLabel(draft.defaultAudioLang)}</Select.Trigger
               >
               <Select.Content>
-                {#each LANGUAGES as l}
+                {#each AUDIO_LANGUAGES as l}
                   <Select.Item value={l.value}>{l.label}</Select.Item>
                 {/each}
               </Select.Content>

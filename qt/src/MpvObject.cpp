@@ -333,9 +333,20 @@ void MpvObject::onMpvEvents() {
       emit fileLoaded();
       emit tracksChanged(readTrackList());
       break;
-    case MPV_EVENT_END_FILE:
-      emit endReached();
+    case MPV_EVENT_END_FILE: {
+      // MPV_EVENT_END_FILE fires whenever the current file stops for ANY
+      // reason — including being replaced by the next loadfile (reason=stop)
+      // or an explicit stop(). Only a genuine end-of-playback may surface as
+      // endReached: the web side treats it as "the episode finished" (marks
+      // watch progress complete, and with autoplay on advances to the next
+      // episode), so emitting it on a mere file switch made every episode
+      // change look like a finished episode and chained autoplay through an
+      // entire season instantly.
+      auto *end = static_cast<mpv_event_end_file *>(event->data);
+      if (end->reason == MPV_END_FILE_REASON_EOF)
+        emit endReached();
       break;
+    }
     default:
       break;
     }

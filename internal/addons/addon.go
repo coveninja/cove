@@ -68,6 +68,11 @@ type Stream struct {
 	InfoHash  string     `json:"infoHash"`
 	AddonName string     `json:"addonName"`
 	Subtitles []Subtitle `json:"subtitles,omitempty"`
+	// SizeBytes is the stream's file size when the source reports it as a
+	// structured number (currently only Nuvio scrapers). Zero means unknown —
+	// callers fall back to parsing a size out of Title text (the ubiquitous
+	// but unstructured "💾 1.4 GB" convention used by most Stremio addons).
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
 	// Headers are extra HTTP headers (e.g. Referer/Origin) the origin CDN
 	// requires. Only Nuvio-sourced streams set this today; when present,
 	// /api/play proxies the request instead of redirecting, since a bare

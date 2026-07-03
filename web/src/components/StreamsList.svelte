@@ -376,6 +376,7 @@
         {
           measuredBandwidthMbps: $settings.measuredBandwidthMbps,
           preferredProvider: $settings.defaultProvider,
+          sourcePreference: $settings.sourcePreference,
         },
       );
       const best = ranked[0] ?? null;
@@ -626,7 +627,7 @@
                 >
                   {#if opt.logoPath}
                     <img
-                      src="https://image.tmdb.org/t/p/w45{opt.logoPath}"
+                      src={api.imgUrl("w45", opt.logoPath)}
                       alt={opt.providerName}
                       class="size-5 rounded-sm object-contain"
                     />

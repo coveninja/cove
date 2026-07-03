@@ -55,6 +55,15 @@ type Player struct {
 	// every lookup so long playback sessions stay valid.
 	streamHeadersMu sync.Mutex
 	streamHeaders   map[string]streamHeaderEntry
+
+	// Background next-episode prefetch (F7) — a single slot, not a queue.
+	// Switching shows (or advancing episodes) while an earlier prefetch is
+	// still in flight deprioritizes it rather than downloading two things at
+	// once; disk usage stays bounded to one background download plus whatever
+	// the reaper hasn't yet collected.
+	prefetchMu   sync.Mutex
+	prefetchHash string
+	prefetchFile *torrent.File
 }
 
 type streamHeaderEntry struct {
@@ -69,6 +78,11 @@ const streamHeadersTTL = 30 * time.Minute
 // dropped, so New() and CleanupTorrents must agree on the path.
 var torrentDataDir = filepath.Join(os.TempDir(), "cove-torrents")
 
+// infoHashRe validates a BitTorrent v1 infohash: 40 hex characters (SHA-1,
+// hex-encoded). Used to reject garbage before /api/prefetch-download burns a
+// background metadata-fetch attempt on it.
+var infoHashRe = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
 type torrentState struct {
 	torrent      *torrent.Torrent
 	lastBytes    int64
@@ -81,6 +95,14 @@ type torrentState struct {
 	// than the idle cutoff, so an actively-watched title is never collected.
 	lastUsed time.Time
 	readers  int
+
+	// prefetched marks this torrent as the current background next-episode
+	// download (F7) — it intentionally has zero readers (nothing is streaming
+	// it yet) but shouldn't be reaped just for being idle as long as it's
+	// still making progress. lastReapBytes is the BytesCompleted() reading
+	// from the last reaper pass, used to detect that progress.
+	prefetched    bool
+	lastReapBytes int64
 }
 
 // New constructs a Player: it creates the torrent client and stores the
@@ -394,6 +416,52 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 	return selectFile(t, season, episode)
 }
 
+// PrefetchTorrent background-downloads infoHash's selected file (F7): once
+// the current episode of a TV show finishes downloading, the caller resolves
+// the next episode, ranks its streams, and — if the winner is a torrent —
+// calls this so it's already sitting on disk by the time the user gets there.
+// Reuses getTorrentFile for metadata fetch + file selection (same season-pack
+// matching playback itself uses), then calls File.Download(), which only
+// raises piece priorities to Normal — additive, so it never disturbs a reader
+// actively streaming the same torrent (e.g. a season pack whose current
+// episode is still playing while this call targets a different file in the
+// same swarm).
+//
+// Bookkeeping is a single slot, not a queue (see Player.prefetchHash/File):
+// starting a prefetch for a different hash than whatever was previously
+// prefetching deprioritizes that old file back to PiecePriorityNone first, so
+// at most one background download is ever in flight.
+func (p *Player) PrefetchTorrent(infoHash string, season, episode *int) error {
+	file, err := p.getTorrentFile(infoHash, season, episode)
+	if err != nil {
+		return err
+	}
+
+	p.prefetchMu.Lock()
+	prevHash, prevFile := p.prefetchHash, p.prefetchFile
+	if prevHash != "" && prevHash != infoHash && prevFile != nil {
+		prevFile.SetPriority(torrent.PiecePriorityNone)
+		p.activeTorrentsMu.Lock()
+		if st, ok := p.activeTorrents[prevHash]; ok {
+			st.prefetched = false
+		}
+		p.activeTorrentsMu.Unlock()
+	}
+	p.prefetchHash = infoHash
+	p.prefetchFile = file
+	p.prefetchMu.Unlock()
+
+	p.activeTorrentsMu.Lock()
+	if st, ok := p.activeTorrents[infoHash]; ok {
+		st.prefetched = true
+		st.lastReapBytes = 0
+	}
+	p.activeTorrentsMu.Unlock()
+
+	file.Download()
+	return nil
+}
+
 // CleanupTorrents drops torrents that have no live readers and haven't been
 // touched within the idle cutoff. anacrolix
 // torrents hold open file handles plus on-disk pieces under torrentDataDir;
@@ -401,6 +469,14 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 // fill /tmp. Dropping removes the torrent from the client; we then RemoveAll
 // its data directory to reclaim disk (unlinking is safe even if a handle is
 // briefly still open on Linux).
+//
+// A background prefetch (F7) is idle by this same definition — nothing is
+// streaming it, since it's downloading ahead of playback rather than during
+// it — so without special-casing it, a season-pack prefetch that takes longer
+// than 30 minutes to finish would get reaped mid-download. Instead, an idle
+// prefetch candidate is only reaped once it's stopped making progress (a
+// stalled swarm, or a completed download nobody's touched since); as long as
+// bytes are still landing each pass, it's kept alive and its idle clock reset.
 func (p *Player) CleanupTorrents() {
 	cutoff := time.Now().Add(-30 * time.Minute)
 
@@ -412,10 +488,19 @@ func (p *Player) CleanupTorrents() {
 
 	p.activeTorrentsMu.Lock()
 	for hash, st := range p.activeTorrents {
-		if st.readers <= 0 && st.lastUsed.Before(cutoff) {
-			toDrop = append(toDrop, dropped{hash, st.torrent})
-			delete(p.activeTorrents, hash)
+		if st.readers > 0 || !st.lastUsed.Before(cutoff) {
+			continue
 		}
+		if st.prefetched {
+			complete := st.torrent.BytesCompleted()
+			if complete > st.lastReapBytes {
+				st.lastReapBytes = complete
+				st.lastUsed = time.Now()
+				continue
+			}
+		}
+		toDrop = append(toDrop, dropped{hash, st.torrent})
+		delete(p.activeTorrents, hash)
 	}
 	p.activeTorrentsMu.Unlock()
 
@@ -464,7 +549,35 @@ func (p *Player) StreamTorrent(infoHash string, season, episode *int, w http.Res
 	http.ServeContent(w, r, file.DisplayPath(), time.Time{}, reader)
 }
 
-func (p *Player) GetProgress(infoHash string) map[string]interface{} {
+// parseSeasonEpisode reads optional ?season=&episode= query params, returning
+// nil for either that's missing or non-numeric. Shared by /api/play,
+// /api/progress, and /api/progress/stream so a season-pack torrent's episode
+// selection stays consistent across playback and progress reporting.
+func parseSeasonEpisode(r *http.Request) (season, episode *int) {
+	if s := r.URL.Query().Get("season"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil {
+			season = &v
+		}
+	}
+	if e := r.URL.Query().Get("episode"); e != "" {
+		if v, err := strconv.Atoi(e); err == nil {
+			episode = &v
+		}
+	}
+	return season, episode
+}
+
+// GetProgress reports download progress for infoHash. When season/episode are
+// given and the torrent's metadata is available, progress is computed over
+// just the selected episode's file rather than the whole torrent — a season
+// pack torrent can be 8% complete overall while the one file being played is
+// already 100% done, and the whole-torrent number was wildly misleading in
+// that case. Falls back to whole-torrent progress when metadata isn't ready
+// yet or the torrent has no recognizable video files. Speed/peers stay
+// torrent-wide either way — a per-file speed isn't meaningful (pieces for the
+// selected file aren't fetched in isolation from the rest of the swarm
+// bookkeeping) and torrent-wide is a reasonable proxy for "is this moving".
+func (p *Player) GetProgress(infoHash string, season, episode *int) map[string]interface{} {
 	p.activeTorrentsMu.Lock()
 	state, ok := p.activeTorrents[infoHash]
 	if !ok {
@@ -490,8 +603,25 @@ func (p *Player) GetProgress(infoHash string) map[string]interface{} {
 		return map[string]interface{}{"found": true, "progress": 0, "peers": 0, "speed": "0 B/s"}
 	}
 
-	complete := t.BytesCompleted()
-	total := t.Length()
+	var complete, total int64
+	// Reuse the pure selection path (selectFileIndex), NOT selectFile — the
+	// latter logs on every call, and this runs on a 2s SSE tick for the
+	// lifetime of playback.
+	files := videoFiles(t)
+	if len(files) > 0 {
+		infos := make([]fileCandidate, len(files))
+		for i, f := range files {
+			infos[i] = fileCandidate{path: f.DisplayPath(), length: f.Length()}
+		}
+		idx, _ := selectFileIndex(infos, season, episode)
+		f := files[idx]
+		complete = f.BytesCompleted()
+		total = f.Length()
+	} else {
+		complete = t.BytesCompleted()
+		total = t.Length()
+	}
+
 	var pct float64
 	if total > 0 {
 		pct = float64(complete) / float64(total) * 100
@@ -694,17 +824,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		// episode of a season pack — see selectFile/D1) as seekable http. mpv
 		// handles every codec/container natively, so no transcoding involved.
 		if infoHash != "" {
-			var season, episode *int
-			if s := r.URL.Query().Get("season"); s != "" {
-				if v, err := strconv.Atoi(s); err == nil {
-					season = &v
-				}
-			}
-			if e := r.URL.Query().Get("episode"); e != "" {
-				if v, err := strconv.Atoi(e); err == nil {
-					episode = &v
-				}
-			}
+			season, episode := parseSeasonEpisode(r)
 			p.StreamTorrent(infoHash, season, episode, w, r)
 			return
 		}
@@ -712,10 +832,44 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		http.Error(w, "missing hash or url", http.StatusBadRequest)
 	}))
 
+	// POST /api/prefetch-download?hash=&season=&episode= — background-download
+	// the next episode's torrent (F7) ahead of the user getting there. Fires
+	// PrefetchTorrent in a goroutine and returns immediately: metadata fetch
+	// alone can take up to 45s (getTorrentFile's GotInfo timeout), and this is
+	// a fire-and-forget warm, not something the caller waits on. Same policy
+	// as /api/play?hash= — a hash play isn't gated on rememberStream, so this
+	// isn't either — but the hash format IS validated here (unlike /api/play,
+	// which just lets AddMagnet reject garbage) since a malformed value would
+	// otherwise burn a full metadata-fetch attempt in the background goroutine
+	// before failing.
+	mux.HandleFunc("/api/prefetch-download", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		infoHash := r.URL.Query().Get("hash")
+		if !infoHashRe.MatchString(infoHash) {
+			http.Error(w, "invalid or missing ?hash= (expected a 40-char hex infohash)", http.StatusBadRequest)
+			return
+		}
+		season, episode := parseSeasonEpisode(r)
+
+		go func() {
+			if err := p.PrefetchTorrent(infoHash, season, episode); err != nil {
+				log.Println("prefetch-download:", err)
+			}
+		}()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+	}))
+
 	// Legacy polling endpoint — kept for compatibility; prefer /api/progress/stream (SSE).
 	mux.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
-		err := json.NewEncoder(w).Encode(p.GetProgress(hash))
+		season, episode := parseSeasonEpisode(r)
+		err := json.NewEncoder(w).Encode(p.GetProgress(hash, season, episode))
 		if err != nil {
 			log.Println(err)
 		}
@@ -723,6 +877,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 
 	mux.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
+		season, episode := parseSeasonEpisode(r)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -741,7 +896,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				data, _ := json.Marshal(p.GetProgress(hash))
+				data, _ := json.Marshal(p.GetProgress(hash, season, episode))
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}

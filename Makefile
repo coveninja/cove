@@ -91,17 +91,24 @@ hot-debug: go qt
 
 ## Bump patch version in web/package.json, stage all pending changes, commit,
 ## and tag for release. Pass TITLE="..." to override the default commit title
-## and/or MSG="..." to add a commit message body note, e.g.
-## `make patch TITLE="fix quick-play loading state"`.
+## and/or MSG="..." to add a commit message body note (multi-line is fine),
+## e.g. `make patch TITLE="fix quick-play loading state"`.
 ## Then push with: git push origin master v<version>
+##
+## TITLE/MSG reach the recipe via the environment ($$TITLE/$$MSG), NOT via
+## make's $(...) substitution: make pastes $(MSG) into the recipe text
+## verbatim, so a message containing real newlines used to split the recipe
+## into broken shell lines ("unexpected EOF while looking for matching quote").
+## Environment values pass through the shell untouched, newlines and all.
+export TITLE MSG
 patch:
 	cd $(WEB_DIR) && npm version patch --no-git-tag-version
 	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
-	TITLE="$(if $(TITLE),$(TITLE),chore: bump version to v$$NEW_VER)"; \
+	TITLE="$${TITLE:-chore: bump version to v$$NEW_VER}"; \
 	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$$NEW_VER\" date=\"$$(date +%Y-%m-%d)\"/>|" flatpak/io.github.coveninja.Cove.metainfo.xml && \
 	git add -A && \
-	if [ -n "$(MSG)" ]; then \
-		git commit -m "$$TITLE" -m "$(MSG)"; \
+	if [ -n "$$MSG" ]; then \
+		git commit -m "$$TITLE" -m "$$MSG"; \
 	else \
 		git commit -m "$$TITLE"; \
 	fi && \

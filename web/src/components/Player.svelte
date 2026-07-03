@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Media } from "$lib/types/tmdb";
+  import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { TimestampData, TimestampSegment } from "$lib/types/addons";
   import { Spinner } from "$lib/components/ui/spinner";
   import * as Popover from "$lib/components/ui/popover";
@@ -16,6 +16,8 @@
     Captions,
     Check,
     Keyboard,
+    X,
+    SkipForward,
   } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
   import { fade } from "svelte/transition";
@@ -27,6 +29,9 @@
     type ProgressContext,
   } from "$lib/player/progressSaver.svelte.js";
   import { TorrentProgress } from "$lib/player/torrentProgress.svelte.js";
+  import { langMatches } from "$lib/lang";
+  import { nextAiredEpisode } from "$lib/nextEpisode";
+  import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import {SvelteMap, SvelteSet} from "svelte/reactivity";
 
   // ─── Props (unchanged from the old Player) ──────────────────────────────────
@@ -38,6 +43,7 @@
     season = undefined,
     episode = undefined,
     onPlaybackFailed = undefined,
+    onPlayNext = undefined,
   }: {
     src: string;
     media?: Media;
@@ -48,6 +54,11 @@
      * or a stalled torrent that never got peers. The caller (App.svelte)
      * decides what to do: try the next candidate stream, or give up. */
     onPlaybackFailed?: () => void;
+    /** Fired when the up-next overlay's "Watch now" is clicked, its countdown
+     * finishes, or the episode ends with autoplay on. Absence disables the
+     * whole up-next feature (no overlay, no autoplay-advance) — the caller
+     * (App.svelte) is what actually knows how to start the next episode. */
+    onPlayNext?: (season: number, episode: number) => void;
   } = $props();
 
   // ─── Playback lifecycle ─────────────────────────────────────────────────────
@@ -59,6 +70,25 @@
   let appliedSubDefault = false;
   const addedExternal = new SvelteSet<string>(); // external sub ids already sub-add'd
 
+  // "Original language" audio (F1): the ISO 639-1 code of the title's
+  // original audio, resolved once per src. null while unresolved (or if the
+  // title genuinely has no original_language, in which case it stays null
+  // forever and the "original" preference is simply unresolvable for this
+  // title — the auto-select effect below then no-ops rather than guessing).
+  let originalLang = $state<string | null>(null);
+
+  // ─── Up-next overlay state (F6) ──────────────────────────────────────────────
+  // See the "Up-next overlay" section further down for the resolution/countdown
+  // effects that drive these.
+  let nextEp = $state<{ season: number; episode: TVEpisode } | null>(null);
+  let upNextDismissed = $state(false);
+  let advanced = false; // guards advance() from firing twice for one src
+  let countdownSecs = $state<number | null>(null);
+  let resolvingNextEp = false; // per-src guard so nextAiredEpisode fires once
+
+  // ─── Background next-episode prefetch state (F7) ────────────────────────────
+  let prefetchedNext = false; // per-src guard so the prefetch trigger fires once
+
   $effect(() => {
     if (!src || !Player.available) return;
     switching = true;
@@ -66,6 +96,13 @@
     scrubValue = 0;
     appliedAudioDefault = false;
     appliedSubDefault = false;
+    originalLang = null;
+    nextEp = null;
+    upNextDismissed = false;
+    advanced = false;
+    countdownSecs = null;
+    resolvingNextEp = false;
+    prefetchedNext = false;
     addedExternal.clear();
     autoSkippedSegments.clear();
     subSelection = { kind: "off" };
@@ -80,6 +117,37 @@
       }
     });
     Player.play(api.playUrl(src, { season, episode }));
+  });
+
+  // Resolve original_language for "original" audio preference. media is
+  // often only a partial object (library-launched playback carries just
+  // id/media_type/etc.), so original_language may not be populated even
+  // though the title has one — fetch the full record in that case rather
+  // than treating "field absent" as "title has no original language".
+  $effect(() => {
+    if (!src || $settings?.defaultAudioLang !== "original") return;
+    if (originalLang !== null) return;
+    const m = media;
+    if (!m) return;
+    if (m.original_language) {
+      originalLang = m.original_language;
+      return;
+    }
+    const requestedSrc = src; // guards against a stale response after switching src
+    untrack(() => {
+      api
+        .getMediaByID(m.id, m.media_type)
+        .then((full) => {
+          if (src !== requestedSrc) return;
+          // Empty string is a valid "resolved to nothing" — still distinct
+          // from null (unresolved), so the auto-select effect stops retrying.
+          originalLang = full.original_language ?? "";
+        })
+        .catch(() => {
+          if (src !== requestedSrc) return;
+          originalLang = ""; // give up — treat as unresolvable
+        });
+    });
   });
 
   $effect(() => {
@@ -226,7 +294,77 @@
 
   $effect(() => {
     if (!isHash) return;
-    return torrent.start(src);
+    return torrent.start(src, { season, episode });
+  });
+
+  // ─── Background next-episode prefetch trigger (F7) ──────────────────────────
+  // Fires once the CURRENT episode's file has finished downloading — the
+  // point at which the swarm's spare capacity is genuinely free rather than
+  // competing with active playback. Deliberately independent of the up-next
+  // overlay's own nextEp resolution (F6) above: this can legitimately fire
+  // long before the user is anywhere near the end of the episode.
+  $effect(() => {
+    if (
+      $settings?.prefetchNextEpisode === false ||
+      media?.media_type !== "tv" ||
+      season == null ||
+      episode == null ||
+      !isHash ||
+      torrent.progress < 100 ||
+      prefetchedNext
+    )
+      return;
+    prefetchedNext = true;
+    const m = media;
+    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const bandwidth = $settings?.measuredBandwidthMbps;
+    const preferredProvider = $settings?.defaultProvider;
+    const sourcePreference = $settings?.sourcePreference;
+    untrack(() => {
+      (async () => {
+        const next = await nextAiredEpisode(m.id, season, episode);
+        if (!next) return; // caught up — nothing to warm
+
+        // Single call, no retry — this is a background nicety, not something
+        // worth the retry/backoff machinery fetchStreamsWithRetry (App.svelte)
+        // uses for the user-facing path. Also warms the backend's own
+        // per-title caches and registers direct URLs (rememberStream) — all a
+        // top-ranked HTTP candidate needs; only a torrent winner needs the
+        // extra prefetch-download call below.
+        let streams;
+        try {
+          streams = await api.getStreams(m.id, {
+            type: "tv",
+            season: next.season,
+            episode: next.episode.episode_number,
+          });
+        } catch {
+          return;
+        }
+        if (streams.length === 0) return;
+
+        // Same ranking opts as quickPlay (App.svelte) so the eventual real
+        // play picks the identical winner this prefetch warmed.
+        const ranked = rankStreams(streams, mode, {
+          measuredBandwidthMbps: bandwidth,
+          preferredProvider,
+          sourcePreference,
+        });
+        const best = ranked[0];
+        if (best?.infoHash) {
+          // Called even if it equals the current src — season-pack case:
+          // this just queues the next file within the same swarm, and the
+          // backend's single-slot bookkeeping handles a same-hash prefetch
+          // fine.
+          api
+            .prefetchDownload(best.infoHash, {
+              season: next.season,
+              episode: next.episode.episode_number,
+            })
+            .catch(() => {});
+        }
+      })();
+    });
   });
 
   const loadingMessage = $derived(
@@ -384,19 +522,38 @@
   }
 
   // ─── Auto-select preferred audio track ──────────────────────────────────────
+  // mpv/ffmpeg tag embedded audio tracks with ISO 639-2 (three-letter, e.g.
+  // "jpn"), while the setting and TMDB's original_language are ISO 639-1
+  // ("ja") — langMatches normalizes both sides before comparing so this
+  // doesn't silently no-op for every non-English track.
 
   $effect(() => {
     if (appliedAudioDefault || Player.audioTracks.length <= 1) return;
-    const lang = $settings?.defaultAudioLang;
-    if (!lang) return;
+    const setting = $settings?.defaultAudioLang;
+    if (!setting) return;
+    if (setting === "original") {
+      // originalLang is still resolving (or media hasn't arrived yet) — don't
+      // mark this applied, so the effect re-runs once it settles instead of
+      // permanently giving up on the "original language" preference.
+      if (originalLang === null) return;
+      if (originalLang === "") {
+        // Resolved to "unresolvable" (title has no original_language) —
+        // nothing sensible to match against; leave mpv's own default alone.
+        appliedAudioDefault = true;
+        return;
+      }
+    }
+    const targetLang = setting === "original" ? originalLang : setting;
     appliedAudioDefault = true;
-    const match = Player.audioTracks.find((t) => t.lang === lang);
+    const match = Player.audioTracks.find((t) => langMatches(t.lang, targetLang));
     if (match && !match.selected) Player.setAudioTrack(match.id);
   });
 
   // ─── Auto-select preferred subtitle track ───────────────────────────────────
   // Gated on the file being loaded (duration > 0) so embedded tracks have had a
   // chance to populate before we choose between them and the external list.
+  // Same 639-1/639-2 mismatch as audio tracks applies here (embedded tracks
+  // come from mpv/container metadata), hence langMatches again.
 
   $effect(() => {
     if (appliedSubDefault || !canPlay) return;
@@ -404,15 +561,128 @@
     appliedSubDefault = true;
     const lang = $settings.defaultSubtitleLang;
 
-    const embedded = Player.subtitleTracks.find((t) => t.lang === lang);
+    const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
     if (embedded) {
       selectSubtitle({ kind: "embedded", id: embedded.id });
       return;
     }
     const ext =
-            externalSubtitles.find((s) => s.lang === lang) ?? externalSubtitles[0];
+            externalSubtitles.find((s) => langMatches(s.lang, lang)) ?? externalSubtitles[0];
     if (ext) selectSubtitle({ kind: "external", id: ext.id });
   });
+
+  // ─── Up-next overlay + autoplay countdown (F6) ──────────────────────────────
+  // autoPlay has existed as a setting since settings.go:23 but nothing ever
+  // read it — this is what actually wires it up.
+
+  // Resolve the next aired episode once per src (not on every position tick —
+  // nextAiredEpisode hits the season-episodes endpoint).
+  $effect(() => {
+    if (
+      !src ||
+      !canPlay ||
+      nextEp !== null ||
+      resolvingNextEp ||
+      media?.media_type !== "tv" ||
+      season == null ||
+      episode == null
+    )
+      return;
+    resolvingNextEp = true;
+    const requestedSrc = src;
+    const id = media.id;
+    untrack(() => {
+      nextAiredEpisode(id, season, episode)
+        .then((next) => {
+          if (src !== requestedSrc) return;
+          nextEp = next;
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (src === requestedSrc) resolvingNextEp = false;
+        });
+    });
+  });
+
+  // Shown once there's a resolved next episode and the player is near the
+  // episode's end — either IntroDB flagged a credits segment, or we're within
+  // the last 40s of the file (no credits data for this title).
+  const showUpNext = $derived(
+    !!nextEp &&
+      !upNextDismissed &&
+      !!onPlayNext &&
+      (activeSegment?.type === "credits" ||
+        (Player.duration > 0 && Player.duration - Player.position < 40 && canPlay) ||
+        Player.ended),
+  );
+
+  // Countdown: arm a 10s "Playing in Ns" timer once the overlay shows and
+  // autoplay is on. Cleared (and re-armable) whenever showUpNext flips back
+  // to false — most notably a seek back away from the episode's end.
+  //
+  // countdownSecs must only ever be touched inside untrack() here (the
+  // interval callback is fine — async callbacks aren't tracked): the effect
+  // reads it to display-drive the template indirectly, and a tracked read
+  // followed by the writes below would make the effect re-run on its own
+  // write, tearing down the interval it just created and then bailing on the
+  // "already counting down" guard — freezing the countdown at 10s forever.
+  // With untrack, the effect's only dependencies are showUpNext and autoPlay.
+  $effect(() => {
+    if (!showUpNext || !$settings?.autoPlay || advanced) {
+      untrack(() => (countdownSecs = null));
+      return;
+    }
+    untrack(() => (countdownSecs = 10));
+    const interval = setInterval(() => {
+      if (countdownSecs === null) return;
+      if (countdownSecs <= 1) {
+        countdownSecs = 0;
+        // advanced isn't reactive state, so this effect won't automatically
+        // re-run (and tear down the interval) just because advance() sets
+        // it — clear explicitly here instead of relying on that.
+        clearInterval(interval);
+        advance();
+        return;
+      }
+      countdownSecs -= 1;
+    }, 1000);
+    return () => clearInterval(interval);
+  });
+
+  // Immediate advance when the file ends with autoplay on — covers the case
+  // where the file has no trailing ~40s credits window (or IntroDB has no
+  // data for it) for the countdown to have armed against. everCanPlay (the
+  // watchdog's per-src "playback genuinely started" flag) guards against a
+  // stale/spurious ended reading during the src-switch window ever chaining
+  // an advance for an episode that never actually played.
+  $effect(() => {
+    if (
+      Player.ended &&
+      everCanPlay &&
+      $settings?.autoPlay &&
+      nextEp &&
+      !upNextDismissed &&
+      !advanced
+    ) {
+      advance();
+    }
+  });
+
+  function advance(): void {
+    if (advanced || !nextEp || !onPlayNext) return;
+    advanced = true;
+    // Mirrors the ended-effect above: mark the current episode complete so the
+    // library records it (and the backend's next-episode prefetch worker, F7,
+    // sees a completed episode to trigger off of).
+    if (media && Player.duration > 0) {
+      progress.saveNow(Player.duration, Player.duration, progressCtx, true);
+    }
+    onPlayNext(nextEp.season, nextEp.episode.episode_number);
+  }
+
+  function dismissUpNext(): void {
+    upNextDismissed = true;
+  }
 
   // ─── Controls state ─────────────────────────────────────────────────────────
 
@@ -1093,6 +1363,50 @@
     >
       Skip {activeSegment.label}
     </button>
+  {/if}
+
+  <!-- ── Up-next overlay (F6) ─────────────────────────────────────────────── -->
+  {#if showUpNext && nextEp}
+    <div
+      class="absolute bottom-20 right-6 z-20 w-72 overflow-hidden rounded-lg border border-white/20 bg-black/80 text-white shadow-2xl backdrop-blur-sm"
+      transition:fade={{ duration: 150 }}
+    >
+      <div class="flex items-start justify-between gap-2 px-4 pt-3">
+        <p class="text-xs font-medium uppercase tracking-wide text-white/60">
+          Up next · S{nextEp.season}E{nextEp.episode.episode_number}
+        </p>
+        <button
+          class="shrink-0 rounded p-0.5 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+          onclick={(e) => { e.stopPropagation(); dismissUpNext(); }}
+          aria-label="Dismiss"
+        >
+          <X class="size-4" />
+        </button>
+      </div>
+      {#if !$settings?.hideSpoilers && nextEp.episode.name}
+        <p class="truncate px-4 pb-3 text-sm text-white/90">{nextEp.episode.name}</p>
+      {:else}
+        <div class="pb-3"></div>
+      {/if}
+      <button
+        class="flex w-full items-center justify-center gap-2 bg-white/10 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+        onclick={(e) => { e.stopPropagation(); advance(); }}
+      >
+        <SkipForward class="size-4" />
+        Watch now
+      </button>
+      {#if countdownSecs !== null}
+        <div class="px-4 py-2">
+          <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>
+          <div class="h-1 w-full overflow-hidden rounded-full bg-white/20">
+            <div
+              class="h-full bg-white transition-[width] duration-1000 ease-linear"
+              style="width: {((10 - countdownSecs) / 10) * 100}%"
+            ></div>
+          </div>
+        </div>
+      {/if}
+    </div>
   {/if}
 
   <!-- ── Loading screen ─────────────────────────────────────────────────────── -->

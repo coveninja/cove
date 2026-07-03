@@ -12,6 +12,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +50,10 @@ type scrapedStream struct {
 	Quality string            `json:"quality"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
+	// Size is the file size in bytes, when the scraper reported one (either as
+	// a raw number or a human string like "1.4 GB" — see sizeToBytes). Zero
+	// means unknown.
+	Size int64
 }
 
 // invocationTimeout bounds a single scraper's total run time (script + all
@@ -254,6 +261,13 @@ func exportStreams(v goja.Value) ([]scrapedStream, error) {
 				}
 			}
 		}
+		switch sz := m["size"].(type) {
+		case float64:
+			// goja exports JS numbers as float64 regardless of int-ness.
+			s.Size = int64(sz)
+		case string:
+			s.Size = sizeToBytes(sz)
+		}
 		streams = append(streams, s)
 	}
 	return streams, nil
@@ -264,6 +278,36 @@ func stringField(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// sizeToBytesRe mirrors the frontend's size-parsing regex (streamSelection.ts
+// getSizeBytes) so a human-readable size string like "1.4 GB" from a scraper
+// parses to the same byte count the frontend would compute from title text.
+var sizeToBytesRe = regexp.MustCompile(`(?i)([\d.]+)\s*(TB|GB|MB|KB)`)
+
+// sizeToBytes parses a human-readable size string (e.g. "1.4 GB") into bytes.
+// Returns 0 if the string doesn't match the expected pattern.
+func sizeToBytes(s string) int64 {
+	m := sizeToBytesRe.FindStringSubmatch(s)
+	if m == nil {
+		return 0
+	}
+	value, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0
+	}
+	switch strings.ToUpper(m[2]) {
+	case "TB":
+		return int64(value * (1 << 40))
+	case "GB":
+		return int64(value * (1 << 30))
+	case "MB":
+		return int64(value * (1 << 20))
+	case "KB":
+		return int64(value * (1 << 10))
+	default:
+		return 0
+	}
 }
 
 // bindGlobals installs the injected context real Nuvio scrapers expect:

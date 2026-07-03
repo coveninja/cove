@@ -10,8 +10,9 @@
   import ContinueWatchingCard, {
     type ContinueItem,
   } from "./cards/ContinueWatchingCard.svelte";
-  import { SvelteDate, SvelteMap } from "svelte/reactivity";
+  import { SvelteMap } from "svelte/reactivity";
   import { animate } from "animejs";
+  import { nextAiredEpisode as nextAiredEpisodeShared } from "$lib/nextEpisode";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -51,13 +52,6 @@
     return p;
   }
 
-  function hasAired(ep: TVEpisode): boolean {
-    if (!ep.air_date) return false;
-    const today = new SvelteDate();
-    today.setHours(0, 0, 0, 0);
-    return new Date(ep.air_date + "T00:00:00").getTime() <= today.getTime();
-  }
-
   async function episodeStill(
     id: number,
     season: number,
@@ -67,28 +61,15 @@
     return eps.find((e) => e.episode_number === episode)?.still_path ?? "";
   }
 
-  // The next *aired* episode after (season, episode): the following episode in
-  // the same season, else the first of the next season. An existing-but-unaired
-  // next episode means the user is caught up → null (the New Episodes row owns
-  // that case).
-  // TVEpisode has no season_number, so we return the season we queried with.
-  async function nextAiredEpisode(
+  // Wraps the shared nextAiredEpisode (see $lib/nextEpisode) with this row's
+  // own per-load season cache, so a show's resume-point lookup and its
+  // roll-forward check share fetches instead of hitting the same season twice.
+  function nextAiredEpisode(
     id: number,
     season: number,
     episode: number,
   ): Promise<{ season: number; episode: TVEpisode } | null> {
-    const same = await fetchSeason(id, season);
-    const inSeason = same.find((e) => e.episode_number === episode + 1);
-    if (inSeason)
-      return hasAired(inSeason) ? { season, episode: inSeason } : null;
-
-    const next = await fetchSeason(id, season + 1);
-    const first = next
-      .filter((e) => e.episode_number >= 1)
-      .toSorted((a, b) => a.episode_number - b.episode_number)[0];
-    if (first)
-      return hasAired(first) ? { season: season + 1, episode: first } : null;
-    return null;
+    return nextAiredEpisodeShared(id, season, episode, fetchSeason);
   }
 
   function latestProgress(progress: WatchProgress[]): WatchProgress | null {

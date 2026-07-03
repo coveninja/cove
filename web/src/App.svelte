@@ -469,6 +469,7 @@
     const ranked = rankStreams(streams, mode, {
       measuredBandwidthMbps: $settings?.measuredBandwidthMbps,
       preferredProvider: $settings?.defaultProvider,
+      sourcePreference: $settings?.sourcePreference,
     });
     const best = ranked[0] ?? null;
     if (!best) {
@@ -766,6 +767,10 @@
             season={playerSession.season}
             episode={playerSession.episode}
             onPlaybackFailed={handlePlaybackFailed}
+            onPlayNext={(s, e) => {
+              const m = playerSession?.media;
+              if (m) quickPlay(m, s, e);
+            }}
           />
         </div>
       {/if}

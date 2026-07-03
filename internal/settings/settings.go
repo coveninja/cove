@@ -33,11 +33,12 @@ type Settings struct {
 	AutoSelectStream      bool    `json:"autoSelectStream"`      // skip the manual stream list and play immediately
 	StreamSelectionMode   string  `json:"streamSelectionMode"`   // "balanced" | "seeders" | "quality" | "smallest" | "bandwidth"
 	MeasuredBandwidthMbps float64 `json:"measuredBandwidthMbps"` // from the in-app speed test; 0 = never measured
+	SourcePreference      string  `json:"sourcePreference"`      // "" (none) | "torrent" | "direct" — additive ranking boost, doesn't exclude
 
 	// Subtitles
 	SubtitlesEnabled    bool    `json:"subtitlesEnabled"`
 	DefaultSubtitleLang string  `json:"defaultSubtitleLang"` // ISO 639-1 e.g. "en"
-	DefaultAudioLang    string  `json:"defaultAudioLang"`    // ISO 639-1 e.g. "en"
+	DefaultAudioLang    string  `json:"defaultAudioLang"`    // ISO 639-1 e.g. "en", or "original" to match the title's original_language
 	SubtitleSize        float64 `json:"subtitleSize"`        // percentage, 50–200
 	SubtitlePosition    float64 `json:"subtitlePosition"`    // percent from bottom, 2–90
 	SubtitleBackground  bool    `json:"subtitleBackground"`  // dark box behind subtitle text
@@ -64,6 +65,11 @@ type Settings struct {
 	// instantly. Default true; the worker checks this each cycle and the
 	// completion-trigger respects it too.
 	PrefetchStreams bool `json:"prefetchStreams"`
+
+	// PrefetchNextEpisode background-downloads the next TV episode's top-ranked
+	// torrent stream once the current episode's file finishes downloading, so
+	// playback of the next episode starts near-instantly. Default true.
+	PrefetchNextEpisode bool `json:"prefetchNextEpisode"`
 
 	// Sync bookkeeping — stamped server-side on every local write, used to resolve
 	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
@@ -93,6 +99,8 @@ var defaultSettings = Settings{
 	AutoSkipPreview:       false,
 	DiscoveryAlgorithm:    "smart",
 	PrefetchStreams:       true,
+	SourcePreference:      "",
+	PrefetchNextEpisode:   true,
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits
