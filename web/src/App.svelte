@@ -191,6 +191,9 @@
     window.addEventListener("unhandledrejection", onRejection);
     window.addEventListener("error", onError);
 
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", onContextMenu);
+
     // Pull remote changes on window focus when signed in. Guarded so rapid
     // focus/blur cycling (alt-tabbing) doesn't trigger a sync — and downstream
     // refetch storm across every MediaCard + ContinueWatching — on every
@@ -222,6 +225,7 @@
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
+      document.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("focus", onFocus);
     };
   });
