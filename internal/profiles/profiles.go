@@ -220,6 +220,57 @@ func (s *Store) Delete(id string) error {
 	return fmt.Errorf("profile %q not found", id)
 }
 
+// AdoptID rewrites a local profile's ID to newID, renaming its per-profile
+// data files to the new name. Used when a signed-in account already owns a
+// remote profile: the local profile adopts the remote identity so every
+// device pulls and pushes the same rows. Unlike SetActive, onChange runs
+// synchronously so the caller can merge remote data into the reloaded stores
+// as soon as this returns.
+func (s *Store) AdoptID(oldID, newID string) error {
+	s.mu.Lock()
+	idx := -1
+	for i, p := range s.disk.Profiles {
+		if p.ID == newID {
+			s.mu.Unlock()
+			return fmt.Errorf("profile %q already exists", newID)
+		}
+		if p.ID == oldID {
+			idx = i
+		}
+	}
+	if idx == -1 {
+		s.mu.Unlock()
+		return fmt.Errorf("profile %q not found", oldID)
+	}
+	for _, base := range []string{"library", "settings", "addons", "nuvio"} {
+		src, err1 := utils.ConfigPath(ProfileFileName(base, oldID))
+		dst, err2 := utils.ConfigPath(ProfileFileName(base, newID))
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			log.Printf("profiles: adopt %s: %v", ProfileFileName(base, oldID), err)
+		}
+	}
+	s.disk.Profiles[idx].ID = newID
+	isActive := s.disk.ActiveProfileID == oldID
+	if isActive {
+		s.disk.ActiveProfileID = newID
+	}
+	err := s.write()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if isActive && s.onChange != nil {
+		s.onChange(newID)
+	}
+	return nil
+}
+
 // LinkSupabase stores the Supabase user ID on a profile.
 func (s *Store) LinkSupabase(profileID, supabaseUID string) error {
 	s.mu.Lock()

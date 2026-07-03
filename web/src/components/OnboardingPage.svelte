@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { CheckCircle, Check, Loader2 } from "lucide-svelte";
+  import { CheckCircle, Check, Loader2, ArrowLeft, ArrowRight } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
@@ -260,7 +260,7 @@
   });
 </script>
 
-<div class="flex w-[90%]! h-[50%]! flex-col rounded-2xl border border-border bg-card shadow-2xl">
+<div class="flex w-[90%]! h-[80%]! flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
   <!-- Progress pills -->
   <div class="flex items-center justify-center gap-2 px-8 pt-8">
     {#each STEPS as _, i}
@@ -275,7 +275,7 @@
   </div>
 
   <!-- Step content -->
-  <div class="flex min-h-10/12 flex-col px-8 py-6">
+  <div class="flex flex-1 min-h-0 flex-col px-8 py-6">
     {#if stepIndex === 0}
       <!-- Welcome -->
       <div class="flex flex-1 flex-col items-center justify-center gap-4 text-center">
@@ -563,7 +563,10 @@
   <div class="flex items-center justify-between border-t border-border px-8 py-4">
     <div class="w-24">
       {#if !isFirst}
-        <Button variant="ghost" onclick={back} disabled={nextLoading}>← Back</Button>
+        <Button variant="ghost" onclick={back} disabled={nextLoading}>
+          <ArrowLeft class="size-4" />
+          Back
+        </Button>
       {/if}
     </div>
     <div class="flex items-center gap-2">
@@ -574,7 +577,10 @@
         {#if nextLoading}
           <Loader2 class="size-4 animate-spin" />
         {:else}
-          {isFirst ? "Get Started" : isLast ? "Start Exploring" : "Next →"}
+          {isFirst ? "Get Started" : isLast ? "Start Exploring" : "Next"}
+          {#if !isLast && !isFirst}
+            <ArrowRight class="size-4" />
+          {/if}
         {/if}
       </Button>
     </div>

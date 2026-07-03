@@ -253,7 +253,7 @@
   // audio auto-select effect. Subtitles have no equivalent concept (TMDB
   // doesn't publish an "original subtitle language").
   const AUDIO_LANGUAGES = [
-    { value: "original", label: "Original language" },
+    { value: "original", label: "Original" },
     ...LANGUAGES,
   ];
 

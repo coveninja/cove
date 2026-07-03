@@ -356,9 +356,68 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// reconcileProfile makes the active local profile and the account's remote
+// profile rows agree before any pull or push. Three cases:
+//   - the local profile ID already exists remotely → nothing to do;
+//   - the account owns remote profiles but none match → adopt the remote
+//     primary's ID locally, so every device syncs the same rows;
+//   - the account owns no remote profiles → create the remote row for the
+//     local ID (registration used to be the only place this happened).
+//
+// Without this, a device that didn't perform the original registration
+// pushes rows whose profile_id has no owner in `profiles` — which RLS
+// rejects with 42501 — and pulls a profile ID that has no remote data.
+func (s *Server) reconcileProfile(supabaseUID, userJWT string) profiles.Profile {
+	active := s.profileStore.ActiveProfile()
+
+	remotes, err := s.cfg.RemoteProfilesForUser(userJWT, supabaseUID)
+	if err != nil {
+		log.Println("supabase: list remote profiles:", err)
+		return active
+	}
+	for _, r := range remotes {
+		if r.ID == active.ID {
+			return active
+		}
+	}
+
+	if len(remotes) == 0 {
+		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary); err != nil {
+			log.Println("supabase: create remote profile:", err)
+		}
+		return active
+	}
+
+	target := remotes[0]
+	for _, r := range remotes {
+		if r.IsPrimary {
+			target = r
+			break
+		}
+	}
+	if err := s.profileStore.AdoptID(active.ID, target.ID); err != nil {
+		// A different local profile already owns the remote ID (or the
+		// rename failed) — register this profile ID remotely instead so
+		// pushes stop violating RLS; it becomes another profile of the
+		// same account.
+		log.Println("supabase: adopt remote profile:", err)
+		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary); err != nil {
+			log.Println("supabase: create remote profile:", err)
+		}
+		return active
+	}
+	if target.Name != "" && target.Name != active.Name {
+		if err := s.profileStore.Rename(target.ID, target.Name); err != nil {
+			log.Println("supabase: rename adopted profile:", err)
+		}
+	}
+	log.Printf("supabase: local profile adopted remote profile %s (%q)", target.ID, target.Name)
+	return s.profileStore.ActiveProfile()
+}
+
 // mergeRemote pulls all Supabase data for a user and merges it into the active profile.
 func (s *Server) mergeRemote(supabaseUID, userJWT string) {
-	active := s.profileStore.ActiveProfile()
+	active := s.reconcileProfile(supabaseUID, userJWT)
 
 	// Link UID to profile if not already set.
 	if active.SupabaseUID == nil {
