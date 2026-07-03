@@ -11,6 +11,8 @@
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import StarRating from "./StarRating.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
+  import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
 
   let {
     media,
@@ -25,6 +27,7 @@
     onexpand,
     onmouseleave,
     onpopoverchange,
+    oncontextmenuopen,
   }: {
     media: Media;
     style: string;
@@ -38,6 +41,7 @@
     onexpand: () => void;
     onmouseleave?: (e: MouseEvent) => void;
     onpopoverchange?: (open: boolean) => void;
+    oncontextmenuopen?: (open: boolean) => void;
   } = $props();
 
   // Expose the root element so the parent can check relatedTarget against it
@@ -111,6 +115,11 @@
     });
   });
 
+  let contextMenuOpen = $state(false);
+  $effect(() => {
+    oncontextmenuopen?.(contextMenuOpen);
+  });
+
   // Expose close animation so the parent can await it before hiding
   export function animateClose(onComplete: () => void): void {
     if (!el) {
@@ -136,6 +145,8 @@
   onclick={() => onexpand()}
   style="opacity: 0; transform: scale(0.85); {style}"
 >
+    <ContextMenu.Root bind:open={contextMenuOpen}>
+    <ContextMenu.Trigger class="contents">
   {#if videoUrl}
     <PlayerSimple src={videoUrl} controls={false} bg={media.poster_path} />
   {:else}
@@ -242,4 +253,9 @@
       </span>
     </span>
   </span>
+          </ContextMenu.Trigger>
+    <ContextMenu.Content>
+      <LibraryContextMenuContent {libraryEntry} {media} />
+    </ContextMenu.Content>
+  </ContextMenu.Root>
 </span>

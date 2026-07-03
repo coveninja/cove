@@ -164,12 +164,12 @@
     return !!popover?.contains(target);
   }
 
+  let hoverCardContextMenuOpen = $state(false);
+
   function closeIfIdle(): void {
-    if (popoverOpen || withinZone) return;
+    if (popoverOpen || hoverCardContextMenuOpen || withinZone) return;
     if (hoverCardInstance) {
-      hoverCardInstance.animateClose(() => {
-        hovered = false;
-      });
+      hoverCardInstance.animateClose(() => (hovered = false));
     } else {
       hovered = false;
     }
@@ -252,6 +252,8 @@
         }
       });
   });
+
+
 
   // Flip `visible` when the card scrolls within 300px of the viewport, which
   // triggers the two effects above. Loads eagerly if IntersectionObserver is
@@ -358,5 +360,6 @@
     onmouseleave={onLeave}
     onexpand={openOverlay}
     onpopoverchange={(open) => (popoverOpen = open)}
+    oncontextmenuopen={(open) => (hoverCardContextMenuOpen = open)}
   />
 {/if}
