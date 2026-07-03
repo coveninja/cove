@@ -1,7 +1,9 @@
 // Package player owns the torrent client and streams playback sources as
-// seekable HTTP: torrents stream their largest file directly via
-// http.ServeContent (mpv's Range requests just work, no transcoding
-// involved), and direct-URL sources get a redirect straight to the origin.
+// seekable HTTP: torrents stream a selected file directly via
+// http.ServeContent — the largest file for a movie/single-file torrent, or
+// the file matching the requested season/episode for a season-pack torrent
+// (see selectFile) — mpv's Range requests just work, no transcoding
+// involved. Direct-URL sources get a redirect straight to the origin.
 // A background reaper (CleanupTorrents) drops idle torrents and their
 // on-disk pieces after 30 minutes of no active readers, so a long-running
 // process doesn't accumulate downloaded data forever.
@@ -19,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -176,18 +179,151 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 	proxy.ServeHTTP(w, r)
 }
 
-// largestFile returns the biggest file in a torrent whose metadata is ready.
-func largestFile(t *torrent.Torrent) (*torrent.File, error) {
-	var largest *torrent.File
+// videoExtensions is the set of container extensions selectFile considers a
+// playable video file — everything else in a torrent (nfo, srt, jpg, etc.)
+// is ignored when picking which file to stream.
+var videoExtensions = map[string]bool{
+	".mkv":  true,
+	".mp4":  true,
+	".avi":  true,
+	".m4v":  true,
+	".webm": true,
+	".ts":   true,
+}
+
+// videoFiles returns every file in the torrent that looks like a real video
+// (by extension, excluding sample clips) — the base pool selectFile matches
+// episode-number patterns against for season-pack torrents.
+func videoFiles(t *torrent.Torrent) []*torrent.File {
+	var out []*torrent.File
 	for _, f := range t.Files() {
-		if largest == nil || f.Length() > largest.Length() {
-			largest = f
+		if isVideoFile(f.DisplayPath()) {
+			out = append(out, f)
 		}
 	}
-	if largest == nil {
-		return nil, fmt.Errorf("no files found in torrent")
+	return out
+}
+
+func isVideoFile(path string) bool {
+	if !videoExtensions[strings.ToLower(filepath.Ext(path))] {
+		return false
 	}
-	return largest, nil
+	return !strings.Contains(strings.ToLower(path), "sample")
+}
+
+// episodePatternBoundary keeps a season/episode-number match from firing
+// inside a longer number (season 1 matching inside "S15E02") — Go's RE2
+// engine has no lookaround, so this stands in for one: the char immediately
+// before/after the number (if any) must not itself be a digit.
+const episodePatternBoundary = `(?:^|[^0-9])`
+const episodePatternEnd = `(?:$|[^0-9])`
+
+// selectFile picks which file in a torrent to stream (D1). For a movie
+// (season/episode nil) or when no episode-pattern match is found in the
+// torrent's video files, it's simply the largest video file — the original,
+// pre-D1 behavior, and the correct choice for a single-file torrent. For a
+// TV episode it tries increasingly loose filename patterns against
+// DisplayPath() (case-insensitive) — "S01E02"/"S1E2", then "1x02", then a
+// bare episode marker ("E02"/"Ep02"/"Episode 2", only trusted when it
+// matches exactly one file in the torrent, since without a season number
+// it can't otherwise be disambiguated from another season's same episode
+// number) — falling back to the largest video file if nothing matches.
+// Multiple files matching the same tier (e.g. an extras file that happens
+// to match) resolve to the largest of that tier's matches.
+//
+// The actual decision logic lives in selectFileIndex, a pure function over
+// plain (path, length) pairs — torrent.File has no exported constructor, so
+// keeping the logic torrent-package-agnostic is what makes it unit-testable.
+func selectFile(t *torrent.Torrent, season, episode *int) (*torrent.File, error) {
+	files := videoFiles(t)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no video files found in torrent")
+	}
+
+	infos := make([]fileCandidate, len(files))
+	for i, f := range files {
+		infos[i] = fileCandidate{path: f.DisplayPath(), length: f.Length()}
+	}
+
+	idx, reason := selectFileIndex(infos, season, episode)
+	chosen := files[idx]
+	log.Printf("selectFile: %s -> %s", reason, chosen.DisplayPath())
+	return chosen, nil
+}
+
+// fileCandidate is the torrent-package-agnostic shape selectFileIndex works
+// over — a file's display path and byte length, nothing else.
+type fileCandidate struct {
+	path   string
+	length int64
+}
+
+// selectFileIndex is selectFile's pure decision logic. files must be
+// non-empty (callers filter to video files first). Returns the chosen
+// index and a short human-readable reason (logged by selectFile).
+func selectFileIndex(files []fileCandidate, season, episode *int) (int, string) {
+	if season != nil && episode != nil {
+		s, e := *season, *episode
+		tiers := []struct {
+			label string
+			re    *regexp.Regexp
+		}{
+			// "S01E02" / "S1E2" — padding-flexible via 0*.
+			{fmt.Sprintf("matched S%02dE%02d", s, e), regexp.MustCompile(fmt.Sprintf(`(?i)%ss0*%de0*%d%s`, episodePatternBoundary, s, e, episodePatternEnd))},
+			// "1x02"
+			{fmt.Sprintf("matched %dx%02d", s, e), regexp.MustCompile(fmt.Sprintf(`(?i)%s%dx0*%d%s`, episodePatternBoundary, s, e, episodePatternEnd))},
+		}
+		for _, tier := range tiers {
+			if idx := largestMatchIndex(files, tier.re); idx >= 0 {
+				return idx, tier.label
+			}
+		}
+
+		episodeOnly := regexp.MustCompile(fmt.Sprintf(`(?i)%s(?:e|ep|episode\s?)0*%d%s`, episodePatternBoundary, e, episodePatternEnd))
+		if matches := matchIndices(files, episodeOnly); len(matches) == 1 {
+			return matches[0], fmt.Sprintf("matched episode-only E%02d", e)
+		}
+	}
+
+	return largestIndex(files), "no episode match, using largest video file"
+}
+
+// matchIndices returns the indices of every file whose path matches re.
+func matchIndices(files []fileCandidate, re *regexp.Regexp) []int {
+	var out []int
+	for i, f := range files {
+		if re.MatchString(f.path) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// largestMatchIndex returns the index of the largest file matching re, or -1
+// if nothing matches.
+func largestMatchIndex(files []fileCandidate, re *regexp.Regexp) int {
+	matches := matchIndices(files, re)
+	if len(matches) == 0 {
+		return -1
+	}
+	best := matches[0]
+	for _, i := range matches[1:] {
+		if files[i].length > files[best].length {
+			best = i
+		}
+	}
+	return best
+}
+
+// largestIndex returns the index of the largest file in files (non-empty).
+func largestIndex(files []fileCandidate) int {
+	best := 0
+	for i, f := range files {
+		if f.length > files[best].length {
+			best = i
+		}
+	}
+	return best
 }
 
 // addReader adjusts readers (+1 on open, -1 on return) and refreshes lastUsed.
@@ -203,7 +339,11 @@ func (p *Player) addReader(infoHash string, delta int) {
 	p.activeTorrentsMu.Unlock()
 }
 
-func (p *Player) getLargestTorrentFile(infoHash string) (*torrent.File, error) {
+// getTorrentFile resolves the torrent for infoHash (fetching its metadata if
+// this is the first request for it) and selects which file within it to
+// stream — see selectFile for the season/episode matching logic. season and
+// episode are nil for movies.
+func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent.File, error) {
 	// Reuse a torrent we've already fetched metadata for. AddMagnet is
 	// idempotent, but reusing also avoids re-running the GotInfo wait and keeps
 	// the idle timer fresh.
@@ -212,7 +352,7 @@ func (p *Player) getLargestTorrentFile(infoHash string) (*torrent.File, error) {
 		t := st.torrent
 		st.lastUsed = time.Now()
 		p.activeTorrentsMu.Unlock()
-		return largestFile(t)
+		return selectFile(t, season, episode)
 	}
 	p.activeTorrentsMu.Unlock()
 
@@ -251,7 +391,7 @@ func (p *Player) getLargestTorrentFile(infoHash string) (*torrent.File, error) {
 	}
 	p.activeTorrentsMu.Unlock()
 
-	return largestFile(t)
+	return selectFile(t, season, episode)
 }
 
 // CleanupTorrents drops torrents that have no live readers and haven't been
@@ -291,8 +431,11 @@ func (p *Player) CleanupTorrents() {
 	}
 }
 
-func (p *Player) StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
-	largest, err := p.getLargestTorrentFile(infoHash)
+// StreamTorrent serves infoHash's selected file (see selectFile) as seekable
+// HTTP. season/episode (nil for movies) pick the right file out of a
+// season-pack torrent instead of always streaming its largest file.
+func (p *Player) StreamTorrent(infoHash string, season, episode *int, w http.ResponseWriter, r *http.Request) {
+	file, err := p.getTorrentFile(infoHash, season, episode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -304,7 +447,7 @@ func (p *Player) StreamTorrent(infoHash string, w http.ResponseWriter, r *http.R
 	p.addReader(infoHash, +1)
 	defer p.addReader(infoHash, -1)
 
-	reader := largest.NewReader()
+	reader := file.NewReader()
 	// Closing the reader matters: anacrolix readers hold piece-download
 	// priorities until Close(), and the player opens a new request (new reader)
 	// on each seek. Closing on handler return releases stale prioritisation so
@@ -318,7 +461,7 @@ func (p *Player) StreamTorrent(infoHash string, w http.ResponseWriter, r *http.R
 	reader.SetResponsive()
 	reader.SetReadahead(16 << 20) // 16 MiB
 
-	http.ServeContent(w, r, largest.DisplayPath(), time.Time{}, reader)
+	http.ServeContent(w, r, file.DisplayPath(), time.Time{}, reader)
 }
 
 func (p *Player) GetProgress(infoHash string) map[string]interface{} {
@@ -404,7 +547,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			}
 		}
 
-		allSubs := p.addonMgr.GetAllSubtitles(mediaType, stremioID)
+		allSubs := p.addonMgr.GetAllSubtitles(r.Context(), mediaType, stremioID)
 		if allSubs == nil {
 			allSubs = []addons.Subtitle{}
 		}
@@ -461,27 +604,50 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			}
 		}
 
-		streams, err := p.addonMgr.GetAllStreams(mediaType, stremioID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if streams == nil {
-			streams = []addons.Stream{}
-		}
+		// Stremio addons and Nuvio scrapers are independent legs with no shared
+		// state — run them concurrently so the response latency is max(leg),
+		// not sum(leg). (A4)
+		ctx := r.Context()
+		var addonStreams []addons.Stream
+		var addonErr error
+		var nuvioStreams []addons.Stream
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			addonStreams, addonErr = p.addonMgr.GetAllStreams(ctx, mediaType, stremioID)
+		}()
 
 		// Skip the extra TMDB lookup entirely for the common case (no Nuvio
 		// scrapers enabled) — it exists purely to feed Nuvio's metadata.
 		if p.nuvioMgr != nil && p.nuvioMgr.HasEnabledScrapers() {
-			var title string
-			var year int
-			if media, mErr := p.tmdbClient.GetMediaByID(id, mediaType); mErr == nil && media != nil {
-				title = firstNonEmpty(media.Title, media.Name)
-				year = parseYear(firstNonEmpty(media.Released, media.FirstAir))
-			}
-			nuvioStreams := p.nuvioMgr.GetStreams(mediaType, id, imdbID, title, year, seasonNum, episodeNum)
-			streams = append(streams, nuvioStreams...)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var title string
+				var year int
+				if media, mErr := p.tmdbClient.GetMediaByID(id, mediaType); mErr == nil && media != nil {
+					title = firstNonEmpty(media.Title, media.Name)
+					year = parseYear(firstNonEmpty(media.Released, media.FirstAir))
+				}
+				nuvioStreams = p.nuvioMgr.GetStreams(ctx, mediaType, id, imdbID, title, year, seasonNum, episodeNum)
+			}()
 		}
+		wg.Wait()
+
+		if addonErr != nil {
+			http.Error(w, addonErr.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Response stays a single JSON array, nuvio appended after addons
+		// (frontend contract unchanged).
+		streams := addonStreams
+		if streams == nil {
+			streams = []addons.Stream{}
+		}
+		streams = append(streams, nuvioStreams...)
 
 		// Register every direct-URL stream we're about to offer — /api/play
 		// only accepts URLs from this registry (see rememberStream).
@@ -524,10 +690,22 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 
-		// Torrent sources: stream the largest file as seekable http. mpv handles
-		// every codec/container natively, so no transcoding is involved.
+		// Torrent sources: stream the selected file (largest, or the matching
+		// episode of a season pack — see selectFile/D1) as seekable http. mpv
+		// handles every codec/container natively, so no transcoding involved.
 		if infoHash != "" {
-			p.StreamTorrent(infoHash, w, r)
+			var season, episode *int
+			if s := r.URL.Query().Get("season"); s != "" {
+				if v, err := strconv.Atoi(s); err == nil {
+					season = &v
+				}
+			}
+			if e := r.URL.Query().Get("episode"); e != "" {
+				if v, err := strconv.Atoi(e); err == nil {
+					episode = &v
+				}
+			}
+			p.StreamTorrent(infoHash, season, episode, w, r)
 			return
 		}
 

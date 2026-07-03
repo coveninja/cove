@@ -63,6 +63,13 @@ export interface Settings {
   discoveryAlgorithm: string; // "smart" | "popularity" | "custom"
   customAlgorithmUrl: string; // used when discoveryAlgorithm == "custom"
   /**
+   * Predictive prefetch (Phase E) — background-warms stream caches for
+   * continue-watching titles and next episodes so playback starts near-
+   * instantly. Default true; the worker checks this each cycle and the
+   * completion-trigger respects it too.
+   */
+  prefetchStreams: boolean;
+  /**
    * Sync bookkeeping — stamped server-side on every local write, used to resolve
    * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
    */

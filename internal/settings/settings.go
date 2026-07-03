@@ -59,6 +59,12 @@ type Settings struct {
 	DiscoveryAlgorithm string `json:"discoveryAlgorithm"` // "smart" | "popularity" | "custom"
 	CustomAlgorithmURL string `json:"customAlgorithmUrl"` // used when discoveryAlgorithm == "custom"
 
+	// Predictive prefetch (Phase E) — background-warms stream caches for
+	// continue-watching titles and next episodes so playback starts near-
+	// instantly. Default true; the worker checks this each cycle and the
+	// completion-trigger respects it too.
+	PrefetchStreams bool `json:"prefetchStreams"`
+
 	// Sync bookkeeping — stamped server-side on every local write, used to resolve
 	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -86,6 +92,7 @@ var defaultSettings = Settings{
 	AutoSkipCredits:       false,
 	AutoSkipPreview:       false,
 	DiscoveryAlgorithm:    "smart",
+	PrefetchStreams:       true,
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits

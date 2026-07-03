@@ -26,7 +26,7 @@
     getSeeders,
     getSizeBytes,
     isTorrentStream,
-    pickBestStream,
+    rankStreams,
     formatStreamSummary,
     type StreamSelectionMode,
   } from "$lib/streamSelection";
@@ -75,8 +75,21 @@
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let pollAttempts = 0;
   // Indexers that never turn anything up shouldn't poll forever — cap it and
-  // fall back to the existing empty state.
-  const MAX_POLL_ATTEMPTS = 20;
+  // fall back to the existing empty state. Halved from 20 alongside the 1s→2s
+  // poll interval below (B4) — same ~20s total window, half the requests.
+  const MAX_POLL_ATTEMPTS = 10;
+
+  // ── Fetch sequencing (B3) ──────────────────────────────────────────────────
+  // fetchSeq/abortCtrl guard against rapid episode switching racing a stale
+  // response: the effect below bumps fetchSeq and creates a fresh
+  // AbortController on every run, fetchStreams bails before touching
+  // streams/maxQuality/auto-pick if its seq has been superseded, and
+  // autoPickTimer is explicitly cleared on effect cleanup so a pending
+  // 500ms auto-pick from the *previous* episode/season can never fire after
+  // the user has already moved on (the old wrong-episode-autoplay bug).
+  let fetchSeq = 0;
+  let abortCtrl: AbortController | null = null;
+  let autoPickTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Auto stream selection ─────────────────────────────────────────────────────
 
@@ -203,19 +216,40 @@
       return () => {};
 
     clearPoll();
+    if (autoPickTimer != null) {
+      clearTimeout(autoPickTimer);
+      autoPickTimer = null;
+    }
+    abortCtrl?.abort();
+    const seq = ++fetchSeq;
+    const ctrl = new AbortController();
+    abortCtrl = ctrl;
+
     loadingStreams = true;
     streams = [];
     pollAttempts = 0;
     autoPickCancelled = false;
     autoPicking = false;
     showAlternatives = false;
-    fetchStreams().then(() => {
+    fetchStreams(seq, ctrl.signal).then(() => {
+      if (seq !== fetchSeq) return; // superseded while the fetch was in flight
       loadingStreams = false;
       if (streams.length === 0)
-        pollInterval = setInterval(pollFetchStreams, 1000);
+        // 2s, not 1s (B4) — A3's per-addon negative cache makes each poll
+        // hit-or-miss the same 20s-TTL cache entry either way, so a tighter
+        // interval mostly just burns more requests without surfacing results
+        // any sooner.
+        pollInterval = setInterval(() => pollFetchStreams(seq, ctrl.signal), 2000);
     });
 
-    return () => clearPoll();
+    return () => {
+      clearPoll();
+      ctrl.abort();
+      if (autoPickTimer != null) {
+        clearTimeout(autoPickTimer);
+        autoPickTimer = null;
+      }
+    };
   });
 
   // Stream helpers
@@ -236,28 +270,47 @@
     return ["all", ...qs];
   });
 
-  const filteredStreams = $derived.by(() => {
-    const list = streams.map((s) => ({
-      ...s,
+  // D5: seeders/size/quality are regex-parsed out of the stream title (see
+  // streamSelection.ts) — parsing is the expensive part, so it only reruns
+  // when `streams` itself changes, not on every filter/sort toggle. `key` is
+  // a stable identity for the {#each} below (url/infoHash/title, matching
+  // rankStreams' dedup key) so toggling a filter/sort no longer tears down
+  // and rebuilds every row's DOM (the previous key was object identity on a
+  // freshly-mapped object every derive, which changed on every filter/sort
+  // toggle even though the underlying stream hadn't).
+  interface ParsedStream {
+    stream: Stream;
+    key: string;
+    seeders: number;
+    sizeBytes: number;
+    quality: string | null;
+  }
+
+  const parsedStreams = $derived<ParsedStream[]>(
+    streams.map((s) => ({
+      stream: s,
+      key: s.url || s.infoHash || s.title,
       seeders: getSeeders(s),
       sizeBytes: getSizeBytes(s),
       quality: inferQuality(s),
-    }));
-    const filtered = list.filter(
+    })),
+  );
+
+  const filteredStreams = $derived.by(() => {
+    const filtered = parsedStreams.filter(
       (s) => qualityFilter === "all" || s.quality === qualityFilter,
     );
     const preferred = $settings?.defaultProvider;
-    filtered.sort((a, b) => {
+    return filtered.toSorted((a, b) => {
       if (preferred) {
-        const aPref = a.addonName === preferred ? 1 : 0;
-        const bPref = b.addonName === preferred ? 1 : 0;
+        const aPref = a.stream.addonName === preferred ? 1 : 0;
+        const bPref = b.stream.addonName === preferred ? 1 : 0;
         if (aPref !== bPref) return bPref - aPref;
       }
       return sortMode === "seeders"
         ? b.seeders - a.seeders
         : b.sizeBytes - a.sizeBytes;
     });
-    return filtered;
   });
 
   const selectedSeasonLabel = $derived(
@@ -274,19 +327,23 @@
 
   // setInterval callback for the empty-results poll. Stops itself (falling
   // back to the existing "no streams" empty state) once MAX_POLL_ATTEMPTS is
-  // reached instead of retrying forever.
-  function pollFetchStreams(): void {
+  // reached instead of retrying forever. seq/signal are bound to the fetch
+  // generation that started this poll — if a newer effect run has since
+  // superseded it, bail immediately instead of firing a stale request.
+  function pollFetchStreams(seq: number, signal: AbortSignal): void {
+    if (seq !== fetchSeq) return;
     pollAttempts++;
     if (pollAttempts > MAX_POLL_ATTEMPTS) {
       clearPoll();
       return;
     }
-    fetchStreams();
+    fetchStreams(seq, signal);
   }
 
-  async function fetchStreams(): Promise<void> {
-    return await api
-      .getStreams(
+  async function fetchStreams(seq: number, signal: AbortSignal): Promise<void> {
+    let res: Stream[];
+    try {
+      res = await api.getStreams(
         media.id,
         isTV
           ? {
@@ -295,50 +352,63 @@
               episode: selectedEpisode!.episode_number,
             }
           : {},
-      )
-      .then((res: Stream[]) => {
-        streams = res;
-        maxQuality = getMaxQuality(streams);
-        if (streams.length > 0) clearPoll();
+        signal,
+      );
+    } catch (e) {
+      if ((e as { name?: string } | null)?.name === "AbortError") return;
+      throw e;
+    }
 
-        if (
-          $settings?.autoSelectStream &&
-          !autoPickCancelled &&
-          !autoPicking &&
-          !alreadyPlayingThisSelection &&
-          streams.length > 0
-        ) {
-          const best = pickBestStream(
-            streams,
-            ($settings.streamSelectionMode as StreamSelectionMode) ??
-              "balanced",
-            {
-              measuredBandwidthMbps: $settings.measuredBandwidthMbps,
-              preferredProvider: $settings.defaultProvider,
-            },
-          );
-          if (best) {
-            const mode = $settings.streamSelectionMode ?? "balanced";
-            console.log(
-              `[stream-select] auto (${mode}): "${best.name}" — ${formatStreamSummary(best)}`,
+    // Superseded by a newer effect run (episode/season switch) while this
+    // request was in flight — discard rather than clobber the current pick.
+    if (seq !== fetchSeq) return;
+
+    streams = res;
+    maxQuality = getMaxQuality(streams);
+    if (streams.length > 0) clearPoll();
+
+    if (
+      $settings?.autoSelectStream &&
+      !autoPickCancelled &&
+      !autoPicking &&
+      !alreadyPlayingThisSelection &&
+      streams.length > 0
+    ) {
+      const ranked = rankStreams(
+        streams,
+        ($settings.streamSelectionMode as StreamSelectionMode) ?? "balanced",
+        {
+          measuredBandwidthMbps: $settings.measuredBandwidthMbps,
+          preferredProvider: $settings.defaultProvider,
+        },
+      );
+      const best = ranked[0] ?? null;
+      if (best) {
+        const mode = $settings.streamSelectionMode ?? "balanced";
+        console.log(
+          `[stream-select] auto (${mode}): "${best.name}" — ${formatStreamSummary(best)}`,
+          best,
+        );
+        autoPicking = true;
+        // Small delay so the "Auto-selecting…" message and its cancel
+        // button actually get a moment on screen before playback starts.
+        autoPickTimer = setTimeout(() => {
+          autoPickTimer = null;
+          if (seq === fetchSeq && !autoPickCancelled) {
+            // Pass a handful of runner-up candidates so App.svelte's
+            // watchdog (B2) can auto-advance to the next one if this pick
+            // turns out to be dead, without a full re-fetch.
+            onPlayStream(
               best,
+              selectedSeason ?? undefined,
+              selectedEpisode?.episode_number,
+              selectedEpisode?.name,
+              ranked.slice(0, 5),
             );
-            autoPicking = true;
-            // Small delay so the "Auto-selecting…" message and its cancel
-            // button actually get a moment on screen before playback starts.
-            setTimeout(() => {
-              if (!autoPickCancelled) {
-                onPlayStream(
-                  best,
-                  selectedSeason ?? undefined,
-                  selectedEpisode?.episode_number,
-                  selectedEpisode?.name,
-                );
-              }
-            }, 500);
           }
-        }
-      });
+        }, 500);
+      }
+    }
   }
 </script>
 
@@ -635,7 +705,8 @@
             </div>
           {:else}
             <div class="flex flex-col gap-3">
-              {#each filteredStreams as stream (stream)}
+              {#each filteredStreams as item (item.key)}
+                {@const stream = item.stream}
                 <button
                   class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
                   onclick={() => {
@@ -671,16 +742,16 @@
                   >
                     {#if isTorrentStream(stream)}
                       <span class="rounded bg-background/70 px-1.5 py-0.5">
-                        👤 {getSeeders(stream)}
+                        👤 {item.seeders}
                       </span>
                       <span class="rounded bg-background/70 px-1.5 py-0.5">
-                        💾 {getSizeBytes(stream) / 1024 ** 3 >= 1
-                          ? `${(getSizeBytes(stream) / 1024 ** 3).toFixed(2)} GB`
-                          : `${(getSizeBytes(stream) / 1024 ** 2).toFixed(0)} MB`}
+                        💾 {item.sizeBytes / 1024 ** 3 >= 1
+                          ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
+                          : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
                       </span>
                     {/if}
                     <span class="rounded bg-background/70 px-1.5 py-0.5">
-                      {inferQuality(stream)}
+                      {item.quality}
                     </span>
                     {#if stream.addonName}
                       <span

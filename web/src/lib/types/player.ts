@@ -4,9 +4,11 @@
 // source: player.go
 /*
 Package player owns the torrent client and streams playback sources as
-seekable HTTP: torrents stream their largest file directly via
-http.ServeContent (mpv's Range requests just work, no transcoding
-involved), and direct-URL sources get a redirect straight to the origin.
+seekable HTTP: torrents stream a selected file directly via
+http.ServeContent — the largest file for a movie/single-file torrent, or
+the file matching the requested season/episode for a season-pack torrent
+(see selectFile) — mpv's Range requests just work, no transcoding
+involved. Direct-URL sources get a redirect straight to the origin.
 A background reaper (CleanupTorrents) drops idle torrents and their
 on-disk pieces after 30 minutes of no active readers, so a long-running
 process doesn't accumulate downloaded data forever.

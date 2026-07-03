@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/coveninja/cove/internal/addons"
@@ -16,6 +19,7 @@ import (
 	"github.com/coveninja/cove/internal/library"
 	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/player"
+	"github.com/coveninja/cove/internal/prefetch"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
 	supapkg "github.com/coveninja/cove/internal/supabase"
@@ -139,12 +143,33 @@ func main() {
 
 	clientsession.SetupHandlers(mux)
 
+	// Predictive stream prefetch (Phase E): warms addon/Nuvio caches for
+	// continue-watching titles and next episodes so /api/streams answers
+	// from cache by the time the user actually presses play. Off entirely
+	// when Settings.PrefetchStreams is false (checked every cycle).
+	prefetchWorker := prefetch.New(lib, tmdbClient, addonMgr, nuvioMgr, st)
+	lib.SetOnNearComplete(prefetchWorker.Notify)
+	go prefetchWorker.Run(context.Background())
+
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			p.CleanupTorrents()
 		}
+	}()
+
+	// Flush the library's debounced writes (D3) on a clean shutdown so the
+	// last mutation before exit isn't lost to the ~1s debounce window the
+	// process didn't live to see. The Qt shell sends SIGTERM on normal quit
+	// (main.cpp's aboutToQuit handler); SIGINT covers `./cove` run directly
+	// in a terminal during development.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		lib.Flush()
+		os.Exit(0)
 	}()
 
 	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {

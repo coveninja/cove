@@ -113,6 +113,12 @@ function coalesce<T>(
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   if (method !== "GET") return exec();
+  // A caller-supplied signal means this request has its own cancellation
+  // lifecycle — sharing a coalesced promise would let one caller's abort
+  // reject every other caller waiting on the same key, even ones that never
+  // asked to be cancelled. Skip coalescing entirely for signalled requests;
+  // each runs (and can be aborted) independently.
+  if (init?.signal) return exec();
 
   const existing = inflight.get(key) as Promise<T> | undefined;
   if (existing) return existing;
@@ -355,12 +361,16 @@ export const api = {
     request(`/tv/episodes?id=${id}&season=${season}`),
 
   // ── Streams & subtitles (addons) ──────────────────────────────────────────────
-  getStreams: (tmdbId: number, opts: StreamQuery = {}): Promise<Stream[]> => {
+  getStreams: (
+    tmdbId: number,
+    opts: StreamQuery = {},
+    signal?: AbortSignal,
+  ): Promise<Stream[]> => {
     const p = new URLSearchParams({ id: String(tmdbId) });
     if (opts.type) p.set("type", opts.type);
     if (opts.season != null) p.set("season", String(opts.season));
     if (opts.episode != null) p.set("episode", String(opts.episode));
-    return request(`/streams?${p}`);
+    return request(`/streams?${p}`, signal ? { signal } : undefined);
   },
 
   getSubtitles: (p: {
@@ -375,14 +385,69 @@ export const api = {
     return request(`/subtitles?${q}`);
   },
 
+  // Streams NDJSON quality-badge results for a batch of typed ids
+  // ("movie:603", "tv:1396") from /api/quality/batch, calling onEntry for
+  // each line as it arrives. Deliberately bypasses the concurrency limiter —
+  // same rationale as the progress SSE and speedtest above: this is a
+  // long-lived streaming connection that would otherwise hold one of the 8
+  // slots open for its whole duration and starve every other fetch on the
+  // page. Swallows AbortError so callers can just pass a signal and not
+  // special-case cancellation.
+  streamQualityBatch: async (
+    ids: string[],
+    onEntry: (id: string, quality: string) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    if (ids.length === 0) return;
+    try {
+      const res = await fetch(
+        `${BASE}/quality/batch?ids=${ids.map(encodeURIComponent).join(",")}`,
+        withAuth({ signal }),
+      );
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const { id, quality } = JSON.parse(line);
+            onEntry(id, quality);
+          } catch {
+            /* ignore malformed frames */
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as { name?: string } | null)?.name === "AbortError") return;
+      throw e;
+    }
+  },
+
   // ── Player: source URL builders ───────────────────────────────────────────────
   //
   // These return strings rather than fetching — the URL is handed to mpv, a
   // <track src>, or EventSource, which handle their own loading.
 
-  /** Direct torrent stream (or the original URL if src is already absolute). */
-  playUrl: (src: string): string =>
-    isHashSrc(src) ? `${BASE}/play?hash=${src}` : src,
+  /**
+   * Direct torrent stream (or the original URL if src is already absolute).
+   * For a hash src, season/episode (D1) let the backend pick the right file
+   * out of a season-pack torrent instead of always streaming its largest
+   * file — omitted entirely for a movie or an already-absolute src.
+   */
+  playUrl: (src: string, opts?: { season?: number; episode?: number }): string => {
+    if (!isHashSrc(src)) return src;
+    const p = new URLSearchParams({ hash: src });
+    if (opts?.season != null) p.set("season", String(opts.season));
+    if (opts?.episode != null) p.set("episode", String(opts.episode));
+    return `${BASE}/play?${p}`;
+  },
 
   subtitleProxyUrl: (externalUrl: string): string =>
     `${BASE}/subtitle-proxy?url=${encodeURIComponent(externalUrl)}`,

@@ -148,18 +148,57 @@ function scoreCandidates(
 const PROVIDER_BOOST = 0.15;
 
 /** Sorts by a mode's normalized 0..1 metric (higher = better), plus a small
- * bonus for the preferred provider, falling back to `tiebreak` on ties. */
-function sortByBoostedDesc(
+ * bonus for the preferred provider, falling back to `tiebreak` on ties.
+ * Returns the whole sorted pool — callers that only want the winner take
+ * `[0]`. */
+function rankByBoosted(
   pool: ScoredStream[],
   normalize: (c: ScoredStream) => number,
   tiebreak: (a: ScoredStream, b: ScoredStream) => number,
-): ScoredStream {
+): ScoredStream[] {
   return pool.toSorted((a, b) => {
     const boostedA = normalize(a) + (a.isPreferred ? PROVIDER_BOOST : 0);
     const boostedB = normalize(b) + (b.isPreferred ? PROVIDER_BOOST : 0);
     const diff = boostedB - boostedA;
     return diff !== 0 ? diff : tiebreak(a, b);
-  })[0];
+  });
+}
+
+/** A candidate's stable identity for dedup purposes — mirrors how the rest of
+ * the app distinguishes streams (see StreamsList/App.svelte candidate lists). */
+function streamKey(c: ScoredStream): string {
+  return c.stream.url || c.stream.infoHash || c.stream.title;
+}
+
+/**
+ * Ranks `primary` (the mode's preferred candidate pool) first, then appends
+ * whatever `all` contains that isn't already in `primary` — the streams a
+ * mode's filters excluded (zero-seeder torrents, out-of-budget, sub-480p) —
+ * ranked by the same metric, as last-resort fallbacks. Deduped by
+ * url/infoHash so a candidate never appears twice.
+ */
+function finalizeRanking(
+  primary: ScoredStream[],
+  all: ScoredStream[],
+  normalize: (c: ScoredStream) => number,
+  tiebreak: (a: ScoredStream, b: ScoredStream) => number,
+): Stream[] {
+  const primaryKeys = new Set(primary.map(streamKey));
+  const fallback = all.filter((c) => !primaryKeys.has(streamKey(c)));
+  const ranked = [
+    ...rankByBoosted(primary, normalize, tiebreak),
+    ...rankByBoosted(fallback, normalize, tiebreak),
+  ];
+
+  const seen = new Set<string>();
+  const out: Stream[] = [];
+  for (const c of ranked) {
+    const key = streamKey(c);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c.stream);
+  }
+  return out;
 }
 
 export interface PickBestOptions {
@@ -172,22 +211,27 @@ export interface PickBestOptions {
 }
 
 /**
- * Picks the single best stream from a list according to the given strategy.
- * Returns null only if the input list is empty.
+ * Ranks every stream in `streams` best-first according to the given
+ * strategy, returning the full ordered pool (never null/empty unless the
+ * input is). Candidates a mode's filters would normally exclude entirely
+ * (zero-seeder torrents, out-of-budget, sub-480p) aren't dropped — they're
+ * appended at the tail in their own sorted order as last-resort fallbacks,
+ * so a caller doing candidate-list fallback (B2's watchdog/auto-advance)
+ * always has somewhere further to go. Deduped by url || infoHash.
  */
-export function pickBestStream(
+export function rankStreams(
   streams: Stream[],
   mode: StreamSelectionMode,
   opts: PickBestOptions = {},
-): Stream | null {
-  if (streams.length === 0) return null;
+): Stream[] {
+  if (streams.length === 0) return [];
 
   const all = scoreCandidates(streams, opts.preferredProvider);
   // A zero-seeder torrent will likely never actually start downloading, so
-  // exclude them from consideration — unless it's literally the only option.
-  // Direct HTTP streams (Nuvio, etc.) have no seeder concept at all — they're
-  // never excluded by this check, torrent or not isn't a reliability signal
-  // for them one way or the other.
+  // it's excluded from the primary pool — unless it's literally the only
+  // option. Direct HTTP streams (Nuvio, etc.) have no seeder concept at
+  // all — they're never excluded by this check, torrent or not isn't a
+  // reliability signal for them one way or the other.
   const withSeeders = all.filter((c) => !c.isTorrent || c.seeders > 0);
   const pool = withSeeders.length > 0 ? withSeeders : all;
 
@@ -209,11 +253,12 @@ export function pickBestStream(
   switch (mode) {
     case "seeders": {
       const maxSeeders = Math.max(1, ...pool.map((c) => c.seeders));
-      return sortByBoostedDesc(
+      return finalizeRanking(
         pool,
+        all,
         (c) => reliability(c, maxSeeders),
         (a, b) => b.seeders - a.seeders,
-      ).stream;
+      );
     }
 
     case "smallest": {
@@ -225,20 +270,22 @@ export function pickBestStream(
       const fromPool = decent.length > 0 ? decent : pool;
       const knownSizes = fromPool.map((c) => c.sizeBytes).filter((b) => b > 0);
       const maxSize = Math.max(1, ...knownSizes);
-      return sortByBoostedDesc(
+      return finalizeRanking(
         fromPool,
+        all,
         (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5),
         (a, b) => a.sizeBytes - b.sizeBytes,
-      ).stream;
+      );
     }
 
     case "quality": {
       const maxRank = Math.max(1, ...pool.map((c) => qualityRank(c.quality)));
-      return sortByBoostedDesc(
+      return finalizeRanking(
         pool,
+        all,
         (c) => qualityRank(c.quality) / maxRank,
         qualityTiebreak,
-      ).stream;
+      );
     }
 
     case "bandwidth": {
@@ -246,7 +293,7 @@ export function pickBestStream(
       if (!mbps || mbps <= 0) {
         // No measurement on file — guessing a quality/bandwidth match without
         // data isn't meaningfully better than just balancing seeders & size.
-        return pickBestStream(streams, "balanced", opts);
+        return rankStreams(streams, "balanced", opts);
       }
       const minutes = opts.estimatedMinutes ?? 90;
       const seconds = minutes * 60;
@@ -261,11 +308,12 @@ export function pickBestStream(
         1,
         ...fromPool.map((c) => qualityRank(c.quality)),
       );
-      return sortByBoostedDesc(
+      return finalizeRanking(
         fromPool,
+        all,
         (c) => qualityRank(c.quality) / maxRank,
         qualityTiebreak,
-      ).stream;
+      );
     }
 
     case "balanced":
@@ -273,8 +321,9 @@ export function pickBestStream(
       const maxSeeders = Math.max(1, ...pool.map((c) => c.seeders));
       const knownSizes = pool.map((c) => c.sizeBytes).filter((b) => b > 0);
       const maxSize = Math.max(1, ...knownSizes);
-      return sortByBoostedDesc(
+      return finalizeRanking(
         pool,
+        all,
         (c) => {
           const seederScore = reliability(c, maxSeeders);
           // Streams with no parsed size aren't penalized or rewarded — treat
@@ -283,7 +332,19 @@ export function pickBestStream(
           return seederScore * 0.6 + sizeScore * 0.4;
         },
         () => 0,
-      ).stream;
+      );
     }
   }
+}
+
+/**
+ * Picks the single best stream from a list according to the given strategy.
+ * Returns null only if the input list is empty.
+ */
+export function pickBestStream(
+  streams: Stream[],
+  mode: StreamSelectionMode,
+  opts: PickBestOptions = {},
+): Stream | null {
+  return rankStreams(streams, mode, opts)[0] ?? null;
 }

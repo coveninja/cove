@@ -42,6 +42,7 @@
       season?: number,
       episode?: number,
       episodeName?: string,
+      candidates?: Stream[],
     ) => void;
     onclose: () => void;
     onsimilar?: (m: Media) => void;
@@ -231,8 +232,9 @@
     season?: number,
     episode?: number,
     episodeName?: string,
+    candidates?: Stream[],
   ): void {
-    onplaystream?.(stream, season, episode, episodeName);
+    onplaystream?.(stream, season, episode, episodeName, candidates);
     onclose();
   }
 
@@ -534,7 +536,8 @@
                 season?: number,
                 episode?: number,
                 episodeName?: string,
-              ) => playStream(s, season, episode, episodeName)}
+                candidates?: Stream[],
+              ) => playStream(s, season, episode, episodeName, candidates)}
               bind:maxQuality={streamMaxQuality}
               {streamActive}
               {activeSeason}

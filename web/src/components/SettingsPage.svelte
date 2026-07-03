@@ -427,6 +427,23 @@
           <Separator />
 
           <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="prefetch-streams" class="text-sm font-medium"
+                >Prefetch streams</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Pre-fetch streams for shows you're likely to watch next.
+              </p>
+            </div>
+            <Switch
+              id="prefetch-streams"
+              checked={draft.prefetchStreams}
+              onCheckedChange={(v) => patch("prefetchStreams", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
             <div class="pr-4">
               <Label class="text-sm font-medium">Selection strategy</Label>
               <p class="text-xs text-muted-foreground">

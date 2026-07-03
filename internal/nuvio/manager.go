@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -34,13 +35,73 @@ type Manager struct {
 	repos     []Repo
 	client    *http.Client
 	storePath string
+
+	// Results cache (E1). Running goja + third-party scrapers is expensive
+	// (up to overallDeadline per call), so repeat opens of the same title —
+	// live requests or the background prefetch worker — are served from here
+	// instead of re-running the whole batch. Keyed mediaType|tmdbID|S|E, same
+	// shape as addons.Manager's per-addon stream cache.
+	streamCacheMu sync.Mutex
+	streamCache   map[string]nuvioStreamCacheEntry
+}
+
+// nuvioStreamCacheEntry is one cached GetStreams result, pre-expiry.
+type nuvioStreamCacheEntry struct {
+	streams []addons.Stream
+	expires time.Time
+}
+
+// streamCacheTTL is flat (no separate empty-result TTL, unlike addons.Manager's
+// A3 cache) — a title genuinely having zero Nuvio results is just as valid a
+// fact to cache as a populated list, and scraper runs are far more expensive
+// than an addon HTTP call, so there's less value in re-probing sooner.
+const streamCacheTTL = 15 * time.Minute
+
+// nuvioCacheKey builds a cache key from what actually identifies the
+// content — title/year/imdbID are enrichment passed to scrapers, not part of
+// identity. "-" stands in for a nil season/episode (movies).
+func nuvioCacheKey(mediaType string, tmdbID int, season, episode *int) string {
+	s, e := "-", "-"
+	if season != nil {
+		s = strconv.Itoa(*season)
+	}
+	if episode != nil {
+		e = strconv.Itoa(*episode)
+	}
+	return fmt.Sprintf("%s|%d|%s|%s", mediaType, tmdbID, s, e)
+}
+
+func (m *Manager) streamCacheGet(key string) ([]addons.Stream, bool) {
+	m.streamCacheMu.Lock()
+	defer m.streamCacheMu.Unlock()
+	entry, ok := m.streamCache[key]
+	if !ok || time.Now().After(entry.expires) {
+		return nil, false
+	}
+	return append([]addons.Stream(nil), entry.streams...), true
+}
+
+// streamCacheSet stores a result and sweeps expired entries while it's
+// already holding the lock — same pattern as addons.Manager.streamCacheSet
+// and Player.rememberStream, avoiding a separate background goroutine.
+func (m *Manager) streamCacheSet(key string, streams []addons.Stream) {
+	m.streamCacheMu.Lock()
+	defer m.streamCacheMu.Unlock()
+	now := time.Now()
+	for k, v := range m.streamCache {
+		if now.After(v.expires) {
+			delete(m.streamCache, k)
+		}
+	}
+	m.streamCache[key] = nuvioStreamCacheEntry{streams: streams, expires: now.Add(streamCacheTTL)}
 }
 
 // New returns a Manager loaded from the profile-scoped store (or empty on
 // first run — no repos means the feature is entirely inert).
 func New(profileID string) *Manager {
 	m := &Manager{
-		client: &http.Client{Timeout: 30 * time.Second},
+		client:      &http.Client{Timeout: 30 * time.Second},
+		streamCache: make(map[string]nuvioStreamCacheEntry),
 	}
 
 	path, err := utils.ConfigPath(fmt.Sprintf("nuvio-%s.json", profileID))
@@ -132,7 +193,12 @@ type enabledScraper struct {
 // fanned out across every title in a discovery grid, which must not incur
 // goja startup + third-party network calls per grid tile. Only call this from
 // a single-title context (the user explicitly requested streams to play).
-func (m *Manager) GetStreams(mediaType string, tmdbID int, imdbID, title string, year int, season, episode *int) []addons.Stream {
+func (m *Manager) GetStreams(ctx context.Context, mediaType string, tmdbID int, imdbID, title string, year int, season, episode *int) []addons.Stream {
+	key := nuvioCacheKey(mediaType, tmdbID, season, episode)
+	if streams, ok := m.streamCacheGet(key); ok {
+		return streams
+	}
+
 	m.mu.RLock()
 	var scrapers []enabledScraper
 	for _, r := range m.repos {
@@ -152,7 +218,7 @@ func (m *Manager) GetStreams(mediaType string, tmdbID int, imdbID, title string,
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), overallDeadline)
+	ctx, cancel := context.WithTimeout(ctx, overallDeadline)
 	defer cancel()
 
 	sem := make(chan struct{}, maxConcurrentScrapers)
@@ -197,14 +263,25 @@ func (m *Manager) GetStreams(mediaType string, tmdbID int, imdbID, title string,
 		wg.Wait()
 		close(done)
 	}()
+	// Only cache a result that actually completed — one cut short by the
+	// overall deadline is missing whatever scrapers hadn't finished yet, and
+	// caching that partial list for the full TTL would strand later callers
+	// with fewer streams than a fresh run could have found.
+	completed := false
 	select {
 	case <-done:
+		completed = true
 	case <-ctx.Done():
 	}
 
 	mu.Lock()
-	defer mu.Unlock()
-	return allStreams
+	result := allStreams
+	mu.Unlock()
+
+	if completed {
+		m.streamCacheSet(key, result)
+	}
+	return result
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -37,12 +37,17 @@
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
+    onPlaybackFailed = undefined,
   }: {
     src: string;
     media?: Media;
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
+    /** Fired once (per src) when playback never starts — a startup timeout
+     * or a stalled torrent that never got peers. The caller (App.svelte)
+     * decides what to do: try the next candidate stream, or give up. */
+    onPlaybackFailed?: () => void;
   } = $props();
 
   // ─── Playback lifecycle ─────────────────────────────────────────────────────
@@ -74,7 +79,7 @@
         Player.setVolume(Math.round($settings.defaultVolume * 100));
       }
     });
-    Player.play(api.playUrl(src));
+    Player.play(api.playUrl(src, { season, episode }));
   });
 
   $effect(() => {
@@ -104,6 +109,65 @@
   let switching = $state(false);
 
   const canPlay = $derived(!switching && Player.ready && Player.duration > 0)
+
+  // ─── Playback-start watchdog (B2) ───────────────────────────────────────────
+  // If a stream never actually starts — a dead torrent with no peers, a dead
+  // direct link — mpv just sits there with no error to catch, and without
+  // this the loading screen spins forever. Two independent triggers call
+  // triggerPlaybackFailed(): a startup timer (armed fresh for every src) and
+  // torrent.stalled (torrentProgress's own give-up-after-repeated-SSE-errors
+  // signal, previously computed but never read by anything). failedFired
+  // guards against both firing, and everCanPlay guards against firing after
+  // playback already succeeded once for this src (e.g. a later stall once
+  // the swarm empties out mid-watch shouldn't retrigger a "failed to start").
+
+  let failedFired = false;
+  let everCanPlay = false;
+  let takingAWhile = $state(false);
+
+  function triggerPlaybackFailed(): void {
+    if (failedFired || everCanPlay) return;
+    failedFired = true;
+    onPlaybackFailed?.();
+  }
+
+  $effect(() => {
+    if (!src || !Player.available) return;
+    failedFired = false;
+    everCanPlay = false;
+    takingAWhile = false;
+
+    // Hash (torrent) sources get longer: the backend's own metadata-fetch
+    // timeout is 45s (player.go:228 getLargestTorrentFile) — let that fail
+    // first so the error surfaces from the right layer instead of racing it.
+    const isHashSrc = !src.startsWith("http");
+    const failTimeoutMs = isHashSrc ? 50_000 : 25_000;
+    const failTimer = setTimeout(triggerPlaybackFailed, failTimeoutMs);
+    const slowTimer = setTimeout(() => {
+      takingAWhile = true;
+    }, 15_000);
+
+    return () => {
+      clearTimeout(failTimer);
+      clearTimeout(slowTimer);
+    };
+  });
+
+  $effect(() => {
+    if (canPlay) {
+      everCanPlay = true;
+      takingAWhile = false;
+    }
+  });
+
+  // The stalled signal (torrentProgress gave up reconnecting the progress
+  // SSE) means the torrent is effectively dead — treat it the same as a
+  // startup timeout rather than leaving the loading screen spinning.
+  $effect(() => {
+    if (torrent.stalled && !canPlay) {
+      triggerPlaybackFailed();
+    }
+  });
 
   // ─── Watch progress (mpv-driven) ─────────────────────────────────────────────
 
@@ -1058,6 +1122,19 @@
       {/if}
       <Spinner class="relative z-10 mt-6 size-10" />
       <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>
+      {#if takingAWhile}
+        <p class="relative z-10 mt-2 text-xs text-white/40" transition:fade={{ duration: 150 }}>
+          This is taking a while…
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          class="relative z-10 mt-4 text-white"
+          onclick={() => triggerPlaybackFailed()}
+        >
+          Cancel
+        </Button>
+      {/if}
     </div>
   {/if}
 </div>

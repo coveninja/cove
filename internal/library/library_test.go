@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -168,4 +169,87 @@ func TestHandlers_GetStats(t *testing.T) {
 	var st Stats
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&st))
 	assert.Equal(t, 0, st.Total)
+}
+
+// ── D2: TasteGeneration() bumps only on taste-relevant mutations ────────────
+
+func TestTasteGeneration_BumpsOnEntryUpsert(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	g0 := l.TasteGeneration()
+	body := `{"tmdb_id":123,"media_type":"movie","title":"Test Movie","status":"watch_later"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Greater(t, l.TasteGeneration(), g0)
+}
+
+func TestTasteGeneration_DoesNotBumpOnProgressPositionTick(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	// First write creates the entry — taste-relevant (auto-created "watching").
+	// Isolate the *second* write (a plain position tick, not completing
+	// anything) to verify it alone doesn't bump tasteGen.
+	post := func(pos float64, completed bool) {
+		body := bytes.NewBufferString(`{"tmdb_id":55,"media_type":"movie","position_seconds":` +
+			jsonFloat(pos) + `,"duration_seconds":6000,"completed":` + jsonBool(completed) + `}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+
+	post(10, false)
+	g0 := l.TasteGeneration()
+	post(20, false) // plain position tick — not near/at completion
+	assert.Equal(t, g0, l.TasteGeneration(), "a progress tick that doesn't complete must not bump tasteGen")
+}
+
+func TestTasteGeneration_BumpsOnCompletedTransition(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	post := func(pos float64, completed bool) {
+		body := bytes.NewBufferString(`{"tmdb_id":66,"media_type":"movie","position_seconds":` +
+			jsonFloat(pos) + `,"duration_seconds":6000,"completed":` + jsonBool(completed) + `}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+
+	post(10, false)
+	g0 := l.TasteGeneration()
+	post(6000, true) // transitions to Completed
+	assert.Greater(t, l.TasteGeneration(), g0, "a Completed transition must bump tasteGen")
+}
+
+func TestGeneration_NotDoubleBumpedByMergeFrom(t *testing.T) {
+	l := newLib(t)
+	g0 := l.Generation()
+	l.MergeFrom([]*LibraryEntry{{
+		ID: "id1", TmdbID: 1, MediaType: "movie", Title: "Test",
+		Status: StatusWatchLater, AddedAt: time.Now(), UpdatedAt: time.Now(),
+	}}, nil, nil)
+	// persist() bumps gen exactly once; MergeFrom must not add a second bump
+	// on top of it.
+	assert.Equal(t, g0+1, l.Generation())
+}
+
+func jsonFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+func jsonBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }

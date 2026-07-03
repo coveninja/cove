@@ -21,10 +21,7 @@
   import { onMount, setContext } from "svelte";
   import { scale, fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import {
-    pickBestStream,
-    type StreamSelectionMode,
-  } from "$lib/streamSelection";
+  import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { api, type UpdateCheckResult, setTokenSource } from "$lib/api";
   import InsightsPage from "./components/InsightsPage.svelte";
   import ExplorePage from "./components/ExplorePage.svelte";
@@ -72,13 +69,22 @@
     episode?: number;
     episodeName?: string;
     subtitles: { id: string; url: string; lang: string }[];
+    // B2: runner-up streams (ranked, best-first) to fall back to if `stream`
+    // never actually starts — see handlePlaybackFailed. Session-local only;
+    // no Go/tygo type carries this. Manual stream-list picks carry no
+    // candidates (undefined) — an explicit user pick is never silently
+    // swapped for another stream, it just gets the watchdog UI.
+    candidates?: Stream[];
+    // How many candidates have already failed for this playback attempt —
+    // caps the auto-advance chain (see handlePlaybackFailed).
+    attempt?: number;
   };
 
   let playerSession = $state<PlayerSession | null>(null);
   let playerMode = $state<"full" | null>(null);
 
   // Covers the gap between a "Watch" click and playerSession being set — the
-  // fetchStreamsWithRetry/pickBestStream/tvEpisodes work in quickPlay, none of
+  // fetchStreamsWithRetry/rankStreams/tvEpisodes work in quickPlay, none of
   // which shows anything today.
   let quickPlayPending = $state<{ media: Media; message: string } | null>(
     null,
@@ -342,6 +348,8 @@
     season?: number,
     episode?: number,
     episodeName?: string,
+    candidates?: Stream[],
+    attempt = 0,
   ): void {
     quickPlayPending = null;
     playStartSound();
@@ -353,6 +361,8 @@
       episode,
       episodeName,
       subtitles: [],
+      candidates,
+      attempt,
     };
     playerMode = "full";
 
@@ -379,21 +389,35 @@
   // Streams often come back empty on the first hit while indexers are still
   // searching — StreamsList handles that by polling every second; quickPlay
   // does the same here rather than giving up after one empty response.
+  // `signal` short-circuits both the retry loop and the fetch itself once a
+  // newer quickPlay call has superseded this one (see quickPlayAbort below).
   async function fetchStreamsWithRetry(
-    fetcher: () => Promise<Stream[]>,
+    fetcher: (signal: AbortSignal) => Promise<Stream[]>,
+    signal: AbortSignal,
   ): Promise<Stream[]> {
-    for (let attempt = 0; attempt < 15; attempt++) {
+    // 8 attempts at 2s (B4), not 15 at 1s — A3's per-addon negative cache
+    // makes each retry hit-or-miss the same 20s-TTL cache entry either way,
+    // so the tighter interval mostly just burned more requests.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (signal.aborted) return [];
       try {
-        const res = await fetcher();
+        const res = await fetcher(signal);
         if (Array.isArray(res) && res.length > 0) return res;
       } catch (e) {
+        if ((e as { name?: string } | null)?.name === "AbortError") return [];
         console.error("quickPlay: failed to fetch streams", e);
         return [];
       }
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 2000));
     }
     return [];
   }
+
+  // Aborts the previous quickPlay's in-flight stream fetch the moment a new
+  // one starts — quickPlayToken alone only prevents a stale response from
+  // being *acted on*, it doesn't stop the superseded request from running to
+  // completion on the wire.
+  let quickPlayAbort: AbortController | null = null;
 
   // Used by "Watch"/"Continue" buttons on media cards: skip the media page
   // entirely and go straight to picking a stream and playing it, the same
@@ -407,19 +431,25 @@
     episode?: number,
   ): Promise<void> {
     const myToken = ++quickPlayToken;
+    quickPlayAbort?.abort();
+    const ctrl = new AbortController();
+    quickPlayAbort = ctrl;
     quickPlayPending = { media, message: "Finding streams…" };
 
     const isTV = media.media_type === "tv";
     const targetSeason = isTV ? (season ?? 1) : undefined;
     const targetEpisode = isTV ? (episode ?? 1) : undefined;
 
-    const streams = await fetchStreamsWithRetry(() =>
-      api.getStreams(
-        media.id,
-        isTV
-          ? { type: "tv", season: targetSeason, episode: targetEpisode }
-          : {},
-      ),
+    const streams = await fetchStreamsWithRetry(
+      (signal) =>
+        api.getStreams(
+          media.id,
+          isTV
+            ? { type: "tv", season: targetSeason, episode: targetEpisode }
+            : {},
+          signal,
+        ),
+      ctrl.signal,
     );
     if (myToken !== quickPlayToken) return;
     if (streams.length === 0) {
@@ -432,10 +462,11 @@
 
     const mode =
       ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
-    const best = pickBestStream(streams, mode, {
+    const ranked = rankStreams(streams, mode, {
       measuredBandwidthMbps: $settings?.measuredBandwidthMbps,
       preferredProvider: $settings?.defaultProvider,
     });
+    const best = ranked[0] ?? null;
     if (!best) {
       quickPlayPending = { media, message: "No stream found" };
       setTimeout(() => {
@@ -457,7 +488,67 @@
     }
     if (myToken !== quickPlayToken) return;
 
-    startPlayback(media, best, targetSeason, targetEpisode, episodeName);
+    // Runner-up candidates (B2) so the playback watchdog can auto-advance if
+    // `best` turns out to be dead, without a full re-fetch.
+    startPlayback(
+      media,
+      best,
+      targetSeason,
+      targetEpisode,
+      episodeName,
+      ranked.slice(0, 5),
+      0,
+    );
+  }
+
+  // ─── Playback-start watchdog: auto-advance / give up (B2) ──────────────────
+  // Tiny inline toast — there's no toast/notification library in this app, so
+  // this mirrors Player.svelte's own "feedback flash" pattern rather than
+  // pulling one in for two short-lived messages.
+  let playbackToast = $state<string | null>(null);
+  let playbackToastTimer: ReturnType<typeof setTimeout> | undefined;
+  function showPlaybackToast(text: string, ms = 3000): void {
+    playbackToast = text;
+    clearTimeout(playbackToastTimer);
+    playbackToastTimer = setTimeout(() => (playbackToast = null), ms);
+  }
+
+  // Fired by <Player> (via onPlaybackFailed) when the current stream never
+  // actually started — a startup timeout or a stalled/dead torrent. Drops
+  // the dead stream from the candidate list and tries the next one, up to 3
+  // fallback attempts; once exhausted (or there were no candidates to begin
+  // with — a manual stream-list pick), closes the player and reopens the
+  // media detail so the user sees the manual stream list instead of a
+  // frozen loading screen.
+  function handlePlaybackFailed(): void {
+    const session = playerSession;
+    if (!session) return;
+
+    const deadKey = session.stream.url || session.stream.infoHash;
+    const remaining = (session.candidates ?? []).filter(
+      (c) => (c.url || c.infoHash) !== deadKey,
+    );
+    const attempt = session.attempt ?? 0;
+    const next = remaining[0];
+
+    if (next && attempt < 3) {
+      showPlaybackToast("Stream didn't start — trying another…");
+      startPlayback(
+        session.media,
+        next,
+        session.season,
+        session.episode,
+        session.episodeName,
+        remaining.slice(1),
+        attempt + 1,
+      );
+      return;
+    }
+
+    const media = session.media;
+    closePlayer();
+    showPlaybackToast("Couldn't start playback automatically", 4000);
+    selectMedia(media);
   }
 
   // mpv's surface always fills the whole window behind the web UI. Make the app
@@ -503,9 +594,18 @@
           const m = selectedMedia;
           if (m) quickPlay(m, season, episode);
         }}
-        onplaystream={(stream, season, episode, episodeName) => {
+        onplaystream={(stream, season, episode, episodeName, candidates) => {
           const m = selectedMedia;
-          if (m) startPlayback(m, stream, season, episode, episodeName);
+          if (m)
+            startPlayback(
+              m,
+              stream,
+              season,
+              episode,
+              episodeName,
+              candidates,
+              0,
+            );
         }}
         onsimilar={(m) => selectMedia(m)}
         onclose={() => (selectedMedia = null)}
@@ -661,6 +761,7 @@
             externalSubtitles={playerSession.subtitles}
             season={playerSession.season}
             episode={playerSession.episode}
+            onPlaybackFailed={handlePlaybackFailed}
           />
         </div>
       {/if}
@@ -670,6 +771,19 @@
 
 {#if updateInfo}
   <UpdateModal info={updateInfo} ondismiss={() => (updateInfo = null)} />
+{/if}
+
+{#if playbackToast}
+  <div
+    class="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center"
+    transition:fade={{ duration: 150 }}
+  >
+    <div
+      class="rounded-full bg-black/80 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm"
+    >
+      {playbackToast}
+    </div>
+  </div>
 {/if}
 
 {#if showOnboarding}

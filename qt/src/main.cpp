@@ -470,87 +470,162 @@ int main(int argc, char *argv[]) {
     }
     qInfo().noquote() << "[shell] serving renderer at" << baseUrl.toString();
 
-    QProcess *backend = startBackend(backendPath, &app);
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, [backend]() {
-      if (backend->state() == QProcess::NotRunning)
+    // shuttingDown gates the crash-restart logic below: QProcess::terminate()
+    // (called from aboutToQuit) fires the same `finished` signal a real crash
+    // would, so without this flag a normal app quit would look exactly like
+    // a crash and trigger a pointless restart-and-immediately-quit cycle.
+    auto shuttingDown = std::make_shared<bool>(false);
+
+    // currentBackend always points at whichever QProcess is presently live —
+    // a restart replaces it with a new QProcess, so aboutToQuit (registered
+    // once, below) must dereference this rather than closing over a single
+    // QProcess* that a later restart would make stale.
+    auto currentBackend = std::make_shared<QProcess *>(nullptr);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [shuttingDown, currentBackend]() {
+      *shuttingDown = true;
+      QProcess *backend = *currentBackend;
+      if (!backend || backend->state() == QProcess::NotRunning)
         return;
       backend->terminate();
       if (!backend->waitForFinished(2000))
         backend->kill();
     });
 
-    // Guards against reportStartupFailure firing twice (e.g. errorOccurred
-    // and finished both fire for a crashed process) and against a late
-    // failure signal arriving after the backend was already confirmed ready.
-    auto settled = std::make_shared<bool>(false);
+    // Restart-with-backoff bookkeeping for a crash *after* the backend was
+    // already up and serving (a startup failure still goes through
+    // reportStartupFailure via `settled`, unchanged). windowTimer resets the
+    // count whenever more than 60s has elapsed since the first restart in
+    // the current burst, so a backend that crashes rarely (e.g. once a day)
+    // always gets a fresh 3 attempts rather than accumulating toward the cap
+    // forever.
+    auto restartCount = std::make_shared<int>(0);
+    auto restartWindow = std::make_shared<QElapsedTimer>();
+    constexpr int maxRestartsPerWindow = 3;
+    constexpr int restartWindowMs = 60000;
 
-    QObject::connect(
-        backend, &QProcess::errorOccurred, &app,
-        [backend, backendPath, settled](QProcess::ProcessError) {
-          if (*settled)
-            return;
-          *settled = true;
-          reportStartupFailure(
-              QStringLiteral("Backend process failed to start: %1 (path: %2)")
-                  .arg(backend->errorString(), backendPath));
-        });
+    // launchBackend starts the backend, wires up its error/exit signals, and
+    // waits for it to answer on apiPort. `first` controls whether a
+    // successful connect navigates the WebEngineView (only needed once — on
+    // a post-crash restart the view is already showing the app and simply
+    // resumes working the moment /api answers again, no reload needed).
+    // Declared as a shared_ptr<std::function<...>> (rather than a plain
+    // lambda) so the `finished` handler can invoke it again on a later
+    // crash — a lambda can't capture itself directly.
+    auto launchBackend = std::make_shared<std::function<void(bool)>>();
+    *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, apiPort,
+                       shuttingDown, currentBackend, restartCount, restartWindow,
+                       launchBackend](bool first) {
+      QProcess *backend = startBackend(backendPath, &app);
+      *currentBackend = backend;
 
-    // Exit code 42 signals that the backend applied an update and wants the
-    // shell to restart so the new binaries are loaded. Re-exec this process
-    // with the same arguments, then quit the current instance.
-    // On Windows the backend cannot rename its own .exe while running, so it
-    // writes cove.exe.new and exits; we perform the rename here, when the
-    // process is guaranteed to be gone.
-    QObject::connect(
-        backend,
-        QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        [&app, backendPath, settled](int exitCode, QProcess::ExitStatus) {
-          if (exitCode == 42) {
-#ifdef Q_OS_WIN
-            const QString newExe = backendPath + ".new";
-            if (QFile::exists(newExe)) {
-              QFile::remove(backendPath + ".old");
-              QFile::rename(backendPath, backendPath + ".old");
-              QFile::rename(newExe, backendPath);
-            }
-#endif
-            const QStringList args = QCoreApplication::arguments().mid(1);
-            QProcess::startDetached(QCoreApplication::applicationFilePath(),
-                                    args);
-            app.quit();
-            return;
-          }
-          if (!*settled) {
+      // Guards against reportStartupFailure firing twice (e.g. errorOccurred
+      // and finished both fire for a crashed process) and against a late
+      // failure signal arriving after the backend was already confirmed ready.
+      auto settled = std::make_shared<bool>(false);
+
+      QObject::connect(
+          backend, &QProcess::errorOccurred, &app,
+          [backend, backendPath, settled](QProcess::ProcessError) {
+            if (*settled)
+              return;
             *settled = true;
             reportStartupFailure(
-                QStringLiteral(
-                    "Backend exited before it was ready (exit code %1).")
-                    .arg(exitCode));
-          }
-        });
+                QStringLiteral("Backend process failed to start: %1 (path: %2)")
+                    .arg(backend->errorString(), backendPath));
+          });
 
-    waitForBackend(
-        apiPort, 20000,
-        [loadScene, baseUrl, isDev, settled]() {
-          if (*settled)
-            return;
-          *settled = true;
-          qInfo().noquote() << "[shell] backend up — loading UI";
-          if (isDev) {
-            loadScene(QStringLiteral("http://localhost:5173"), QString());
-          } else {
-            loadScene(baseUrl.toString(), QString());
-          }
-        },
-        [apiPort, settled]() {
-          if (*settled)
-            return;
-          *settled = true;
-          reportStartupFailure(
-              QStringLiteral(
-                  "Backend did not respond on 127.0.0.1:%1 within 20s.")
-                  .arg(apiPort));
-        });
+      // Exit code 42 signals that the backend applied an update and wants the
+      // shell to restart so the new binaries are loaded. Re-exec this process
+      // with the same arguments, then quit the current instance.
+      // On Windows the backend cannot rename its own .exe while running, so it
+      // writes cove.exe.new and exits; we perform the rename here, when the
+      // process is guaranteed to be gone.
+      QObject::connect(
+          backend,
+          QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+          [&app, backendPath, settled, shuttingDown, restartCount, restartWindow,
+           launchBackend](int exitCode, QProcess::ExitStatus) {
+            if (exitCode == 42) {
+#ifdef Q_OS_WIN
+              const QString newExe = backendPath + ".new";
+              if (QFile::exists(newExe)) {
+                QFile::remove(backendPath + ".old");
+                QFile::rename(backendPath, backendPath + ".old");
+                QFile::rename(newExe, backendPath);
+              }
+#endif
+              const QStringList args = QCoreApplication::arguments().mid(1);
+              QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                      args);
+              app.quit();
+              return;
+            }
+            if (!*settled) {
+              *settled = true;
+              reportStartupFailure(
+                  QStringLiteral(
+                      "Backend exited before it was ready (exit code %1).")
+                      .arg(exitCode));
+              return;
+            }
+            // The backend was up and serving, then died — a post-startup
+            // crash rather than a failed launch. A deliberate shutdown
+            // (terminate() from aboutToQuit) fires this same signal, so
+            // check shuttingDown before treating it as one.
+            if (*shuttingDown)
+              return;
+
+            if (!restartWindow->isValid() || restartWindow->hasExpired(restartWindowMs)) {
+              restartWindow->start();
+              *restartCount = 0;
+            }
+            ++*restartCount;
+            if (*restartCount > maxRestartsPerWindow) {
+              reportStartupFailure(QStringLiteral(
+                  "Backend crashed repeatedly (exit code %1).").arg(exitCode));
+              return;
+            }
+            qWarning().noquote()
+                << "[shell] backend crashed (exit code" << exitCode << ") — restarting ("
+                << *restartCount << "/" << maxRestartsPerWindow << " in this window)";
+            (*launchBackend)(/*first=*/false);
+          });
+
+      waitForBackend(
+          apiPort, 20000,
+          [loadScene, baseUrl, isDev, settled, first]() {
+            if (*settled)
+              return;
+            *settled = true;
+            if (first) {
+              qInfo().noquote() << "[shell] backend up — loading UI";
+              if (isDev) {
+                loadScene(QStringLiteral("http://localhost:5173"), QString());
+              } else {
+                loadScene(baseUrl.toString(), QString());
+              }
+            } else {
+              qInfo().noquote() << "[shell] backend recovered after restart";
+            }
+          },
+          [apiPort, settled, first]() {
+            if (*settled)
+              return;
+            *settled = true;
+            if (first) {
+              reportStartupFailure(
+                  QStringLiteral(
+                      "Backend did not respond on 127.0.0.1:%1 within 20s.")
+                      .arg(apiPort));
+            } else {
+              reportStartupFailure(QStringLiteral(
+                  "Backend restarted but did not respond on 127.0.0.1:%1 within 20s.")
+                                        .arg(apiPort));
+            }
+          });
+    };
+
+    (*launchBackend)(/*first=*/true);
   }
 
   return app.exec();

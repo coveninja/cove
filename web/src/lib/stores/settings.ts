@@ -27,6 +27,7 @@ const DEFAULTS: Settings = {
   onboardingDone: false,
   discoveryAlgorithm: "smart",
   customAlgorithmUrl: "",
+  prefetchStreams: true,
   updatedAt: "",
 };
 

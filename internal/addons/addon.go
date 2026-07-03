@@ -2,11 +2,13 @@
 // couple of bespoke "official" integrations (JustWatch availability, IntroDB
 // timestamps) that aren't Stremio addons at all despite sharing the same
 // AddonEntry shape. Fan-out across multiple enabled addons of the same kind
-// is a sequential loop with per-addon failures swallowed — one broken addon
-// should never break the ones that work.
+// runs one goroutine per addon under an overall deadline, with per-addon
+// failures swallowed — one broken or slow addon should never break or stall
+// the ones that work.
 package addons
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,8 +101,8 @@ func (r *ManifestResource) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (m *Manager) addonRequest(url string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func (m *Manager) addonRequest(ctx context.Context, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -117,8 +119,8 @@ func normalizeAddonURL(raw string) string {
 	return strings.TrimRight(u, "/")
 }
 
-func (m *Manager) FetchManifest(addonURL string) (Manifest, error) {
-	res, err := m.addonRequest(addonURL + "/manifest.json")
+func (m *Manager) FetchManifest(ctx context.Context, addonURL string) (Manifest, error) {
+	res, err := m.addonRequest(ctx, addonURL+"/manifest.json")
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -142,10 +144,10 @@ func (m *Manager) FetchManifest(addonURL string) (Manifest, error) {
 	return manifest, nil
 }
 
-func (m *Manager) FetchStreams(addonURL string, mediaType string, imdbID string) ([]Stream, error) {
+func (m *Manager) FetchStreams(ctx context.Context, addonURL string, mediaType string, imdbID string) ([]Stream, error) {
 	url := fmt.Sprintf("%s/stream/%s/%s.json", addonURL, mediaType, imdbID)
 
-	res, err := m.addonRequest(url)
+	res, err := m.addonRequest(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +156,10 @@ func (m *Manager) FetchStreams(addonURL string, mediaType string, imdbID string)
 			log.Println(err)
 		}
 	}(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
+	}
 
 	var data struct {
 		Streams []Stream `json:"streams"`
@@ -164,9 +170,9 @@ func (m *Manager) FetchStreams(addonURL string, mediaType string, imdbID string)
 	return data.Streams, nil
 }
 
-func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, error) {
+func (m *Manager) FetchSubtitles(ctx context.Context, addonURL string, mediaType string, id string) ([]Subtitle, error) {
 	url := fmt.Sprintf("%s/subtitles/%s/%s.json", addonURL, mediaType, id)
-	res, err := m.addonRequest(url)
+	res, err := m.addonRequest(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +181,10 @@ func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) (
 			log.Println(err)
 		}
 	}(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
+	}
 
 	var data struct {
 		Subtitles []Subtitle `json:"subtitles"`
@@ -206,7 +216,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
 				return
 			}
-			entry, err := m.AddStremioAddon(body.URL)
+			entry, err := m.AddStremioAddon(r.Context(), body.URL)
 			if err != nil {
 				http.Error(w, "could not add addon: "+err.Error(), http.StatusBadRequest)
 				return

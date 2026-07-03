@@ -7,8 +7,9 @@ Package addons manages Stremio-compatible provider/subtitle addons and a
 couple of bespoke "official" integrations (JustWatch availability, IntroDB
 timestamps) that aren't Stremio addons at all despite sharing the same
 AddonEntry shape. Fan-out across multiple enabled addons of the same kind
-is a sequential loop with per-addon failures swallowed — one broken addon
-should never break the ones that work.
+runs one goroutine per addon under an overall deadline, with per-addon
+failures swallowed — one broken or slow addon should never break or stall
+the ones that work.
 */
 
 export type AddonKind = string;

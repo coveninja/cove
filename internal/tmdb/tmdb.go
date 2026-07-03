@@ -22,6 +22,7 @@ import (
 
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/utils"
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -31,6 +32,85 @@ import (
 type Client struct {
 	apiKey string
 	client *http.Client
+
+	// IMDB-id cache. Keyed "movie:<tmdbID>" / "tv:<tmdbID>" — a movie and a TV
+	// show can share a numeric TMDB id, so the type prefix disambiguates them.
+	// No TTL: IMDB ids are immutable once assigned, so a cache hit never goes
+	// stale. Only non-empty successful lookups are ever stored (see
+	// imdbIDCached) — errors and empty results are never cached, so a
+	// transient TMDB failure (rate limit, blip) doesn't get "stuck" negative.
+	imdbMu    sync.Mutex
+	imdbCache map[string]string
+	sf        singleflight.Group
+
+	// Quality-badge result cache for /api/quality/batch (C1). Keyed by the
+	// canonical typed id ("movie:603" / "tv:1396"). Non-empty TTL is long
+	// (15m) since a title's max available quality changes slowly; empty
+	// results get a shorter TTL (5m) so a title with no streams yet doesn't
+	// stay "no badge" for as long once an indexer catches up.
+	qualityCacheMu sync.Mutex
+	qualityCache   map[string]qualityCacheEntry
+
+	// GetDetails cache (D2). Keyed "movie:<id>"/"tv:<id>", TTL 24h — a
+	// title's genres/cast/keywords/etc. change rarely enough that a day-old
+	// answer is fine. This defuses the discover package's BuildProfile
+	// stampede: without it, a progress tick every ~10s used to bump the
+	// (now taste-scoped, see library.Library.tasteGen) generation counter,
+	// invalidating the profile cache and re-fetching Details for the whole
+	// library on the next recommendation request.
+	detailsCacheMu sync.Mutex
+	detailsCache   map[string]detailsCacheEntry
+	detailsSF      singleflight.Group
+}
+
+type detailsCacheEntry struct {
+	details *Details
+	expires time.Time
+}
+
+const (
+	detailsCacheTTL = 24 * time.Hour
+	// detailsCacheCap bounds the cache so a very large library (or a long
+	// process lifetime touching many titles via discovery) can't grow it
+	// unbounded — dropping the whole map on overflow, same tradeoff as
+	// Client.imdbCache.
+	detailsCacheCap = 2000
+)
+
+type qualityCacheEntry struct {
+	quality string
+	expires time.Time
+}
+
+const (
+	qualityCacheTTLHit   = 15 * time.Minute
+	qualityCacheTTLEmpty = 5 * time.Minute
+)
+
+func (c *Client) qualityCacheGet(key string) (string, bool) {
+	c.qualityCacheMu.Lock()
+	defer c.qualityCacheMu.Unlock()
+	e, ok := c.qualityCache[key]
+	if !ok || time.Now().After(e.expires) {
+		return "", false
+	}
+	return e.quality, true
+}
+
+// qualityCacheSet stores a result and sweeps expired entries while it's
+// already holding the lock — same pattern as Player.rememberStream
+// (internal/player/player.go) and addons.Manager's streamCacheSet, avoiding a
+// separate background goroutine.
+func (c *Client) qualityCacheSet(key, quality string, ttl time.Duration) {
+	c.qualityCacheMu.Lock()
+	defer c.qualityCacheMu.Unlock()
+	now := time.Now()
+	for k, v := range c.qualityCache {
+		if now.After(v.expires) {
+			delete(c.qualityCache, k)
+		}
+	}
+	c.qualityCache[key] = qualityCacheEntry{quality: quality, expires: now.Add(ttl)}
 }
 
 // New returns a TMDB client. The 15s timeout matters because http.DefaultClient
@@ -38,9 +118,54 @@ type Client struct {
 // open forever; TMDB is normally fast, so 15s only trips on a dead connection.
 func New(apiKey string) *Client {
 	return &Client{
-		apiKey: apiKey,
-		client: &http.Client{Timeout: 15 * time.Second},
+		apiKey:       apiKey,
+		client:       &http.Client{Timeout: 15 * time.Second},
+		imdbCache:    make(map[string]string),
+		qualityCache: make(map[string]qualityCacheEntry),
+		detailsCache: make(map[string]detailsCacheEntry),
 	}
+}
+
+// imdbCacheCap bounds the IMDB-id cache so a pathological caller (or a very
+// long-running process) can't grow it unbounded. Well beyond any real
+// library/session size — this is a safety valve, not a working-set limit.
+const imdbCacheCap = 10_000
+
+// imdbIDCached wraps an IMDB-id fetch with a permanent cache plus singleflight
+// coalescing: a cache hit returns immediately; a miss lets exactly one
+// in-flight fetch per key run, with concurrent callers for the same key
+// sharing its result instead of hitting TMDB N times. Only non-empty,
+// successful results are cached — an error or an empty id is never stored,
+// so a transient failure gets retried on the next call instead of being
+// "stuck" negative forever.
+func (c *Client) imdbIDCached(key string, fetch func() (string, error)) (string, error) {
+	c.imdbMu.Lock()
+	if id, ok := c.imdbCache[key]; ok {
+		c.imdbMu.Unlock()
+		return id, nil
+	}
+	c.imdbMu.Unlock()
+
+	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
+		id, err := fetch()
+		if err != nil || id == "" {
+			return "", err
+		}
+		c.imdbMu.Lock()
+		if len(c.imdbCache) > imdbCacheCap {
+			// Simplest possible cap: drop the whole map rather than tracking
+			// per-entry recency. IMDB ids are cheap to refetch and this path
+			// should be rare in practice.
+			c.imdbCache = make(map[string]string)
+		}
+		c.imdbCache[key] = id
+		c.imdbMu.Unlock()
+		return id, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
 }
 
 type Media struct {
@@ -243,7 +368,9 @@ type MediaVideos struct {
 	Results []MediaVideoObject `json:"results"`
 }
 
-const baseURL = "https://api.themoviedb.org/3"
+// baseURL is a var (not a const) so tests can point it at an httptest.Server.
+var baseURL = "https://api.themoviedb.org/3"
+
 const imageBase = "https://image.tmdb.org/t/p/w500"
 const imageBaseOriginal = "https://image.tmdb.org/t/p/original"
 const stillBase = "https://image.tmdb.org/t/p/w300"
@@ -647,48 +774,62 @@ func (c *Client) ProviderTitles(providerID, limit int) ([]Media, error) {
 	return all, nil
 }
 
-// GetIMDBId returns the IMDB ID for a movie by TMDB ID.
+// GetIMDBId returns the IMDB ID for a movie by TMDB ID. Cached permanently
+// (IMDB ids are immutable) and coalesced across concurrent callers — see
+// imdbIDCached.
 func (c *Client) GetIMDBId(tmdbID int) (string, error) {
-	url := fmt.Sprintf("%s/movie/%d?api_key=%s", baseURL, tmdbID, c.apiKey)
-	res, err := c.client.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
+	key := fmt.Sprintf("movie:%d", tmdbID)
+	return c.imdbIDCached(key, func() (string, error) {
+		url := fmt.Sprintf("%s/movie/%d?api_key=%s", baseURL, tmdbID, c.apiKey)
+		res, err := c.client.Get(url)
 		if err != nil {
-			fmt.Println(err)
+			return "", err
 		}
-	}(res.Body)
+		defer func(Body io.ReadCloser) {
+			if err := Body.Close(); err != nil {
+				log.Println(err)
+			}
+		}(res.Body)
 
-	var details MediaDetails
-	err = json.NewDecoder(res.Body).Decode(&details)
-	if err != nil {
-		fmt.Println(err)
-		return "", err
-	}
-	return details.ImdbID, nil
+		if res.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("tmdb: HTTP %d", res.StatusCode)
+		}
+
+		var details MediaDetails
+		if err := json.NewDecoder(res.Body).Decode(&details); err != nil {
+			log.Println(err)
+			return "", err
+		}
+		return details.ImdbID, nil
+	})
 }
 
-// GetTVIMDBId returns the IMDB ID for a TV show by TMDB ID.
+// GetTVIMDBId returns the IMDB ID for a TV show by TMDB ID. Cached
+// permanently and coalesced across concurrent callers — see imdbIDCached.
 func (c *Client) GetTVIMDBId(tmdbID int) (string, error) {
-	url := fmt.Sprintf("%s/tv/%d/external_ids?api_key=%s", baseURL, tmdbID, c.apiKey)
-	res, err := c.client.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
+	key := fmt.Sprintf("tv:%d", tmdbID)
+	return c.imdbIDCached(key, func() (string, error) {
+		url := fmt.Sprintf("%s/tv/%d/external_ids?api_key=%s", baseURL, tmdbID, c.apiKey)
+		res, err := c.client.Get(url)
 		if err != nil {
-			log.Println(err)
+			return "", err
 		}
-	}(res.Body)
+		defer func(Body io.ReadCloser) {
+			if err := Body.Close(); err != nil {
+				log.Println(err)
+			}
+		}(res.Body)
 
-	var ext TVExternalIds
-	if err := json.NewDecoder(res.Body).Decode(&ext); err != nil {
-		return "", err
-	}
-	return ext.ImdbID, nil
+		if res.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("tmdb: HTTP %d", res.StatusCode)
+		}
+
+		var ext TVExternalIds
+		if err := json.NewDecoder(res.Body).Decode(&ext); err != nil {
+			return "", err
+		}
+		return ext.ImdbID, nil
+	})
 }
 
 // GetSeasons returns the season list for a TV show (skipping specials season 0).
@@ -830,7 +971,43 @@ func (m *Media) DisplayDate() string {
 	return m.FirstAir
 }
 
+// GetDetails returns a title's full details (genres, cast, keywords,
+// ratings, ...), cached for detailsCacheTTL and coalesced across concurrent
+// callers for the same id (D2) — see the Client.detailsCache field doc.
+// Callers must treat the returned *Details as read-only: a cache hit shares
+// the same pointer across every caller until the entry expires.
 func (c *Client) GetDetails(tmdbID int, mediaType string) (*Details, error) {
+	key := fmt.Sprintf("%s:%d", mediaType, tmdbID)
+
+	c.detailsCacheMu.Lock()
+	if entry, ok := c.detailsCache[key]; ok && time.Now().Before(entry.expires) {
+		c.detailsCacheMu.Unlock()
+		return entry.details, nil
+	}
+	c.detailsCacheMu.Unlock()
+
+	v, err, _ := c.detailsSF.Do(key, func() (interface{}, error) {
+		d, err := c.fetchDetails(tmdbID, mediaType)
+		if err != nil {
+			return nil, err
+		}
+		c.detailsCacheMu.Lock()
+		if len(c.detailsCache) > detailsCacheCap {
+			// Simplest possible cap: drop the whole map rather than tracking
+			// per-entry recency, same tradeoff as Client.imdbCache.
+			c.detailsCache = make(map[string]detailsCacheEntry)
+		}
+		c.detailsCache[key] = detailsCacheEntry{details: d, expires: time.Now().Add(detailsCacheTTL)}
+		c.detailsCacheMu.Unlock()
+		return d, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*Details), nil
+}
+
+func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 	url := fmt.Sprintf("%s/%s/%d?api_key=%s&append_to_response=credits,release_dates,content_ratings,keywords,origin_country",
 		baseURL, mediaType, tmdbID, c.apiKey)
 	res, err := c.client.Get(url)
@@ -1529,45 +1706,116 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		w.Header().Set("X-Accel-Buffering", "no")
 		flusher, canFlush := w.(http.Flusher)
 
+		ctx := r.Context()
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		enc := json.NewEncoder(w)
 
+		// write emits one NDJSON line. Guarded on ctx so a client that already
+		// disconnected doesn't get written to (and so wg.Wait() below isn't
+		// the only thing standing between a dead connection and this handler
+		// winding down).
+		write := func(id, quality string) {
+			if ctx.Err() != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err := enc.Encode(entry{ID: id, Quality: quality}); err != nil {
+				log.Println(err)
+				return
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+
 		for _, s := range idStrs {
-			id, err := strconv.Atoi(strings.TrimSpace(s))
-			if err != nil {
+			typedID, mediaType, tmdbID, ok := parseQualityID(s)
+			if !ok {
 				continue
 			}
-			wg.Add(1)
-			go func(tmdbID int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
 
-				imdbID, err := c.GetIMDBId(tmdbID)
+			// Cached hit — emit immediately, no worker/IMDB-lookup/addon
+			// fan-out needed at all.
+			if q, hit := c.qualityCacheGet(typedID); hit {
+				write(typedID, q)
+				continue
+			}
+
+			wg.Add(1)
+			go func(typedID, mediaType string, tmdbID int) {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					return
+				}
+				if ctx.Err() != nil {
+					return
+				}
+
+				var imdbID string
+				var err error
+				if mediaType == "tv" {
+					imdbID, err = c.GetTVIMDBId(tmdbID)
+				} else {
+					imdbID, err = c.GetIMDBId(tmdbID)
+				}
 				if err != nil || imdbID == "" {
 					return
 				}
-				streams, err := addonMgr.GetAllStreams("movie", imdbID)
-				if err != nil || len(streams) == 0 {
+
+				stremioID := imdbID
+				if mediaType == "tv" {
+					// The badge is per-title, not per-episode: probe S1E1 as a
+					// representative sample of what's available for the show
+					// rather than fanning out across every episode.
+					stremioID = imdbID + ":1:1"
+				}
+
+				streams, err := addonMgr.GetAllStreams(ctx, mediaType, stremioID)
+				if err != nil {
 					return
 				}
 				q := addons.GetMaxQuality(streams)
+				ttl := qualityCacheTTLHit
+				if q == "" {
+					ttl = qualityCacheTTLEmpty
+				}
+				c.qualityCacheSet(typedID, q, ttl)
 				if q == "" {
 					return
 				}
-				mu.Lock()
-				err = enc.Encode(entry{ID: strconv.Itoa(tmdbID), Quality: q})
-				if err != nil {
-					log.Println(err)
-				}
-				if canFlush {
-					flusher.Flush()
-				}
-				mu.Unlock()
-			}(id)
+				write(typedID, q)
+			}(typedID, mediaType, tmdbID)
 		}
 
 		wg.Wait()
 	}))
+}
+
+// parseQualityID parses one comma-separated token from /api/quality/batch's
+// ids= param. Accepts a typed id ("movie:603" / "tv:1396") or a bare number
+// ("603", defaulting to movie — backward compat with pre-typed-id callers).
+// typedID is always the canonical prefixed form, used as both the cache key
+// and the id echoed back in the response, so callers get a consistent shape
+// regardless of which form they sent.
+func parseQualityID(raw string) (typedID, mediaType string, tmdbID int, ok bool) {
+	raw = strings.TrimSpace(raw)
+	mediaType = "movie"
+	numPart := raw
+	if idx := strings.IndexByte(raw, ':'); idx >= 0 {
+		prefix := raw[:idx]
+		if prefix == "movie" || prefix == "tv" {
+			mediaType = prefix
+		}
+		numPart = raw[idx+1:]
+	}
+	id, err := strconv.Atoi(numPart)
+	if err != nil || id <= 0 {
+		return "", "", 0, false
+	}
+	return mediaType + ":" + strconv.Itoa(id), mediaType, id, true
 }
