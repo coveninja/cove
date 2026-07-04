@@ -17,3 +17,4 @@
 /internal/discover/discover_test.go
 /internal/discover/algorithm.go
 /internal/discover/algorithm_test.go
+/.claude/
