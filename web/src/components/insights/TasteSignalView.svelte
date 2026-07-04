@@ -74,18 +74,6 @@
     return selected;
   });
 
-  const maxScore = $derived(
-          divergingItems.reduce((m, i) => Math.max(m, Math.abs(i.score)), 0.001),
-  );
-
-  // Bar pct: 0-100, square-root scale so small scores remain visible.
-  // Non-zero bars are floored at 4 to avoid invisible slivers.
-  function barPct(score: number): number {
-    if (score === 0) return 0;
-    const raw = Math.round(Math.sqrt(Math.abs(score) / maxScore) * 100);
-    return Math.max(raw, 4);
-  }
-
   // ── Radar chart data ────────────────────────────────────────────────────
   //
   // Radar/spider charts get unreadable with too many spokes, so each side is
