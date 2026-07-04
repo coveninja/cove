@@ -40,6 +40,8 @@ set(APP_SOURCES
   src/main.cpp
   src/MpvObject.cpp
   src/MpvObject.h
+  src/GpuWorkaround.cpp
+  src/GpuWorkaround.h
   resources.qrc
 )
 # resources/cove.rc embeds resources/cove.ico into cove_shell.exe (taskbar,

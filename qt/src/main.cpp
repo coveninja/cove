@@ -41,10 +41,17 @@
 #endif
 
 #ifdef Q_OS_LINUX
-#include <csignal>
 #include <sys/prctl.h>
 #endif
 
+#ifdef Q_OS_UNIX
+#include <QSocketNotifier>
+#include <csignal>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#include "GpuWorkaround.h"
 #include "MpvObject.h"
 
 // Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
@@ -85,6 +92,37 @@ static void openLogFile() {
     s_logFile = nullptr;
   }
 }
+
+#ifdef Q_OS_UNIX
+// Terminal launches (make run, konsole) are quit with Ctrl+C or kill, which
+// bypasses Qt: the process dies without aboutToQuit, so the GPU crash
+// sentinel would survive and the next launch would spuriously escalate the
+// workaround level. Bridge SIGINT/SIGTERM/SIGHUP into a clean quit via the
+// self-pipe trick (only write() is safe inside a signal handler).
+static int s_sigFds[2] = {-1, -1};
+
+static void installUnixSignalBridge(QCoreApplication *app) {
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, s_sigFds) != 0)
+    return;
+  struct sigaction sa = {};
+  sa.sa_handler = [](int) {
+    const char byte = 1;
+    (void)!::write(s_sigFds[0], &byte, 1);
+  };
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  ::sigaction(SIGINT, &sa, nullptr);
+  ::sigaction(SIGTERM, &sa, nullptr);
+  ::sigaction(SIGHUP, &sa, nullptr);
+  auto *notifier =
+      new QSocketNotifier(s_sigFds[1], QSocketNotifier::Read, app);
+  QObject::connect(notifier, &QSocketNotifier::activated, app, [] {
+    char byte;
+    (void)!::read(s_sigFds[1], &byte, 1);
+    QCoreApplication::quit();
+  });
+}
+#endif
 
 // Surfaces a fatal startup failure to the user, then exits. A QML-rendered
 // error screen would depend on the same Qt Quick/OpenGL stack that's the top
@@ -374,6 +412,30 @@ int main(int argc, char *argv[]) {
   // else logs. The returned pointer is the Qt default handler.
   s_defaultMsgHandler = qInstallMessageHandler(msgFilter);
 
+  // QCommandLineParser needs an app instance, which doesn't exist yet.
+  // Pre-scan raw argv for the one flag that must be read before
+  // QtWebEngineQuick::initialize().
+  int gpuWorkaroundOverride = -1;
+  for (int i = 1; i < argc; ++i) {
+    const QLatin1String arg(argv[i]);
+    if (arg == QLatin1String("--gpu-workaround") && i + 1 < argc) {
+      const char *val = argv[i + 1];
+      if (val[0] >= '0' && val[0] <= '2' && val[1] == '\0')
+        gpuWorkaroundOverride = val[0] - '0';
+      break;
+    }
+    const QLatin1String eqPrefix("--gpu-workaround=");
+    if (arg.startsWith(eqPrefix) && arg.size() == eqPrefix.size() + 1) {
+      const char c = argv[i][eqPrefix.size()];
+      if (c >= '0' && c <= '2')
+        gpuWorkaroundOverride = c - '0';
+      break;
+    }
+  }
+
+  // Must precede WebEngine init so [gpu] diagnostics reach shell.log.
+  openLogFile();
+
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
   // (mpv renders via OpenGL), and give the default surface an alpha channel so
   // the transparent web layer can composite.
@@ -383,13 +445,19 @@ int main(int argc, char *argv[]) {
   fmt.setAlphaBufferSize(8);
   QSurfaceFormat::setDefaultFormat(fmt);
 
+  const GpuWorkaround::ApplyResult gpuState =
+      GpuWorkaround::applyBeforeInit(gpuWorkaroundOverride);
+
   QtWebEngineQuick::initialize();
   QGuiApplication app(argc, argv);
   app.setApplicationName("cove");
   app.setOrganizationName("coveninja");
   app.setWindowIcon(QIcon(QStringLiteral(":/cove.png")));
-
-  openLogFile();
+  QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                   [] { GpuWorkaround::markStartupSuccessful(); });
+#ifdef Q_OS_UNIX
+  installUnixSignalBridge(&app);
+#endif
 
   // Single-instance guard. QLockFile detects stale locks from crashed
   // processes (it records the holder's PID), so a crash never wedges future
@@ -401,7 +469,6 @@ int main(int argc, char *argv[]) {
                        "instance lock)."));
     return 0;
   }
-
   qmlRegisterType<MpvObject>("mpv", 1, 0, "MpvObject");
 
   QCommandLineParser parser;
@@ -419,11 +486,25 @@ int main(int argc, char *argv[]) {
       "play", "Compositing test: play this media file behind a test overlay.",
       "file");
   QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
+  QCommandLineOption gpuWorkaroundOpt(
+      "gpu-workaround",
+      "GPU workaround level: 0=off, 1=QTWEBENGINE_FORCE_USE_GBM=0 (Vulkan "
+      "fallback), 2=level 1 + --disable-gpu (software raster for the web "
+      "layer; mpv is unaffected). Also settable via COVE_GPU_WORKAROUND env. "
+      "Persisted automatically after a detected startup crash; this flag pins "
+      "the level and skips escalation.",
+      "level");
   parser.addOption(backendOpt);
   parser.addOption(webrootOpt);
   parser.addOption(playOpt);
   parser.addOption(devOpt);
+  parser.addOption(gpuWorkaroundOpt);
   parser.process(app);
+
+  // After process(): --help/--version exit the process directly without
+  // firing aboutToQuit, and must not leave a crash sentinel behind. The GPU
+  // crash window only opens when the WebEngineView loads, further down.
+  GpuWorkaround::commitState(gpuState);
 
   const QString backendPath =
       QFileInfo(parser.value(backendOpt)).absoluteFilePath();
@@ -455,6 +536,8 @@ int main(int argc, char *argv[]) {
     // Test mode — no backend needed for a local file.
     qInfo().noquote() << "[shell] compositing test, playing:" << testFile;
     loadScene(testOverlayUrl(), testFile);
+    // The GPU abort strikes within seconds of the first WebEngineView load.
+    QTimer::singleShot(30000, qApp, [] { GpuWorkaround::markStartupSuccessful(); });
   } else {
     qInfo().noquote() << "[shell] backend:" << backendPath
                       << (QFileInfo::exists(backendPath) ? "(ok)" : "(MISSING)");
@@ -604,6 +687,9 @@ int main(int argc, char *argv[]) {
               } else {
                 loadScene(baseUrl.toString(), QString());
               }
+              // The GPU abort strikes within seconds of the first WebEngineView load.
+              QTimer::singleShot(30000, qApp,
+                                 [] { GpuWorkaround::markStartupSuccessful(); });
             } else {
               qInfo().noquote() << "[shell] backend recovered after restart";
             }
