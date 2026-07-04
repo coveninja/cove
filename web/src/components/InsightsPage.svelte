@@ -342,9 +342,9 @@
 
 <div class="mx-auto mt-24 flex w-full max-w-4xl flex-col gap-6 p-6">
   <header class="flex flex-col gap-1">
-    <h1 class="text-2xl font-semibold">Your stats</h1>
+    <h1 class="text-2xl font-semibold">Your Insights</h1>
     <p class="text-sm text-muted-foreground">
-      Watch history, taste profile, and what makes you unique.
+      Your watch history, taste profile, and what makes you unique.
     </p>
   </header>
 
@@ -375,7 +375,7 @@
           <Card.Header>
             <Card.Title class="flex items-center gap-2 text-sm">
               <BarChart3 class="size-4" />
-              Hours by month
+              Hours by Month
               {#if monthSecondary}
                 <span class="ml-auto text-xs font-normal text-muted-foreground"
                   >vs last year</span
@@ -392,7 +392,7 @@
         <div class="grid gap-4 md:grid-cols-2">
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">By day of week</Card.Title>
+              <Card.Title class="text-sm">Hours by Day of Week</Card.Title>
             </Card.Header>
             <Card.Content>
               <ActivityBars items={dowItems} />
@@ -401,7 +401,7 @@
 
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">By hour of day</Card.Title>
+              <Card.Title class="text-sm">Hours by Hour of Day</Card.Title>
             </Card.Header>
             <Card.Content>
               <ActivityBars items={hourItems} compact={true} />
@@ -579,7 +579,8 @@
           <p>
             A single dropped or "not interested" title needs to be a much
             stronger signal before it steers you away from an entire genre; once
-            two or more titles agree, a milder signal is enough.
+            two or more titles agree, a milder signal is enough. Rating a title
+            below ★3 always counts as a dislike, even if you finished it.
           </p>
         </Card.Content>
       </Card.Root>

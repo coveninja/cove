@@ -217,7 +217,8 @@ func (s *Store) OnProgressSave(ev library.ProgressSaveEvent) {
 // idempotent: subsequent calls after the first successful run are no-ops
 // (guarded by the Backfilled flag persisted to disk). For each row it credits
 // DurationSeconds if the row is marked completed, else PositionSeconds,
-// bucketed at the row's WatchedAt date/hour. This is an approximation —
+// bucketed at the row's WatchedAt date/hour in local time (matching live
+// ticks, which use time.Now()). This is an approximation —
 // all seconds for a title land in one timestamp per row — that the user has
 // accepted in exchange for getting historical data with no extra tracking.
 //
@@ -248,8 +249,9 @@ func (s *Store) Backfill(progress []*library.WatchProgress) {
 			s.db.LastPos[pKey] = p.PositionSeconds
 		}
 
-		date := p.WatchedAt.Format("2006-01-02")
-		hour := p.WatchedAt.Hour()
+		local := p.WatchedAt.In(time.Local)
+		date := local.Format("2006-01-02")
+		hour := local.Hour()
 		day := s.db.Days[date]
 		if day == nil {
 			day = &DayEntry{ByTitle: make(map[string]int64)}

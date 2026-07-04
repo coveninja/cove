@@ -13,6 +13,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
+  import { libraryChanged } from "$lib/stores/library";
 
   let {
     media,
@@ -85,6 +86,7 @@
     try {
       if (next) await api.notInterested(media);
       else await api.undoNotInterested(media);
+      libraryChanged.update((n) => n + 1);
     } catch {
       dismissed = !next; // revert on error
     }

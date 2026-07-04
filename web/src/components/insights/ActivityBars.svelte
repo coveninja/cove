@@ -22,7 +22,7 @@
     compact?: boolean;
   } = $props();
 
-  const maxVal = $derived(() => {
+  const maxVal = $derived.by(() => {
     let m = 1;
     for (const it of items) if (it.value > m) m = it.value;
     if (secondary) for (const v of secondary) if (v > m) m = v;
@@ -31,8 +31,7 @@
 
   // Bar height as percentage of container (0-100)
   function pct(val: number): number {
-    const mv = maxVal();
-    return mv === 0 ? 0 : Math.round((val / mv) * 100);
+    return maxVal === 0 ? 0 : Math.round((val / maxVal) * 100);
   }
 
   // How many bar labels to show (skip every-other for dense layouts)
@@ -53,18 +52,18 @@
       {@const primaryH = pct(item.value)}
       {@const ghostH = secondary ? pct(secondary[i] ?? 0) : 0}
       <!-- Column: bars stacked in a relative container anchored to bottom -->
-      <div class="relative flex flex-1 items-end">
+      <div class="relative flex h-full flex-1 items-end">
         <!-- Ghost bar (last year / secondary) — rendered behind primary -->
         {#if secondary && ghostH > 0}
           <div
-            class="absolute bottom-0 w-full rounded-t-[2px] bg-muted/60"
-            style="height: {ghostH}%"
+            class="absolute bottom-0 w-full rounded-t-xs bg-muted/60"
+            style="height: max({ghostH}%, 2px)"
           ></div>
         {/if}
         <!-- Primary bar (this year) -->
         <div
-          class="relative w-full rounded-t-[2px] bg-indigo-500/75 transition-[height]"
-          style="height: {primaryH}%"
+          class="relative w-full rounded-t-xs bg-accent/75 transition-[height]"
+          style="height: max({primaryH}%, {item.value > 0 ? 2 : 0}px)"
         ></div>
       </div>
     {/each}

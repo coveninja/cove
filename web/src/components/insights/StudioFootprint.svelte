@@ -28,7 +28,7 @@
           <div class="h-2 w-full rounded-full bg-muted/40"></div>
           <!-- Fill -->
           <div
-            class="absolute inset-y-0 left-0 rounded-full bg-indigo-500/60"
+            class="absolute inset-y-0 left-0 rounded-full bg-accent/60"
             style="width: {pct}%"
           ></div>
         </div>

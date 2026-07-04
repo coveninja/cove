@@ -8,6 +8,7 @@
   import type { WatchProgress } from "$lib/types/library";
   import { settings } from "$lib/stores/settings";
   import ScrambledText from "./ScrambledText.svelte";
+  import { libraryChanged } from "$lib/stores/library";
 
   let {
     media,
@@ -63,6 +64,7 @@
       completed: true,
     });
     progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+    libraryChanged.update((n) => n + 1);
     nudgeSync();
   }
 
@@ -80,6 +82,7 @@
       completed: false,
     });
     progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+    libraryChanged.update((n) => n + 1);
     nudgeSync();
   }
 

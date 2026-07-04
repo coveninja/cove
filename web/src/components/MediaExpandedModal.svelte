@@ -21,6 +21,7 @@
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import StarRating from "./StarRating.svelte";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
+  import { libraryChanged } from "$lib/stores/library";
 
   let {
     media,
@@ -185,6 +186,7 @@
     try {
       if (next) await api.notInterested(media);
       else await api.undoNotInterested(media);
+      libraryChanged.update((n) => n + 1);
     } catch {
       dismissed = !next;
     }

@@ -27,6 +27,7 @@
   import type { LibraryEntry } from "$lib/types/library";
   import PlayerSimple from "./PlayerSimple.svelte";
   import { Player } from "$lib/player/player.svelte";
+  import { libraryChanged } from "$lib/stores/library";
 
   // Suppress carousel auto-advance while the mpv player is active. PlayerSimple
   // already destroys its YouTube iframe when mpvBusy, but the timer below can
@@ -184,7 +185,10 @@
   function dismissCurrent(): void {
     const media = medias[mediaIndex];
     if (!media) return;
-    api.notInterested(media).catch(() => {}); // fire-and-forget; UI updates optimistically
+    api
+      .notInterested(media)
+      .then(() => libraryChanged.update((n) => n + 1))
+      .catch(() => {}); // fire-and-forget; UI updates optimistically
     medias = medias.filter(
       (m) => !(m.id === media.id && m.media_type === media.media_type),
     );

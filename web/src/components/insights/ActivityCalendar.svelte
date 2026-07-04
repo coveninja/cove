@@ -3,6 +3,7 @@
   import { fmtHours } from "./utils";
   import * as Card from "$lib/components/ui/card/index.js";
   import { CalendarDays } from "lucide-svelte";
+  import {SvelteDate} from "svelte/reactivity";
 
   let { activity }: { activity: ActivityStats } = $props();
 
@@ -53,23 +54,23 @@
       if (v > maxVal) maxVal = v;
     }
 
-    const today = new Date();
+    const today = new SvelteDate();
     today.setHours(0, 0, 0, 0);
 
     // Trailing 12 months: start one year ago (inclusive)
-    const rangeStart = new Date(today);
+    const rangeStart = new SvelteDate(today);
     rangeStart.setFullYear(rangeStart.getFullYear() - 1);
     rangeStart.setDate(rangeStart.getDate() + 1);
 
     // Snap back to the Sunday on or before rangeStart
-    const gridStart = new Date(rangeStart);
+    const gridStart = new SvelteDate(rangeStart);
     gridStart.setDate(gridStart.getDate() - gridStart.getDay());
 
     const cells: CalCell[] = [];
     const monthLabels: MonthLabel[] = [];
     let seenMonth = -1;
     let weekIdx = 0;
-    const cur = new Date(gridStart);
+    const cur = new SvelteDate(gridStart);
 
     while (cur <= today) {
       const dayIdx = cur.getDay();
@@ -122,7 +123,7 @@
     if (!inRange) return "background:transparent";
     if (level === 0) return "background:rgba(255,255,255,0.06)";
     const opacities = [0, 0.18, 0.42, 0.67, 0.92];
-    return `background:rgba(99,102,241,${opacities[level]})`;
+    return `background:rgba(38,223,106,${opacities[level]})`;
   }
 
   // ── Simple hover tooltip (lighter than 365 Tooltip.Root instances) ────────
@@ -177,10 +178,10 @@
         </div>
 
         <!-- Day labels + cell grid -->
-        <div class="flex gap-[3px]">
+        <div class="flex gap-0.75">
           <!-- Day-of-week labels: fixed 7-row column -->
           <div
-            class="flex shrink-0 flex-col gap-[3px]"
+            class="flex shrink-0 flex-col gap-0.75"
             style="width: {DAY_LABEL_W}px"
           >
             {#each DOW_LABELS as label, i (i)}
@@ -195,13 +196,13 @@
 
           <!-- Calendar cell grid (grid-auto-flow: column, 7 rows) -->
           <div
-            class="grid gap-[3px]"
+            class="grid gap-0.75"
             style="grid-template-rows: repeat(7, {CELL_PX}px); grid-auto-flow: column; grid-auto-columns: {CELL_PX}px"
           >
             {#each calData.cells as cell (cell.dateStr)}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
-                class="rounded-[2px] transition-opacity hover:opacity-80"
+                class="rounded-xs transition-opacity hover:opacity-80"
                 style="{cellStyle(
                   cell.level,
                   cell.inRange,

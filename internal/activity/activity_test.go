@@ -271,3 +271,38 @@ func TestBackfillSeedsLastPos(t *testing.T) {
 		t.Errorf("backfill LastPos seed: expected 500, got %f", lastPos)
 	}
 }
+
+// TestBackfillBucketsByLocalTime confirms that Backfill places seconds in the
+// day/hour computed from WatchedAt converted to local time, not raw UTC. We
+// pick 23:30 UTC so the date boundary crosses in most western timezones and
+// the test is non-trivial.
+func TestBackfillBucketsByLocalTime(t *testing.T) {
+	s := newTestStore(t)
+
+	// Build a UTC timestamp at 23:30 on 2026-01-01.
+	watchedUTC := time.Date(2026, 1, 1, 23, 30, 0, 0, time.UTC)
+	progress := []*library.WatchProgress{
+		{
+			TmdbID: 55, MediaType: "movie",
+			PositionSeconds: 1000, DurationSeconds: 5000,
+			Completed: false, WatchedAt: watchedUTC,
+		},
+	}
+	s.Backfill(progress)
+
+	// Compute expected bucket from local time — same conversion the code does.
+	local := watchedUTC.In(time.Local)
+	wantDate := local.Format("2006-01-02")
+	wantHour := local.Hour()
+
+	s.mu.RLock()
+	day := s.db.Days[wantDate]
+	s.mu.RUnlock()
+
+	if day == nil {
+		t.Fatalf("backfill local-time bucket: no entry for local date %s (UTC date was %s)", wantDate, watchedUTC.Format("2006-01-02"))
+	}
+	if got := day.ByHour[wantHour]; got != 1000 {
+		t.Errorf("backfill local-time bucket: expected 1000 seconds in hour %d of %s, got %d", wantHour, wantDate, got)
+	}
+}

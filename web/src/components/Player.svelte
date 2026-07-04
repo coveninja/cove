@@ -33,6 +33,7 @@
   import { nextAiredEpisode } from "$lib/nextEpisode";
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import {SvelteMap, SvelteSet} from "svelte/reactivity";
+  import { libraryChanged } from "$lib/stores/library";
 
   // ─── Props (unchanged from the old Player) ──────────────────────────────────
 
@@ -162,13 +163,18 @@
   onDestroy(() => {
     if (!Player.available) return;
     try {
-      if (media && Player.duration > 0)
+      if (media && Player.duration > 0) {
         progress.saveNow(
                 Player.position,
                 Player.duration,
                 progressCtx,
                 false,
         );
+        // One bump per session teardown — never on the ~10s maybeSave ticks,
+        // which would make every libraryChanged subscriber refetch during
+        // playback.
+        libraryChanged.update((n) => n + 1);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -278,13 +284,15 @@
 
   // Mark complete at end of file.
   $effect(() => {
-    if (Player.ended && media)
+    if (Player.ended && media) {
       progress.saveNow(
               Player.duration,
               Player.duration,
               progressCtx,
               true,
       );
+      libraryChanged.update((n) => n + 1);
+    }
   });
 
   // ─── Torrent download progress (SSE, hash sources only) ──────────────────────

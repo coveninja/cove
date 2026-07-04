@@ -23,23 +23,23 @@
 </script>
 
 <Card.Root class="overflow-hidden">
-  <Card.Content class="flex flex-col items-center gap-3 px-8 py-10 text-center">
+  <Card.Content class="flex flex-col items-center gap-3 p-4 text-center">
     <p
-      class="text-xs font-medium uppercase tracking-widest text-muted-foreground"
+      class="font-medium uppercase tracking-widest text-muted-foreground"
     >
-      Your watch time
+      You have spent
     </p>
 
     <div class="flex items-baseline gap-2">
       <span
-        class="font-mono text-7xl font-black leading-none text-indigo-400 [font-variant-numeric:tabular-nums]"
+        class="font-mono text-7xl font-black leading-none text-accent [font-variant-numeric:tabular-nums]"
       >
         {hours.toLocaleString()}
       </span>
       <span class="text-2xl font-light text-muted-foreground">h</span>
     </div>
 
-    <p class="text-sm text-muted-foreground">
+    <p class="text-muted-foreground">
       across <span class="font-semibold text-foreground"
         >{activity.total_titles.toLocaleString()}</span
       > titles
@@ -49,7 +49,7 @@
       {#if yoyPct !== null}
         {@const positive = yoyPct >= 0}
         <span
-          class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium {positive
+          class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-medium {positive
             ? 'bg-emerald-500/15 text-emerald-400'
             : 'bg-rose-500/15 text-rose-400'}"
         >
@@ -65,7 +65,7 @@
 
       {#if activity.titles_this_year > 0}
         <span
-          class="rounded-full bg-muted/60 px-3 py-1 text-xs text-muted-foreground"
+          class="rounded-full bg-muted/60 px-3 py-1 text-muted-foreground"
         >
           {activity.titles_this_year} titles · {fmtHours(
             activity.this_year_seconds,
