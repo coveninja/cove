@@ -264,7 +264,19 @@ type Details struct {
 			Name string `json:"name"`
 		} `json:"results"` // tv shows
 	} `json:"keywords"`
-	OriginCountry    []string   `json:"origin_country"`
+	OriginCountry []string `json:"origin_country"`
+	// ProductionCompanies is the list of studios that produced this title
+	// (movies and TV). Present in the base details response — no extra
+	// append_to_response needed.
+	ProductionCompanies []struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	} `json:"production_companies"`
+	// Networks is the list of TV networks this show aired on (TV only).
+	Networks []struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	} `json:"networks"`
 	NumberOfSeasons  int        `json:"number_of_seasons"`
 	NumberOfEpisodes int        `json:"number_of_episodes"`
 	Seasons          []TVSeason `json:"seasons"`

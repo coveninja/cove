@@ -98,11 +98,31 @@ type TasteSignal struct {
 	UserRating *float64 // user's 0–5 rating; nil if unrated
 	Completed  bool     // any progress record for this title is completed
 	Dismissed  bool
+	// Title and PosterPath are populated for entry-backed signals so that
+	// downstream consumers (e.g. discover's contributing-title view) can
+	// render a poster row without a second TMDB lookup. The PosterPath is
+	// already rewritten to route through the local image-cache proxy.
+	// Progress-only and dismissal-only signals leave these empty.
+	Title      string
+	PosterPath string
 	// LastInteractionAt is the most recent time the user touched this title
 	// (rated/status change, a watch, or a dismissal). Lets discover decay old
 	// signals instead of weighing a five-year-old favorite the same as
 	// yesterday's.
 	LastInteractionAt time.Time
+}
+
+// ProgressSaveEvent is emitted (best-effort, outside any lock) on every
+// successful POST to /api/library/progress. It carries enough context for an
+// activity log to credit watch-time deltas without knowing library internals.
+type ProgressSaveEvent struct {
+	ProgressKey string    // library's progressKey() value for this record
+	TmdbID      int
+	MediaType   string
+	Position    float64
+	Duration    float64
+	Completed   bool
+	At          time.Time
 }
 
 // AllEntries returns a snapshot of all library entries. Used for sync.
@@ -231,6 +251,8 @@ func (l *Library) TasteSignals() []TasteSignal {
 			Status:            e.Status,
 			UserRating:        e.Rating,
 			Completed:         !completed[key].IsZero(),
+			Title:             e.Title,
+			PosterPath:        rewritePosterURL(e.PosterPath),
 			LastInteractionAt: ts,
 		})
 	}
@@ -347,6 +369,12 @@ type Library struct {
 	// that a different meaning) — see internal/prefetch.
 	onNearComplete func()
 
+	// onProgressSave, if set, is called (best-effort, outside any lock) on
+	// every successful POST to /api/library/progress — including the ~10s
+	// playback ticks — so an activity log can credit watch-time deltas in
+	// near-real-time. See internal/activity.
+	onProgressSave func(ProgressSaveEvent)
+
 	// Debounced persistence (D3). markDirty() marshals the store (cheap — it's
 	// small) synchronously while the caller still holds l.mu, then schedules
 	// the actual disk write ~1s out via dirtyTimer if one isn't already
@@ -442,6 +470,14 @@ func (l *Library) writeNow() error {
 func (l *Library) SetOnNearComplete(fn func()) {
 	l.mu.Lock()
 	l.onNearComplete = fn
+	l.mu.Unlock()
+}
+
+// SetOnProgressSave registers the progress-save callback (internal/activity's
+// delta-crediting hook). Called once from main.go at startup.
+func (l *Library) SetOnProgressSave(fn func(ProgressSaveEvent)) {
+	l.mu.Lock()
+	l.onProgressSave = fn
 	l.mu.Unlock()
 }
 
@@ -783,6 +819,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		l.markDirty()
 		result := *prog // copy before unlock
 		hook := l.onNearComplete
+		progressSaveHook := l.onProgressSave
 		l.mu.Unlock()
 
 		// A progress write happens on every ~10s tick during playback — only a
@@ -791,6 +828,21 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		// cache would thrash exactly like it did before this split existed.
 		if completedTransition {
 			l.tasteGen.Add(1)
+		}
+
+		// Best-effort, outside the lock: activity log credits the delta since
+		// the last tick into today's date/hour bucket (internal/activity
+		// discards seeks and large jumps via its own 0 < delta ≤ 90s clamp).
+		if progressSaveHook != nil {
+			progressSaveHook(ProgressSaveEvent{
+				ProgressKey: pKey,
+				TmdbID:      body.TmdbID,
+				MediaType:   body.MediaType,
+				Position:    body.PositionSeconds,
+				Duration:    body.DurationSeconds,
+				Completed:   body.Completed,
+				At:          now,
+			})
 		}
 
 		// Best-effort, outside the lock: this is the moment "next episode"

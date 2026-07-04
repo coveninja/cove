@@ -86,9 +86,7 @@
   // Covers the gap between a "Watch" click and playerSession being set — the
   // fetchStreamsWithRetry/rankStreams/tvEpisodes work in quickPlay, none of
   // which shows anything today.
-  let quickPlayPending = $state<{ media: Media; message: string } | null>(
-    null,
-  );
+  let quickPlayPending = $state<{ media: Media; message: string } | null>(null);
 
   // Not $state — bumped on every quickPlay call so a stale call (superseded
   // by a newer "Watch" click before the first one resolved) can detect it's
@@ -681,7 +679,10 @@
             <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "insights"}>
-            <InsightsPage onSelectPerson={(p) => (selectedPerson = p)} />
+            <InsightsPage
+              visible={currentPage.type === "insights"}
+              onSelectPerson={(p) => (selectedPerson = p)}
+            />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
             <MyListPage

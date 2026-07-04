@@ -118,6 +118,22 @@ export interface Details {
     }[]; // tv shows
   };
   origin_country: string[];
+  /**
+   * ProductionCompanies is the list of studios that produced this title
+   * (movies and TV). Present in the base details response — no extra
+   * append_to_response needed.
+   */
+  production_companies: {
+    id: number /* int */;
+    name: string;
+  }[];
+  /**
+   * Networks is the list of TV networks this show aired on (TV only).
+   */
+  networks: {
+    id: number /* int */;
+    name: string;
+  }[];
   number_of_seasons: number /* int */;
   number_of_episodes: number /* int */;
   seasons: TVSeason[];

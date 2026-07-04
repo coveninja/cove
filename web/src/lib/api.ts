@@ -260,6 +260,49 @@ export interface DiscoverInsights {
   top_keywords: Taste[];
   top_people: Taste[];
   signals_used: number;
+  top_studios: StudioEntry[];
+  top_contributors: ContributingTitle[];
+  negative_contributors: ContributingTitle[];
+}
+
+export interface TitleSeconds {
+  tmdb_id: number;
+  media_type: string;
+  title: string;
+  poster_path: string;
+  seconds: number;
+}
+
+export interface ActivityStats {
+  total_seconds: number;
+  total_titles: number;
+  current_streak: number;
+  longest_streak: number;
+  avg_seconds_per_active_day: number;
+  titles_this_year: number;
+  this_year_seconds: number;
+  last_year_seconds: number;
+  by_year: Record<string, number>;
+  by_month_this_year: number[];
+  by_month_last_year: number[];
+  by_day_of_week: number[];
+  by_hour_of_day: number[];
+  calendar: Record<string, number>;
+  titles_watched_this_year: TitleSeconds[];
+}
+
+export interface StudioEntry {
+  id: number;
+  name: string;
+  count: number;
+}
+
+export interface ContributingTitle {
+  tmdb_id: number;
+  media_type: string;
+  title: string;
+  poster_path: string;
+  weight: number;
 }
 
 // A /search/person result. profile_path / known_for posters arrive as fully
@@ -444,7 +487,10 @@ export const api = {
    * out of a season-pack torrent instead of always streaming its largest
    * file — omitted entirely for a movie or an already-absolute src.
    */
-  playUrl: (src: string, opts?: { season?: number; episode?: number }): string => {
+  playUrl: (
+    src: string,
+    opts?: { season?: number; episode?: number },
+  ): string => {
     if (!isHashSrc(src)) return src;
     const p = new URLSearchParams({ hash: src });
     if (opts?.season != null) p.set("season", String(opts.season));
@@ -776,6 +822,8 @@ export const api = {
 
   discoverInsights: (): Promise<DiscoverInsights> =>
     request(`/discover/insights`),
+
+  activityStats: (): Promise<ActivityStats> => request(`/library/activity`),
 
   // ── Auto-update ──────────────────────────────────────────────────────────────
 

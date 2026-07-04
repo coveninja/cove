@@ -242,7 +242,7 @@ func (s *Store) AdoptID(oldID, newID string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("profile %q not found", oldID)
 	}
-	for _, base := range []string{"library", "settings", "addons", "nuvio"} {
+	for _, base := range []string{"library", "settings", "addons", "nuvio", "activity"} {
 		src, err1 := utils.ConfigPath(ProfileFileName(base, oldID))
 		dst, err2 := utils.ConfigPath(ProfileFileName(base, newID))
 		if err1 != nil || err2 != nil {

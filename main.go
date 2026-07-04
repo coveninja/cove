@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/clientsession"
 	"github.com/coveninja/cove/internal/discover"
@@ -73,6 +74,7 @@ func main() {
 	var nuvioMgr *nuvio.Manager
 	var st *settings.Store
 	var lib *library.Library
+	var act *activity.Store
 
 	profileStore, err := profiles.New(func(profileID string) {
 		// Reload all data stores when the active profile switches.
@@ -87,6 +89,9 @@ func main() {
 		}
 		if err := nuvioMgr.SetProfile(profileID); err != nil {
 			log.Println("profile switch: reload nuvio repos:", err)
+		}
+		if err := act.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload activity:", err)
 		}
 	})
 	if err != nil {
@@ -114,6 +119,18 @@ func main() {
 		log.Println("could not load library:", err)
 	}
 
+	// Activity log — per-profile watch-time bucketed by date/hour. Non-fatal:
+	// a failure here degrades the insights page but doesn't break playback.
+	act, err = activity.New(activeID)
+	if err != nil {
+		log.Println("could not load activity log:", err)
+	}
+	// Seed historical data from existing progress rows (idempotent; skips if
+	// already done). Must run after library.New and before serving requests.
+	act.Backfill(lib.AllProgress())
+	// Wire the library to enrich TitlesWatchedThisYear with title/poster data.
+	act.SetLibrary(lib)
+
 	// The torrent client is core functionality — if it can't start, there's
 	// nothing to stream, so a New failure is fatal.
 	p, err := player.New(tmdbClient, addonMgr, nuvioMgr)
@@ -139,6 +156,7 @@ func main() {
 	p.SetupHandlers(mux)
 	st.SetupHandlers(mux)
 	lib.SetupHandlers(mux)
+	act.SetupHandlers(mux)
 	profileStore.SetupHandlers(mux)
 	updater.SetupHandlers(mux, Version)
 	if imgCache != nil {
@@ -163,6 +181,7 @@ func main() {
 	// when Settings.PrefetchStreams is false (checked every cycle).
 	prefetchWorker := prefetch.New(lib, tmdbClient, addonMgr, nuvioMgr, st)
 	lib.SetOnNearComplete(prefetchWorker.Notify)
+	lib.SetOnProgressSave(act.OnProgressSave)
 	go prefetchWorker.Run(context.Background())
 
 	go func() {
@@ -183,6 +202,7 @@ func main() {
 	go func() {
 		<-sigCh
 		lib.Flush()
+		act.Flush()
 		os.Exit(0)
 	}()
 
