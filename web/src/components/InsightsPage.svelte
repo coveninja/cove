@@ -340,7 +340,7 @@
   </Card.Root>
 {/snippet}
 
-<div class="mx-auto mt-24 flex w-full max-w-4xl flex-col gap-6 p-6">
+<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-6">
   <header class="flex flex-col gap-1">
     <h1 class="text-2xl font-semibold">Your Insights</h1>
     <p class="text-sm text-muted-foreground">

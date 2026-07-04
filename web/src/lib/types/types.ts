@@ -5,7 +5,7 @@ export type Page =
   | { type: "myList" }
   | { type: "explore" }
   | { type: "settings" }
-  | { type: "insights" }
+  | { type: "account" }
   | { type: "query"; query: string }
   | { type: "mediaView"; media: Media };
 

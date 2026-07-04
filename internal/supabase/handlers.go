@@ -415,6 +415,16 @@ func (s *Server) reconcileProfile(supabaseUID, userJWT string) profiles.Profile 
 	return s.profileStore.ActiveProfile()
 }
 
+// CleanupDeletedProfile removes all remote Supabase data for a deleted profile.
+// Returns nil immediately when Supabase is not configured, no JWT is present,
+// or the profile was not linked to a Supabase account.
+func (s *Server) CleanupDeletedProfile(userJWT, profileID string, supabaseUID *string) error {
+	if s.cfg == nil || userJWT == "" || supabaseUID == nil {
+		return nil
+	}
+	return s.cfg.DeleteProfileData(userJWT, profileID)
+}
+
 // mergeRemote pulls all Supabase data for a user and merges it into the active profile.
 func (s *Server) mergeRemote(supabaseUID, userJWT string) {
 	active := s.reconcileProfile(supabaseUID, userJWT)

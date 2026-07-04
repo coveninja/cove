@@ -23,7 +23,7 @@
   import { cubicOut } from "svelte/easing";
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { api, type UpdateCheckResult, setTokenSource } from "$lib/api";
-  import InsightsPage from "./components/InsightsPage.svelte";
+  import MyAccountPage from "./components/MyAccountPage.svelte";
   import ExplorePage from "./components/ExplorePage.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
   import OnboardingPage from "./components/OnboardingPage.svelte";
@@ -678,18 +678,14 @@
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
             <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
-          <div class="h-full" class:hidden={currentPage.type !== "insights"}>
-            <InsightsPage
-              visible={currentPage.type === "insights"}
+          <div class="h-full" class:hidden={currentPage.type !== "account"}>
+            <MyAccountPage
+              visible={currentPage.type === "account"}
               onSelectPerson={(p) => (selectedPerson = p)}
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
-            <MyListPage
-              onSelectMedia={selectMedia}
-              onWatch={quickPlay}
-              onSelectPerson={(p) => (selectedPerson = p)}
-            />
+            <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
             <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />

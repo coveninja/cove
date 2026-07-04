@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    api,
-    STATUS_LABELS,
-    type LibraryStatus,
-    type Person,
-  } from "$lib/api";
+  import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
@@ -21,17 +16,14 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
-  import InsightsPage from "./InsightsPage.svelte";
   import { SvelteSet } from "svelte/reactivity";
 
   let {
     onSelectMedia,
     onWatch,
-    onSelectPerson,
   }: {
     onSelectMedia: (m: Media) => void;
     onWatch?: (m: Media, season?: number, episode?: number) => void;
-    onSelectPerson: (p: Person) => void;
   } = $props();
 
   // ── State ────────────────────────────────────────────────────────────────────
@@ -625,7 +617,6 @@
           </section>
         {/each}
       {/if}
-      <InsightsPage {onSelectPerson} />
     </ScrollArea>
   {/if}
 </div>

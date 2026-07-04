@@ -56,3 +56,6 @@ func (s *Server) SetupHandlers(mux *http.ServeMux) {
 		mux.HandleFunc(path, stub)
 	}
 }
+
+// CleanupDeletedProfile is a no-op when built without -tags supabase.
+func (s *Server) CleanupDeletedProfile(_, _ string, _ *string) error { return nil }

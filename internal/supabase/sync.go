@@ -244,3 +244,22 @@ func progressToMap(p *library.WatchProgress) map[string]any {
 		"watched_at":       p.WatchedAt,
 	}
 }
+
+// DeleteProfileData removes all Supabase rows for the given profile. Child
+// table rows must go first: their RLS policies prove ownership through the
+// profiles row (profile_id IN (SELECT id FROM profiles WHERE user_id =
+// auth.uid())), so once the parent row is gone a child DELETE silently
+// matches nothing and the rows are orphaned forever. Child cleanup is
+// best-effort so one failure does not abort the rest; the parent row goes
+// last.
+func (c *Config) DeleteProfileData(userJWT, profileID string) error {
+	for _, table := range []string{"library_entries", "watch_progress", "dismissals", "profile_settings", "profile_addons"} {
+		if err := c.Delete(userJWT, table, "profile_id=eq."+url.QueryEscape(profileID)); err != nil {
+			log.Printf("supabase: delete %s for profile %s: %v", table, profileID, err)
+		}
+	}
+	if err := c.Delete(userJWT, "profiles", "id=eq."+url.QueryEscape(profileID)); err != nil {
+		return fmt.Errorf("delete profile row: %w", err)
+	}
+	return nil
+}

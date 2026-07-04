@@ -169,6 +169,11 @@ func main() {
 	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey)
 	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
 	supaServer.SetupHandlers(mux)
+	profileStore.SetOnDelete(func(profileID string, uid *string, jwt string) {
+		if err := supaServer.CleanupDeletedProfile(jwt, profileID, uid); err != nil {
+			log.Printf("profiles: remote cleanup for %s: %v", profileID, err)
+		}
+	})
 
 	disc := discover.New(tmdbClient, lib, st)
 	disc.SetupHandlers(mux)
