@@ -449,7 +449,7 @@
     </div>
 
     <!-- Episode rows -->
-    <ScrollArea class="min-h-0 flex-1">
+    <ScrollArea class="min-h-0 flex-1 p-2">
       <div class="flex flex-col divide-y divide-border">
         {#if loadingEpisodes}
           <div class="flex items-center justify-center py-12">

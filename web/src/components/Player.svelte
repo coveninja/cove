@@ -1404,7 +1404,7 @@
     {#if episodesOpen && media}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-              class="flex flex-col bg-background/75 rounded-2xl absolute top-20 bottom-24 right-0 z-20 w-[35vw] max-w-[85vw] p-3 gap-4"
+              class="flex flex-col bg-background/75 rounded-2xl absolute top-20 bottom-24 right-0 z-20 w-[35vw] max-w-[85vw] pt-4 gap-4"
               transition:fly={{ x: 420, duration: 250 }}
               onclick={(e) => e.stopPropagation()}
               onkeydown={(e) => e.stopPropagation()}
@@ -1439,45 +1439,49 @@
   <!-- ── Skip segment button (IntroDB) ────────────────────────────────────── -->
   {#if activeSegment}
     <!-- svelte-ignore a11y_consider_explicit_label -->
-    <button
-      class="absolute bottom-20 right-6 z-20 rounded border border-white/50 bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20"
+    <Button
+      variant="default"
+      size="lg"
+      class="absolute bottom-20 right-6 z-20 font-semibold"
       onclick={(e) => { e.stopPropagation(); skipSegment(activeSegment!); }}
-      transition:fade={{ duration: 150 }}
     >
       Skip {activeSegment.label}
-    </button>
+    </Button>
   {/if}
 
   <!-- ── Up-next overlay (F6) ─────────────────────────────────────────────── -->
   {#if showUpNext && nextEp}
     <div
-      class="absolute bottom-20 right-6 z-20 w-72 overflow-hidden rounded-lg border border-white/20 bg-black/80 text-white shadow-2xl backdrop-blur-sm"
+      class="absolute bottom-20 right-6 z-20 w-72 overflow-hidden rounded-lg border border-white/20 bg-black/80 text-white shadow-2xl backdrop-blur-sm p-4"
       transition:fade={{ duration: 150 }}
     >
-      <div class="flex items-start justify-between gap-2 px-4 pt-3">
+      <div class="flex items-start justify-between gap-2">
         <p class="text-xs font-medium uppercase tracking-wide text-white/60">
           Up next · S{nextEp.season}E{nextEp.episode.episode_number}
         </p>
-        <button
-          class="shrink-0 rounded p-0.5 text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+        <Button
+          variant="outline"
+          size="icon-sm"
+          class="shrink-0 p-0.5"
           onclick={(e) => { e.stopPropagation(); dismissUpNext(); }}
           aria-label="Dismiss"
         >
           <X class="size-4" />
-        </button>
+        </Button>
       </div>
       {#if !$settings?.hideSpoilers && nextEp.episode.name}
         <p class="truncate px-4 pb-3 text-sm text-white/90">{nextEp.episode.name}</p>
       {:else}
         <div class="pb-3"></div>
       {/if}
-      <button
-        class="flex w-full items-center justify-center gap-2 bg-white/10 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+      <Button
+        variant="outline"
+        class="flex w-full items-center justify-center hover:text-accent"
         onclick={(e) => { e.stopPropagation(); advance(); }}
       >
         <SkipForward class="size-4" />
         Watch now
-      </button>
+      </Button>
       {#if countdownSecs !== null}
         <div class="px-4 py-2">
           <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>

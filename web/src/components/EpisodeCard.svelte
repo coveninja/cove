@@ -107,7 +107,7 @@
         ? 'cursor-default opacity-40'
         : 'hover:bg-secondary/60'}
                     {completed ? 'opacity-70' : ''}
-                    {isCurrentlyPlaying ? 'ring-1 ring-inset ring-accent/60' : ''}"
+                    {isCurrentlyPlaying ? 'mb-1 rounded-2xl overflow-clip ring-2 ring-inset ring-accent' : ''}"
       onclick={() => {
         if (!unreleased) selectedEpisode = ep;
       }}
