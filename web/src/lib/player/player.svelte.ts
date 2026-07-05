@@ -156,7 +156,15 @@ class MpvPlayer {
     // Everything keyed on canPlay (loading screen, resume seek, up-next
     // resolution) then ran against the previous file's stale duration/position.
     this.duration = 0;
-    this.#seekLockUntil = 0; // clear any lock left over from the previous stream
+    // Arm the same lock seek() uses: the Qt WebChannel can still deliver a
+    // queued positionChanged from the PREVIOUS stream after this call (mpv
+    // emitted it just before processing the load command). Without this,
+    // that stale near-end-of-file value overwrites the optimistic 0 above,
+    // and if the new file happens to have a similar duration, canPlay flips
+    // true with `duration - position` already under the up-next threshold —
+    // showing (and autoplay-advancing past) the next episode's up-next
+    // overlay within moments of it starting.
+    this.#seekLockUntil = Date.now() + 500;
     this.#mpv?.play(url);
   }
 
