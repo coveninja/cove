@@ -488,11 +488,7 @@ int main(int argc, char *argv[]) {
   QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
   QCommandLineOption gpuWorkaroundOpt(
       "gpu-workaround",
-      "GPU workaround level: 0=off, 1=QTWEBENGINE_FORCE_USE_GBM=0 (Vulkan "
-      "fallback), 2=level 1 + --disable-gpu (software raster for the web "
-      "layer; mpv is unaffected). Also settable via COVE_GPU_WORKAROUND env. "
-      "Persisted automatically after a detected startup crash; this flag pins "
-      "the level and skips escalation.",
+      "GPU workaround level: 0=off, 1=QTWEBENGINE_FORCE_USE_GBM=0 (Vulkan fallback; may render incorrectly on some drivers), 2=level 1 + --disable-gpu (software raster, auto-recovery target). Pins the level for this run; overrides COVE_GPU_WORKAROUND and disables auto-escalation.",
       "level");
   parser.addOption(backendOpt);
   parser.addOption(webrootOpt);

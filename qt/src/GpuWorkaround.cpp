@@ -74,19 +74,34 @@ ApplyResult applyBeforeInit(int overrideLevel) {
   result.sentinelFound = QFile::exists(sentinelPath());
 
   if (!result.wasOverridden) {
+    // v0.20.17 auto-escalation could persist level 1, whose Vulkan fallback
+    // renders corrupted output on some drivers. Pins are never persisted, so
+    // a stored 1 can only come from that ladder — migrate it to level 2.
+    if (!stale && result.storedLevel == 1) {
+      result.storedLevel = 2;
+      qInfo().noquote()
+          << "[gpu] persisted level 1 (Vulkan fallback) is known to render"
+             " corrupted output on some drivers — upgrading to level 2"
+             " (pin COVE_GPU_WORKAROUND=1 to keep Vulkan)";
+    }
+
     int effective = result.storedLevel;
 
     if (result.sentinelFound && !stale) {
-      const int escalated = qMin(effective + 1, 2);
+      // Straight to --disable-gpu: the intermediate Vulkan level keeps the
+      // process alive but can corrupt rendering, which the sentinel cannot
+      // detect. Auto-recovery must land on the level that is safe by
+      // construction; level 1 stays available as a manual pin.
+      const int escalated = 2;
       if (escalated > effective) {
         result.wasEscalated = true;
         qWarning().noquote()
             << "[gpu] previous startup appears to have crashed — escalating"
                " GPU workaround from level"
             << effective << "to" << escalated
-            << QStringLiteral(
-                   "(pin: COVE_GPU_WORKAROUND=%1 or --gpu-workaround %1)")
-                   .arg(escalated);
+            << "(software rendering for the web layer; video is unaffected."
+               " Pin a level with COVE_GPU_WORKAROUND=<0|1|2> or"
+               " --gpu-workaround <0|1|2>)";
       } else {
         qWarning().noquote() << "[gpu] crash sentinel found but workaround"
                                 " already at maximum level 2 (--disable-gpu)";

@@ -9,10 +9,14 @@
 // next one escalates:
 //
 //   0 (Default) - no override; normal WebEngine behaviour
-//   1 (NoGbm)   - QTWEBENGINE_FORCE_USE_GBM=0 (Chromium falls back to Vulkan)
+//   1 (NoGbm)   - QTWEBENGINE_FORCE_USE_GBM=0 (Chromium falls back to Vulkan).
+//                 Manual pin only (COVE_GPU_WORKAROUND=1 / --gpu-workaround 1):
+//                 the Vulkan path renders corrupted output on some drivers
+//                 (radv on RDNA4, QTBUG-139424) — a defect the crash sentinel
+//                 cannot detect — so auto-escalation skips it.
 //   2 (NoGpu)   - level 1 + --disable-gpu in QTWEBENGINE_CHROMIUM_FLAGS
 //                 (software raster for the web layer; mpv has its own GL path
-//                 and is unaffected)
+//                 and is unaffected). The auto-escalation target.
 //
 // State lives next to shell.log in <GenericConfigLocation>/cove/:
 //   gpu_workaround.ini - persisted level + the Qt version it was probed on
