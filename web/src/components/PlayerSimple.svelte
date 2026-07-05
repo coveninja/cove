@@ -1,16 +1,3 @@
-<script module lang="ts">
-  // Vidstack rejects pending media requests with "provider destroyed"
-  // when a player is torn down mid-flight. These are harmless; swallow
-  // only this exact message so real rejections still surface.
-  if (typeof window !== "undefined") {
-    window.addEventListener("unhandledrejection", (e) => {
-      const msg =
-        typeof e.reason === "string" ? e.reason : e.reason?.message;
-      if (msg === "provider destroyed") e.preventDefault();
-    });
-  }
-</script>
-
 <script lang="ts">
   import "vidstack/bundle";
   import "vidstack/svelte";

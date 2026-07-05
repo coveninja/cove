@@ -13,9 +13,11 @@
   let {
     onSelectMedia,
     onWatch,
+    visible = true,
   }: {
     onSelectMedia: (m: Media) => void;
     onWatch?: (m: Media, season?: number, episode?: number) => void;
+    visible?: boolean;
   } = $props();
 
   // Rows aren't hardcoded. Beyond the blended "Based on your tastes" feed, the
@@ -133,7 +135,7 @@
 
 <ScrollArea class="mb-24 h-full w-full">
   <div class="flex w-full flex-col justify-start gap-2 pb-8">
-    <LargeRecommendationsCard bind:isPaused={areVideosPaused}/>
+    <LargeRecommendationsCard bind:isPaused={areVideosPaused} {visible} />
 
     <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
 

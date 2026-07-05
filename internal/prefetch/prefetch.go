@@ -133,6 +133,20 @@ func (w *Worker) runCycle(ctx context.Context) {
 	}
 	log.Printf("prefetch: warming %d candidate(s)", len(candidates))
 
+	// Hoist the spacing timer outside the loop so we create exactly one timer
+	// per runCycle call rather than one per candidate. time.After leaks the
+	// underlying timer until it fires; with up to maxCandidates iterations and
+	// each prefetchOne taking up to perCandidateTimeout, those orphaned timers
+	// pile up. We stop-and-drain once before entering the loop to ensure the
+	// channel starts empty, then Reset right before the select each iteration
+	// (safe because the only other arm — ctx.Done — returns, so timer.C is
+	// always consumed or the loop exits).
+	timer := time.NewTimer(candidateSpacing)
+	defer timer.Stop()
+	if !timer.Stop() {
+		<-timer.C
+	}
+
 	for i, c := range candidates {
 		if ctx.Err() != nil {
 			return
@@ -140,8 +154,9 @@ func (w *Worker) runCycle(ctx context.Context) {
 		w.prefetchOne(ctx, c)
 
 		if i < len(candidates)-1 {
+			timer.Reset(candidateSpacing)
 			select {
-			case <-time.After(candidateSpacing):
+			case <-timer.C:
 			case <-ctx.Done():
 				return
 			}

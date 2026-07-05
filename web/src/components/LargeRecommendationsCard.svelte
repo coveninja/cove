@@ -40,7 +40,7 @@
   let medias = $state<Media[]>([]);
   let isMuted = $state(true);
 
-  let { isPaused = $bindable(false) } = $props();
+  let { isPaused = $bindable(false), visible = true } = $props();
 
   // Starts playback (auto-picking the best stream) for the current item.
   // Provided by App.svelte via context, so no prop threading through HomePage.
@@ -157,10 +157,11 @@
   $effect(() => {
     const idx = mediaIndex;
     const busy = mpvBusy; // track so the effect re-runs when mpv opens/closes
+    const vis = visible;  // track so the effect re-runs when the page is shown/hidden
     currentAnimation?.pause();
     currentAnimation = null;
     progress = 0;
-    if (medias.length > 0 && !videoClips[idx] && !busy) startTimer();
+    if (medias.length > 0 && !videoClips[idx] && !busy && vis) startTimer();
   });
 
   let overviewEl = $state<HTMLElement | null>(null);

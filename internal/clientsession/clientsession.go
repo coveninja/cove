@@ -47,6 +47,11 @@ func handle(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 
 	case http.MethodPost:
+		// Bound the incoming body to 1 MiB — session payloads are small JSON
+		// blobs; anything larger is almost certainly a mistake or an attempted
+		// resource exhaustion. MaxBytesReader causes io.ReadAll below to return
+		// an error that flows through to the existing 400 response path.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

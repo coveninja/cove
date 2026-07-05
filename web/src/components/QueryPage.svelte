@@ -226,6 +226,9 @@
         qualityMap = new SvelteMap();
         return;
       }
+      // Drop stale quality badges before each new search so entries from a
+      // previous query don't bleed into the incoming results.
+      qualityMap = new SvelteMap();
       await animateText(query);
       loading = true;
       const [res, kw] = await Promise.all([

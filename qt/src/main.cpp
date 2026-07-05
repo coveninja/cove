@@ -162,11 +162,26 @@ protected:
     auto buffer = std::make_shared<QByteArray>();
     connect(sock, &QTcpSocket::readyRead, this, [this, sock, buffer]() {
       buffer->append(sock->readAll());
-      if (buffer->indexOf("\r\n\r\n") < 0)
+      if (buffer->indexOf("\r\n\r\n") < 0) {
+        // Guard against a stalled or malformed client growing the buffer
+        // indefinitely; abort once we've received 64 KiB without a header end.
+        if (buffer->size() > 64 * 1024) {
+          sock->abort();
+          sock->deleteLater();
+        }
         return;
+      }
       serve(sock, *buffer);
     });
     connect(sock, &QTcpSocket::disconnected, sock, &QObject::deleteLater);
+    // Abort connections that never complete an HTTP request within 10s.
+    // respond() always sends Connection: close + disconnectFromHost(), so sock
+    // is never kept alive past a served request — the singleShot auto-cancels
+    // when sock is destroyed after a normal request completes.
+    QTimer::singleShot(10000, sock, [sock]() {
+      sock->abort();
+      sock->deleteLater();
+    });
   }
 
 private:
@@ -304,8 +319,13 @@ static void waitForBackend(quint16 port, int timeoutMs,
           onTimeout();
           return;
         }
-        auto *probe = new QTcpSocket;
-        QObject::connect(probe, &QTcpSocket::connected, probe,
+        // Parent probe to the timer so any pending probe is freed when the
+        // timer is destroyed (timeout path or app quit).
+        // Use timer as the context object (not probe) so Qt auto-disconnects
+        // this slot when the timer is destroyed — a late `connected` signal
+        // after the timeout must not touch the freed timer.
+        auto *probe = new QTcpSocket(timer);
+        QObject::connect(probe, &QTcpSocket::connected, timer,
                          [timer, probe, onReady]() {
                            timer->stop();
                            timer->deleteLater();

@@ -2,7 +2,6 @@ package nuvio
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -55,7 +54,12 @@ func (m *Manager) fetchRaw(owner, name, branch, path string) ([]byte, error) {
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d fetching %s", res.StatusCode, path)
 	}
-	return io.ReadAll(res.Body)
+	// Cap at maxFetchBody (20 MiB) — repo manifests and scraper JS are small
+	// by design; an oversized response is almost certainly an error or a
+	// malicious repo, not a legitimate file. readCapped errors rather than
+	// silently truncating so callers see a clear message instead of a baffling
+	// parse error downstream.
+	return readCapped(res.Body)
 }
 
 // resolveBranchAndManifest tries the given branch (if any), falling back to

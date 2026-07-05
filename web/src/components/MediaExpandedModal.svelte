@@ -83,6 +83,7 @@
   $effect(() => {
     detailsLoading = true;
     const type = media.media_type;
+    let stale = false;
     Promise.all([
       api.getVideos(media),
       api.getSimilar(media),
@@ -90,6 +91,7 @@
       api.getImages(media),
     ])
       .then(([vids, similarList, details, img]) => {
+        if (stale) return;
         images = img;
         videoUrl = getVideoOpt(vids, "Trailer", { randomize: true }) ?? null;
         similar = similarList;
@@ -121,9 +123,11 @@
         detailsLoading = false;
       })
       .catch((err) => {
+        if (stale) return;
         console.error("MediaExpandedModal details fetch failed", err);
         detailsLoading = false;
       });
+    return () => { stale = true; };
   });
 
   const overviewParagraphs = $derived(
@@ -159,9 +163,11 @@
   let dismissed = $state(false);
 
   $effect(() => {
+    let stale = false;
     api
       .libraryGet(media.id, media.media_type)
       .then((result) => {
+        if (stale) return;
         if (!result) {
           libraryEntry = null;
           movieProgress = null;
@@ -177,7 +183,8 @@
           tvProgressList = result.progress;
         }
       })
-      .catch(console.error);
+      .catch((err) => { if (!stale) console.error(err); });
+    return () => { stale = true; };
   });
 
   async function toggleDismissed(): Promise<void> {

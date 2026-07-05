@@ -29,6 +29,11 @@ const (
 
 	SourceOfficial AddonSource = "official"
 	SourceStremio  AddonSource = "stremio"
+
+	// maxAddonResponseBody caps how many bytes we'll consume from any
+	// third-party addon response. 20 MiB is already generous for JSON
+	// payloads; anything larger is almost certainly an error or a rogue addon.
+	maxAddonResponseBody = 20 << 20
 )
 
 type ManifestResource struct {
@@ -140,7 +145,7 @@ func (m *Manager) FetchManifest(ctx context.Context, addonURL string) (Manifest,
 	}
 
 	var manifest Manifest
-	if err := json.NewDecoder(res.Body).Decode(&manifest); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxAddonResponseBody)).Decode(&manifest); err != nil {
 		return Manifest{}, err
 	}
 	if manifest.ID == "" {
@@ -169,7 +174,7 @@ func (m *Manager) FetchStreams(ctx context.Context, addonURL string, mediaType s
 	var data struct {
 		Streams []Stream `json:"streams"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxAddonResponseBody)).Decode(&data); err != nil {
 		return nil, err
 	}
 	return data.Streams, nil
@@ -194,7 +199,7 @@ func (m *Manager) FetchSubtitles(ctx context.Context, addonURL string, mediaType
 	var data struct {
 		Subtitles []Subtitle `json:"subtitles"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxAddonResponseBody)).Decode(&data); err != nil {
 		return nil, err
 	}
 	return data.Subtitles, nil

@@ -179,6 +179,11 @@
       );
     };
     const onRejection = (e: PromiseRejectionEvent) => {
+      // Vidstack rejects pending media requests with "provider destroyed"
+      // when a player is torn down mid-flight. These are harmless; swallow
+      // only this exact message so real rejections still surface.
+      const msg = typeof e.reason === "string" ? e.reason : (e.reason as { message?: string } | null)?.message;
+      if (msg === "provider destroyed") { e.preventDefault(); return; }
       if (isAbort(e.reason)) e.preventDefault();
     };
     const onError = (e: ErrorEvent) => {
@@ -676,7 +681,7 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
-            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
+            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} visible={currentPage.type === "home"} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "account"}>
             <MyAccountPage

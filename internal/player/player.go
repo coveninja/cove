@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -61,9 +62,10 @@ type Player struct {
 	// still in flight deprioritizes it rather than downloading two things at
 	// once; disk usage stays bounded to one background download plus whatever
 	// the reaper hasn't yet collected.
-	prefetchMu   sync.Mutex
-	prefetchHash string
-	prefetchFile *torrent.File
+	prefetchMu       sync.Mutex
+	prefetchHash     string
+	prefetchFile     *torrent.File
+	prefetchInFlight atomic.Bool // true while a PrefetchTorrent goroutine is running
 }
 
 type streamHeaderEntry struct {
@@ -842,6 +844,12 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 	// which just lets AddMagnet reject garbage) since a malformed value would
 	// otherwise burn a full metadata-fetch attempt in the background goroutine
 	// before failing.
+	//
+	// A single-flight guard (prefetchInFlight) ensures at most one goroutine
+	// is running at a time — PrefetchTorrent's bookkeeping is a single slot,
+	// so concurrent metadata fetches are never useful and only waste resources.
+	// Callers that arrive while a fetch is already in flight get 202 with
+	// {"started": false} and should not retry immediately.
 	mux.HandleFunc("/api/prefetch-download", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -854,7 +862,17 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		}
 		season, episode := parseSeasonEpisode(r)
 
+		if !p.prefetchInFlight.CompareAndSwap(false, true) {
+			// Another PrefetchTorrent is already running; a second concurrent
+			// fetch would race on the same single-slot bookkeeping and waste a
+			// full metadata-fetch attempt for nothing.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"started": false})
+			return
+		}
 		go func() {
+			defer p.prefetchInFlight.Store(false)
 			if err := p.PrefetchTorrent(infoHash, season, episode); err != nil {
 				log.Println("prefetch-download:", err)
 			}

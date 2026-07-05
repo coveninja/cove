@@ -218,7 +218,7 @@
     autoPicking = false;
     showAlternatives = false;
     fetchStreams(seq, ctrl.signal).then(() => {
-      if (seq !== fetchSeq) return; // superseded while the fetch was in flight
+      if (seq !== fetchSeq || ctrl.signal.aborted) return; // superseded or destroyed before response landed
       loadingStreams = false;
       if (streams.length === 0)
         // 2s, not 1s (B4) — A3's per-addon negative cache makes each poll
