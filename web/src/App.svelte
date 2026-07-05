@@ -773,6 +773,10 @@
               const m = playerSession?.media;
               if (m) quickPlay(m, s, e);
             }}
+            onPlayStream={(stream, s, e, name, candidates) => {
+              const m = playerSession?.media;
+              if (m) startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+            }}
           />
         </div>
       {/if}

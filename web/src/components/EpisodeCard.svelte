@@ -16,12 +16,16 @@
     selectedSeason,
     progressMap,
     selectedEpisode = $bindable<TVEpisode>(),
+    activeSeason = undefined,
+    activeEpisode = undefined,
   } = $props<{
     media: Media;
     ep: TVEpisode;
     selectedSeason: number;
     progressMap: SvelteMap<string, WatchProgress>;
     selectedEpisode: TVEpisode;
+    activeSeason?: number;
+    activeEpisode?: number;
   }>();
 
   let prog = $derived(
@@ -87,6 +91,12 @@
   }
 
   let hideSpoilers = $derived($settings?.hideSpoilers && !completed);
+  let isCurrentlyPlaying = $derived(
+    activeSeason != null &&
+    activeEpisode != null &&
+    selectedSeason === activeSeason &&
+    ep.episode_number === activeEpisode,
+  );
 </script>
 
 <ContextMenu.Root>
@@ -96,7 +106,8 @@
                     {unreleased
         ? 'cursor-default opacity-40'
         : 'hover:bg-secondary/60'}
-                    {completed ? 'opacity-70' : ''}"
+                    {completed ? 'opacity-70' : ''}
+                    {isCurrentlyPlaying ? 'ring-1 ring-inset ring-accent/60' : ''}"
       onclick={() => {
         if (!unreleased) selectedEpisode = ep;
       }}
@@ -147,6 +158,16 @@
             <Play
               class="size-5 text-white opacity-0 transition-opacity group-hover:opacity-100"
             />
+          </span>
+        {/if}
+
+        <!-- Currently Playing badge — rendered over completed/hover overlays -->
+        {#if isCurrentlyPlaying}
+          <span
+            class="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground shadow"
+          >
+            <Play class="size-3 fill-current" />
+            Now Playing
           </span>
         {/if}
       </span>

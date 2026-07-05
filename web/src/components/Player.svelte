@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
-  import type { TimestampData, TimestampSegment } from "$lib/types/addons";
+  import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
   import { Spinner } from "$lib/components/ui/spinner";
   import * as Popover from "$lib/components/ui/popover";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -18,9 +18,11 @@
     Keyboard,
     X,
     SkipForward,
+    ListVideo,
   } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { fade } from "svelte/transition";
+  import { fade, fly } from "svelte/transition";
+  import StreamsList from "./StreamsList.svelte";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
@@ -45,6 +47,7 @@
     episode = undefined,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
+    onPlayStream = undefined,
   }: {
     src: string;
     media?: Media;
@@ -60,6 +63,16 @@
      * whole up-next feature (no overlay, no autoplay-advance) — the caller
      * (App.svelte) is what actually knows how to start the next episode. */
     onPlayNext?: (season: number, episode: number) => void;
+    /** Fired when the user picks an episode from the in-player sidebar. Same
+     * signature as StreamsList's onPlayStream so it can be forwarded directly.
+     * Sidebar is only shown for TV shows when this prop is provided. */
+    onPlayStream?: (
+      stream: Stream,
+      season?: number,
+      episode?: number,
+      episodeName?: string,
+      candidates?: Stream[],
+    ) => void;
   } = $props();
 
   // ─── Playback lifecycle ─────────────────────────────────────────────────────
@@ -107,6 +120,7 @@
     addedExternal.clear();
     autoSkippedSegments.clear();
     subSelection = { kind: "off" };
+    episodesOpen = false;
     // Apply volume settings at stream start. Read inside untrack so that a
     // settings change while watching doesn't re-run this effect and restart
     // the stream.
@@ -701,7 +715,10 @@
   let audioOpen = $state(false);
   let subsOpen = $state(false);
   let helpOpen = $state(false);
-  const menuOpen = $derived(audioOpen || subsOpen || helpOpen);
+  let episodesOpen = $state(false);
+  // The season Select inside the sidebar uses arrow keys — include episodesOpen
+  // so keyboard shortcuts stand down while the panel is open.
+  const menuOpen = $derived(audioOpen || subsOpen || helpOpen || episodesOpen);
 
   // Scrubbing: while dragging the seek bar, show the dragged time and only issue
   // the real seek on release, so we don't spam mpv (costly on torrent sources).
@@ -1326,6 +1343,29 @@
             </Popover.Root>
           {/if}
 
+          <!-- Episodes sidebar toggle (TV only, when caller provides onPlayStream) -->
+          {#if media?.media_type === "tv" && onPlayStream}
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  <Button
+                    {...props}
+                    variant="ghost"
+                    size="sm"
+                    class="gap-1.5 text-white hover:bg-white/15 hover:text-white {episodesOpen
+                      ? 'bg-white/15'
+                      : ''}"
+                    onclick={() => (episodesOpen = !episodesOpen)}
+                  >
+                    <ListVideo class="size-4" />
+                    <span class="text-xs">Episodes</span>
+                  </Button>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content>Episodes</Tooltip.Content>
+            </Tooltip.Root>
+          {/if}
+
           <!-- Keyboard shortcuts -->
           <Popover.Root bind:open={helpOpen}>
             <Popover.Trigger>
@@ -1359,6 +1399,41 @@
         </div>
       </div>
     </div>
+
+    <!-- ── Episodes sidebar ─────────────────────────────────────────────────── -->
+    {#if episodesOpen && media}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+              class="flex flex-col bg-background/75 rounded-2xl absolute top-20 bottom-24 right-0 z-20 w-[35vw] max-w-[85vw] p-3 gap-4"
+              transition:fly={{ x: 420, duration: 250 }}
+              onclick={(e) => e.stopPropagation()}
+              onkeydown={(e) => e.stopPropagation()}
+      >
+        <Button
+                class="absolute top-3 right-3 z-30"
+                size="icon"
+                variant="outline"
+                onclick={() => (episodesOpen = false)}
+                aria-label="Close episodes"
+        >
+          <X class="size-4" />
+        </Button>
+
+        <div class="pt-10 overflow-y-auto flex-1">
+          <StreamsList
+                  {media}
+                  streamActive={true}
+                  activeSeason={season}
+                  activeEpisode={episode}
+                  autoJumpToActive={false}
+                  onPlayStream={(stream, s, e, name, candidates) => {
+        episodesOpen = false;
+        onPlayStream?.(stream, s, e, name, candidates);
+      }}
+          />
+        </div>
+      </div>
+    {/if}
   {/if}
 
   <!-- ── Skip segment button (IntroDB) ────────────────────────────────────── -->

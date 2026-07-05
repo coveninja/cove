@@ -33,6 +33,7 @@
     streamActive = false,
     activeSeason = undefined,
     activeEpisode = undefined,
+    autoJumpToActive = true,
   } = $props();
 
   // TV types
@@ -187,7 +188,9 @@
         // Same idea, one level deeper: jump straight to the episode that's
         // already playing rather than leaving the user on the episode
         // browser, having to find and re-click it themselves.
-        if (selectedSeason === activeSeason && activeEpisode != null) {
+        // When autoJumpToActive is false (the in-player sidebar), skip this
+        // so the sidebar opens on the episode list rather than the stream list.
+        if (autoJumpToActive && selectedSeason === activeSeason && activeEpisode != null) {
           const match = episodes.find(
             (e) => e.episode_number === activeEpisode,
           );
@@ -462,6 +465,8 @@
               {selectedSeason}
               bind:selectedEpisode
               {progressMap}
+              {activeSeason}
+              {activeEpisode}
             />
           {/each}
         {/if}
