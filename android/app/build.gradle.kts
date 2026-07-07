@@ -19,7 +19,9 @@ plugins {
 
 android {
     namespace = "com.coveninja.cove"
-    compileSdk = 35
+    // 36: required by androidyoutubeplayer 13.x (AAR metadata). targetSdk
+    // stays 35 — compileSdk only raises the API surface we build against.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.coveninja.cove"
@@ -104,5 +106,8 @@ dependencies {
     implementation("dev.jdtech.mpv:libmpv:0.5.1")
 
     // YouTube player for trailer embeds in the media detail sheet.
-    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:12.1.0")
+    // 13.x is required since YouTube's late-2025 embed enforcement: it sends
+    // the app package as the embed origin/Referer; 12.x gets "video
+    // unavailable" (error 152) on every video.
+    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")
 }

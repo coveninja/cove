@@ -400,6 +400,7 @@ private fun TrailerHeader(
     var ytPlayerView by remember { mutableStateOf<YouTubePlayerView?>(null) }
     var ytPlayer by remember { mutableStateOf<YouTubePlayer?>(null) }
     var playerReady by remember { mutableStateOf(false) }
+    var playerFailed by remember { mutableStateOf(false) }
     var isMuted by remember { mutableStateOf(true) }
 
     // Release the WebView when the composable leaves the tree (sheet dismissed).
@@ -420,11 +421,17 @@ private fun TrailerHeader(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // YouTube trailer — only mounted when a key is available.
-        if (trailerKey != null) {
+        // YouTube trailer — only mounted when a key is available and playable.
+        // On any player error (embed-restricted video, region block, network)
+        // we unmount and fall back to the backdrop instead of showing
+        // YouTube's error box.
+        if (trailerKey != null && !playerFailed) {
             AndroidView(
                 factory = { ctx ->
-                    val options = IFramePlayerOptions.Builder()
+                    // 13.x: Builder takes the context so the library can derive
+                    // the embed origin/Referer from the app package (YouTube's
+                    // late-2025 requirement for embedded players).
+                    val options = IFramePlayerOptions.Builder(ctx)
                         .controls(0)      // hide YouTube chrome
                         .rel(0)           // no related videos
                         .build()
@@ -460,6 +467,20 @@ private fun TrailerHeader(
                                     }
                                     else -> {}
                                 }
+                            }
+                            override fun onError(
+                                player: YouTubePlayer,
+                                error: PlayerConstants.PlayerError,
+                            ) {
+                                // Defer the release past this callback, then
+                                // let recomposition unmount the AndroidView.
+                                pv.post {
+                                    pv.release()
+                                    ytPlayerView = null
+                                    ytPlayer = null
+                                }
+                                playerReady = false
+                                playerFailed = true
                             }
                         }, options)
                         ytPlayerView = pv

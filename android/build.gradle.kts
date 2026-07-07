@@ -1,7 +1,9 @@
 // build.gradle.kts (root) — declares plugin versions without applying them.
 // Each subproject applies the plugins it actually needs in its own build script.
 plugins {
-    id("com.android.application")            version "8.7.3"  apply false
+    // 8.9.2: minimum AGP line with compileSdk 36 support (needed by
+    // androidyoutubeplayer 13.x); still compatible with Gradle 8.11.1.
+    id("com.android.application")            version "8.9.2"  apply false
     id("org.jetbrains.kotlin.android")       version "2.1.0"  apply false
     // Kotlin 2.x separates the Compose compiler into its own plugin; the old
     // composeOptions.kotlinCompilerExtensionVersion block is gone for this toolchain.
