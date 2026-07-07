@@ -268,6 +268,18 @@ func (m *Manager) getAllStreams(ctx context.Context, mediaType string, stremioID
 		if !addon.Enabled || addon.Kind != KindProvider {
 			continue
 		}
+		// Skip addons that explicitly declare their resources without including
+		// "stream" — catalog-only addons would always 404 on stream endpoints.
+		hasStream := false
+		for _, r := range addon.Manifest.Resources {
+			if r.Name == "stream" {
+				hasStream = true
+				break
+			}
+		}
+		if !hasStream {
+			continue
+		}
 		wg.Add(1)
 		go func(i int, addon AddonEntry) {
 			defer wg.Done()
@@ -451,6 +463,73 @@ func (m *Manager) isOfficialEnabledL(id string) bool {
 		return enabled
 	}
 	return true
+}
+
+// GetEnabledCatalogs returns CatalogRefs for all home-eligible, non-disabled
+// catalogs across all enabled stremio addons.
+func (m *Manager) GetEnabledCatalogs() []CatalogRef {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var refs []CatalogRef
+	for _, addon := range m.stremioAddons {
+		if !addon.Enabled {
+			continue
+		}
+		for _, cat := range addon.Manifest.Catalogs {
+			if !cat.IsHomeEligible() {
+				continue
+			}
+			if addon.DisabledCatalogs[cat.CatalogKey()] {
+				continue
+			}
+			refs = append(refs, CatalogRef{
+				AddonID:     addon.ID,
+				AddonName:   addon.Manifest.Name,
+				CatalogType: cat.Type,
+				CatalogID:   cat.ID,
+				Name:        cat.Name,
+			})
+		}
+	}
+	return refs
+}
+
+// SetCatalogEnabled enables or disables a specific catalog for an addon.
+// An absent DisabledCatalogs entry means enabled (default-on); disabling
+// stores true, re-enabling removes the entry.
+func (m *Manager) SetCatalogEnabled(addonID, catalogKey string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i, a := range m.stremioAddons {
+		if a.ID != addonID {
+			continue
+		}
+		if !enabled {
+			if m.stremioAddons[i].DisabledCatalogs == nil {
+				m.stremioAddons[i].DisabledCatalogs = make(map[string]bool)
+			}
+			m.stremioAddons[i].DisabledCatalogs[catalogKey] = true
+		} else {
+			delete(m.stremioAddons[i].DisabledCatalogs, catalogKey)
+		}
+		return m.saveL()
+	}
+	return fmt.Errorf("addon not found")
+}
+
+// FindAddonURL returns the base URL for a stremio addon by ID.
+func (m *Manager) FindAddonURL(addonID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, a := range m.stremioAddons {
+		if a.ID == addonID {
+			return a.URL, true
+		}
+	}
+	return "", false
 }
 
 // saveL persists the current state. Must be called with m.mu write-locked.

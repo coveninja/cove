@@ -4,9 +4,12 @@
   import ContinueWatching from "./ContinueWatching.svelte";
   import type { Media } from "$lib/types/tmdb";
   import { api, type DiscoverInsights, type LibraryStats } from "$lib/api";
+  import type { CatalogRef } from "$lib/types/addons";
+  import type { Page } from "$lib/types/types";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { onMount } from "svelte";
   import { tick } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
 
   // Same contract as MyListPage: parent hands down how to open a title and
   // (optionally) how to start watching it. We forward both into every row.
@@ -14,10 +17,12 @@
     onSelectMedia,
     onWatch,
     visible = true,
+    onChangePage,
   }: {
     onSelectMedia: (m: Media) => void;
     onWatch?: (m: Media, season?: number, episode?: number) => void;
     visible?: boolean;
+    onChangePage?: (p: Page) => void;
   } = $props();
 
   // Rows aren't hardcoded. Beyond the blended "Based on your tastes" feed, the
@@ -27,6 +32,11 @@
   type RowSpec = { key: string; header: string; load: () => Promise<Media[]> };
 
   let rows = $state<Row[]>([]);
+  let catalogRows = $state<Row[]>([]);
+
+  // Sidecar map from row key → CatalogRef so the template can wire up onSeeAll
+  // for catalog rows without duplicating the ref data into the Row shape.
+  const catalogRefMap = new SvelteMap<string, CatalogRef>();
 
   const PER_BUCKET = 2; // rows drawn from each source: movie genres / tv genres / keywords
   const ROW_LIMIT = 20; // titles fetched per row
@@ -48,6 +58,20 @@
       .then((d) => patchRow(spec.key, { medias: d }))
       .catch(() => patchRow(spec.key, { medias: [] }))
       .finally(() => patchRow(spec.key, { loading: false }));
+  }
+
+  function patchCatalogRow(key: string, patch: Partial<Row>): void {
+    const i = catalogRows.findIndex((r) => r.key === key);
+    if (i !== -1) catalogRows[i] = { ...catalogRows[i], ...patch };
+  }
+
+  function startCatalogRow(spec: RowSpec): void {
+    catalogRows = [...catalogRows, { key: spec.key, header: spec.header, medias: [], loading: true }];
+    spec
+      .load()
+      .then((d) => patchCatalogRow(spec.key, { medias: d }))
+      .catch(() => patchCatalogRow(spec.key, { medias: [] }))
+      .finally(() => patchCatalogRow(spec.key, { loading: false }));
   }
 
   // Turn the taste profile into row specs. Genre IDs are namespaced per media
@@ -130,12 +154,41 @@
         for (const spec of tasteSpecs(insights, primaryType)) startRow(spec);
       },
     );
+
+    // Catalog rows: ungated by signals_used — new users with no taste profile
+    // still get their addon catalogs. Runs in parallel with the taste flow above.
+    api.getCatalogs().catch(() => [] as CatalogRef[]).then((refs) => {
+      for (const ref of refs) {
+        const key = `catalog-${ref.addonId}-${ref.catalogType}/${ref.catalogId}`;
+        catalogRefMap.set(key, ref);
+        startCatalogRow({
+          key,
+          header: ref.name,
+          load: () =>
+            api.catalogPage(ref.addonId, ref.catalogType, ref.catalogId, 0, 20).then((r) => r.medias),
+        });
+      }
+    });
   });
 </script>
 
 <ScrollArea class="mb-24 h-full w-full">
   <div class="flex w-full flex-col justify-start gap-2 pb-8">
     <LargeRecommendationsCard bind:isPaused={areVideosPaused} {visible} />
+
+    {#each catalogRows as row (row.key)}
+      {@const ref = catalogRefMap.get(row.key)}
+      <SmallRecommendations
+        header={row.header}
+        medias={row.medias}
+        loading={row.loading}
+        onSelect={handleSelectMedia}
+        onWatch={handleOnWatch}
+        onSeeAll={ref
+          ? () => onChangePage?.({ type: "catalog", addonId: ref.addonId, catalogType: ref.catalogType, catalogId: ref.catalogId, name: ref.name })
+          : undefined}
+      />
+    {/each}
 
     <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
 

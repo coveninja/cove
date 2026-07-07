@@ -25,6 +25,7 @@
   import { api, type UpdateCheckResult, setTokenSource } from "$lib/api";
   import MyAccountPage from "./components/MyAccountPage.svelte";
   import ExplorePage from "./components/ExplorePage.svelte";
+  import CatalogGridPage from "./components/CatalogGridPage.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
   import OnboardingPage from "./components/OnboardingPage.svelte";
   import SplashScreen from "./components/SplashScreen.svelte";
@@ -681,7 +682,7 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
-            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} visible={currentPage.type === "home"} />
+            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} visible={currentPage.type === "home"} onChangePage={changePage} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "account"}>
             <MyAccountPage
@@ -694,6 +695,16 @@
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
             <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />
+          </div>
+          <div class="h-full" class:hidden={currentPage.type !== "catalog"}>
+            <CatalogGridPage
+              addonId={currentPage.type === "catalog" ? currentPage.addonId : ""}
+              catalogType={currentPage.type === "catalog" ? currentPage.catalogType : ""}
+              catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
+              name={currentPage.type === "catalog" ? currentPage.name : ""}
+              onSelectMedia={selectMedia}
+              onWatch={quickPlay}
+            />
           </div>
         </div>
       </div>

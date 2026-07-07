@@ -30,7 +30,18 @@ _PRIVATE_TAGS := $(strip \
 _BUILD_TAGS := $(subst $(_space),$(,),$(_PRIVATE_TAGS))
 _TAG_FLAGS  := $(if $(_BUILD_TAGS),-tags $(_BUILD_TAGS))
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean
+# Android SDK paths — override on the command line if your SDK lives elsewhere.
+# ANDROID_NDK_HOME points to the versioned NDK installed by sdkmanager.
+ANDROID_HOME     ?= $(HOME)/Android/Sdk
+ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
+
+# Targets that drive the Android toolchain export these so that gomobile,
+# sdkmanager, avdmanager, and Gradle all pick up the same SDK without
+# requiring the caller to pre-export them in the shell.
+export ANDROID_HOME
+export ANDROID_NDK_HOME
+
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean android-aar android android-install
 
 all: build
 
@@ -121,6 +132,29 @@ inject-private:
 	git submodule update --init
 	cp _private/cove-auth/*.go internal/supabase/
 	cp _private/cove-discover/*.go internal/discover/
+
+## Build the gomobile AAR for Android arm64 + amd64 (API 29+).
+## arm64 targets real devices; amd64 is required for the x86_64 emulator AVD.
+## Prerequisites:
+##   1. gomobile: go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
+##   2. ANDROID_HOME / ANDROID_NDK_HOME set (defaults above, override as needed)
+##   3. JDK 17 (gomobile invokes javac when packaging the AAR)
+## Private build tags (supabase, discover) are added automatically when the
+## corresponding implementation files are present (run `make inject-private` first).
+android-aar:
+	mkdir -p android/app/libs
+	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm64,android/amd64 -androidapi 29 $(_TAG_FLAGS) -o android/app/libs/cove.aar ./mobile
+
+## Build the Android debug APK. Requires all android-aar prerequisites above.
+android: android-aar
+	cd android && ./gradlew assembleDebug
+
+## Install the debug APK on a connected device / running emulator and launch.
+## For UI-only iterations that don't require an AAR rebuild, run:
+##   cd android && ./gradlew installDebug
+android-install: android
+	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.coveninja.cove/.MainActivity
 
 ## Remove build artifacts.
 clean:

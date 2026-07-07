@@ -159,7 +159,10 @@ func check(currentVersion string) (*CheckResult, error) {
 	// release tarball in place would either be a no-op (Flatpak's read-only
 	// /app) or silently desync a pacman-owned install from its package
 	// database, so self-update never offers itself here.
-	if runtime.GOOS == "linux" {
+	// Android and iOS distribute and update through the Play Store and App
+	// Store respectively; self-patching outside those channels is not
+	// permitted and would not work in a sandboxed environment.
+	if runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "ios" {
 		return result, nil
 	}
 

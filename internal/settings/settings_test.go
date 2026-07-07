@@ -106,6 +106,42 @@ func TestMergeFrom_AcceptsNewer(t *testing.T) {
 	assert.True(t, st.Get().OnboardingDone, "a genuinely newer incoming merge must be accepted")
 }
 
+// TestMergeFrom_PreservesRemoteAccessFields verifies that a Supabase pull
+// (MergeFrom) never overwrites the local device's RemoteAccessEnabled and
+// RemoteAccessToken — propagating these via sync would silently open a LAN
+// listener on every synced device, which is a security and correctness bug.
+func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	// Establish local remote-access config (device-specific).
+	// Use Set (not MergeFrom) to simulate a local user action — MergeFrom is
+	// for incoming remote pulls and now preserves the cached values of these
+	// fields, so it cannot be used to write them in the first place.
+	local := st.Get()
+	local.RemoteAccessEnabled = true
+	local.RemoteAccessToken = "local-device-token"
+	require.NoError(t, st.Set(local))
+	require.True(t, st.Get().RemoteAccessEnabled)
+	require.Equal(t, "local-device-token", st.Get().RemoteAccessToken)
+
+	// A newer remote pull with different remote-access values arrives.
+	remote := st.Get()
+	remote.RemoteAccessEnabled = false        // remote device has it disabled
+	remote.RemoteAccessToken = "remote-token" // remote device's token
+	remote.HideSpoilers = true                // some regular setting that should merge
+	remote.UpdatedAt = st.Get().UpdatedAt.Add(time.Hour)
+	st.MergeFrom(remote)
+
+	s := st.Get()
+	// Regular setting from the remote pull should win (it's newer).
+	assert.True(t, s.HideSpoilers, "newer remote regular setting must be accepted")
+	// Device-local remote-access config must NOT have been overwritten.
+	assert.True(t, s.RemoteAccessEnabled, "RemoteAccessEnabled must be preserved from local")
+	assert.Equal(t, "local-device-token", s.RemoteAccessToken, "RemoteAccessToken must be preserved from local")
+}
+
 func TestSetProfile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 

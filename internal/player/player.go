@@ -66,6 +66,10 @@ type Player struct {
 	prefetchHash     string
 	prefetchFile     *torrent.File
 	prefetchInFlight atomic.Bool // true while a PrefetchTorrent goroutine is running
+
+	// dataDir is the resolved directory for downloaded torrent pieces, set
+	// once in New and shared by CleanupTorrents for removal of stale data.
+	dataDir string
 }
 
 type streamHeaderEntry struct {
@@ -75,10 +79,12 @@ type streamHeaderEntry struct {
 
 const streamHeadersTTL = 30 * time.Minute
 
-// torrentDataDir is where the anacrolix client writes downloaded pieces. The
-// reaper removes per-torrent subdirectories under here when a torrent is
-// dropped, so New() and CleanupTorrents must agree on the path.
-var torrentDataDir = filepath.Join(os.TempDir(), "cove-torrents")
+// torrentDataDirDefault is the fallback location for downloaded torrent pieces
+// when no override is passed to New. Mobile builds (Android) supply an
+// explicit path because os.TempDir() returns /tmp, which is unavailable or
+// undesirable on Android. New() and CleanupTorrents must agree on the
+// resolved path — it is stored on the Player struct after construction.
+var torrentDataDirDefault = filepath.Join(os.TempDir(), "cove-torrents")
 
 // infoHashRe validates a BitTorrent v1 infohash: 40 hex characters (SHA-1,
 // hex-encoded). Used to reject garbage before /api/prefetch-download burns a
@@ -111,9 +117,16 @@ type torrentState struct {
 // injected TMDB client, addon manager, and Nuvio plugin manager. The torrent
 // client is core functionality, so a failure here is returned for the caller
 // to treat as fatal.
-func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager) (*Player, error) {
+//
+// dataDir, when non-empty, overrides the default torrentDataDirDefault
+// (os.TempDir()/cove-torrents) as the directory where downloaded torrent
+// pieces are stored. Pass an empty string to use the platform default.
+func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager, dataDir string) (*Player, error) {
+	if dataDir == "" {
+		dataDir = torrentDataDirDefault
+	}
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = torrentDataDir
+	cfg.DataDir = dataDir
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, err
@@ -125,6 +138,7 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		addonMgr:       addonMgr,
 		nuvioMgr:       nuvioMgr,
 		streamHeaders:  map[string]streamHeaderEntry{},
+		dataDir:        dataDir,
 	}, nil
 }
 
@@ -510,7 +524,7 @@ func (p *Player) CleanupTorrents() {
 		name := d.t.Name() // capture before Drop; valid once metadata is known
 		d.t.Drop()
 		if name != "" {
-			if err := os.RemoveAll(filepath.Join(torrentDataDir, name)); err != nil {
+			if err := os.RemoveAll(filepath.Join(p.dataDir, name)); err != nil {
 				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
 			}
 		}

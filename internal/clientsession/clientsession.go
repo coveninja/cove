@@ -15,11 +15,9 @@ import (
 )
 
 func filePath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "cove", "session.json"), nil
+	// Route through utils.ConfigPath so the SetDataDir override (used by
+	// mobile builds and COVE_DATA_DIR on desktop) propagates here too.
+	return utils.ConfigPath("session.json")
 }
 
 func SetupHandlers(mux *http.ServeMux) {

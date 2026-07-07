@@ -7,6 +7,7 @@
 package tmdb
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,6 +62,13 @@ type Client struct {
 	detailsCacheMu sync.Mutex
 	detailsCache   map[string]detailsCacheEntry
 	detailsSF      singleflight.Group
+
+	// Catalog page cache for /api/catalog. Keyed
+	// addonURL+"|"+type+"|"+id+"|"+skip+"|"+limit, TTL catalogCacheTTL.
+	// Expired entries are swept on insert (same inline-expiry style as
+	// qualityCache / addons.Manager.streamCache).
+	catalogCacheMu sync.Mutex
+	catalogCache   map[string]catalogPageEntry
 }
 
 type detailsCacheEntry struct {
@@ -86,6 +94,16 @@ const (
 	qualityCacheTTLHit   = 15 * time.Minute
 	qualityCacheTTLEmpty = 5 * time.Minute
 )
+
+// catalogPageEntry caches one resolved page of catalog results so repeated
+// visits to the same catalog row don't re-hit the addon + TMDB on every render.
+type catalogPageEntry struct {
+	medias   []Media
+	nextSkip int
+	expires  time.Time
+}
+
+const catalogCacheTTL = 5 * time.Minute
 
 func (c *Client) qualityCacheGet(key string) (string, bool) {
 	c.qualityCacheMu.Lock()
@@ -113,6 +131,32 @@ func (c *Client) qualityCacheSet(key, quality string, ttl time.Duration) {
 	c.qualityCache[key] = qualityCacheEntry{quality: quality, expires: now.Add(ttl)}
 }
 
+func (c *Client) catalogCacheGet(key string) ([]Media, int, bool) {
+	c.catalogCacheMu.Lock()
+	defer c.catalogCacheMu.Unlock()
+	e, ok := c.catalogCache[key]
+	if !ok || time.Now().After(e.expires) {
+		return nil, 0, false
+	}
+	cp := make([]Media, len(e.medias))
+	copy(cp, e.medias)
+	return cp, e.nextSkip, true
+}
+
+// catalogCacheSet stores a resolved page and sweeps expired entries while
+// already holding the lock — same inline-expiry style as qualityCacheSet.
+func (c *Client) catalogCacheSet(key string, medias []Media, nextSkip int) {
+	c.catalogCacheMu.Lock()
+	defer c.catalogCacheMu.Unlock()
+	now := time.Now()
+	for k, v := range c.catalogCache {
+		if now.After(v.expires) {
+			delete(c.catalogCache, k)
+		}
+	}
+	c.catalogCache[key] = catalogPageEntry{medias: medias, nextSkip: nextSkip, expires: now.Add(catalogCacheTTL)}
+}
+
 // New returns a TMDB client. The 15s timeout matters because http.DefaultClient
 // has none, so a stalled TMDB response would otherwise hold a request goroutine
 // open forever; TMDB is normally fast, so 15s only trips on a dead connection.
@@ -123,6 +167,7 @@ func New(apiKey string) *Client {
 		imdbCache:    make(map[string]string),
 		qualityCache: make(map[string]qualityCacheEntry),
 		detailsCache: make(map[string]detailsCacheEntry),
+		catalogCache: make(map[string]catalogPageEntry),
 	}
 }
 
@@ -1377,6 +1422,117 @@ func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {
 	return data.Results, nil
 }
 
+// FindByIMDBId resolves an IMDb id to a TMDB Media via the /find endpoint.
+// tmdbType selects which result array to pick from ("tv" or "movie").
+func (c *Client) FindByIMDBId(ctx context.Context, imdbID, tmdbType string) (*Media, error) {
+	url := fmt.Sprintf("%s/find/%s?api_key=%s&external_source=imdb_id", baseURL, imdbID, c.apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		if err := Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /find/%s", res.StatusCode, imdbID)
+	}
+
+	var data struct {
+		MovieResults []Media `json:"movie_results"`
+		TVResults    []Media `json:"tv_results"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	results := data.MovieResults
+	if tmdbType == "tv" {
+		results = data.TVResults
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("tmdb: no results for imdb id %s", imdbID)
+	}
+
+	m := results[0]
+	m.MediaType = tmdbType
+	if m.PosterURL != "" {
+		m.PosterURL = imgURL("w500", m.PosterURL)
+	}
+	return &m, nil
+}
+
+// ResolveMeta maps a StremioMeta to a TMDB Media. Returns nil when the id
+// can't be resolved — callers drop nils rather than surfacing resolution
+// failures. Stremio "series" is mapped to TMDB "tv" at this boundary.
+//
+// Supported id forms:
+//   - "tmdb:<id>" — direct TMDB numeric id, optional ":season:episode" suffix ignored.
+//   - "tt..." (IMDb) — resolved via FindByIMDBId, with the TMDB id cached
+//     permanently in imdbIDCached so repeat visits are instant.
+//   - anything else → nil.
+func (c *Client) ResolveMeta(ctx context.Context, meta addons.StremioMeta) *Media {
+	tmdbType := meta.Type
+	if tmdbType == "series" {
+		tmdbType = "tv"
+	}
+	if tmdbType != "movie" && tmdbType != "tv" {
+		return nil
+	}
+
+	if strings.HasPrefix(meta.ID, "tmdb:") {
+		raw := strings.TrimPrefix(meta.ID, "tmdb:")
+		// Strip any episode suffix (e.g. "tmdb:12345:1:2" → "12345").
+		if idx := strings.IndexByte(raw, ':'); idx >= 0 {
+			raw = raw[:idx]
+		}
+		id, err := strconv.Atoi(raw)
+		if err != nil || id <= 0 {
+			return nil
+		}
+		m, err := c.GetMediaByID(id, tmdbType)
+		if err != nil {
+			return nil
+		}
+		return m
+	}
+
+	if strings.HasPrefix(meta.ID, "tt") {
+		// Cache the TMDB numeric id (as a string) for this IMDb id permanently
+		// via imdbIDCached — FindByIMDBId is a one-time cost per id, after which
+		// GetMediaByID does the real fetch (its details cache handles further
+		// repeated loads).
+		cacheKey := "find-" + tmdbType + ":" + meta.ID
+		tmdbIDStr, err := c.imdbIDCached(cacheKey, func() (string, error) {
+			m, err := c.FindByIMDBId(ctx, meta.ID, tmdbType)
+			if err != nil {
+				return "", err
+			}
+			return strconv.Itoa(m.ID), nil
+		})
+		if err != nil || tmdbIDStr == "" {
+			return nil
+		}
+		tmdbID, err := strconv.Atoi(tmdbIDStr)
+		if err != nil || tmdbID <= 0 {
+			return nil
+		}
+		m, err := c.GetMediaByID(tmdbID, tmdbType)
+		if err != nil {
+			return nil
+		}
+		return m
+	}
+
+	return nil
+}
+
 func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 	mux.HandleFunc("/api/keywords", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
@@ -1829,6 +1985,124 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 
 		wg.Wait()
+	}))
+
+	// GET /api/catalog?addonId=&catalogType=&catalogId=&skip=<n>&limit=<n>
+	// Returns {medias:[], nextSkip:n} — one page of a Stremio addon catalog,
+	// resolved through TMDB. Unresolvable metas are silently dropped; page
+	// results are cached 5 minutes per (addonURL, type, id, skip, limit) key.
+	mux.HandleFunc("/api/catalog", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		addonID := r.URL.Query().Get("addonId")
+		catalogType := r.URL.Query().Get("catalogType")
+		catalogID := r.URL.Query().Get("catalogId")
+		if addonID == "" || catalogType == "" || catalogID == "" {
+			http.Error(w, "missing addonId, catalogType, or catalogId", http.StatusBadRequest)
+			return
+		}
+
+		skip := 0
+		if s := r.URL.Query().Get("skip"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+				skip = n
+			}
+		}
+
+		const defaultLimit = 20
+		const maxLimit = 100
+		limit := defaultLimit
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if n, err := strconv.Atoi(l); err == nil && n > 0 {
+				limit = n
+			}
+			// n <= 0 stays at default
+		}
+		if limit > maxLimit {
+			limit = maxLimit
+		}
+
+		addonURL, ok := addonMgr.FindAddonURL(addonID)
+		if !ok {
+			http.Error(w, "addon not found", http.StatusNotFound)
+			return
+		}
+
+		cacheKey := addonURL + "|" + catalogType + "|" + catalogID + "|" + strconv.Itoa(skip) + "|" + strconv.Itoa(limit)
+		if medias, nextSkip, ok := c.catalogCacheGet(cacheKey); ok {
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(struct {
+				Medias   []Media `json:"medias"`
+				NextSkip int     `json:"nextSkip"`
+			}{Medias: medias, NextSkip: nextSkip}); err != nil {
+				log.Println("catalog cache encode:", err)
+			}
+			return
+		}
+
+		rawMetas, err := addonMgr.FetchCatalog(r.Context(), addonURL, catalogType, catalogID, skip)
+		if err != nil {
+			http.Error(w, "addon fetch failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		// nextSkip advances by raw item count (before resolution) so
+		// unresolvable metas don't cause the pagination cursor to undercount.
+		consumed := len(rawMetas)
+		if consumed > limit {
+			consumed = limit
+			rawMetas = rawMetas[:limit]
+		}
+		nextSkip := skip + consumed
+
+		// Resolve metas concurrently, order-preserving, bounded semaphore so we
+		// don't open hundreds of TMDB connections for a large limit.
+		const resolveSem = 6
+		results := make([]*Media, len(rawMetas))
+		sem := make(chan struct{}, resolveSem)
+		var wg sync.WaitGroup
+		ctx := r.Context()
+
+		for i, meta := range rawMetas {
+			wg.Add(1)
+			go func(i int, meta addons.StremioMeta) {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					return
+				}
+				results[i] = c.ResolveMeta(ctx, meta)
+			}(i, meta)
+		}
+		wg.Wait()
+
+		// Compact nils — unresolvable metas are silently dropped.
+		medias := make([]Media, 0, len(results))
+		for _, m := range results {
+			if m != nil {
+				medias = append(medias, *m)
+			}
+		}
+
+		// Don't cache when the client disconnected mid-resolution — the early
+		// ctx-done returns above would bake a partially-resolved page in for
+		// the full TTL.
+		if ctx.Err() == nil {
+			c.catalogCacheSet(cacheKey, medias, nextSkip)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(struct {
+			Medias   []Media `json:"medias"`
+			NextSkip int     `json:"nextSkip"`
+		}{Medias: medias, NextSkip: nextSkip}); err != nil {
+			log.Println("catalog encode:", err)
+		}
 	}))
 }
 

@@ -7,6 +7,8 @@
 package settings
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -71,6 +73,27 @@ type Settings struct {
 	// playback of the next episode starts near-instantly. Default true.
 	PrefetchNextEpisode bool `json:"prefetchNextEpisode"`
 
+	// Remote access (Phase 5) — opens a separate LAN listener so other devices
+	// (e.g. the Android app in thin-client mode) can reach this backend over the
+	// local network. Settings are per-profile; remote access follows whichever
+	// profile is currently active.
+	//
+	// RemoteAccessEnabled: when true the server opens a separate TCP listener on
+	// 0.0.0.0:<main-port+1> (default 0.0.0.0:6970). The main loopback listener
+	// (127.0.0.1:6969) is never touched. When false, the LAN port is simply
+	// closed — a port scan gets connection-refused, not a 403.
+	//
+	// RemoteAccessToken: a 32-byte hex string generated once (crypto/rand) the
+	// first time RemoteAccessEnabled is set to true, then persisted and never
+	// auto-rotated. Every request arriving on the LAN listener must supply this
+	// token via X-Cove-Token header or ?token= query param.
+	//
+	// NOTE: these two fields are intentionally excluded from Supabase sync
+	// (see MergeFrom). They are device-local security config and must not
+	// propagate to other devices.
+	RemoteAccessEnabled bool   `json:"remoteAccessEnabled"`
+	RemoteAccessToken   string `json:"remoteAccessToken"`
+
 	// Sync bookkeeping — stamped server-side on every local write, used to resolve
 	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -101,14 +124,27 @@ var defaultSettings = Settings{
 	PrefetchStreams:       true,
 	SourcePreference:      "",
 	PrefetchNextEpisode:   true,
+	RemoteAccessEnabled:   false,
+	RemoteAccessToken:     "",
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits
 // nothing for Store — only the Settings data type crosses into the generated TS.
 type Store struct {
-	mu     sync.RWMutex
-	cached Settings
-	path   string
+	mu       sync.RWMutex
+	cached   Settings
+	path     string
+	onChange func(Settings) // called in a goroutine after every successful write; nil-safe
+}
+
+// SetOnChange registers a hook that fires (in its own goroutine) after every
+// successful settings write. The hook receives a snapshot of the newly-saved
+// settings. Used by the server layer to react to RemoteAccessEnabled changes
+// without polling. Pass nil to clear.
+func (s *Store) SetOnChange(fn func(Settings)) {
+	s.mu.Lock()
+	s.onChange = fn
+	s.mu.Unlock()
 }
 
 // New resolves settings-{profileID}.json in the per-user config directory (see
@@ -141,12 +177,31 @@ func New(profileID string) (*Store, error) {
 	return s, nil
 }
 
+// write persists s.cached to disk and fires the onChange hook in a new goroutine.
+// Must be called with s.mu held. The goroutine receives a snapshot so it never
+// races against subsequent mutations.
 func (s *Store) write() error {
 	data, err := json.MarshalIndent(s.cached, "", "  ")
 	if err != nil {
 		return err
 	}
-	return utils.AtomicWriteFile(s.path, data, 0o644)
+	if err := utils.AtomicWriteFile(s.path, data, 0o644); err != nil {
+		return err
+	}
+	if s.onChange != nil {
+		snap := s.cached
+		go s.onChange(snap)
+	}
+	return nil
+}
+
+// generateToken returns a 32-byte cryptographically random hex string.
+func generateToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Get returns the current settings value. Safe for concurrent use.
@@ -156,16 +211,73 @@ func (s *Store) Get() Settings {
 	return s.cached
 }
 
+// Set replaces the in-memory settings and persists them to disk. It is the
+// programmatic equivalent of a PUT /api/settings request and applies the same
+// token-preservation logic. Safe for concurrent use.
+func (s *Store) Set(incoming Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	incoming = s.applyTokenPolicy(incoming)
+	incoming.UpdatedAt = time.Now().UTC()
+	s.cached = incoming
+	return s.write()
+}
+
+// applyTokenPolicy ensures RemoteAccessToken is populated whenever remote
+// access is enabled. Called under s.mu — must not acquire the lock itself.
+//
+//   - If the client sends a non-empty token, keep it as-is.
+//   - If the client sends an empty token but one already exists (e.g. a full
+//     read-modify-write that omitted the field), preserve the existing token.
+//   - If no token exists yet and remote access is being enabled for the first
+//     time, generate one with crypto/rand.
+//   - If remote access is disabled, leave the token untouched (so it's still
+//     there when the user re-enables it without needing to re-pair).
+func (s *Store) applyTokenPolicy(incoming Settings) Settings {
+	if !incoming.RemoteAccessEnabled {
+		return incoming
+	}
+	if incoming.RemoteAccessToken != "" {
+		// Client supplied a token explicitly — respect it.
+		return incoming
+	}
+	if s.cached.RemoteAccessToken != "" {
+		// Preserve the existing generated token across full-object PUTs that
+		// omit the field (common when clients read-then-write the settings blob).
+		incoming.RemoteAccessToken = s.cached.RemoteAccessToken
+		return incoming
+	}
+	// First time enabling remote access: generate a token.
+	token, err := generateToken()
+	if err != nil {
+		log.Println("settings: generate remote-access token:", err)
+		return incoming
+	}
+	incoming.RemoteAccessToken = token
+	return incoming
+}
+
 // MergeFrom replaces the cached settings with incoming (from a Supabase pull), but
 // only if incoming is actually newer — otherwise a stale pull would silently revert
 // a local edit that hasn't been pushed to Supabase yet (see library.MergeFrom for
 // the same pattern applied to library entries).
+//
+// RemoteAccessEnabled and RemoteAccessToken are always preserved from the LOCAL
+// (cached) values and are never overwritten by an incoming merge, regardless of
+// which side has the newer UpdatedAt. These fields are device-local security
+// configuration: propagating them via Supabase would silently open a LAN listener
+// on every synced device (e.g. the phone's embedded backend), which is both a
+// security concern and a functional bug. This mirrors the nuvio-config exclusion
+// precedent — per-device runtime configuration must not roam across devices.
 func (s *Store) MergeFrom(incoming Settings) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !incoming.UpdatedAt.After(s.cached.UpdatedAt) {
 		return
 	}
+	// Always preserve device-local remote-access config (see comment above).
+	incoming.RemoteAccessEnabled = s.cached.RemoteAccessEnabled
+	incoming.RemoteAccessToken = s.cached.RemoteAccessToken
 	s.cached = incoming
 	if err := s.write(); err != nil {
 		log.Println("settings: merge write:", err)
@@ -211,16 +323,17 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 
-		// PUT /api/settings — merge & persist
+		// PUT /api/settings — validate, apply token policy, persist
 		if r.Method == http.MethodPut {
 			var incoming Settings
 			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 				http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			incoming.UpdatedAt = time.Now().UTC()
 
 			s.mu.Lock()
+			incoming = s.applyTokenPolicy(incoming)
+			incoming.UpdatedAt = time.Now().UTC()
 			s.cached = incoming
 			err := s.write()
 			s.mu.Unlock()

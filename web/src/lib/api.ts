@@ -7,6 +7,7 @@ import type {
 } from "$lib/types/tmdb";
 import type {
   AddonEntry,
+  CatalogRef,
   Stream,
   TimestampData,
   WatchOption,
@@ -597,6 +598,38 @@ export const api = {
     if (id) p.set("id", id);
     else if (url) p.set("url", url);
     return request(`/addons?${p}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
+  getCatalogs: (): Promise<CatalogRef[]> => request(`/catalogs`),
+
+  catalogPage: (
+    addonId: string,
+    catalogType: string,
+    catalogId: string,
+    skip: number,
+    limit?: number,
+  ): Promise<{ medias: Media[]; nextSkip: number }> => {
+    const p = new URLSearchParams({
+      addonId,
+      catalogType,
+      catalogId,
+      skip: String(skip),
+    });
+    if (limit != null) p.set("limit", String(limit));
+    return request(`/catalog?${p}`);
+  },
+
+  toggleCatalog: (
+    addonId: string,
+    catalogKey: string,
+    enabled: boolean,
+  ): Promise<void> => {
+    const p = new URLSearchParams({ id: addonId, catalog: catalogKey });
+    return request(`/addons/catalog?${p}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),

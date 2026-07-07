@@ -2,6 +2,7 @@ package addons
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,12 +29,16 @@ func newTestManager(entries []AddonEntry) *Manager {
 
 func streamAddon(id string, url string) AddonEntry {
 	return AddonEntry{
-		ID:       id,
-		URL:      url,
-		Kind:     KindProvider,
-		Source:   SourceStremio,
-		Enabled:  true,
-		Manifest: Manifest{ID: id, Name: id},
+		ID:      id,
+		URL:     url,
+		Kind:    KindProvider,
+		Source:  SourceStremio,
+		Enabled: true,
+		Manifest: Manifest{
+			ID:        id,
+			Name:      id,
+			Resources: []ManifestResource{{Name: "stream"}},
+		},
 	}
 }
 
@@ -211,6 +216,73 @@ func TestGetAllStreams_DisabledAndNonProviderAddonsSkipped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, streams)
 	assert.Equal(t, int32(0), atomic.LoadInt32(&hits), "disabled/non-provider addons must never be fetched")
+}
+
+func TestGetAllStreams_NoStreamResourceSkipped(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"streams":[{"name":"x","title":"t","url":"http://x/1"}]}`)
+	}))
+	defer srv.Close()
+
+	// An addon with no Resources at all should be skipped even if KindProvider.
+	noResources := AddonEntry{
+		ID:      "no-res",
+		URL:     srv.URL,
+		Kind:    KindProvider,
+		Source:  SourceStremio,
+		Enabled: true,
+		Manifest: Manifest{ID: "no-res", Name: "no-res"},
+	}
+	m := newTestManager([]AddonEntry{noResources})
+
+	streams, err := m.GetAllStreams(context.Background(), "movie", "tt1")
+	require.NoError(t, err)
+	assert.Empty(t, streams)
+	assert.Equal(t, int32(0), atomic.LoadInt32(&hits), "addon with no stream resource must never be fetched")
+}
+
+func TestManifestCatalogUnmarshal_LegacyForm(t *testing.T) {
+	// Legacy form: extraRequired + extraSupported arrays of strings.
+	raw := `{
+		"type": "movie",
+		"id":   "top",
+		"name": "Top List",
+		"extraRequired":  ["genre"],
+		"extraSupported": ["skip", "genre"]
+	}`
+	var c ManifestCatalog
+	require.NoError(t, json.Unmarshal([]byte(raw), &c))
+	assert.Equal(t, "movie", c.Type)
+	assert.Equal(t, "top", c.ID)
+	// genre appears in extraRequired → IsRequired true
+	// skip appears only in extraSupported → IsRequired false
+	// genre should not appear twice (dedup)
+	require.Len(t, c.Extra, 2)
+	assert.Equal(t, ManifestCatalogExtra{Name: "genre", IsRequired: true}, c.Extra[0])
+	assert.Equal(t, ManifestCatalogExtra{Name: "skip", IsRequired: false}, c.Extra[1])
+}
+
+func TestManifestCatalogUnmarshal_ModernForm(t *testing.T) {
+	raw := `{"type":"series","id":"popular","name":"Popular","extra":[{"name":"genre","isRequired":false},{"name":"skip","isRequired":false}]}`
+	var c ManifestCatalog
+	require.NoError(t, json.Unmarshal([]byte(raw), &c))
+	assert.Equal(t, "series", c.Type)
+	require.Len(t, c.Extra, 2)
+	assert.False(t, c.Extra[0].IsRequired)
+}
+
+func TestManifestCatalog_IsHomeEligible(t *testing.T) {
+	searchOnly := ManifestCatalog{Extra: []ManifestCatalogExtra{{Name: "search", IsRequired: true}}}
+	assert.False(t, searchOnly.IsHomeEligible(), "required non-skip extra must exclude from home")
+
+	skipOnly := ManifestCatalog{Extra: []ManifestCatalogExtra{{Name: "skip", IsRequired: true}}}
+	assert.True(t, skipOnly.IsHomeEligible(), "required skip extra is pagination, not search — home eligible")
+
+	noExtras := ManifestCatalog{}
+	assert.True(t, noExtras.IsHomeEligible())
 }
 
 func TestGetAllSubtitles_Parallel(t *testing.T) {

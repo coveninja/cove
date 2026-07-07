@@ -42,6 +42,84 @@ type ManifestResource struct {
 	IDPrefixes []string `json:"idPrefixes"`
 }
 
+// ManifestCatalogExtra describes one parameterisation dimension for a catalog
+// (e.g. genre, skip). IsRequired true means the catalog can't be browsed
+// without supplying that parameter — i.e. it's search-only.
+type ManifestCatalogExtra struct {
+	Name       string `json:"name"`
+	IsRequired bool   `json:"isRequired"`
+}
+
+// ManifestCatalog is one catalog declared in a Stremio addon manifest. The
+// custom UnmarshalJSON normalises both the modern extra:[{name,isRequired}]
+// form and the legacy extraRequired/extraSupported:[]string form into the
+// unified Extra field.
+type ManifestCatalog struct {
+	Type  string                 `json:"type"`
+	ID    string                 `json:"id"`
+	Name  string                 `json:"name"`
+	Extra []ManifestCatalogExtra `json:"extra,omitempty"`
+}
+
+// CatalogKey is the stable composite identity for a catalog across all
+// callers (cache keys, API params, persistence). The same catalog id can
+// appear under both "movie" and "series", so the type prefix is required.
+func (c ManifestCatalog) CatalogKey() string {
+	return c.Type + "/" + c.ID
+}
+
+// IsHomeEligible returns false if the catalog has any required extra
+// parameter other than "skip" — such catalogs can't be browsed without
+// a supplied parameter value and therefore can't appear as home page rows.
+func (c ManifestCatalog) IsHomeEligible() bool {
+	for _, e := range c.Extra {
+		if e.IsRequired && e.Name != "skip" {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *ManifestCatalog) UnmarshalJSON(data []byte) error {
+	// Raw form captures both the modern extra array and the legacy
+	// extraRequired/extraSupported string slices in one pass.
+	var raw struct {
+		Type           string                 `json:"type"`
+		ID             string                 `json:"id"`
+		Name           string                 `json:"name"`
+		Extra          []ManifestCatalogExtra `json:"extra"`
+		ExtraRequired  []string               `json:"extraRequired"`
+		ExtraSupported []string               `json:"extraSupported"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	c.Type = raw.Type
+	c.ID = raw.ID
+	c.Name = raw.Name
+
+	if len(raw.Extra) > 0 {
+		// Modern form — use as-is.
+		c.Extra = raw.Extra
+	} else if len(raw.ExtraRequired) > 0 || len(raw.ExtraSupported) > 0 {
+		// Legacy form — merge required first, then optional, deduped.
+		seen := make(map[string]bool)
+		for _, name := range raw.ExtraRequired {
+			if !seen[name] {
+				seen[name] = true
+				c.Extra = append(c.Extra, ManifestCatalogExtra{Name: name, IsRequired: true})
+			}
+		}
+		for _, name := range raw.ExtraSupported {
+			if !seen[name] {
+				seen[name] = true
+				c.Extra = append(c.Extra, ManifestCatalogExtra{Name: name, IsRequired: false})
+			}
+		}
+	}
+	return nil
+}
+
 type Manifest struct {
 	ID          string             `json:"id"`
 	Name        string             `json:"name"`
@@ -49,6 +127,7 @@ type Manifest struct {
 	Version     string             `json:"version"`
 	Resources   []ManifestResource `json:"resources"`
 	Types       []string           `json:"types"`
+	Catalogs    []ManifestCatalog  `json:"catalogs,omitempty"`
 }
 
 type AddonEntry struct {
@@ -58,6 +137,30 @@ type AddonEntry struct {
 	Kind     AddonKind   `json:"kind"`
 	Source   AddonSource `json:"source"`
 	Enabled  bool        `json:"enabled"`
+	// DisabledCatalogs tracks per-catalog opt-outs. An absent key means the
+	// catalog is enabled (default-on, only explicit opt-outs are stored,
+	// mirroring how OfficialEnabled works for official addons). Persists via
+	// the existing addonStore JSON encode in store.go.
+	DisabledCatalogs map[string]bool `json:"disabledCatalogs,omitempty"`
+}
+
+// StremioMeta is one item from a Stremio catalog response.
+type StremioMeta struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Poster      string `json:"poster"`
+	Description string `json:"description"`
+	ReleaseInfo string `json:"releaseInfo"`
+}
+
+// CatalogRef is the DTO for a single enabled catalog sent to the frontend.
+type CatalogRef struct {
+	AddonID     string `json:"addonId"`
+	AddonName   string `json:"addonName"`
+	CatalogType string `json:"catalogType"`
+	CatalogID   string `json:"catalogId"`
+	Name        string `json:"name"`
 }
 
 type Subtitle struct {
@@ -205,6 +308,40 @@ func (m *Manager) FetchSubtitles(ctx context.Context, addonURL string, mediaType
 	return data.Subtitles, nil
 }
 
+// FetchCatalog retrieves one page of catalog items from a Stremio addon.
+// skip == 0 uses the plain .json form (some addons 404 on the skip=0 extra
+// param form); otherwise the /skip=N.json paginated form is used.
+func (m *Manager) FetchCatalog(ctx context.Context, addonURL, catalogType, catalogID string, skip int) ([]StremioMeta, error) {
+	var url string
+	if skip == 0 {
+		url = fmt.Sprintf("%s/catalog/%s/%s.json", addonURL, catalogType, catalogID)
+	} else {
+		url = fmt.Sprintf("%s/catalog/%s/%s/skip=%d.json", addonURL, catalogType, catalogID, skip)
+	}
+
+	res, err := m.addonRequest(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		if err := Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}(res.Body)
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
+	}
+
+	var data struct {
+		Metas []StremioMeta `json:"metas"`
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxAddonResponseBody)).Decode(&data); err != nil {
+		return nil, err
+	}
+	return data.Metas, nil
+}
+
 func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 	// GET  /api/addons          — list all addons
 	// POST /api/addons          — add stremio addon (body: {"url":"..."})
@@ -314,6 +451,49 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		if err := json.NewEncoder(w).Encode(data); err != nil {
 			log.Println("timestamps encode:", err)
 		}
+	}))
+
+	// GET /api/catalogs — list enabled, home-eligible catalogs across all stremio addons.
+	mux.HandleFunc("/api/catalogs", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		refs := m.GetEnabledCatalogs()
+		if refs == nil {
+			refs = []CatalogRef{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(refs); err != nil {
+			log.Println("catalogs list:", err)
+		}
+	}))
+
+	// PATCH /api/addons/catalog?id=<addonID>&catalog=<type/id>
+	// body: {"enabled":bool} — toggle a specific catalog on or off (204 on success).
+	mux.HandleFunc("/api/addons/catalog", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		addonID := r.URL.Query().Get("id")
+		catalogKey := r.URL.Query().Get("catalog")
+		if addonID == "" || catalogKey == "" {
+			http.Error(w, "missing ?id= or ?catalog=", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if err := m.SetCatalogEnabled(addonID, catalogKey, body.Enabled); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}))
 
 	// GET /api/watch-options?id=<tmdbID>&type=movie|tv

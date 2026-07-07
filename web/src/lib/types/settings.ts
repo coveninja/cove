@@ -77,6 +77,20 @@ export interface Settings {
    */
   prefetchNextEpisode: boolean;
   /**
+   * Remote access (Phase 5) — exposes the backend on 0.0.0.0 so LAN devices
+   * (e.g. the Android app in thin-client mode) can reach it. Settings are
+   * per-profile; remote access follows whichever profile is currently active.
+   * RemoteAccessEnabled: when true the server listens on 0.0.0.0:<port> in
+   * addition to the always-on loopback listener. The loopback listener is
+   * never restarted.
+   * RemoteAccessToken: a 32-byte hex string generated once (crypto/rand) the
+   * first time RemoteAccessEnabled is set to true, then persisted and never
+   * auto-rotated. Every request arriving on the LAN listener must supply this
+   * token via X-Cove-Token header or ?token= query param.
+   */
+  remoteAccessEnabled: boolean;
+  remoteAccessToken: string;
+  /**
    * Sync bookkeeping — stamped server-side on every local write, used to resolve
    * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
    */

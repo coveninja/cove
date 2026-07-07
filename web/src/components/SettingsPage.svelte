@@ -107,6 +107,19 @@
     addons = addons.filter((a) => !(a.id === addon.id && a.url === addon.url));
   }
 
+  async function handleToggleCatalog(addon: AddonEntry, key: string, enabled: boolean) {
+    try {
+      await api.toggleCatalog(addon.id, key, enabled);
+      addons = addons.map((a) =>
+        a.id === addon.id
+          ? { ...a, disabledCatalogs: { ...(a.disabledCatalogs ?? {}), [key]: !enabled } }
+          : a,
+      );
+    } catch (e) {
+      console.error("handleToggleCatalog failed", e);
+    }
+  }
+
   // ── Nuvio plugin repos ───────────────────────────────────────────────────────
   let nuvioRepos = $state<NuvioRepo[]>([]);
   let addRepoUrl = $state("");
@@ -799,64 +812,85 @@
           <!-- Addon list -->
           <div class="space-y-2">
             {#each addons as addon (addon.id)}
-              <div
-                class="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3"
-              >
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2">
-                    <span class="text-sm font-medium"
-                      >{addon.manifest.name ||
-                        addon.url ||
-                        addon.id ||
-                        "Unknown addon"}</span
-                    >
-                    <Badge
-                      variant="outline"
-                      class={addon.kind === KindProvider
-                        ? "border-blue-500/30 bg-blue-500/20 text-blue-400"
-                        : addon.kind === KindTimestamps
-                          ? "border-amber-500/30 bg-amber-500/20 text-amber-400"
-                          : "border-purple-500/30 bg-purple-500/20 text-purple-400"}
-                    >
-                      {addon.kind === KindProvider
-                        ? "Provider"
-                        : addon.kind === KindTimestamps
-                          ? "Timestamps"
-                          : "Subtitles"}
-                    </Badge>
-                    {#if addon.source === SourceOfficial}
+              <div class="rounded-lg border border-border bg-secondary/30 p-3">
+                <div class="flex items-center gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-medium"
+                        >{addon.manifest.name ||
+                          addon.url ||
+                          addon.id ||
+                          "Unknown addon"}</span
+                      >
                       <Badge
                         variant="outline"
-                        class="border-green-500/30 bg-green-500/20 text-green-400"
-                        >Built-in</Badge
+                        class={addon.kind === KindProvider
+                          ? "border-blue-500/30 bg-blue-500/20 text-blue-400"
+                          : addon.kind === KindTimestamps
+                            ? "border-amber-500/30 bg-amber-500/20 text-amber-400"
+                            : "border-purple-500/30 bg-purple-500/20 text-purple-400"}
                       >
+                        {addon.kind === KindProvider
+                          ? "Provider"
+                          : addon.kind === KindTimestamps
+                            ? "Timestamps"
+                            : "Subtitles"}
+                      </Badge>
+                      {#if addon.source === SourceOfficial}
+                        <Badge
+                          variant="outline"
+                          class="border-green-500/30 bg-green-500/20 text-green-400"
+                          >Built-in</Badge
+                        >
+                      {/if}
+                    </div>
+                    {#if addon.manifest.description}
+                      <p class="mt-0.5 text-xs text-muted-foreground">
+                        {addon.manifest.description}
+                      </p>
                     {/if}
                   </div>
-                  {#if addon.manifest.description}
-                    <p class="mt-0.5 text-xs text-muted-foreground">
-                      {addon.manifest.description}
-                    </p>
+
+                  <!-- Toggle -->
+                  <Switch
+                    checked={addon.enabled}
+                    onCheckedChange={() => handleToggleAddon(addon)}
+                    class="shrink-0"
+                  />
+
+                  <!-- Remove (stremio only) -->
+                  {#if addon.source !== SourceOfficial}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="shrink-0 text-muted-foreground hover:text-destructive"
+                      onclick={() => handleRemoveAddon(addon)}
+                      title="Remove"
+                    >
+                      <Trash2 class="size-4" />
+                    </Button>
                   {/if}
                 </div>
 
-                <!-- Toggle -->
-                <Switch
-                  checked={addon.enabled}
-                  onCheckedChange={() => handleToggleAddon(addon)}
-                  class="shrink-0"
-                />
-
-                <!-- Remove (stremio only) -->
-                {#if addon.source !== SourceOfficial}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="shrink-0 text-muted-foreground hover:text-destructive"
-                    onclick={() => handleRemoveAddon(addon)}
-                    title="Remove"
-                  >
-                    <Trash2 class="size-4" />
-                  </Button>
+                <!-- Per-catalog toggles (only for addons that declare catalogs) -->
+                {#if addon.manifest.catalogs?.length}
+                  <div class="mt-2 space-y-1 border-t border-border pt-2">
+                    {#each addon.manifest.catalogs as cat (`${cat.type}/${cat.id}`)}
+                      {@const key = `${cat.type}/${cat.id}`}
+                      <div class="flex items-center gap-3 py-1">
+                        <div class="min-w-0 flex-1">
+                          <span class="text-xs font-medium">{cat.name}</span>
+                          <span class="ml-1.5 text-xs text-muted-foreground">({cat.type})</span>
+                        </div>
+                        <Switch
+                          checked={!addon.disabledCatalogs?.[key]}
+                          disabled={!addon.enabled}
+                          onCheckedChange={(v) => handleToggleCatalog(addon, key, v)}
+                          class="shrink-0"
+                        />
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
               </div>
             {:else}

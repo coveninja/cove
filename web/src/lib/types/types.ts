@@ -7,7 +7,8 @@ export type Page =
   | { type: "settings" }
   | { type: "account" }
   | { type: "query"; query: string }
-  | { type: "mediaView"; media: Media };
+  | { type: "mediaView"; media: Media }
+  | { type: "catalog"; addonId: string; catalogType: string; catalogId: string; name: string };
 
 export interface UpcomingItem {
   tmdbId: number;

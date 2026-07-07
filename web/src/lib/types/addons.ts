@@ -24,6 +24,27 @@ export interface ManifestResource {
   types: string[];
   idPrefixes: string[];
 }
+/**
+ * ManifestCatalogExtra describes one parameterisation dimension for a catalog
+ * (e.g. genre, skip). IsRequired true means the catalog can't be browsed
+ * without supplying that parameter — i.e. it's search-only.
+ */
+export interface ManifestCatalogExtra {
+  name: string;
+  isRequired: boolean;
+}
+/**
+ * ManifestCatalog is one catalog declared in a Stremio addon manifest. The
+ * custom UnmarshalJSON normalises both the modern extra:[{name,isRequired}]
+ * form and the legacy extraRequired/extraSupported:[]string form into the
+ * unified Extra field.
+ */
+export interface ManifestCatalog {
+  type: string;
+  id: string;
+  name: string;
+  extra?: ManifestCatalogExtra[];
+}
 export interface Manifest {
   id: string;
   name: string;
@@ -31,6 +52,7 @@ export interface Manifest {
   version: string;
   resources: ManifestResource[];
   types: string[];
+  catalogs?: ManifestCatalog[];
 }
 export interface AddonEntry {
   id: string;
@@ -39,6 +61,34 @@ export interface AddonEntry {
   kind: AddonKind;
   source: AddonSource;
   enabled: boolean;
+  /**
+   * DisabledCatalogs tracks per-catalog opt-outs. An absent key means the
+   * catalog is enabled (default-on, only explicit opt-outs are stored,
+   * mirroring how OfficialEnabled works for official addons). Persists via
+   * the existing addonStore JSON encode in store.go.
+   */
+  disabledCatalogs?: { [key: string]: boolean};
+}
+/**
+ * StremioMeta is one item from a Stremio catalog response.
+ */
+export interface StremioMeta {
+  id: string;
+  type: string;
+  name: string;
+  poster: string;
+  description: string;
+  releaseInfo: string;
+}
+/**
+ * CatalogRef is the DTO for a single enabled catalog sent to the frontend.
+ */
+export interface CatalogRef {
+  addonId: string;
+  addonName: string;
+  catalogType: string;
+  catalogId: string;
+  name: string;
 }
 export interface Subtitle {
   id: string;

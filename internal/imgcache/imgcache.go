@@ -92,18 +92,28 @@ type Cache struct {
 	totalBytes int64
 }
 
-// New resolves os.UserCacheDir()/cove/images, creates it if missing, and
-// scans it once to seed the running size estimate eviction decisions are
-// based on. A scan failure (e.g. permissions) isn't fatal — the cache just
-// starts believing it's empty, which only risks growing past maxCacheBytes
-// before the next successful scan-equivalent (there isn't one; it's
-// incremental after startup), not a crash.
-func New() (*Cache, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return nil, err
+// New resolves the image-cache directory, creates it if missing, and scans
+// it once to seed the running size estimate that eviction decisions are based
+// on. A scan failure (e.g. permissions) isn't fatal — the cache just starts
+// believing it's empty, which only risks growing past maxCacheBytes before
+// the next successful scan-equivalent (there isn't one; it's incremental
+// after startup), not a crash.
+//
+// cacheDir, when non-empty, overrides the default os.UserCacheDir()/cove/images
+// location — used by mobile builds (Android) where os.UserCacheDir is
+// unavailable or returns an unwritable path, and by the COVE_CACHE_DIR env
+// var on desktop.
+func New(cacheDir string) (*Cache, error) {
+	var dir string
+	if cacheDir != "" {
+		dir = cacheDir
+	} else {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return nil, err
+		}
+		dir = filepath.Join(base, "cove", "images")
 	}
-	dir := filepath.Join(base, "cove", "images")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        INTERNET is required even for loopback TCP: OkHttp and the Go net stack
+        both go through the normal socket path regardless of destination address.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        FOREGROUND_SERVICE is required to call startForegroundService() at all
+        (API 28+). FOREGROUND_SERVICE_MEDIA_PLAYBACK is required to declare
+        foregroundServiceType="mediaPlayback" (API 34+). POST_NOTIFICATIONS
+        is required to show the persistent notification (API 33+); requested
+        at runtime in MainActivity — denied permission just hides the notification.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".CoveApplication"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <!--
+            android:exported must be true for any Activity with a LAUNCHER
+            intent-filter at targetSdk 31+; AGP 8 / lint enforces this.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            PlayerActivity: landscape-friendly. exported=true so the adb am-start
+            debug hook in Part D works from the host shell; Phase 4 may restrict
+            this back to false once the launcher lives in-app.
+            configChanges handles rotation without re-creating the activity.
+        -->
+        <activity
+            android:name=".player.PlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:screenOrientation="sensorLandscape" />
+
+        <!--
+            CoveService: foreground media-playback service that owns the Go backend.
+            foregroundServiceType="mediaPlayback" is required for API 34 when
+            startForeground() passes FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK.
+        -->
+        <service
+            android:name=".service.CoveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+    </application>
+</manifest>
