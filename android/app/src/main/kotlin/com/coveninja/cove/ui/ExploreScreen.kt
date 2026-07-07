@@ -3,6 +3,9 @@ package com.coveninja.cove.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -131,6 +134,11 @@ fun ExploreScreen(onOpenDetail: (Media) -> Unit) {
             modifier = Modifier.padding(16.dp, 16.dp, 16.dp, 8.dp),
         )
 
+        // OutlinedTextField enforces a ~56dp natural height; matching it here
+        // keeps the segmented buttons and the genre dropdown the same height and
+        // stops the dropdown's text from being vertically clipped.
+        val controlHeight = 56.dp
+
         // Controls: Movies/TV segmented button + genre dropdown
         Row(
             modifier = Modifier
@@ -139,17 +147,25 @@ fun ExploreScreen(onOpenDetail: (Media) -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.weight(1f)) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(controlHeight),
+            ) {
                 SegmentedButton(
                     selected = vm.mediaType == "movie",
                     onClick = { vm.setMediaType("movie") },
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                ) { Text("Movies") }
+                    // Suppress the default selected-state checkmark so only the
+                    // media-type icon shows.
+                    icon = {},
+                ) { Icon(Icons.Filled.Movie, contentDescription = "Movies") }
                 SegmentedButton(
                     selected = vm.mediaType == "tv",
                     onClick = { vm.setMediaType("tv") },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                ) { Text("TV Shows") }
+                    icon = {},
+                ) { Icon(Icons.Filled.Tv, contentDescription = "TV Shows") }
             }
 
             var dropdownExpanded by remember { mutableStateOf(false) }
@@ -165,9 +181,12 @@ fun ExploreScreen(onOpenDetail: (Media) -> Unit) {
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded) },
                     modifier = Modifier
                         .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .height(controlHeight),
                     singleLine = true,
-                    label = { Text("Genre") },
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    // no label -> saves the vertical space reserved for the floating label
+                    colors = OutlinedTextFieldDefaults.colors(),
                 )
                 ExposedDropdownMenu(
                     expanded = dropdownExpanded,

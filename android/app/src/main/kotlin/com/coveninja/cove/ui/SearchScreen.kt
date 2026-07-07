@@ -2,6 +2,7 @@ package com.coveninja.cove.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -63,6 +64,7 @@ fun SearchScreen(onOpenDetail: (Media) -> Unit) {
             placeholder = { Text("Search movies & TV…") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             singleLine = true,
+            shape = CircleShape,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
             modifier = Modifier.fillMaxWidth().padding(12.dp),

@@ -5,6 +5,12 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
@@ -37,6 +43,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLayoutDirection
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,69 +135,21 @@ fun CoveApp() {
         return
     }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    icon = {
-                        Icon(
-                            if (tab == Tab.HOME) Icons.Filled.Home else Icons.Outlined.Home,
-                            contentDescription = "Home",
-                        )
-                    },
-                    label = { Text("Home") },
-                    selected = tab == Tab.HOME,
-                    onClick = { tab = Tab.HOME },
-                )
-                NavigationBarItem(
-                    icon = {
-                        Icon(
-                            if (tab == Tab.MY_LIST) Icons.Filled.Bookmark else Icons.Outlined.Bookmark,
-                            contentDescription = "My List",
-                        )
-                    },
-                    label = { Text("My List") },
-                    selected = tab == Tab.MY_LIST,
-                    onClick = { tab = Tab.MY_LIST },
-                )
-                NavigationBarItem(
-                    icon = {
-                        Icon(
-                            if (tab == Tab.EXPLORE) Icons.Filled.LocalFireDepartment
-                            else Icons.Outlined.LocalFireDepartment,
-                            contentDescription = "Explore",
-                        )
-                    },
-                    label = { Text("Explore") },
-                    selected = tab == Tab.EXPLORE,
-                    onClick = { tab = Tab.EXPLORE },
-                )
-                NavigationBarItem(
-                    icon = {
-                        Icon(
-                            if (tab == Tab.SEARCH) Icons.Filled.Search else Icons.Outlined.Search,
-                            contentDescription = "Search",
-                        )
-                    },
-                    label = { Text("Search") },
-                    selected = tab == Tab.SEARCH,
-                    onClick = { tab = Tab.SEARCH },
-                )
-                NavigationBarItem(
-                    icon = {
-                        Icon(
-                            if (tab == Tab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
-                            contentDescription = "Settings",
-                        )
-                    },
-                    label = { Text("Settings") },
-                    selected = tab == Tab.SETTINGS,
-                    onClick = { tab = Tab.SETTINGS },
-                )
-            }
+    Scaffold { innerPadding ->
+        // The home hero is a full-bleed backdrop, so let it draw behind the
+        // status bar. Every other tab keeps the top inset so its content clears
+        // the bar; the bottom/side insets are always honoured.
+        val layoutDir = LocalLayoutDirection.current
+        val contentPadding = if (tab == Tab.HOME) {
+            PaddingValues(
+                start = innerPadding.calculateStartPadding(layoutDir),
+                end = innerPadding.calculateEndPadding(layoutDir),
+                bottom = innerPadding.calculateBottomPadding(),
+            )
+        } else {
+            innerPadding
         }
-    ) { innerPadding ->
-        Box(Modifier.fillMaxSize().padding(innerPadding)) {
+        Box(Modifier.fillMaxSize().padding(contentPadding)) {
             if (!backendReady) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(
@@ -200,19 +162,87 @@ fun CoveApp() {
                 }
             } else {
                 val openDetail: (Media) -> Unit = { detailMedia = it }
-                if (tab == Tab.HOME) HomeScreen(
-                    onOpenDetail = openDetail,
-                    onStreamsRequested = { m, s, e ->
-                        detailMedia = null
-                        streamsMedia = m
-                        streamsSeason = s
-                        streamsEpisode = e
-                    },
-                )
-                if (tab == Tab.MY_LIST) LibraryScreen(onOpenDetail = openDetail)
-                if (tab == Tab.EXPLORE) ExploreScreen(onOpenDetail = openDetail)
-                if (tab == Tab.SEARCH) SearchScreen(onOpenDetail = openDetail)
-                if (tab == Tab.SETTINGS) SettingsScreen(authVm = authVm, onOpenAddons = { showAddons = true })
+                // Crossfade between tabs for a smooth transition. Keyed on `tab`, so
+                // only the screen content animates — the nav pill below stays put.
+                Crossfade(
+                    targetState = tab,
+                    animationSpec = tween(durationMillis = 250),
+                    label = "tab",
+                ) { current ->
+                    when (current) {
+                        Tab.HOME -> HomeScreen(
+                            onOpenDetail = openDetail,
+                            onStreamsRequested = { m, s, e ->
+                                detailMedia = null
+                                streamsMedia = m
+                                streamsSeason = s
+                                streamsEpisode = e
+                            },
+                        )
+                        Tab.MY_LIST -> LibraryScreen(onOpenDetail = openDetail)
+                        Tab.EXPLORE -> ExploreScreen(onOpenDetail = openDetail)
+                        Tab.SEARCH -> SearchScreen(onOpenDetail = openDetail)
+                        Tab.SETTINGS -> SettingsScreen(authVm = authVm, onOpenAddons = { showAddons = true })
+                    }
+                }
+            }
+
+            // Floating pill nav bar overlaid on the content. Rendered here (not in
+            // Scaffold's bottomBar) so no opaque band is reserved around it — the
+            // page shows through behind the rounded pill instead of a dark frame.
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = NavigationBarDefaults.containerColor,
+                tonalElevation = 0.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CoveNavItem(
+                        selected = tab == Tab.HOME,
+                        selectedIcon = Icons.Filled.Home,
+                        unselectedIcon = Icons.Outlined.Home,
+                        contentDescription = "Home",
+                        onClick = { tab = Tab.HOME },
+                    )
+                    CoveNavItem(
+                        selected = tab == Tab.MY_LIST,
+                        selectedIcon = Icons.Filled.Bookmark,
+                        unselectedIcon = Icons.Outlined.Bookmark,
+                        contentDescription = "My List",
+                        onClick = { tab = Tab.MY_LIST },
+                    )
+                    CoveNavItem(
+                        selected = tab == Tab.EXPLORE,
+                        selectedIcon = Icons.Filled.LocalFireDepartment,
+                        unselectedIcon = Icons.Outlined.LocalFireDepartment,
+                        contentDescription = "Explore",
+                        onClick = { tab = Tab.EXPLORE },
+                    )
+                    CoveNavItem(
+                        selected = tab == Tab.SEARCH,
+                        selectedIcon = Icons.Filled.Search,
+                        unselectedIcon = Icons.Outlined.Search,
+                        contentDescription = "Search",
+                        onClick = { tab = Tab.SEARCH },
+                    )
+                    CoveNavItem(
+                        selected = tab == Tab.SETTINGS,
+                        selectedIcon = Icons.Filled.Settings,
+                        unselectedIcon = Icons.Outlined.Settings,
+                        contentDescription = "Settings",
+                        onClick = { tab = Tab.SETTINGS },
+                    )
+                }
             }
         }
     }
@@ -238,6 +268,37 @@ fun CoveApp() {
             season = streamsSeason,
             episode = streamsEpisode,
             onDismiss = { streamsMedia = null },
+        )
+    }
+}
+
+@Composable
+private fun CoveNavItem(
+    selected: Boolean,
+    selectedIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    unselectedIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    val color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer
+    else MaterialTheme.colorScheme.onSurfaceVariant
+
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = if (selected) selectedIcon else unselectedIcon,
+            contentDescription = contentDescription,
+            tint = color,
         )
     }
 }

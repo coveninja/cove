@@ -143,15 +143,6 @@ fun HomeScreen(
             }
         }
 
-        item {
-            Text(
-                "Cove",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(16.dp, 16.dp, 16.dp, 8.dp),
-            )
-        }
-
         if (vm.continueWatching.isNotEmpty()) {
             item {
                 SectionHeader("Continue Watching")
@@ -286,6 +277,23 @@ fun HeroPage(
                             0.0f to Color.Transparent,
                             0.55f to Color.Black.copy(alpha = 0.55f),
                             1.0f to Color.Black.copy(alpha = 0.92f),
+                        ),
+                    )
+                ),
+        )
+
+        // Top scrim so status-bar icons stay legible where the hero now bleeds
+        // behind the status bar.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .height(96.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.35f),
+                            Color.Transparent,
                         ),
                     )
                 ),

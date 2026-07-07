@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
@@ -28,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
@@ -122,7 +124,14 @@ fun MediaDetailSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxHeight(0.92f),
+        // Fill the whole view: the sheet's surface spans top-to-bottom and draws
+        // under the navigation bar so no strip of the scrimmed page shows through
+        // beneath it. Content is padded for the nav bar below.
+        contentWindowInsets = { WindowInsets(0) },
+        // Span the full width too — otherwise the sheet is capped at ~640dp and
+        // centered on wide/landscape screens, leaving bands on either side.
+        sheetMaxWidth = Dp.Unspecified,
+        modifier = Modifier.fillMaxHeight(),
     ) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             // ── Backdrop / YouTube trailer header ──────────────────────────────
@@ -192,9 +201,7 @@ fun MediaDetailSheet(
                             OutlinedButton(
                                 onClick = { if (!libraryLoading) showStatusMenu = true },
                             ) {
-                                Icon(Icons.Default.FavoriteBorder, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Add to My List")
+                                Icon(Icons.Default.Bookmark, null, Modifier.size(16.dp))
                             }
                             DropdownMenu(
                                 expanded = showStatusMenu,
@@ -378,7 +385,9 @@ fun MediaDetailSheet(
                 }
             }
 
-            item { Spacer(Modifier.height(32.dp)) }
+            // Bottom spacer + nav-bar inset so the last content clears the nav bar
+            // now that the sheet draws edge-to-edge under it.
+            item { Spacer(Modifier.height(32.dp).navigationBarsPadding()) }
         }
     }
 }
