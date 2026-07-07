@@ -31,6 +31,8 @@ const DEFAULTS: Settings = {
   prefetchStreams: true,
   prefetchNextEpisode: true,
   updatedAt: "",
+  remoteAccessEnabled: false,
+  remoteAccessToken: ""
 };
 
 function createSettingsStore(): {
