@@ -444,10 +444,16 @@ jobs:
           cp _private/cove-auth/*.go internal/supabase/
           cp _private/cove-discover/*.go internal/discover/
 
-      # gomobile version is kept in lockstep with the go.mod requirement;
-      # gobind ships as a go.mod tool and is resolved automatically.
+      # gomobile/gobind versions are kept in lockstep with the go.mod
+      # requirement. gomobile looks up the gobind BINARY on PATH (the go.mod
+      # tool directive is not enough), and `gomobile init` needs the NDK.
       - name: Install gomobile
-        run: go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+        run: |
+          MOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          go install golang.org/x/mobile/cmd/gomobile@"$MOBILE_VERSION"
+          go install golang.org/x/mobile/cmd/gobind@"$MOBILE_VERSION"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          gomobile init
 
       # `make android-aar` composes -tags supabase,discover automatically once
       # the private implementations above are present, mirroring desktop builds.

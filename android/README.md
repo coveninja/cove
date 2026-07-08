@@ -32,10 +32,12 @@ desktop's remote-access settings.
      "emulator" "system-images;android-35;google_apis;x86_64" \
      "ndk;27.2.12479018"
    ```
-4. **gomobile** — install once, then init with the NDK (`gobind` is already a
-   committed go.mod tool, no separate install needed):
+4. **gomobile** — install once, then init with the NDK. gomobile looks up the
+   `gobind` binary on PATH, so both installs are required (the `gobind` go.mod
+   tool directive alone is not enough):
    ```sh
    go install golang.org/x/mobile/cmd/gomobile@latest
+   go install golang.org/x/mobile/cmd/gobind@latest
    export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
    gomobile init
    ```
