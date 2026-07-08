@@ -15,6 +15,7 @@ data class Media(
     @SerialName("vote_average") val voteAverage: Double = 0.0,
     @SerialName("media_type") val mediaType: String = "",
     val popularity: Double = 0.0,
+    @SerialName("original_language") val originalLanguage: String? = null,
 )
 
 // Display helpers
@@ -29,6 +30,18 @@ data class Genre(
 )
 
 @Serializable
+data class CastMember(
+    val id: Int = 0,
+    val name: String = "",
+    val order: Int = 0,
+)
+
+@Serializable
+data class CreditsDto(
+    val cast: List<CastMember> = emptyList(),
+)
+
+@Serializable
 data class Details(
     val overview: String = "",
     val genres: List<Genre> = emptyList(),
@@ -37,6 +50,7 @@ data class Details(
     @SerialName("number_of_seasons") val numberOfSeasons: Int = 0,
     @SerialName("number_of_episodes") val numberOfEpisodes: Int = 0,
     val seasons: List<TvSeason> = emptyList(),
+    val credits: CreditsDto? = null,
 )
 
 @Serializable
@@ -276,4 +290,25 @@ data class MediaVideoObject(
 @Serializable
 data class MediaVideos(
     val results: List<MediaVideoObject> = emptyList(),
+)
+
+@Serializable
+data class SubtitleDto(
+    val id: String = "",
+    val url: String = "",
+    val lang: String = "",
+)
+
+@Serializable
+data class TimestampSegment(
+    @SerialName("start_ms") val startMs: Long? = null,
+    @SerialName("end_ms") val endMs: Long? = null,
+)
+
+@Serializable
+data class TimestampData(
+    val intro: List<TimestampSegment>? = null,
+    val recap: List<TimestampSegment>? = null,
+    val credits: List<TimestampSegment>? = null,
+    val preview: List<TimestampSegment>? = null,
 )

@@ -27,8 +27,18 @@ android {
         applicationId = "com.coveninja.cove"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes the release tag via COVE_VERSION (e.g. "v1.2.3"); local
+        // builds fall back to the dev placeholder. versionCode is derived as
+        // major*10000 + minor*100 + patch so Play/package-manager upgrade
+        // ordering follows semver.
+        val coveVersion = System.getenv("COVE_VERSION")?.removePrefix("v")
+        versionName = coveVersion ?: "0.1.0"
+        versionCode = coveVersion?.split(".")
+            ?.take(3)
+            ?.map { part -> part.takeWhile { it.isDigit() }.toIntOrNull() ?: 0 }
+            ?.let { (maj, min, pat) -> maj * 10000 + min * 100 + pat }
+            ?.takeIf { it > 0 }
+            ?: 1
 
         // Expose TMDB_API_KEY as a BuildConfig constant so CoveApplication can
         // pass it to the Go backend. Defaults to empty string so builds without
@@ -43,6 +53,27 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY", "")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+    }
+
+    // Release signing — CI-only. The keystore never lives in the repo: the
+    // workflow decodes the ANDROID_KEYSTORE_BASE64 secret to a temp file and
+    // points ANDROID_KEYSTORE_FILE at it. Local builds (env unset) keep the
+    // default debug signing so `gradlew assembleRelease` still works.
+    val releaseKeystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+    if (releaseKeystoreFile != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseKeystoreFile)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     buildFeatures {
@@ -110,4 +141,7 @@ dependencies {
     // the app package as the embed origin/Referer; 12.x gets "video
     // unavailable" (error 152) on every video.
     implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")
+
+    // MediaSessionCompat — lock-screen / headset transport controls for PlayerActivity.
+    implementation("androidx.media:media:1.7.0")
 }

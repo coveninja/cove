@@ -2,6 +2,7 @@ package com.coveninja.cove.ui
 
 import android.view.ViewGroup
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -13,13 +14,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkRemove
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -62,27 +66,44 @@ private fun getTrailerKey(videos: MediaVideos?): String? {
     return list.random().key
 }
 
+private fun formatRuntime(minutes: Int): String {
+    if (minutes <= 0) return ""
+    val h = minutes / 60
+    val m = minutes % 60
+    return when {
+        h > 0 && m > 0 -> "${h}h ${m}m"
+        h > 0 -> "${h}h"
+        else -> "${m}m"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaDetailSheet(
     media: Media,
     onDismiss: () -> Unit,
     onStreamsRequested: (Media, Int?, Int?) -> Unit,
+    onOpenMedia: ((Media) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     var details by remember { mutableStateOf<Details?>(null) }
     var libraryDetail by remember { mutableStateOf<LibraryDetail?>(null) }
     var loadingDetails by remember { mutableStateOf(true) }
-    var selectedSeason by remember { mutableStateOf(1) }
+    var selectedSeason by rememberSaveable { mutableStateOf(1) }
     var episodes by remember { mutableStateOf<List<TvEpisode>>(emptyList()) }
     var loadingEpisodes by remember { mutableStateOf(false) }
     var libraryLoading by remember { mutableStateOf(false) }
     var trailerKey by remember { mutableStateOf<String?>(null) }
+    var similar by remember { mutableStateOf<List<Media>>(emptyList()) }
 
-    // Parallel fetch: details + library status + videos.
+    // Parallel fetch: details + library status + videos + similar.
     LaunchedEffect(media.id) {
         loadingDetails = true
-        val (fetchedDetails, fetchedLib, fetchedVideos) = withContext(Dispatchers.IO) {
+        var fetchedDetails: Details? = null
+        var fetchedLib: LibraryDetail? = null
+        var fetchedVideos: MediaVideos? = null
+        var fetchedSimilar: List<Media> = emptyList()
+        withContext(Dispatchers.IO) {
             coroutineScope {
                 val d = async {
                     try { CoveApiClient.get<Details>("/details?id=${media.id}&type=${media.mediaType}") }
@@ -96,15 +117,23 @@ fun MediaDetailSheet(
                     try { CoveApiClient.get<MediaVideos>("/videos?id=${media.id}&type=${media.mediaType}") }
                     catch (e: Exception) { null }
                 }
-                Triple(d.await(), lib.await(), vids.await())
+                val sim = async {
+                    try { CoveApiClient.get<List<Media>>("/similar?id=${media.id}&type=${media.mediaType}") }
+                    catch (e: Exception) { emptyList() }
+                }
+                fetchedDetails = d.await()
+                fetchedLib = lib.await()
+                fetchedVideos = vids.await()
+                fetchedSimilar = sim.await() ?: emptyList()
             }
         }
         details = fetchedDetails
         libraryDetail = fetchedLib
         trailerKey = getTrailerKey(fetchedVideos)
+        similar = fetchedSimilar
 
         if (!media.isMovie && (fetchedDetails?.seasons?.isNotEmpty() == true)) {
-            val firstSeason = fetchedDetails.seasons.firstOrNull { it.seasonNumber > 0 }?.seasonNumber ?: 1
+            val firstSeason = fetchedDetails!!.seasons.firstOrNull { it.seasonNumber > 0 }?.seasonNumber ?: 1
             selectedSeason = firstSeason
         }
         loadingDetails = false
@@ -117,6 +146,17 @@ fun MediaDetailSheet(
                 CoveApiClient.get("/tv/episodes?id=${media.id}&season=$selectedSeason")
             } catch (e: Exception) { emptyList() }
             loadingEpisodes = false
+        }
+    }
+
+    // Map episode number → WatchProgress for the currently selected season.
+    // Recomputes whenever libraryDetail or selectedSeason change.
+    val progressMap by remember {
+        derivedStateOf {
+            libraryDetail?.progress
+                ?.filter { it.season == selectedSeason }
+                ?.associateBy { it.episode ?: -1 }
+                ?: emptyMap()
         }
     }
 
@@ -170,15 +210,30 @@ fun MediaDetailSheet(
                                 color = MaterialTheme.colorScheme.primary,
                             )
                         }
+                        if (!loadingDetails && details != null) {
+                            val runtimeMinutes = if (media.isMovie) details!!.runtime
+                                                 else details!!.episodeRunTime.firstOrNull() ?: 0
+                            val runtimeStr = formatRuntime(runtimeMinutes)
+                            if (runtimeStr.isNotBlank()) {
+                                Text(
+                                    runtimeStr,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                     if (!loadingDetails && details != null) {
                         Spacer(Modifier.height(4.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             details!!.genres.take(3).forEach { g ->
-                                SuggestionChip(
-                                    onClick = {},
-                                    label = { Text(g.name, style = MaterialTheme.typography.labelSmall) },
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                ) {
+                                    Text(g.name, style = MaterialTheme.typography.labelSmall)
+                                }
                             }
                         }
                     }
@@ -189,6 +244,25 @@ fun MediaDetailSheet(
             item {
                 val currentStatus = libraryDetail?.entry?.status
                 val inLibrary = currentStatus != null
+                val libEntry = libraryDetail?.entry
+
+                // Resume-aware play labels
+                val movieProgressEntry = libraryDetail?.progress
+                    ?.firstOrNull { it.season == null && it.episode == null }
+                val moviePlayLabel = when {
+                    movieProgressEntry?.completed == true -> "Rewatch"
+                    (movieProgressEntry?.positionSeconds ?: 0.0) > 10.0 -> "Continue watching"
+                    else -> "Play"
+                }
+                val tvPlayLabel = if (libEntry?.lastWatchedSeason != null && libEntry.lastWatchedEpisode != null) {
+                    "Continue S${libEntry.lastWatchedSeason}E${libEntry.lastWatchedEpisode}"
+                } else "Play"
+                val tvPlaySeason = libEntry?.lastWatchedSeason
+                val tvPlayEpisode = libEntry?.lastWatchedEpisode
+
+                val playLabel = if (media.isMovie) moviePlayLabel else tvPlayLabel
+                val playSeasonArg: Int? = if (media.isMovie) null else tvPlaySeason
+                val playEpisodeArg: Int? = if (media.isMovie) null else tvPlayEpisode
 
                 if (!inLibrary) {
                     var showStatusMenu by remember { mutableStateOf(false) }
@@ -227,8 +301,8 @@ fun MediaDetailSheet(
                                                     put("vote_average", media.voteAverage)
                                                     put("status", status)
                                                 }.toString()
-                                                val entry = CoveApiClient.post<LibraryEntry>("/library", bodyJson)
-                                                libraryDetail = (libraryDetail ?: LibraryDetail()).copy(entry = entry)
+                                                val newEntry = CoveApiClient.post<LibraryEntry>("/library", bodyJson)
+                                                libraryDetail = (libraryDetail ?: LibraryDetail()).copy(entry = newEntry)
                                                 SyncCoordinator.syncAfterMutation()
                                                 libraryLoading = false
                                             }
@@ -237,12 +311,10 @@ fun MediaDetailSheet(
                                 }
                             }
                         }
-                        if (media.isMovie) {
-                            Button(onClick = { onStreamsRequested(media, null, null) }) {
-                                Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Play")
-                            }
+                        Button(onClick = { onStreamsRequested(media, playSeasonArg, playEpisodeArg) }) {
+                            Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(playLabel)
                         }
                     }
                 } else {
@@ -252,6 +324,12 @@ fun MediaDetailSheet(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                         ) {
+                            if (libraryLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            }
                             listOf(
                                 "watch_later" to "Watch Later",
                                 "watching" to "Watching",
@@ -260,6 +338,7 @@ fun MediaDetailSheet(
                             ).forEach { (status, label) ->
                                 FilterChip(
                                     selected = currentStatus == status,
+                                    enabled = !libraryLoading,
                                     onClick = {
                                         if (libraryLoading || currentStatus == status) return@FilterChip
                                         scope.launch {
@@ -272,8 +351,8 @@ fun MediaDetailSheet(
                                                 put("vote_average", media.voteAverage)
                                                 put("status", status)
                                             }.toString()
-                                            val entry = CoveApiClient.post<LibraryEntry>("/library", bodyJson)
-                                            libraryDetail = libraryDetail?.copy(entry = entry)
+                                            val updatedEntry = CoveApiClient.post<LibraryEntry>("/library", bodyJson)
+                                            libraryDetail = libraryDetail?.copy(entry = updatedEntry)
                                             SyncCoordinator.syncAfterMutation()
                                             libraryLoading = false
                                         }
@@ -297,9 +376,10 @@ fun MediaDetailSheet(
                                         libraryLoading = false
                                     }
                                 },
+                                enabled = !libraryLoading,
                             ) {
                                 Icon(
-                                    Icons.Default.FavoriteBorder,
+                                    Icons.Default.BookmarkRemove,
                                     null,
                                     Modifier.size(14.dp),
                                     tint = MaterialTheme.colorScheme.error,
@@ -311,12 +391,10 @@ fun MediaDetailSheet(
                                     style = MaterialTheme.typography.labelMedium,
                                 )
                             }
-                            if (media.isMovie) {
-                                Button(onClick = { onStreamsRequested(media, null, null) }) {
-                                    Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Play")
-                                }
+                            Button(onClick = { onStreamsRequested(media, playSeasonArg, playEpisodeArg) }) {
+                                Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(playLabel)
                             }
                         }
                     }
@@ -333,6 +411,66 @@ fun MediaDetailSheet(
                         modifier = Modifier.padding(16.dp, 4.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+
+            // Cast
+            val castList = details?.credits?.cast?.take(8).orEmpty()
+            if (castList.isNotEmpty()) {
+                item {
+                    Text(
+                        "Cast",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp),
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(castList) { member ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.width(72.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        member.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    member.name,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // More like this
+            if (similar.isNotEmpty()) {
+                item {
+                    Text(
+                        "More like this",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp),
+                    )
+                    MediaRow(similar, onTap = { onOpenMedia?.invoke(it) })
                 }
             }
 
@@ -369,7 +507,11 @@ fun MediaDetailSheet(
                         }
                     } else {
                         items(episodes) { ep ->
-                            EpisodeRow(ep, onPlay = { onStreamsRequested(media, selectedSeason, ep.episodeNumber) })
+                            EpisodeRow(
+                                ep = ep,
+                                onPlay = { onStreamsRequested(media, selectedSeason, ep.episodeNumber) },
+                                progress = progressMap[ep.episodeNumber],
+                            )
                         }
                     }
                 }
@@ -541,18 +683,55 @@ private fun TrailerHeader(
 }
 
 @Composable
-fun EpisodeRow(ep: TvEpisode, onPlay: () -> Unit) {
+fun EpisodeRow(ep: TvEpisode, onPlay: () -> Unit, progress: WatchProgress? = null) {
     Row(
         Modifier.fillMaxWidth().clickable { onPlay() }.padding(16.dp, 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        AsyncImage(
-            model = CoveApiClient.resolveImgUrl(ep.stillPath),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.size(100.dp, 60.dp).clip(RoundedCornerShape(6.dp)),
-        )
+        // Episode still with progress overlay
+        Box(modifier = Modifier.size(100.dp, 60.dp)) {
+            AsyncImage(
+                model = CoveApiClient.resolveImgUrl(ep.stillPath),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)),
+            )
+            when {
+                progress?.completed == true -> {
+                    // Dimmed overlay with a check-circle for completed episodes
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.Black.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Watched",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
+                (progress?.positionSeconds ?: 0.0) > 5.0 -> {
+                    // Thin progress bar anchored to the bottom of the still
+                    val fraction = if ((progress?.durationSeconds ?: 0.0) > 0) {
+                        (progress!!.positionSeconds / progress.durationSeconds)
+                            .toFloat().coerceIn(0f, 1f)
+                    } else 0f
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(bottomStart = 6.dp, bottomEnd = 6.dp)),
+                    )
+                }
+            }
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 "${ep.episodeNumber}. ${ep.name}",
@@ -561,6 +740,18 @@ fun EpisodeRow(ep: TvEpisode, onPlay: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Air date + per-episode runtime meta line
+            val metaParts = buildList<String> {
+                if (ep.airDate.isNotBlank()) add(ep.airDate)
+                if (ep.runtime > 0) add("${ep.runtime}m")
+            }
+            if (metaParts.isNotEmpty()) {
+                Text(
+                    metaParts.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (ep.overview.isNotBlank()) {
                 Text(
                     ep.overview,

@@ -51,8 +51,10 @@ class AddonsViewModel : ViewModel() {
 
     fun toggleAddon(id: String, enabled: Boolean) {
         viewModelScope.launch {
-            CoveApiClient.patch("/addons?id=$id", """{"enabled":$enabled}""")
-            load()
+            val ok = CoveApiClient.patch("/addons?id=$id", """{"enabled":$enabled}""")
+            if (ok) {
+                addons = addons.map { if (it.id == id) it.copy(enabled = enabled) else it }
+            }
         }
     }
 
@@ -136,7 +138,7 @@ fun AddonsScreen(
                 }
             }
 
-            Divider()
+            HorizontalDivider()
 
             // Addon list
             when {
@@ -162,7 +164,7 @@ fun AddonsScreen(
                             onToggle = { vm.toggleAddon(addon.id, it) },
                             onDelete = { vm.deleteAddon(addon.id) },
                         )
-                        Divider(Modifier.padding(start = 16.dp))
+                        HorizontalDivider(Modifier.padding(start = 16.dp))
                     }
                     item { Spacer(Modifier.height(80.dp)) }
                 }
@@ -202,6 +204,10 @@ private fun AddonRow(
                     AssistChip(
                         onClick = {},
                         label = { Text("official", style = MaterialTheme.typography.labelSmall) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
                     )
                 }
             }

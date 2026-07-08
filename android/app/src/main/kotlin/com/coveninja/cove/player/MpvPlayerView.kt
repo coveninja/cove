@@ -59,6 +59,9 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         MPVLib.observeProperty("pause",            MPVLib.MPV_FORMAT_FLAG)
         MPVLib.observeProperty("eof-reached",      MPVLib.MPV_FORMAT_FLAG)
         MPVLib.observeProperty("paused-for-cache", MPVLib.MPV_FORMAT_FLAG)
+        // track-list delivers audio+subtitle track metadata as a JSON string
+        // so we can build the track-picker UI and perform language auto-select.
+        MPVLib.observeProperty("track-list",       MPVLib.MPV_FORMAT_STRING)
 
         holder.addCallback(this)
         Log.d(TAG, "MPV created and initialised")
@@ -89,6 +92,11 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
     fun seekTo(seconds: Double) {
         MPVLib.command(arrayOf("seek", seconds.toLong().toString(), "absolute"))
+    }
+
+    /** Set playback speed multiplier (0.5 … 2.0). */
+    fun setSpeed(speed: Float) {
+        MPVLib.setPropertyDouble("speed", speed.toDouble())
     }
 
     /** Release mpv. Must be called from Activity.onDestroy(). */

@@ -258,6 +258,7 @@ fun CoveApp() {
                 streamsSeason = s
                 streamsEpisode = e
             },
+            onOpenMedia = { detailMedia = it },
         )
     }
 

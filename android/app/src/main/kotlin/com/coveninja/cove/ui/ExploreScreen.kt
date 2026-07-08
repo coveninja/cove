@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -7,9 +8,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -44,6 +47,10 @@ class ExploreViewModel : ViewModel() {
     // true until the first genre + row fetch for the current mediaType finishes
     var initialLoading by mutableStateOf(true)
         private set
+    var refreshing by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
 
     private var genreLoadJob: Job? = null
     private var featuredJob: Job? = null
@@ -64,6 +71,39 @@ class ExploreViewModel : ViewModel() {
     fun setGenre(genreId: Int?) {
         selectedGenreId = genreId
         loadFeatured(mediaType, genreId)
+    }
+
+    /** Re-run the current type's full load — called by retry button. */
+    fun reload() {
+        loadForType(mediaType)
+    }
+
+    /**
+     * Pull-to-refresh: reload the featured row only (genre rows stay in place).
+     * Sets [refreshing] around the network call so the PTR indicator dismisses
+     * when done.
+     */
+    fun refresh() {
+        if (refreshing) return
+        viewModelScope.launch {
+            refreshing = true
+            error = null
+            val path = if (selectedGenreId != null)
+                "/discover/genre?type=$mediaType&genre=$selectedGenreId&limit=20"
+            else
+                "/discover?type=$mediaType&limit=20"
+            val result: List<Media> = try {
+                CoveApiClient.get(path)
+            } catch (e: Exception) {
+                // Only surface as error when we have nothing else to show.
+                if (featuredItems.isEmpty() && genreRows.all { it.items.isEmpty() }) {
+                    error = e.message ?: "Failed to load"
+                }
+                featuredItems // keep existing
+            }
+            if (error == null) featuredItems = result
+            refreshing = false
+        }
     }
 
     private fun loadFeatured(type: String, genreId: Int?) {
@@ -89,12 +129,15 @@ class ExploreViewModel : ViewModel() {
         initialLoading = true
         genreRows = emptyList()
         genres = emptyList()
+        error = null
         loadFeatured(type, null)
 
         genreLoadJob = viewModelScope.launch {
             val fetchedGenres: List<Genre> = try {
                 CoveApiClient.get("/genres?type=$type")
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Genre fetch failed — if featured also fails we'll show an error.
+                error = e.message ?: "Failed to load genres"
                 initialLoading = false
                 return@launch
             }
@@ -208,71 +251,96 @@ fun ExploreScreen(onOpenDetail: (Media) -> Unit) {
 
         Spacer(Modifier.height(4.dp))
 
-        when {
-            vm.initialLoading -> Box(
-                Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) { CircularProgressIndicator() }
-
-            else -> {
-                val featuredHeader = run {
-                    val g = vm.genres.find { it.id == vm.selectedGenreId }
-                    when {
-                        g != null && vm.mediaType == "movie" -> "${g.name} movies"
-                        g != null -> "${g.name} shows"
-                        vm.mediaType == "movie" -> "Popular movies"
-                        else -> "Popular shows"
+        PullToRefreshBox(
+            isRefreshing = vm.refreshing,
+            onRefresh = { vm.refresh() },
+            modifier = Modifier.weight(1f),
+        ) {
+            when {
+                // Initial load — show shimmer skeletons instead of the full-screen spinner.
+                // During a PTR refresh we keep showing the content layer so existing rows
+                // remain visible while the network call runs.
+                vm.initialLoading && !vm.refreshing -> LazyColumn(Modifier.fillMaxSize()) {
+                    repeat(3) { i ->
+                        item(key = "skel-h-$i") {
+                            val brush = shimmerBrush()
+                            Box(
+                                Modifier
+                                    .padding(start = 16.dp, top = 12.dp, bottom = 4.dp)
+                                    .width(140.dp)
+                                    .height(18.dp)
+                                    .clip(MaterialTheme.shapes.extraSmall)
+                                    .background(brush),
+                            )
+                        }
+                        item(key = "skel-r-$i") { MediaRowSkeleton() }
                     }
+                    item { Spacer(Modifier.height(80.dp)) }
                 }
 
-                LazyColumn(Modifier.fillMaxSize()) {
-                    // Featured row
-                    item(key = "featured-header") {
-                        SectionHeader(featuredHeader)
+                // Total failure: genres fetch failed, nothing to show.
+                vm.error != null && vm.featuredItems.isEmpty() && vm.genreRows.isEmpty() -> {
+                    ErrorRetryBox(
+                        message = vm.error ?: "Failed to load",
+                        modifier = Modifier.fillMaxSize(),
+                        onRetry = { vm.reload() },
+                    )
+                }
+
+                else -> {
+                    val featuredHeader = run {
+                        val g = vm.genres.find { it.id == vm.selectedGenreId }
+                        when {
+                            g != null && vm.mediaType == "movie" -> "${g.name} movies"
+                            g != null -> "${g.name} shows"
+                            vm.mediaType == "movie" -> "Popular movies"
+                            else -> "Popular shows"
+                        }
                     }
-                    item(key = "featured-row") {
-                        if (vm.featuredLoading) {
-                            Box(
-                                Modifier.fillMaxWidth().height(180.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { CircularProgressIndicator() }
-                        } else if (vm.featuredItems.isEmpty()) {
-                            Box(
-                                Modifier.fillMaxWidth().height(120.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    "Nothing here yet.",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        // Featured row
+                        item(key = "featured-header") {
+                            SectionHeader(featuredHeader)
+                        }
+                        item(key = "featured-row") {
+                            if (vm.featuredLoading) {
+                                MediaRowSkeleton()
+                            } else if (vm.featuredItems.isEmpty()) {
+                                Box(
+                                    Modifier.fillMaxWidth().height(120.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        "Nothing here yet.",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            } else {
+                                MediaRow(vm.featuredItems, onOpenDetail)
                             }
-                        } else {
-                            MediaRow(vm.featuredItems, onOpenDetail)
                         }
-                    }
 
-                    // Per-genre rows, skipping whichever genre is currently featured
-                    items(
-                        vm.genreRows.filter { it.genre.id != vm.selectedGenreId },
-                        key = { "genre-${it.genre.id}" },
-                    ) { row ->
-                        val rowHeader = if (vm.mediaType == "movie") {
-                            "${row.genre.name} movies"
-                        } else {
-                            "${row.genre.name} shows"
+                        // Per-genre rows, skipping whichever genre is currently featured
+                        items(
+                            vm.genreRows.filter { it.genre.id != vm.selectedGenreId },
+                            key = { "genre-${it.genre.id}" },
+                        ) { row ->
+                            val rowHeader = if (vm.mediaType == "movie") {
+                                "${row.genre.name} movies"
+                            } else {
+                                "${row.genre.name} shows"
+                            }
+                            SectionHeader(rowHeader)
+                            if (row.loading) {
+                                MediaRowSkeleton()
+                            } else {
+                                MediaRow(row.items, onOpenDetail)
+                            }
                         }
-                        SectionHeader(rowHeader)
-                        if (row.loading) {
-                            Box(
-                                Modifier.fillMaxWidth().height(180.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { CircularProgressIndicator() }
-                        } else {
-                            MediaRow(row.items, onOpenDetail)
-                        }
-                    }
 
-                    item { Spacer(Modifier.height(80.dp)) }
+                        item { Spacer(Modifier.height(80.dp)) }
+                    }
                 }
             }
         }

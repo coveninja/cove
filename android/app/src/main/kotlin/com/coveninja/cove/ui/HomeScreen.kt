@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -29,6 +31,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.coveninja.cove.R
 import com.coveninja.cove.api.*
 import com.coveninja.cove.sync.SyncCoordinator
 import kotlinx.coroutines.*
@@ -50,12 +53,17 @@ class HomeViewModel : ViewModel() {
         private set
     var loading by mutableStateOf(true)
         private set
+    var refreshing by mutableStateOf(false)
+        private set
+    var error by mutableStateOf<String?>(null)
+        private set
 
     init { load() }
 
-    fun load() {
+    fun load(isRefresh: Boolean = false) {
         viewModelScope.launch {
-            loading = true
+            if (isRefresh) refreshing = true else loading = true
+            error = null
 
             // Continue watching: library entries with "watching" status + progress
             val library: List<LibraryEntry> = try {
@@ -73,11 +81,13 @@ class HomeViewModel : ViewModel() {
             }
             continueWatching = cwWithProgress
 
-            // Hero: fetch discover items then decorate with images in parallel.
-            val heroMedia: List<Media> = try {
-                CoveApiClient.get("/discover?type=all&limit=10")
+            // Fetch discover once (limit=20). Use take(10) for the hero pager and
+            // the full 20 for the "Based on your tastes" row — avoids a duplicate request.
+            val discoverAll: List<Media> = try {
+                CoveApiClient.get("/discover?type=all&limit=20")
             } catch (_: Exception) { emptyList() }
 
+            val heroMedia = discoverAll.take(10)
             if (heroMedia.isNotEmpty()) {
                 heroItems = coroutineScope {
                     heroMedia.map { media ->
@@ -96,28 +106,38 @@ class HomeViewModel : ViewModel() {
                         }
                     }.awaitAll()
                 }
+            } else {
+                heroItems = emptyList()
             }
 
             // Discovery rows
+            var anyDiscover = discoverAll.isNotEmpty()
             val newRows = mutableListOf<MediaRow>()
-            try {
-                val discover: List<Media> = CoveApiClient.get("/discover?type=all&limit=20")
-                if (discover.isNotEmpty()) newRows.add(MediaRow("Based on your tastes", discover))
-            } catch (_: Exception) {}
+            if (discoverAll.isNotEmpty()) {
+                newRows.add(MediaRow("Based on your tastes", discoverAll))
+            }
             try {
                 val movies: List<Media> = CoveApiClient.get("/discover?type=movie&limit=20")
-                if (movies.isNotEmpty()) newRows.add(MediaRow("Popular movies", movies))
+                if (movies.isNotEmpty()) { newRows.add(MediaRow("Popular movies", movies)); anyDiscover = true }
             } catch (_: Exception) {}
             try {
                 val tv: List<Media> = CoveApiClient.get("/discover?type=tv&limit=20")
-                if (tv.isNotEmpty()) newRows.add(MediaRow("Popular TV", tv))
+                if (tv.isNotEmpty()) { newRows.add(MediaRow("Popular TV", tv)); anyDiscover = true }
             } catch (_: Exception) {}
             rows = newRows
+
+            // Show error only when the screen would be completely empty after a real failure.
+            if (!anyDiscover && continueWatching.isEmpty() && heroItems.isEmpty()) {
+                error = "Couldn't load content.\nCheck your connection and try again."
+            }
+
             loading = false
+            refreshing = false
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onOpenDetail: (Media) -> Unit,
@@ -128,60 +148,107 @@ fun HomeScreen(
     // Reload when SyncCoordinator detects a remote library change.
     val libraryVersion by SyncCoordinator.libraryVersion.collectAsState()
     LaunchedEffect(libraryVersion) {
-        if (libraryVersion > 0) vm.load()
+        if (libraryVersion > 0) vm.load(isRefresh = true)
     }
 
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        // Hero pager — first item, scrolls away with content like desktop.
-        if (vm.heroItems.isNotEmpty()) {
-            item {
-                HeroPager(
-                    items = vm.heroItems,
-                    onOpenDetail = onOpenDetail,
-                    onPlayRequested = { media -> onStreamsRequested(media, null, null) },
-                )
-            }
-        }
-
-        if (vm.continueWatching.isNotEmpty()) {
-            item {
-                SectionHeader("Continue Watching")
-                MediaRow(vm.continueWatching.map { it.first.toMedia() }, onOpenDetail)
-            }
-        }
-
-        if (vm.loading && vm.rows.isEmpty() && vm.continueWatching.isEmpty()) {
-            item {
-                Box(
-                    Modifier.fillMaxWidth().padding(32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
-                }
-            }
-        }
-
-        if (!vm.loading && vm.rows.isEmpty() && vm.continueWatching.isEmpty()) {
-            item {
-                Box(
-                    Modifier.fillMaxWidth().padding(32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "Add titles to your library to see recommendations here.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    PullToRefreshBox(
+        isRefreshing = vm.refreshing,
+        onRefresh = { vm.load(isRefresh = true) },
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            // Hero pager — first item, scrolls away with content like desktop.
+            if (vm.heroItems.isNotEmpty()) {
+                item {
+                    HeroPager(
+                        items = vm.heroItems,
+                        onOpenDetail = onOpenDetail,
+                        onPlayRequested = { media -> onStreamsRequested(media, null, null) },
                     )
                 }
             }
-        }
 
-        items(vm.rows) { row ->
-            SectionHeader(row.title)
-            MediaRow(row.items, onOpenDetail)
-        }
+            if (vm.continueWatching.isNotEmpty()) {
+                item {
+                    SectionHeader("Continue Watching")
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(vm.continueWatching) { (entry, progress) ->
+                            ContinueWatchingPosterCard(
+                                entry = entry,
+                                progress = progress,
+                                onTap = { onOpenDetail(entry.toMedia()) },
+                            )
+                        }
+                    }
+                }
+            }
 
-        item { Spacer(Modifier.height(80.dp)) }
+            // Shimmer loading skeleton: hero-shaped box + 2 row skeletons
+            if (vm.loading && vm.heroItems.isEmpty() && vm.rows.isEmpty() && vm.continueWatching.isEmpty()) {
+                item(key = "skeleton-hero") {
+                    val brush = shimmerBrush()
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 10f)
+                            .background(brush),
+                    )
+                }
+                repeat(2) { i ->
+                    item(key = "skeleton-header-$i") {
+                        val brush = shimmerBrush()
+                        Box(
+                            Modifier
+                                .padding(start = 16.dp, top = 12.dp, bottom = 4.dp)
+                                .width(140.dp)
+                                .height(18.dp)
+                                .clip(MaterialTheme.shapes.extraSmall)
+                                .background(brush),
+                        )
+                    }
+                    item(key = "skeleton-row-$i") {
+                        MediaRowSkeleton()
+                    }
+                }
+            }
+
+            // Error state — only when the screen would be completely empty
+            if (vm.error != null && vm.rows.isEmpty() && vm.continueWatching.isEmpty() && vm.heroItems.isEmpty()) {
+                item {
+                    ErrorRetryBox(
+                        message = vm.error ?: "Unknown error",
+                        modifier = Modifier.fillMaxWidth(),
+                        onRetry = { vm.load() },
+                    )
+                }
+            }
+
+            // Empty state (no library entries yet, no error)
+            if (!vm.loading && vm.error == null && vm.rows.isEmpty() && vm.continueWatching.isEmpty()) {
+                item {
+                    Box(
+                        Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "Add titles to your library to see recommendations here.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            items(vm.rows) { row ->
+                SectionHeader(row.title)
+                MediaRow(row.items, onOpenDetail)
+            }
+
+            item { Spacer(Modifier.height(80.dp)) }
+        }
     }
 }
 
@@ -405,11 +472,68 @@ fun PosterCard(media: Media, onTap: (Media) -> Unit) {
                 contentDescription = media.displayTitle,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+                placeholder = painterResource(R.drawable.ic_poster_placeholder),
+                error = painterResource(R.drawable.ic_poster_error),
             )
         }
         Spacer(Modifier.height(4.dp))
         Text(
             media.displayTitle,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * Variant of [PosterCard] for the Continue Watching row.  Identical in size and
+ * layout but draws a thin [LinearProgressIndicator] anchored to the poster's
+ * bottom edge when [progress] has a known duration.
+ */
+@Composable
+fun ContinueWatchingPosterCard(
+    entry: LibraryEntry,
+    progress: WatchProgress?,
+    onTap: () -> Unit,
+) {
+    Column(modifier = Modifier.width(110.dp).clickable(onClick = onTap)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f),
+        ) {
+            Card(
+                modifier = Modifier.fillMaxSize(),
+                shape = MaterialTheme.shapes.small,
+            ) {
+                AsyncImage(
+                    model = CoveApiClient.resolveImgUrl(entry.posterPath),
+                    contentDescription = entry.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                    placeholder = painterResource(R.drawable.ic_poster_placeholder),
+                    error = painterResource(R.drawable.ic_poster_error),
+                )
+            }
+            // Progress bar — shown only when duration is known.
+            if (progress != null && progress.durationSeconds > 0) {
+                val fraction = (progress.positionSeconds / progress.durationSeconds)
+                    .toFloat().coerceIn(0f, 1f)
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .align(Alignment.BottomCenter),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            entry.title,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,

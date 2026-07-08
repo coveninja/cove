@@ -30,8 +30,9 @@ fun StreamsSheet(
     var streams by remember { mutableStateOf<List<Stream>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var retryKey by remember { mutableStateOf(0) }
 
-    LaunchedEffect(media.id, season, episode) {
+    LaunchedEffect(media.id, season, episode, retryKey) {
         loading = true
         error = null
         try {
@@ -69,6 +70,12 @@ fun StreamsSheet(
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator() }
 
+                error != null -> ErrorRetryBox(
+                    message = error ?: "Unknown error",
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    onRetry = { error = null; retryKey++ },
+                )
+
                 streams.isEmpty() -> Box(
                     Modifier.fillMaxWidth().padding(vertical = 32.dp),
                     contentAlignment = Alignment.Center,
@@ -104,6 +111,18 @@ fun StreamsSheet(
                                     putExtra(PlayerActivity.EXTRA_STREAM_URL, playUrl)
                                     putExtra(PlayerActivity.EXTRA_TMDB_ID, media.id)
                                     putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, media.mediaType)
+                                    putExtra(
+                                        PlayerActivity.EXTRA_ORIGINAL_LANG,
+                                        media.originalLanguage ?: "",
+                                    )
+                                    putExtra(
+                                        PlayerActivity.EXTRA_TITLE,
+                                        if (season != null && episode != null) {
+                                            "${media.displayTitle} S${season}E${episode}"
+                                        } else {
+                                            media.displayTitle
+                                        },
+                                    )
                                     if (season != null) putExtra(PlayerActivity.EXTRA_SEASON, season)
                                     if (episode != null) putExtra(PlayerActivity.EXTRA_EPISODE, episode)
                                     if (stream.headers.isNotEmpty()) {

@@ -8,12 +8,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -22,6 +26,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.coveninja.cove.BuildConfig
+import com.coveninja.cove.api.AddonEntry
 import com.coveninja.cove.api.CoveApiClient
 import com.coveninja.cove.api.ServerMode
 import com.coveninja.cove.api.ServerModeStore
@@ -57,6 +63,10 @@ class SettingsViewModel : ViewModel() {
     var settingsSaving by mutableStateOf(false)
     var settingsSaveError by mutableStateOf<String?>(null)
 
+    // Enabled provider addons for the defaultProvider dropdown.
+    var providerAddons by mutableStateOf<List<AddonEntry>>(emptyList())
+        private set
+
     // Whether the AddonsScreen is open
     var showAddons by mutableStateOf(false)
 
@@ -66,8 +76,14 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 settings = CoveApiClient.get<Settings>("/settings")
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Non-fatal — playback still works without settings loaded
+            }
+            try {
+                val all: List<AddonEntry> = CoveApiClient.get("/addons")
+                providerAddons = all.filter { it.kind == "provider" && it.enabled }
+            } catch (_: Exception) {
+                // Non-fatal
             }
         }
     }
@@ -115,6 +131,7 @@ class SettingsViewModel : ViewModel() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     vm: SettingsViewModel = viewModel(),
@@ -134,7 +151,7 @@ fun SettingsScreen(
         // ── Account / Supabase sync ────────────────────────────────────────
         AccountSection(authVm)
 
-        Divider(modifier = Modifier.padding(vertical = 12.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
         // ── Server section ─────────────────────────────────────────────────
         SectionTitle("Server")
@@ -217,33 +234,129 @@ fun SettingsScreen(
             }
         }
 
-        Divider(modifier = Modifier.padding(vertical = 12.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-        // ── Addons shortcut ────────────────────────────────────────────────
-        SectionTitle("Addons")
-        OutlinedButton(
-            onClick = onOpenAddons,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(Icons.AutoMirrored.Filled.List, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Manage addons")
-        }
-
-        Divider(modifier = Modifier.padding(vertical = 12.dp))
-
-        // ── Playback / app settings ────────────────────────────────────────
-        // Exposed mobile subset: autoPlay, rememberPosition, subtitlesEnabled,
-        // defaultSubtitleLang, subtitleSize, autoSkipIntro/Recap/Credits, hideSpoilers.
-        SectionTitle("Playback")
-
+        // ── Remote Access ──────────────────────────────────────────────────
+        // Placed near the Server section since it controls LAN connectivity.
         val s = vm.settings
-        if (s == null) {
-            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
+        if (s != null) {
+            // Keep a single top-level draft for the whole settings block.
+            // Remember key = s so the draft resets to the latest server state after each save.
             var draft by remember(s) { mutableStateOf(s) }
+
+            SectionTitle("Remote Access")
+
+            SettingsToggle("Enable remote access", draft.remoteAccessEnabled) {
+                draft = draft.copy(remoteAccessEnabled = it)
+                vm.saveSettings(draft)
+                // After toggling on, saveSettings updates vm.settings with the server
+                // response (which includes the generated token). The remember(s) key
+                // changes and draft is reset to the saved value — picking up the token
+                // without any extra logic.
+            }
+            Text(
+                "Allow other devices on your network to connect to this device's Cove server",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+
+            if (draft.remoteAccessEnabled && draft.remoteAccessToken.isNotBlank()) {
+                val clipboardManager = LocalClipboardManager.current
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        draft.remoteAccessToken,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = {
+                        clipboardManager.setText(AnnotatedString(draft.remoteAccessToken))
+                    }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy token",
+                            modifier = Modifier.size(18.dp))
+                    }
+                }
+                Text(
+                    "Use this token on another device to pair.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+            // ── Addons shortcut ────────────────────────────────────────────
+            SectionTitle("Addons")
+            OutlinedButton(
+                onClick = onOpenAddons,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Manage addons")
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+            // ── Streaming ──────────────────────────────────────────────────
+            SectionTitle("Streaming")
+
+            SettingsToggle("Auto-select best stream", draft.autoSelectStream) {
+                draft = draft.copy(autoSelectStream = it)
+                vm.saveSettings(draft)
+            }
+
+            SettingsDropdown(
+                label = "Stream selection strategy",
+                value = draft.streamSelectionMode,
+                options = listOf(
+                    "balanced"  to "Balanced",
+                    "seeders"   to "Most Seeders",
+                    "quality"   to "Highest Quality",
+                    "smallest"  to "Smallest File",
+                    "bandwidth" to "Match Internet Speed",
+                ),
+                onSelect = {
+                    draft = draft.copy(streamSelectionMode = it)
+                    vm.saveSettings(draft)
+                },
+            )
+
+            SettingsDropdown(
+                label = "Source preference",
+                value = draft.sourcePreference,
+                options = listOf(
+                    ""        to "No preference",
+                    "torrent" to "Prefer torrents",
+                    "direct"  to "Prefer direct streams",
+                ),
+                onSelect = {
+                    draft = draft.copy(sourcePreference = it)
+                    vm.saveSettings(draft)
+                },
+            )
+
+            val providerOptions = listOf("" to "None") +
+                vm.providerAddons.map { it.manifest.name to it.manifest.name }
+            SettingsDropdown(
+                label = "Preferred provider",
+                value = draft.defaultProvider,
+                options = providerOptions,
+                onSelect = {
+                    draft = draft.copy(defaultProvider = it)
+                    vm.saveSettings(draft)
+                },
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // ── Playback ───────────────────────────────────────────────────
+            SectionTitle("Playback")
 
             SettingsToggle("Auto-play next episode", draft.autoPlay) {
                 draft = draft.copy(autoPlay = it)
@@ -258,7 +371,32 @@ fun SettingsScreen(
                 vm.saveSettings(draft)
             }
 
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            SettingsDropdown(
+                label = "Default audio language",
+                value = draft.defaultAudioLang,
+                options = listOf(
+                    "original" to "Original language",
+                    "en"       to "English",
+                    "es"       to "Spanish",
+                    "fr"       to "French",
+                    "de"       to "German",
+                    "pt"       to "Portuguese",
+                    "it"       to "Italian",
+                    "ja"       to "Japanese",
+                    "ko"       to "Korean",
+                    "zh"       to "Chinese",
+                    "ar"       to "Arabic",
+                    "ru"       to "Russian",
+                    "hi"       to "Hindi",
+                    "tr"       to "Turkish",
+                ),
+                onSelect = {
+                    draft = draft.copy(defaultAudioLang = it)
+                    vm.saveSettings(draft)
+                },
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionTitle("Subtitles")
 
             SettingsToggle("Subtitles enabled", draft.subtitlesEnabled) {
@@ -284,6 +422,21 @@ fun SettingsScreen(
                     steps = 29,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Subtitle position: ${draft.subtitlePosition.toInt()}% from bottom",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Slider(
+                    value = draft.subtitlePosition.toFloat(),
+                    onValueChange = { draft = draft.copy(subtitlePosition = it.toDouble()) },
+                    valueRange = 2f..90f,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                SettingsToggle("Subtitle background", draft.subtitleBackground) {
+                    draft = draft.copy(subtitleBackground = it)
+                    vm.saveSettings(draft)
+                }
                 Button(
                     onClick = { vm.saveSettings(draft) },
                     modifier = Modifier.fillMaxWidth(),
@@ -294,7 +447,7 @@ fun SettingsScreen(
                 }
             }
 
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             SectionTitle("Segment skip")
 
             SettingsToggle("Skip intro", draft.autoSkipIntro) {
@@ -309,11 +462,46 @@ fun SettingsScreen(
                 draft = draft.copy(autoSkipCredits = it)
                 vm.saveSettings(draft)
             }
+            SettingsToggle("Skip preview", draft.autoSkipPreview) {
+                draft = draft.copy(autoSkipPreview = it)
+                vm.saveSettings(draft)
+            }
 
             vm.settingsSaveError?.let { err ->
                 Text(err, color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp))
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+            // ── About ──────────────────────────────────────────────────────
+            SectionTitle("About")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            ) {
+                Text("Version", modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium)
+                Text(BuildConfig.VERSION_NAME,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+        } else {
+            // Settings still loading — show addons button and spinner only.
+            SectionTitle("Addons")
+            OutlinedButton(
+                onClick = onOpenAddons,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Manage addons")
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
             }
         }
 
@@ -660,5 +848,55 @@ private fun SettingsToggle(label: String, checked: Boolean, onChange: (Boolean) 
     ) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/**
+ * Labelled ExposedDropdownMenuBox that immediately calls [onSelect] with the
+ * chosen value — callers save immediately on selection, consistent with the
+ * switch/toggle pattern used throughout this screen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsDropdown(
+    label: String,
+    value: String,
+    options: List<Pair<String, String>>,   // value → display label
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.find { it.first == value }?.second ?: value
+
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(2.dp))
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    .fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(),
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                options.forEach { (v, l) ->
+                    DropdownMenuItem(
+                        text = { Text(l) },
+                        onClick = { onSelect(v); expanded = false },
+                    )
+                }
+            }
+        }
     }
 }

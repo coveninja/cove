@@ -102,3 +102,43 @@ A single-screen app that starts the Go backend in a background thread and polls
 `http://127.0.0.1:6969/api/ping` every 2 seconds, displaying "Backend: running
 (pong)" or "Backend: unreachable". This is the integration smoke test before the
 full Compose UI (Phase 4) and foreground service (Phase 3) land.
+
+## Release signing (CI)
+
+Tagged releases (`v*`) build a signed APK in the `package-android` job of
+`.github/workflows/release.yml` and attach `cove-android.apk` (+ `.sha256`) to
+the GitHub release. Signing needs a one-time keystore setup:
+
+**1. Generate the keystore** (keep it out of the repo; back it up — losing it
+means users must uninstall/reinstall to update, since Android rejects APKs
+signed with a different key):
+
+```sh
+keytool -genkeypair -v \
+  -keystore cove-release.jks \
+  -alias cove \
+  -keyalg RSA -keysize 4096 \
+  -validity 10000
+```
+
+**2. Add GitHub repository secrets** (Settings → Secrets and variables →
+Actions):
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 cove-release.jks` output |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password chosen above |
+| `ANDROID_KEY_ALIAS` | `cove` (or whatever `-alias` you used) |
+| `ANDROID_KEY_PASSWORD` | key password (same as keystore password unless you set one) |
+
+The job fails fast with a clear error if `ANDROID_KEYSTORE_BASE64` is missing.
+Local `assembleRelease` builds without these env vars fall back to debug
+signing (see `app/build.gradle.kts`), so the keystore is never required for
+development.
+
+To sign a release locally instead:
+```sh
+export ANDROID_KEYSTORE_FILE=/path/to/cove-release.jks
+export ANDROID_KEYSTORE_PASSWORD=... ANDROID_KEY_ALIAS=cove ANDROID_KEY_PASSWORD=...
+COVE_VERSION=v1.2.3 ./gradlew assembleRelease
+```
