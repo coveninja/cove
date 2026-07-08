@@ -3,7 +3,7 @@
 
   # Cove
 
-  A media streaming desktop app for Linux and Windows. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
+  A media streaming app for Linux, Windows, and Android. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
 
   [![CI](https://github.com/coveninja/cove/actions/workflows/release.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/release.yml)
   [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
@@ -29,6 +29,7 @@
 - **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
 - **Multiple profiles** — profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
+- **Android app** — native Kotlin/Compose client with the same embedded Go backend and mpv playback; runs standalone, or connects to your desktop Cove over LAN in remote mode
 
 ## Install
 
@@ -55,6 +56,10 @@ flatpak run io.github.coveninja.Cove
 > **⚠️ Experimental:** Windows support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
 
 Download `cove-windows-amd64-setup.exe` from the [latest release](https://github.com/coveninja/cove/releases/latest) and run the installer. Or grab `cove-windows-amd64.zip` for a portable install.
+
+### Android
+
+Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
 
 
 ## Build from source
@@ -83,6 +88,7 @@ make go      # build the Go backend binary
 make web     # build the Svelte frontend
 make qt      # build the Qt shell
 make dev     # full build + regenerate TypeScript types from Go structs
+make android # build the Android APK (gomobile AAR + Gradle; see android/README.md)
 ```
 
 ### Frontend checks
@@ -103,3 +109,4 @@ A fresh profile ships with no provider addons and no plugin repos enabled — on
 - [ARCHITECTURE.md](ARCHITECTURE.md) — how the Go backend, Svelte frontend, and Qt shell fit together, the playback data flow, and the open-source/proprietary build-tag split
 - [docs/API.md](docs/API.md) — HTTP endpoint reference
 - [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup and code style for contributors
+- [android/README.md](android/README.md) — Android app: toolchain setup, emulator, build/install loops, release signing

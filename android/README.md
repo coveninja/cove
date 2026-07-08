@@ -1,6 +1,16 @@
 # Cove Android
 
-Phase 2 scaffold: Go backend embedded as a gomobile AAR, thin Compose verification UI.
+Native Android client for Cove, written in Kotlin/Jetpack Compose. The full Go
+backend is embedded in the app as a gomobile AAR and runs inside a foreground
+service, so the app is completely standalone — same TMDB metadata, addon
+streams, torrent engine, library, and Supabase auth/sync as the desktop app.
+Playback uses libmpv (same player core as desktop) with subtitle/audio track
+selection, external subtitles, intro/recap/credits skip, and up-next
+auto-advance.
+
+Alternatively, **Remote mode** (Settings → Server) points the app at a desktop
+Cove on your LAN instead of the embedded server — pair with the token from the
+desktop's remote-access settings.
 
 ## Prerequisites
 
@@ -22,19 +32,27 @@ Phase 2 scaffold: Go backend embedded as a gomobile AAR, thin Compose verificati
      "emulator" "system-images;android-35;google_apis;x86_64" \
      "ndk;27.2.12479018"
    ```
-4. **gomobile** — install once, then init with the NDK:
+4. **gomobile** — install once, then init with the NDK (`gobind` is already a
+   committed go.mod tool, no separate install needed):
    ```sh
    go install golang.org/x/mobile/cmd/gomobile@latest
-   go install golang.org/x/mobile/cmd/gobind@latest
-   go get golang.org/x/mobile/bind      # adds the dep to go.mod
    export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018
    gomobile init
    ```
-5. **TMDB API key** — create `android/local.properties` (gitignored) with:
+5. **Secrets** — create `android/local.properties` (gitignored) with:
    ```
    sdk.dir=/home/<you>/Android/Sdk
    TMDB_API_KEY=your_key_here
+   # Optional — enables in-app Supabase sign-in/sync (publishable anon key only):
+   SUPABASE_URL=https://<project>.supabase.co
+   SUPABASE_ANON_KEY=your_publishable_key
+   # Optional, DEV ONLY — make the app talk to a host backend instead of the
+   # embedded one (e.g. adb reverse + desktop Cove). WARNING: this points the
+   # app at that backend's REAL library/settings data.
+   # BACKEND_URL=http://127.0.0.1:6970/api
    ```
+   These land in `BuildConfig` (see `app/build.gradle.kts`); all have safe
+   empty/loopback defaults, so a bare `sdk.dir` file also builds fine.
 
 ## AVD (emulator)
 
@@ -96,12 +114,24 @@ cd android
 ```
 After that `./gradlew` works without a system Gradle installation.
 
-## What Phase 2 gives you
+## App structure
 
-A single-screen app that starts the Go backend in a background thread and polls
-`http://127.0.0.1:6969/api/ping` every 2 seconds, displaying "Backend: running
-(pong)" or "Backend: unreachable". This is the integration smoke test before the
-full Compose UI (Phase 4) and foreground service (Phase 3) land.
+Single-Activity Compose app (`MainActivity` hosts a bottom-nav shell mirroring
+the desktop's top bar: Home / My List / Explore / Search / Settings), plus a
+separate landscape `PlayerActivity`. Packages under
+`app/src/main/kotlin/com/coveninja/cove/`:
+
+| Package | Contents |
+|---|---|
+| `ui/` | Screens + colocated ViewModels (Home hero pager & rows, Explore genre rows, Search, My List with status/type/sort filters), `MediaDetailSheet` (trailer, cast, similar, seasons/episodes with progress), `StreamsSheet` (ranked stream picker, `StreamRanking.kt` ports the desktop's selection logic) |
+| `player/` | `PlayerActivity` + `MpvPlayerView` (libmpv via `dev.jdtech.mpv:libmpv`): track pickers, external subtitles, IntroDB segment skip, up-next auto-advance, resume, MediaSession/audio focus |
+| `api/` | `CoveApiClient` (OkHttp singleton, base-URL + auth-token handling for Local/Remote modes), kotlinx-serialization DTOs mirroring the Go types |
+| `auth/`, `sync/` | Supabase login/register/OTP, encrypted token store, `SyncCoordinator` (foreground-resume + post-mutation sync mirroring the desktop) |
+| `service/` | `CoveService` — foreground service that owns the embedded Go server |
+
+**Server modes:** Local (default) runs the embedded backend on
+`127.0.0.1:6969`; Remote connects to a desktop Cove's LAN listener
+(`:6970`) using its pairing token — switchable at runtime in Settings.
 
 ## Release signing (CI)
 
