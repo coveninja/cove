@@ -470,8 +470,23 @@ jobs:
           SUPABASE_ANON_KEY=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           EOF
 
+      # tr strips whitespace/CR that sneaks in when the base64 is pasted into
+      # the secret box (strict `base64 -d` rejects it); the magic-byte check
+      # turns "wrong secret content" into a readable error instead of a
+      # signing failure at the end of the build.
       - name: Decode release keystore
-        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/cove-release.jks"
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KS_B64" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/cove-release.jks"
+          MAGIC=$(head -c 4 "$RUNNER_TEMP/cove-release.jks" | od -An -tx1 | tr -d ' \n')
+          case "$MAGIC" in
+            feedfeed|3082*) ;;  # JKS / PKCS#12
+            *)
+              echo "::error::ANDROID_KEYSTORE_BASE64 decoded, but the result is not a JKS/PKCS12 keystore (first bytes: ${MAGIC:-empty}). Re-create the secret with: base64 -w0 cove-release.jks"
+              exit 1
+              ;;
+          esac
 
       - name: Build release APK
         working-directory: android
