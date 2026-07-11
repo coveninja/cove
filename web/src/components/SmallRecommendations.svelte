@@ -82,7 +82,7 @@
           {/each}
         {:else}
           {#each medias as media (media.media_type + "-" + media.id)}
-            <div class="w-36 shrink-0" style="scroll-snap-align: start;">
+            <div class="w-36 shrink-0" style="scroll-snap-align: start; content-visibility: auto; contain-intrinsic-size: 144px 216px;">
               <MediaCard
                 {media}
                 onclick={() => onSelect(media)}

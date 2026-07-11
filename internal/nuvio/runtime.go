@@ -75,6 +75,35 @@ const maxFetchBody = 20 << 20
 // addresses; tests that need to hit a local httptest server override it.
 var scraperTransport = utils.SafeTransport
 
+// sharedScraperClient returns the package-level HTTP client for scraper
+// fetch() calls, building it on first use from whatever scraperTransport holds
+// at that moment. Up to 12 scrapers run concurrently (prefetch worker); each
+// previously allocated its own *http.Client and abandoned the idle-conn pool
+// on return. The shared client lets TCP/TLS connections be reused across
+// invocations and prefetch cycles, amortising handshake cost.
+//
+// The client is rebuilt after resetSharedScraperClient() is called — used by
+// tests that swap scraperTransport to hit a local httptest server.
+var (
+	scraperClientOnce sync.Once
+	scraperClientVal  *http.Client
+)
+
+func sharedScraperClient() *http.Client {
+	scraperClientOnce.Do(func() {
+		scraperClientVal = &http.Client{Transport: scraperTransport(), Timeout: httpTimeout}
+	})
+	return scraperClientVal
+}
+
+// resetSharedScraperClient discards the cached client so it is rebuilt from
+// the current scraperTransport on the next call to sharedScraperClient.
+// Only intended for use in tests that override scraperTransport.
+func resetSharedScraperClient() {
+	scraperClientOnce = sync.Once{}
+	scraperClientVal = nil
+}
+
 // runScraper executes one scraper's code against the given media info and
 // returns whatever streams it produced. It never panics the caller: script
 // errors, timeouts, and malformed output are all returned as an error.
@@ -317,10 +346,10 @@ func sizeToBytes(s string) int64 {
 // stdlib beyond what's shimmed here, which is the whole of this package's
 // sandboxing story.
 func bindGlobals(ctx context.Context, loop *eventloop.EventLoop, vm *goja.Runtime, scraperID string) {
-	// The transport refuses loopback/private/link-local addresses so scraper
-	// JS can't use fetch() to reach the local API or the user's LAN.
-	client := &http.Client{Transport: scraperTransport(), Timeout: httpTimeout}
-	bindFetch(ctx, loop, vm, client)
+	// sharedScraperClient is built once from scraperTransport; reusing it
+	// across invocations allows idle TCP/TLS connections to be recycled rather
+	// than being discarded when each per-call client was abandoned.
+	bindFetch(ctx, loop, vm, sharedScraperClient())
 	bindWebGlobals(vm)
 
 	vm.Set("logger", map[string]interface{}{

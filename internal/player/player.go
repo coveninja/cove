@@ -5,7 +5,7 @@
 // (see selectFile) — mpv's Range requests just work, no transcoding
 // involved. Direct-URL sources get a redirect straight to the origin.
 // A background reaper (CleanupTorrents) drops idle torrents and their
-// on-disk pieces after 30 minutes of no active readers, so a long-running
+// on-disk pieces after 10 minutes of no active readers, so a long-running
 // process doesn't accumulate downloaded data forever.
 package player
 
@@ -70,6 +70,12 @@ type Player struct {
 	// dataDir is the resolved directory for downloaded torrent pieces, set
 	// once in New and shared by CleanupTorrents for removal of stale data.
 	dataDir string
+
+	// proxyTransport is the shared HTTP transport for proxyStream. mpv issues
+	// many Range requests while seeking; reusing a single transport (and its
+	// connection pool) instead of allocating one per request avoids leaking
+	// idle connections and keeps TLS handshake overhead to a single session.
+	proxyTransport *http.Transport
 }
 
 type streamHeaderEntry struct {
@@ -127,9 +133,19 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 	}
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.DataDir = dataDir
+	cfg.EstablishedConnsPerTorrent = 20 // default 50; playback needs far fewer peers
+	cfg.MaxUnverifiedBytes = 32 << 20   // default 64 MiB of un-hashed piece data in RAM
+	cfg.NoUpload = true                 // playback client, not a seed box
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, err
+	}
+	// Shared transport for proxyStream — see field comment on Player.
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
 	return &Player{
 		client:         client,
@@ -139,6 +155,7 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		nuvioMgr:       nuvioMgr,
 		streamHeaders:  map[string]streamHeaderEntry{},
 		dataDir:        dataDir,
+		proxyTransport: transport,
 	}, nil
 }
 
@@ -202,12 +219,9 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		// Bound connection setup but never the transfer itself — a stream
 		// runs for the length of the film. FlushInterval -1 disables output
 		// buffering so playback data reaches mpv as it arrives.
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			TLSHandshakeTimeout:   15 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
+		// Transport is shared across calls (see Player.proxyTransport) so
+		// mpv's per-seek Range requests reuse existing TLS connections.
+		Transport:     p.proxyTransport,
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Println("stream proxy:", err)
@@ -489,12 +503,12 @@ func (p *Player) PrefetchTorrent(infoHash string, season, episode *int) error {
 // A background prefetch (F7) is idle by this same definition — nothing is
 // streaming it, since it's downloading ahead of playback rather than during
 // it — so without special-casing it, a season-pack prefetch that takes longer
-// than 30 minutes to finish would get reaped mid-download. Instead, an idle
+// than 10 minutes to finish would get reaped mid-download. Instead, an idle
 // prefetch candidate is only reaped once it's stopped making progress (a
 // stalled swarm, or a completed download nobody's touched since); as long as
 // bytes are still landing each pass, it's kept alive and its idle clock reset.
 func (p *Player) CleanupTorrents() {
-	cutoff := time.Now().Add(-30 * time.Minute)
+	cutoff := time.Now().Add(-10 * time.Minute)
 
 	type dropped struct {
 		hash string
@@ -532,6 +546,47 @@ func (p *Player) CleanupTorrents() {
 	}
 }
 
+// dropIdleNonPrefetch drops every active torrent that has no live readers,
+// is not exceptHash (the torrent just being streamed), and is not the current
+// prefetch target. Called from StreamTorrent on every stream start so torrents
+// from previous plays are freed immediately instead of waiting for the reaper.
+// Data-removal semantics mirror CleanupTorrents exactly.
+func (p *Player) dropIdleNonPrefetch(exceptHash string) {
+	p.prefetchMu.Lock()
+	currentPrefetch := p.prefetchHash
+	p.prefetchMu.Unlock()
+
+	type dropped struct {
+		hash string
+		t    *torrent.Torrent
+	}
+	var toDrop []dropped
+
+	p.activeTorrentsMu.Lock()
+	for hash, st := range p.activeTorrents {
+		if hash == exceptHash || hash == currentPrefetch {
+			continue
+		}
+		if st.readers > 0 {
+			continue
+		}
+		toDrop = append(toDrop, dropped{hash, st.torrent})
+		delete(p.activeTorrents, hash)
+	}
+	p.activeTorrentsMu.Unlock()
+
+	for _, d := range toDrop {
+		name := d.t.Name() // capture before Drop; valid once metadata is known
+		d.t.Drop()
+		if name != "" {
+			if err := os.RemoveAll(filepath.Join(p.dataDir, name)); err != nil {
+				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
+			}
+		}
+		log.Printf("torrent %s dropped (stream switch)", d.hash)
+	}
+}
+
 // StreamTorrent serves infoHash's selected file (see selectFile) as seekable
 // HTTP. season/episode (nil for movies) pick the right file out of a
 // season-pack torrent instead of always streaming its largest file.
@@ -547,6 +602,11 @@ func (p *Player) StreamTorrent(infoHash string, season, episode *int, w http.Res
 	// read is protected.
 	p.addReader(infoHash, +1)
 	defer p.addReader(infoHash, -1)
+
+	// Free stale torrents from previous plays immediately — don't wait for
+	// the reaper. The new stream (infoHash) and the current prefetch target
+	// are kept; everything else with no live readers is dropped now.
+	p.dropIdleNonPrefetch(infoHash)
 
 	reader := file.NewReader()
 	// Closing the reader matters: anacrolix readers hold piece-download
@@ -610,7 +670,13 @@ func (p *Player) GetProgress(infoHash string, season, episode *int) map[string]i
 	}
 	state.lastBytes = currentBytes
 	state.lastCheck = now
-	state.lastUsed = now // progress is polled during playback: acts as a keepalive
+	// Only refresh the idle clock while something is actively streaming.
+	// The /api/progress/stream SSE endpoint polls every 2s for the lifetime of
+	// playback; keeping lastUsed fresh unconditionally here would prevent the
+	// reaper from ever collecting a torrent the user has stopped watching.
+	if state.readers > 0 {
+		state.lastUsed = now
+	}
 	t := state.torrent
 	p.activeTorrentsMu.Unlock()
 

@@ -1073,12 +1073,22 @@ func (c *Client) GetDetails(tmdbID int, mediaType string) (*Details, error) {
 			return nil, err
 		}
 		c.detailsCacheMu.Lock()
+		// Sweep expired entries while already holding the lock — same inline-expiry
+		// style as qualityCacheSet, avoiding a separate background goroutine. The
+		// 24h TTL means entries can linger a long time without this sweep; now they
+		// are collected whenever a new entry is written.
+		now := time.Now()
+		for k, v := range c.detailsCache {
+			if now.After(v.expires) {
+				delete(c.detailsCache, k)
+			}
+		}
 		if len(c.detailsCache) > detailsCacheCap {
 			// Simplest possible cap: drop the whole map rather than tracking
 			// per-entry recency, same tradeoff as Client.imdbCache.
 			c.detailsCache = make(map[string]detailsCacheEntry)
 		}
-		c.detailsCache[key] = detailsCacheEntry{details: d, expires: time.Now().Add(detailsCacheTTL)}
+		c.detailsCache[key] = detailsCacheEntry{details: d, expires: now.Add(detailsCacheTTL)}
 		c.detailsCacheMu.Unlock()
 		return d, nil
 	})

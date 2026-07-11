@@ -379,11 +379,11 @@ func Start(cfg Config) (*Handle, error) {
 	lib.SetOnProgressSave(act.OnProgressSave)
 	go prefetchWorker.Run(ctx)
 
-	// Reap idle torrents every 30 minutes. The ticker is context-aware so
-	// Stop() cancels the loop immediately rather than waiting up to 30 minutes
+	// Reap idle torrents every 5 minutes. The ticker is context-aware so
+	// Stop() cancels the loop immediately rather than waiting up to 5 minutes
 	// for the next tick.
 	go func() {
-		ticker := time.NewTicker(30 * time.Minute)
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {

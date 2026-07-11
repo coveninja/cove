@@ -25,10 +25,16 @@ import (
 func TestRunScraper_CompressedResponses(t *testing.T) {
 	// These exercise the decode path against a loopback httptest server, which
 	// the production SSRF-safe transport refuses — swap in a plain transport
-	// for the duration of the test.
+	// for the duration of the test. Also reset the shared client so the new
+	// transport takes effect (sharedScraperClient is built lazily from
+	// scraperTransport; without the reset the cached production client persists).
 	orig := scraperTransport
 	scraperTransport = func() *http.Transport { return &http.Transport{} }
-	t.Cleanup(func() { scraperTransport = orig })
+	resetSharedScraperClient()
+	t.Cleanup(func() {
+		scraperTransport = orig
+		resetSharedScraperClient()
+	})
 
 	body := `{"ok":true,"streams":[{"name":"n","title":"t","url":"http://example.com/s.m3u8"}]}`
 

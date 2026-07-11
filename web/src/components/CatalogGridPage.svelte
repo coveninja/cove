@@ -22,6 +22,11 @@
     onWatch?: (m: Media, season?: number, episode?: number) => void;
   } = $props();
 
+  // Safety backstop: stop offering further loads once the grid reaches this
+  // size. A very long catalog session can otherwise grow medias[] unboundedly,
+  // slowing renders and inflating memory use in the Qt shell.
+  const MAX_CATALOG_ITEMS = 600;
+
   let medias = $state<Media[]>([]);
   let nextSkip = $state(0);
   let hasMore = $state(false);
@@ -52,7 +57,7 @@
       }
       medias = [...medias, ...fresh];
       nextSkip = res.nextSkip;
-      hasMore = res.medias.length > 0;
+      hasMore = res.medias.length > 0 && medias.length < MAX_CATALOG_ITEMS;
     } catch (e) {
       console.error("CatalogGridPage: failed to load page", e);
     } finally {
@@ -106,11 +111,13 @@
           style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
         >
           {#each medias as media (`${media.media_type}:${media.id}`)}
-            <MediaCard
-              {media}
-              onclick={() => onSelectMedia(media)}
-              onwatch={onWatch}
-            />
+            <div style="content-visibility: auto; contain-intrinsic-size: 150px 225px;">
+              <MediaCard
+                {media}
+                onclick={() => onSelectMedia(media)}
+                onwatch={onWatch}
+              />
+            </div>
           {/each}
         </div>
 

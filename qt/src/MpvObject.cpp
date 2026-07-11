@@ -140,6 +140,10 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   // Surface only real errors; flip to terminal=yes + msg-level=all=v to debug.
   mpv_set_option_string(m_mpv, "terminal", "yes");
   mpv_set_option_string(m_mpv, "msg-level", "all=error");
+  // mpv defaults to ~150 MiB forward + 50 MiB back per network stream. Cap to
+  // something reasonable so the player doesn't hoard memory on large files.
+  mpv_set_option_string(m_mpv, "demuxer-max-bytes",      "50MiB");
+  mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "10MiB");
 
   if (mpv_initialize(m_mpv) < 0) {
     qWarning("[mpv] mpv_initialize() failed — video playback unavailable");

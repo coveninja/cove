@@ -284,6 +284,12 @@ static QProcess *startBackend(const QString &exePath, QObject *parent) {
   proc->setChildProcessModifier(
       [] { prctl(PR_SET_PDEATHSIG, SIGTERM); });
 #endif
+  // anacrolix/torrent selects mmap file IO in an init() that runs before
+  // main(), so this can only be controlled via the environment. mmap maps
+  // entire multi-GB torrent files into virtual memory, which balloons RSS.
+  QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+  env.insert(QStringLiteral("TORRENT_STORAGE_DEFAULT_FILE_IO"), QStringLiteral("classic"));
+  proc->setProcessEnvironment(env);
   proc->start(exePath, {});
 #ifdef Q_OS_WIN
   if (HANDLE job = backendJob(); job && proc->processId() != 0) {
@@ -541,6 +547,10 @@ int main(int argc, char *argv[]) {
   // load (the QML view uses the default profile this installs onto).
   // WebEngineScript isn't creatable from QML in Qt 6, so this is done here.
   installBridgeScript(QWebEngineProfile::defaultProfile());
+  // The Go backend already disk-caches all images and serves them from
+  // localhost with immutable Cache-Control headers, so Chromium's own HTTP
+  // cache is redundant and grows unbounded. Disable it.
+  QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);
 
   auto loadScene = [&](const QString &url, const QString &mpvFile) {
     engine.rootContext()->setContextProperty("launchUrl", url);
