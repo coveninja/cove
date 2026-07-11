@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"log/slog"
+
 	"github.com/anacrolix/torrent"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/nuvio"
@@ -132,6 +134,10 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		dataDir = torrentDataDirDefault
 	}
 	cfg := torrent.NewDefaultClientConfig()
+	// Suppress the spurious per-piece WARN "finished hashing piece" (correct=true)
+	// that upstream's classic file IO emits due to a limitWriter/os.File.WriteTo
+	// mismatch. hashNoiseFilter passes everything else through unchanged.
+	cfg.Slogger = slog.New(hashNoiseFilter{slog.Default().Handler()})
 	cfg.DataDir = dataDir
 	cfg.EstablishedConnsPerTorrent = 20 // default 50; playback needs far fewer peers
 	cfg.MaxUnverifiedBytes = 32 << 20   // default 64 MiB of un-hashed piece data in RAM
@@ -682,7 +688,11 @@ func (p *Player) GetProgress(infoHash string, season, episode *int) map[string]i
 
 	info := t.Info()
 	if info == nil {
-		return map[string]interface{}{"found": true, "progress": 0, "peers": 0, "speed": "0 B/s"}
+		return map[string]interface{}{
+			"found": true, "progress": 0, "peers": 0, "speed": "0 B/s",
+			"seeders": 0, "totalPeers": 0, "speedBps": int64(0),
+			"downloadedBytes": int64(0), "totalBytes": int64(0),
+		}
 	}
 
 	var complete, total int64
@@ -710,10 +720,15 @@ func (p *Player) GetProgress(infoHash string, season, episode *int) map[string]i
 	}
 
 	return map[string]interface{}{
-		"found":    true,
-		"progress": pct,
-		"peers":    stats.ActivePeers,
-		"speed":    formatSpeed(state.speedByteSec),
+		"found":           true,
+		"progress":        pct,
+		"peers":           stats.ActivePeers,
+		"speed":           formatSpeed(state.speedByteSec),
+		"seeders":         stats.ConnectedSeeders,
+		"totalPeers":      stats.TotalPeers,
+		"speedBps":        state.speedByteSec,
+		"downloadedBytes": complete,
+		"totalBytes":      total,
 	}
 }
 

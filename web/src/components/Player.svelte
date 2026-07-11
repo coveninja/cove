@@ -782,6 +782,21 @@
     Player.seek(target);
     flash(`${delta > 0 ? "+" : "−"}${Math.abs(delta)}s`);
   }
+
+  function formatBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }
+
+  function formatEta(remainingBytes: number, speedBps: number): string {
+    if (speedBps <= 0) return "";
+    const secs = remainingBytes / speedBps;
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return m > 0 ? `~${m}m ${s}s` : `~${s}s`;
+  }
   function seekToFraction(frac: number): void {
     if (Player.duration) Player.seek(Player.duration * frac);
   }
@@ -864,6 +879,10 @@
         break;
       case "m":
         toggleMute();
+        break;
+      case "f":
+        Player.toggleFullscreen();
+        flash(Player.isFullscreen ? "Fullscreen" : "Windowed");
         break;
       case "c":
         toggleCaptions();
@@ -1076,6 +1095,7 @@
         onmousemove={showControls}
         onclick={() => Player.togglePause()}
         onkeydown={() => {}}
+        onwheel={(e) => { if (!menuOpen) nudgeVolume(e.deltaY < 0 ? 5 : -5); }}
 >
   <!-- ── Bridge unavailable (running outside the Cove shell) ─────────────────── -->
   {#if !Player.available}
@@ -1250,9 +1270,38 @@
 
           <!-- Torrent download progress (hash sources, mid-download) -->
           {#if isHash && torrent.progress > 0 && torrent.progress < 100}
-            <span class="mr-1 text-xs tabular-nums text-white/60">
-              ↓ {torrent.progress.toFixed(0)}%
-            </span>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  <span {...props} class="mr-1 cursor-default text-xs tabular-nums text-white/60">
+                    ↓ {torrent.progress.toFixed(0)}%
+                  </span>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Content side="top">
+                <div class="space-y-1.5 text-xs">
+                  <!-- Progress bar -->
+                  <div class="flex items-center gap-2">
+                    <div class="h-1 w-24 overflow-hidden rounded-full bg-white/20">
+                      <div class="h-full rounded-full bg-white/70" style="width: {torrent.progress.toFixed(1)}%"></div>
+                    </div>
+                    <span class="tabular-nums">{torrent.progress.toFixed(1)}%</span>
+                  </div>
+                  <!-- Speed -->
+                  <div>Speed: {torrent.speed}</div>
+                  <!-- Peers -->
+                  <div>Peers: {torrent.peers} active / {torrent.totalPeers} known · {torrent.seeders} seeders</div>
+                  <!-- Size -->
+                  {#if torrent.totalBytes > 0}
+                    <div>Size: {formatBytes(torrent.downloadedBytes)} / {formatBytes(torrent.totalBytes)}</div>
+                  {/if}
+                  <!-- ETA -->
+                  {#if torrent.speedBps > 0 && torrent.totalBytes > 0}
+                    <div>ETA: {formatEta(torrent.totalBytes - torrent.downloadedBytes, torrent.speedBps)}</div>
+                  {/if}
+                </div>
+              </Tooltip.Content>
+            </Tooltip.Root>
           {/if}
 
           <!-- Audio tracks -->
