@@ -346,11 +346,23 @@ jobs:
         run: |
           # Run windeployqt against the *staged* exe so its entire output
           # (Qt DLLs, plugin dirs, qml/, resources/, translations/,
-          # QtWebEngineProcess.exe, VC++ runtime DLLs) lands in the package
-          # directly. Cherry-picking files out of qt/build instead has
-          # silently dropped required pieces (qml/, QtWebEngineProcess.exe)
-          # and shipped Windows builds that open a dead window.
-          windeployqt --qmldir qt/qml --compiler-runtime staging/cove_shell.exe
+          # QtWebEngineProcess.exe) lands in the package directly.
+          # Cherry-picking files out of qt/build instead has silently dropped
+          # required pieces (qml/, QtWebEngineProcess.exe) and shipped Windows
+          # builds that open a dead window.
+          windeployqt --qmldir qt/qml staging/cove_shell.exe
+
+          # windeployqt's --compiler-runtime deploys the vc_redist.x64.exe
+          # *installer* for MSVC builds, not the runtime DLLs, so copy the CRT
+          # DLLs (vcruntime140*.dll, msvcp140*.dll) from the MSVC toolchain's
+          # redist dir ourselves. VCToolsRedistDir is exported by
+          # ilammy/msvc-dev-cmd.
+          $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          if (-not $crt) {
+            Write-Error "MSVC CRT redist dir not found under $env:VCToolsRedistDir\x64"
+            exit 1
+          }
+          Copy-Item "$($crt.FullName)\*.dll" staging/
 
       - name: Sanity-check staged package
         shell: pwsh
@@ -362,9 +374,10 @@ jobs:
           # missing/broken GPU driver.
           # QtWebEngineProcess.exe: the Chromium renderer — without it the
           # WebEngineView silently renders nothing.
-          # vcruntime140.dll: from --compiler-runtime; without it a machine
-          # lacking the VC++ redist can't start cove_shell.exe at all.
-          foreach ($f in @("opengl32sw.dll", "QtWebEngineProcess.exe", "vcruntime140.dll")) {
+          # vcruntime140.dll / msvcp140.dll: copied from VCToolsRedistDir;
+          # without them a machine lacking the VC++ redist can't start
+          # cove_shell.exe at all.
+          foreach ($f in @("opengl32sw.dll", "QtWebEngineProcess.exe", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")) {
             if (-not (Test-Path "staging/$f")) { $missing += $f }
           }
           # qml/: the QML modules main.qml imports; without them the shell
