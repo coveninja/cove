@@ -8,6 +8,7 @@
   import type { WatchProgress } from "$lib/types/library";
   import { settings } from "$lib/stores/settings";
   import ScrambledText from "./ScrambledText.svelte";
+  import { libraryChanged } from "$lib/stores/library";
 
   let {
     media,
@@ -15,12 +16,16 @@
     selectedSeason,
     progressMap,
     selectedEpisode = $bindable<TVEpisode>(),
+    activeSeason = undefined,
+    activeEpisode = undefined,
   } = $props<{
     media: Media;
     ep: TVEpisode;
     selectedSeason: number;
     progressMap: SvelteMap<string, WatchProgress>;
     selectedEpisode: TVEpisode;
+    activeSeason?: number;
+    activeEpisode?: number;
   }>();
 
   let prog = $derived(
@@ -36,7 +41,20 @@
     ep.air_date && new SvelteDate(ep.air_date) > new SvelteDate(),
   );
 
+  // A manual watched/unwatched toggle should reach Supabase promptly rather
+  // than waiting for the next focus-triggered sync — if the app quits first,
+  // the toggle never leaves this machine and other devices keep the old
+  // state. authSync is pull-then-push; the pull can't revert the toggle we
+  // just wrote because the progress merge is most-recent-write-wins and our
+  // WatchedAt is newest. No-op for guests (the request just 401s — swallowed).
+  function nudgeSync(): void {
+    api.authSync().catch(() => {});
+  }
+
   async function markWatched(ep: TVEpisode): Promise<void> {
+    // Real runtime when TMDB knows it; the 1/1 placeholder still reads as
+    // 100% watched either way, it's just dishonest data.
+    const durationSecs = ep.runtime > 0 ? ep.runtime * 60 : 1;
     const p = await api.progressSave({
       tmdb_id: media.id,
       media_type: "tv",
@@ -45,11 +63,13 @@
       vote_average: media.vote_average ?? 0,
       season: selectedSeason!,
       episode: ep.episode_number,
-      position_seconds: 1,
-      duration_seconds: 1,
+      position_seconds: durationSecs,
+      duration_seconds: durationSecs,
       completed: true,
     });
     progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+    libraryChanged.update((n) => n + 1);
+    nudgeSync();
   }
 
   async function markUnwatched(ep: TVEpisode): Promise<void> {
@@ -66,9 +86,17 @@
       completed: false,
     });
     progressMap.set(epKey(selectedSeason!, ep.episode_number), p);
+    libraryChanged.update((n) => n + 1);
+    nudgeSync();
   }
 
   let hideSpoilers = $derived($settings?.hideSpoilers && !completed);
+  let isCurrentlyPlaying = $derived(
+    activeSeason != null &&
+    activeEpisode != null &&
+    selectedSeason === activeSeason &&
+    ep.episode_number === activeEpisode,
+  );
 </script>
 
 <ContextMenu.Root>
@@ -78,7 +106,8 @@
                     {unreleased
         ? 'cursor-default opacity-40'
         : 'hover:bg-secondary/60'}
-                    {completed ? 'opacity-70' : ''}"
+                    {completed ? 'opacity-70' : ''}
+                    {isCurrentlyPlaying ? 'mb-1 rounded-2xl overflow-clip ring-2 ring-inset ring-accent' : ''}"
       onclick={() => {
         if (!unreleased) selectedEpisode = ep;
       }}
@@ -90,6 +119,8 @@
           <img
             src={ep.still_path}
             alt={ep.name}
+            loading="lazy"
+            decoding="async"
             class="aspect-video w-full object-cover {hideSpoilers
               ? 'scale-110 blur-md'
               : ''}"
@@ -127,6 +158,16 @@
             <Play
               class="size-5 text-white opacity-0 transition-opacity group-hover:opacity-100"
             />
+          </span>
+        {/if}
+
+        <!-- Currently Playing badge — rendered over completed/hover overlays -->
+        {#if isCurrentlyPlaying}
+          <span
+            class="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground shadow"
+          >
+            <Play class="size-3 fill-current" />
+            Now Playing
           </span>
         {/if}
       </span>

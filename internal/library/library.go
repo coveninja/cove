@@ -1,3 +1,10 @@
+// Package library is the local watch-history store: library entries (status,
+// rating), per-episode watch progress, and "not interested" dismissals,
+// persisted as JSON per profile under the OS config directory. It exposes
+// TasteSignals() and Generation() as the sole interface the recommendation
+// engine (internal/discover) consumes — neither package imports the other,
+// so a personalization feature can evolve independently of how watch history
+// is stored.
 package library
 
 import (
@@ -31,9 +38,9 @@ const (
 
 // LibraryEntry mirrors the `library_entries` Supabase table.
 type LibraryEntry struct {
-	ID        string  `json:"id"`         // UUIDv4
-	ProfileID *string `json:"profile_id"`
-	TmdbID    int     `json:"tmdb_id"`
+	ID          string   `json:"id"` // UUIDv4
+	ProfileID   *string  `json:"profile_id"`
+	TmdbID      int      `json:"tmdb_id"`
 	MediaType   string   `json:"media_type"` // "movie" | "tv"
 	Title       string   `json:"title"`
 	PosterPath  string   `json:"poster_path"`
@@ -54,9 +61,9 @@ type LibraryEntry struct {
 // WatchProgress mirrors the `watch_progress` Supabase table.
 // One row per unique (tmdb_id, media_type, season, episode) tuple.
 type WatchProgress struct {
-	ID             string  `json:"id"`
-	ProfileID      *string `json:"profile_id"`
-	LibraryEntryID string  `json:"library_entry_id"`
+	ID              string    `json:"id"`
+	ProfileID       *string   `json:"profile_id"`
+	LibraryEntryID  string    `json:"library_entry_id"`
 	TmdbID          int       `json:"tmdb_id"`
 	MediaType       string    `json:"media_type"`
 	Season          *int      `json:"season"`  // null for movies
@@ -91,6 +98,31 @@ type TasteSignal struct {
 	UserRating *float64 // user's 0–5 rating; nil if unrated
 	Completed  bool     // any progress record for this title is completed
 	Dismissed  bool
+	// Title and PosterPath are populated for entry-backed signals so that
+	// downstream consumers (e.g. discover's contributing-title view) can
+	// render a poster row without a second TMDB lookup. The PosterPath is
+	// already rewritten to route through the local image-cache proxy.
+	// Progress-only and dismissal-only signals leave these empty.
+	Title      string
+	PosterPath string
+	// LastInteractionAt is the most recent time the user touched this title
+	// (rated/status change, a watch, or a dismissal). Lets discover decay old
+	// signals instead of weighing a five-year-old favorite the same as
+	// yesterday's.
+	LastInteractionAt time.Time
+}
+
+// ProgressSaveEvent is emitted (best-effort, outside any lock) on every
+// successful POST to /api/library/progress. It carries enough context for an
+// activity log to credit watch-time deltas without knowing library internals.
+type ProgressSaveEvent struct {
+	ProgressKey string    // library's progressKey() value for this record
+	TmdbID      int
+	MediaType   string
+	Position    float64
+	Duration    float64
+	Completed   bool
+	At          time.Time
 }
 
 // AllEntries returns a snapshot of all library entries. Used for sync.
@@ -131,7 +163,8 @@ func (l *Library) AllDismissals() []*Dismissal {
 
 // MergeFrom merges remote data (pulled from Supabase) into the local store.
 // Remote entries replace local ones for the same (tmdb_id, media_type) key.
-// Watch progress takes the max position_seconds. Dismissals are unioned.
+// Watch progress takes the most recent write (WatchedAt). Dismissals are
+// unioned.
 func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal) {
 	l.mu.Lock()
 	for _, e := range entries {
@@ -147,7 +180,14 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	for _, p := range progress {
 		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
 		if local, ok := l.db.Progress[key]; ok {
-			if p.PositionSeconds > local.PositionSeconds {
+			// Most-recent-write wins (same rule as entries' UpdatedAt above).
+			// This used to be "higher PositionSeconds wins", which made any
+			// position regression un-syncable: marking an episode unwatched
+			// (position 0) or rewatching from the start always lost to the
+			// remote copy's older-but-larger position — the next sync pull
+			// silently reverted the change, and the push that follows a pull
+			// then uploaded the reverted record, cementing it.
+			if p.WatchedAt.After(local.WatchedAt) {
 				l.db.Progress[key] = p
 			}
 		} else {
@@ -160,9 +200,17 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 			l.db.Dismissed[key] = d
 		}
 	}
-	l.mu.Unlock()
-	_ = l.persist()
+	// Synchronous, not debounced (D3) — this is external data pulled from
+	// Supabase sync, not a local UI mutation, so it should hit disk right
+	// away rather than wait out persistDebounce.
+	if err := l.writeNow(); err != nil {
+		log.Println("library persist:", err)
+	}
 	l.gen.Add(1)
+	l.mu.Unlock()
+	// tasteGen is a distinct counter (D2): MergeFrom pulls in
+	// entries/progress/dismissals wholesale, all taste-relevant.
+	l.tasteGen.Add(1)
 }
 
 // TasteSignals returns one signal per title the user has any history with —
@@ -172,10 +220,16 @@ func (l *Library) TasteSignals() []TasteSignal {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	completed := make(map[string]bool)
+	// Latest WatchedAt among completed progress rows per title, so both the
+	// completed flag and its timestamp come from the same pass.
+	completed := make(map[string]time.Time)
 	for _, p := range l.db.Progress {
-		if p.Completed {
-			completed[entryKey(p.TmdbID, p.MediaType)] = true
+		if !p.Completed {
+			continue
+		}
+		key := entryKey(p.TmdbID, p.MediaType)
+		if p.WatchedAt.After(completed[key]) {
+			completed[key] = p.WatchedAt
 		}
 	}
 
@@ -184,12 +238,22 @@ func (l *Library) TasteSignals() []TasteSignal {
 	for _, e := range l.db.Entries {
 		key := entryKey(e.TmdbID, e.MediaType)
 		seen[key] = true
+		ts := e.UpdatedAt
+		if e.LastWatchedAt != nil && e.LastWatchedAt.After(ts) {
+			ts = *e.LastWatchedAt
+		}
+		if watchedAt, ok := completed[key]; ok && watchedAt.After(ts) {
+			ts = watchedAt
+		}
 		out = append(out, TasteSignal{
-			TmdbID:     e.TmdbID,
-			MediaType:  e.MediaType,
-			Status:     e.Status,
-			UserRating: e.Rating,
-			Completed:  completed[key],
+			TmdbID:            e.TmdbID,
+			MediaType:         e.MediaType,
+			Status:            e.Status,
+			UserRating:        e.Rating,
+			Completed:         !completed[key].IsZero(),
+			Title:             e.Title,
+			PosterPath:        rewritePosterURL(e.PosterPath),
+			LastInteractionAt: ts,
 		})
 	}
 
@@ -205,9 +269,10 @@ func (l *Library) TasteSignals() []TasteSignal {
 		}
 		seen[key] = true
 		out = append(out, TasteSignal{
-			TmdbID:    p.TmdbID,
-			MediaType: p.MediaType,
-			Completed: true, // no entry => no status
+			TmdbID:            p.TmdbID,
+			MediaType:         p.MediaType,
+			Completed:         true, // no entry => no status
+			LastInteractionAt: completed[key],
 		})
 	}
 	for key, d := range l.db.Dismissed {
@@ -216,9 +281,10 @@ func (l *Library) TasteSignals() []TasteSignal {
 		}
 		seen[key] = true
 		out = append(out, TasteSignal{
-			TmdbID:    d.TmdbID,
-			MediaType: d.MediaType,
-			Dismissed: true,
+			TmdbID:            d.TmdbID,
+			MediaType:         d.MediaType,
+			Dismissed:         true,
+			LastInteractionAt: d.DismissedAt,
 		})
 	}
 	return out
@@ -285,6 +351,134 @@ type Library struct {
 	db   diskStore
 	path string
 	gen  atomic.Uint64
+
+	// tasteGen (D2) is bumped only by taste-relevant mutations — entry
+	// upsert/remove, status, rating, dismissal, a progress write that
+	// transitions to Completed, and MergeFrom — unlike gen/Generation(),
+	// which bumps on every persist(), including the playback-progress tick
+	// that fires every ~10s during any watch. internal/discover's profile
+	// cache keys off TasteGeneration() instead of Generation() so a taste
+	// rebuild (and the GetDetails stampede across the whole library that
+	// implies) only happens when taste actually changed, not on every tick.
+	tasteGen atomic.Uint64
+
+	// onNearComplete, if set, is called (best-effort, outside any lock) when
+	// a progress write reports a title/episode as completed or ≥90% watched
+	// — the moment "next episode" becomes the likely next watch. Deliberately
+	// its own single-purpose hook, not coupled to Generation() (D2/D3 give
+	// that a different meaning) — see internal/prefetch.
+	onNearComplete func()
+
+	// onProgressSave, if set, is called (best-effort, outside any lock) on
+	// every successful POST to /api/library/progress — including the ~10s
+	// playback ticks — so an activity log can credit watch-time deltas in
+	// near-real-time. See internal/activity.
+	onProgressSave func(ProgressSaveEvent)
+
+	// Debounced persistence (D3). markDirty() marshals the store (cheap — it's
+	// small) synchronously while the caller still holds l.mu, then schedules
+	// the actual disk write ~1s out via dirtyTimer if one isn't already
+	// pending — so a burst of mutations (e.g. rapid progress ticks) coalesces
+	// into a single AtomicWriteFile instead of one per mutation. Only the I/O
+	// is debounced; pendingData always reflects the latest marshaled state at
+	// the moment markDirty() was last called.
+	dirtyMu     sync.Mutex
+	dirtyTimer  *time.Timer
+	pendingPath string
+	pendingData []byte
+}
+
+// persistDebounce is how long markDirty waits before actually writing —
+// long enough to coalesce a realistic burst (rapid status/rating clicks, a
+// progress-save retry), short enough that a crash right after a mutation
+// loses at most this much.
+const persistDebounce = 1 * time.Second
+
+// markDirty marshals the current store and schedules a debounced write.
+// Must be called with l.mu held (any mode — it only reads l.db/l.path).
+// Callers that need to guarantee the write actually reached disk before
+// returning (external sync data, a profile switch, first-run) use writeNow
+// instead — see MergeFrom/SetProfile/New.
+func (l *Library) markDirty() {
+	raw, err := json.Marshal(l.db)
+	if err != nil {
+		log.Println("library: marshal failed:", err)
+		return
+	}
+
+	l.dirtyMu.Lock()
+	defer l.dirtyMu.Unlock()
+	l.pendingData = raw
+	l.pendingPath = l.path
+	if l.dirtyTimer == nil {
+		l.dirtyTimer = time.AfterFunc(persistDebounce, l.flushPending)
+	}
+}
+
+// flushPending is dirtyTimer's callback — writes out whatever markDirty last
+// staged. Deliberately doesn't touch l.mu: it only ever reads pendingData/
+// pendingPath, both owned by dirtyMu.
+func (l *Library) flushPending() {
+	l.dirtyMu.Lock()
+	data, path := l.pendingData, l.pendingPath
+	l.pendingData, l.pendingPath, l.dirtyTimer = nil, "", nil
+	l.dirtyMu.Unlock()
+
+	if data == nil {
+		return
+	}
+	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
+		log.Println("library: debounced write failed:", err)
+	}
+}
+
+// Flush forces any pending debounced write (D3) to happen immediately —
+// call on shutdown so the last mutation before exit isn't lost to the
+// persistDebounce window the process didn't live to see.
+func (l *Library) Flush() {
+	l.dirtyMu.Lock()
+	if l.dirtyTimer != nil {
+		l.dirtyTimer.Stop()
+	}
+	data, path := l.pendingData, l.pendingPath
+	l.pendingData, l.pendingPath, l.dirtyTimer = nil, "", nil
+	l.dirtyMu.Unlock()
+
+	if data == nil {
+		return
+	}
+	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
+		log.Println("library: flush failed:", err)
+	}
+}
+
+// writeNow synchronously marshals and writes the store to disk, bypassing
+// the debounce entirely. Must be called with l.mu held. Used only by the
+// synchronous exceptions (D3): MergeFrom (external sync data should hit disk
+// right away, not wait out a debounce window), SetProfile's flush-then-swap,
+// and New's first-run write.
+func (l *Library) writeNow() error {
+	raw, err := json.Marshal(l.db)
+	if err != nil {
+		return err
+	}
+	return utils.AtomicWriteFile(l.path, raw, 0o644)
+}
+
+// SetOnNearComplete registers the near-complete callback (internal/prefetch's
+// debounced re-warm trigger). Called once from main.go at startup.
+func (l *Library) SetOnNearComplete(fn func()) {
+	l.mu.Lock()
+	l.onNearComplete = fn
+	l.mu.Unlock()
+}
+
+// SetOnProgressSave registers the progress-save callback (internal/activity's
+// delta-crediting hook). Called once from main.go at startup.
+func (l *Library) SetOnProgressSave(fn func(ProgressSaveEvent)) {
+	l.mu.Lock()
+	l.onProgressSave = fn
+	l.mu.Unlock()
 }
 
 // ── New ────────────────────────────────────────────────────────────────────────
@@ -311,8 +505,11 @@ func New(profileID string) (*Library, error) {
 
 	raw, err := os.ReadFile(l.path)
 	if os.IsNotExist(err) {
-		// First run — persist empty maps so the file exists.
-		return l, l.persist()
+		// First run — write empty maps synchronously so the file exists
+		// immediately (a "synchronous exception" to D3's debounce — nothing
+		// would trigger the debounced write otherwise, and the file existing
+		// is a documented guarantee callers of New() may rely on).
+		return l, l.writeNow()
 	}
 	if err != nil {
 		return l, err
@@ -326,16 +523,11 @@ func New(profileID string) (*Library, error) {
 	return l, nil
 }
 
-func (l *Library) persist() error {
-	raw, err := json.MarshalIndent(l.db, "", "  ")
-	if err != nil {
-		return err
-	}
-	l.gen.Add(1)
-	return utils.AtomicWriteFile(l.path, raw, 0o644)
-}
-
 func (l *Library) Generation() uint64 { return l.gen.Load() }
+
+// TasteGeneration returns the taste-relevant generation counter (D2) — see
+// the Library.tasteGen field doc.
+func (l *Library) TasteGeneration() uint64 { return l.tasteGen.Load() }
 
 // SetProfile reloads the library from the given profile's data file.
 // Safe to call while handlers are live — takes the write lock while swapping.
@@ -358,6 +550,14 @@ func (l *Library) SetProfile(profileID string) error {
 			return err
 		}
 	}
+
+	// Synchronous exception (D3): flush any pending debounced write for the
+	// OLD profile before swapping l.db/l.path out from under it — otherwise
+	// a mutation made just before switching profiles could be lost (its
+	// debounced write would fire ~1s later against whatever l.path has
+	// become by then).
+	l.Flush()
+
 	l.mu.Lock()
 	l.db = newDB
 	l.path = path
@@ -409,18 +609,18 @@ func (l *Library) SetupHandlers(mux *http.ServeMux) {
 
 func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodOptions:
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-
 	case http.MethodGet:
 		statusFilter := r.URL.Query().Get("status")
 		l.mu.RLock()
 		list := make([]*LibraryEntry, 0, len(l.db.Entries))
 		for _, e := range l.db.Entries {
 			if statusFilter == "" || e.Status == statusFilter {
-				list = append(list, e)
+				// Value copy — e is the actual pointer stored under l.mu, and
+				// rewritePosterURL's result must never leak back into it (see
+				// its doc comment).
+				entryCopy := *e
+				entryCopy.PosterPath = rewritePosterURL(entryCopy.PosterPath)
+				list = append(list, &entryCopy)
 			}
 		}
 		l.mu.RUnlock()
@@ -479,14 +679,13 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		err := l.persist()
+		l.gen.Add(1)
+		l.markDirty()
 		result := *entry // copy before unlock
 		l.mu.Unlock()
+		l.tasteGen.Add(1) // entry upsert — taste-relevant
 
-		if err != nil {
-			http.Error(w, "persist failed", http.StatusInternalServerError)
-			return
-		}
+		result.PosterPath = rewritePosterURL(result.PosterPath)
 		jsonOK(w, &result)
 
 	default:
@@ -501,11 +700,6 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 
 func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodOptions:
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-
 	case http.MethodGet:
 		tmdbID, err := strconv.Atoi(r.URL.Query().Get("tmdb_id"))
 		if err != nil {
@@ -611,22 +805,55 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			}
 			l.db.Progress[pKey] = prog
 		}
+		wasCompleted := progExists && prog.Completed
 		prog.PositionSeconds = body.PositionSeconds
 		prog.DurationSeconds = body.DurationSeconds
 		prog.Completed = body.Completed
 		prog.WatchedAt = now
+		completedTransition := !wasCompleted && prog.Completed
 
 		// If the episode/movie was just completed and the entry was "watching",
 		// don't auto-flip to "finished" — user controls that manually.
 
-		err := l.persist()
+		l.gen.Add(1)
+		l.markDirty()
 		result := *prog // copy before unlock
+		hook := l.onNearComplete
+		progressSaveHook := l.onProgressSave
 		l.mu.Unlock()
 
-		if err != nil {
-			http.Error(w, "persist failed", http.StatusInternalServerError)
-			return
+		// A progress write happens on every ~10s tick during playback — only a
+		// genuine Completed transition is taste-relevant (D2); the position
+		// ticks in between must NOT bump tasteGen, or discover's profile
+		// cache would thrash exactly like it did before this split existed.
+		if completedTransition {
+			l.tasteGen.Add(1)
 		}
+
+		// Best-effort, outside the lock: activity log credits the delta since
+		// the last tick into today's date/hour bucket (internal/activity
+		// discards seeks and large jumps via its own 0 < delta ≤ 90s clamp).
+		if progressSaveHook != nil {
+			progressSaveHook(ProgressSaveEvent{
+				ProgressKey: pKey,
+				TmdbID:      body.TmdbID,
+				MediaType:   body.MediaType,
+				Position:    body.PositionSeconds,
+				Duration:    body.DurationSeconds,
+				Completed:   body.Completed,
+				At:          now,
+			})
+		}
+
+		// Best-effort, outside the lock: this is the moment "next episode"
+		// becomes the likely next watch (internal/prefetch debounces this
+		// itself, so firing it isn't a concern under rapid progress ticks).
+		nearComplete := body.Completed ||
+			(body.DurationSeconds > 0 && body.PositionSeconds/body.DurationSeconds >= 0.9)
+		if hook != nil && nearComplete {
+			hook()
+		}
+
 		jsonOK(w, &result)
 
 	default:
@@ -642,13 +869,6 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 // PATCH  /api/library/{id}/{type}/rating  — update rating field (null to clear)
 
 func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
 	// "/api/library/12345/movie" → trimmed = "12345/movie"
 	// "/api/library/12345/movie/rating" → trimmed = "12345/movie/rating"
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/library/")
@@ -691,7 +911,16 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		if progList == nil {
 			progList = []*WatchProgress{}
 		}
-		jsonOK(w, map[string]any{"entry": entry, "progress": progList, "dismissed": dismissed})
+		// Value copy — entry is the actual pointer stored under l.mu (see
+		// rewritePosterURL's doc comment for why this must not be mutated
+		// in place).
+		var entryOut *LibraryEntry
+		if entry != nil {
+			c := *entry
+			c.PosterPath = rewritePosterURL(c.PosterPath)
+			entryOut = &c
+		}
+		jsonOK(w, map[string]any{"entry": entryOut, "progress": progList, "dismissed": dismissed})
 
 	// ── DELETE /api/library/{id}/{type} ───────────────────────────────────────
 	case sub == "" && r.Method == http.MethodDelete:
@@ -701,12 +930,10 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		// removing the title from their list, not erasing their watch history.
 		// Progress records are keyed by (tmdb_id, media_type, season, episode)
 		// and will be re-linked to a new entry if the title is added back later.
-		err := l.persist()
+		l.gen.Add(1)
+		l.markDirty()
 		l.mu.Unlock()
-		if err != nil {
-			http.Error(w, "persist failed", http.StatusInternalServerError)
-			return
-		}
+		l.tasteGen.Add(1) // entry removal — taste-relevant
 		w.WriteHeader(http.StatusNoContent)
 
 	// ── PATCH /api/library/{id}/{type}/status ─────────────────────────────────
@@ -727,13 +954,12 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		}
 		entry.Status = body.Status
 		entry.UpdatedAt = time.Now()
-		err := l.persist()
+		l.gen.Add(1)
+		l.markDirty()
 		result := *entry
 		l.mu.Unlock()
-		if err != nil {
-			http.Error(w, "persist failed", http.StatusInternalServerError)
-			return
-		}
+		l.tasteGen.Add(1) // status change — taste-relevant
+		result.PosterPath = rewritePosterURL(result.PosterPath)
 		jsonOK(w, &result)
 
 	// ── PATCH /api/library/{id}/{type}/rating ─────────────────────────────────
@@ -758,13 +984,12 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		}
 		entry.Rating = body.Rating
 		entry.UpdatedAt = time.Now()
-		err := l.persist()
+		l.gen.Add(1)
+		l.markDirty()
 		result := *entry
 		l.mu.Unlock()
-		if err != nil {
-			http.Error(w, "persist failed", http.StatusInternalServerError)
-			return
-		}
+		l.tasteGen.Add(1) // rating change — taste-relevant
+		result.PosterPath = rewritePosterURL(result.PosterPath)
 		jsonOK(w, &result)
 
 	default:
@@ -804,12 +1029,10 @@ func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
 		} else {
 			delete(l.db.Dismissed, key)
 		}
-		err := l.persist()
+		l.gen.Add(1)
+		l.markDirty()
 		l.mu.Unlock()
-		if err != nil {
-			http.Error(w, "persist failed", http.StatusInternalServerError)
-			return
-		}
+		l.tasteGen.Add(1) // dismissal add/remove — taste-relevant
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
@@ -832,6 +1055,26 @@ func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// rewritePosterURL rewrites a legacy TMDB-hosted poster URL — one stored
+// before internal/imgcache existed, or synced down from Supabase from another
+// device on an older version — to route through the local image-cache proxy
+// instead. tmdb.go itself only ever produces already-rewritten URLs now, but
+// this covers entries written to disk (or Supabase) by a previous version of
+// the app, without needing a one-time migration pass over every stored
+// LibraryEntry.
+//
+// Serve-side view only: callers must apply this to a value COPY of the
+// entry, never mutate the stored/cached LibraryEntry in place — entries are
+// shared pointers under l.mu, and a synced-down URL must stay in its
+// original (TMDB-hosted) form so a future Supabase push doesn't propagate a
+// rewrite that only makes sense pointed at this machine's own backend.
+func rewritePosterURL(s string) string {
+	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
+		return "http://127.0.0.1:6969/api/img/" + rest
+	}
+	return s
+}
 
 func jsonOK(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")

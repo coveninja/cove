@@ -164,12 +164,12 @@
     return !!popover?.contains(target);
   }
 
+  let hoverCardContextMenuOpen = $state(false);
+
   function closeIfIdle(): void {
-    if (popoverOpen || withinZone) return;
+    if (popoverOpen || hoverCardContextMenuOpen || withinZone) return;
     if (hoverCardInstance) {
-      hoverCardInstance.animateClose(() => {
-        hovered = false;
-      });
+      hoverCardInstance.animateClose(() => (hovered = false));
     } else {
       hovered = false;
     }
@@ -253,6 +253,8 @@
       });
   });
 
+
+
   // Flip `visible` when the card scrolls within 300px of the viewport, which
   // triggers the two effects above. Loads eagerly if IntersectionObserver is
   // unavailable. Library state still updates on $libraryChanged afterwards.
@@ -296,6 +298,8 @@
               randomize: true,
             })}
             alt={title}
+            loading="lazy"
+            decoding="async"
             class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
               ? 'opacity-35'
               : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
@@ -304,6 +308,8 @@
           <img
             src={media.poster_path}
             alt={title}
+            loading="lazy"
+            decoding="async"
             class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
               ? 'opacity-35'
               : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
@@ -354,5 +360,6 @@
     onmouseleave={onLeave}
     onexpand={openOverlay}
     onpopoverchange={(open) => (popoverOpen = open)}
+    oncontextmenuopen={(open) => (hoverCardContextMenuOpen = open)}
   />
 {/if}

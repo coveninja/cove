@@ -126,3 +126,14 @@
     @apply border-border outline-ring/50;
   }
 }
+
+/* Skeletons on hidden (always-mounted) pages must not keep the compositor
+   producing frames — 100+ perpetual pulse animations were measured live.
+   .hidden  → display:none  (page-stack toggling in App.svelte)
+   .invisible → visibility:hidden  (page stack while player is full-screen) */
+.hidden .animate-pulse,
+.hidden [class*="animate-"],
+.invisible .animate-pulse,
+.invisible [class*="animate-"] {
+  animation-play-state: paused !important;
+}

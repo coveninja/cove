@@ -26,12 +26,21 @@
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import type { LibraryEntry } from "$lib/types/library";
   import PlayerSimple from "./PlayerSimple.svelte";
+  import { Player } from "$lib/player/player.svelte";
+  import { libraryChanged } from "$lib/stores/library";
+
+  // Suppress carousel auto-advance while the mpv player is active. PlayerSimple
+  // already destroys its YouTube iframe when mpvBusy, but the timer below can
+  // still call next() even for static-image cards (no video clip), advancing the
+  // index into a video-clip card whose iframe would then be rebuilt. Gating the
+  // effect here prevents any carousel churn while mpv is in use.
+  const mpvBusy = $derived(Player.available && Player.duration > 0);
 
   let mediaIndex = $state<number>(0);
   let medias = $state<Media[]>([]);
   let isMuted = $state(true);
 
-  let { isPaused = $bindable(false) } = $props();
+  let { isPaused = $bindable(false), visible = true } = $props();
 
   // Starts playback (auto-picking the best stream) for the current item.
   // Provided by App.svelte via context, so no prop threading through HomePage.
@@ -147,10 +156,12 @@
 
   $effect(() => {
     const idx = mediaIndex;
+    const busy = mpvBusy; // track so the effect re-runs when mpv opens/closes
+    const vis = visible;  // track so the effect re-runs when the page is shown/hidden
     currentAnimation?.pause();
     currentAnimation = null;
     progress = 0;
-    if (medias.length > 0 && !videoClips[idx]) startTimer();
+    if (medias.length > 0 && !videoClips[idx] && !busy && vis) startTimer();
   });
 
   let overviewEl = $state<HTMLElement | null>(null);
@@ -175,7 +186,10 @@
   function dismissCurrent(): void {
     const media = medias[mediaIndex];
     if (!media) return;
-    api.notInterested(media).catch(() => {}); // fire-and-forget; UI updates optimistically
+    api
+      .notInterested(media)
+      .then(() => libraryChanged.update((n) => n + 1))
+      .catch(() => {}); // fire-and-forget; UI updates optimistically
     medias = medias.filter(
       (m) => !(m.id === media.id && m.media_type === media.media_type),
     );

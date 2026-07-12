@@ -5,19 +5,29 @@ import type {
   MediaVideos,
   TVEpisode,
 } from "$lib/types/tmdb";
-import type { AddonEntry, Stream, TimestampData, WatchOption } from "$lib/types/addons";
+import type {
+  AddonEntry,
+  CatalogRef,
+  Stream,
+  TimestampData,
+  WatchOption,
+} from "$lib/types/addons";
+import type { Repo as NuvioRepo } from "$lib/types/nuvio";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
 import type { Profile } from "$lib/types/auth";
 
 // Single source of truth for the backend origin. Override per-environment with
-// VITE_API_BASE (e.g. in .env.production); falls back to the local dev server.
+// VITE_API_BASE (e.g. in .env.production); falls back to 127.0.0.1 (the same
+// host the backend embeds in its JSON) so there is one CSP entry and one
+// Chromium connection pool. localhost is kept as a fallback only in the CSP
+// for browser-dev setups that override VITE_API_BASE to point at localhost.
 // Everything in this module — fetches and the URL builders handed to <video>,
 // <track>, hls.js, and EventSource — is derived from this, so the host appears
 // exactly once in the frontend.
 const BASE =
   (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-    ?.VITE_API_BASE ?? "http://localhost:6969/api";
+    ?.VITE_API_BASE ?? "http://127.0.0.1:6969/api";
 
 // Auth token getter — set by setTokenSource() on startup; called on every request
 // so it always reads the current value without a $effect timing gap.
@@ -38,7 +48,7 @@ export function setTokenSource(getter: () => string | null): void {
 // fetch"). We cap how many fetches are actually in flight; the rest wait in a
 // cheap in-memory queue rather than as pending browser requests.
 //
-// Only request/requestOrNull go through this. Long-lived streams (HLS, the
+// Only request/requestOrNull go through this. Long-lived streams (the
 // progress SSE, speedtest) deliberately bypass it — they'd hold a slot open
 // indefinitely and starve everything else.
 const MAX_CONCURRENT = 8;
@@ -61,6 +71,21 @@ function releaseSlot(): void {
   else inFlight--;
 }
 
+// Every fetch through the limiter gets a hard 20s ceiling — otherwise a
+// stalled request (dead addon, unreachable torrent tracker, etc.) never
+// releases its slot, and with only MAX_CONCURRENT slots, 8 stalled fetches
+// deadlock the entire pool for every other caller. Combined with any signal
+// the caller already passed so both can still abort the request.
+const FETCH_TIMEOUT_MS = 20_000;
+
+function withTimeout(init?: RequestInit): RequestInit {
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
+  return { ...init, signal };
+}
+
 /** fetch(), but never more than MAX_CONCURRENT calls outstanding at once. */
 async function limitedFetch(
   input: RequestInfo | URL,
@@ -68,7 +93,7 @@ async function limitedFetch(
 ): Promise<Response> {
   await acquireSlot();
   try {
-    return await fetch(input, init);
+    return await fetch(input, withTimeout(init));
   } finally {
     releaseSlot();
   }
@@ -92,6 +117,12 @@ function coalesce<T>(
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   if (method !== "GET") return exec();
+  // A caller-supplied signal means this request has its own cancellation
+  // lifecycle — sharing a coalesced promise would let one caller's abort
+  // reject every other caller waiting on the same key, even ones that never
+  // asked to be cancelled. Skip coalescing entirely for signalled requests;
+  // each runs (and can be aborted) independently.
+  if (init?.signal) return exec();
 
   const existing = inflight.get(key) as Promise<T> | undefined;
   if (existing) return existing;
@@ -228,7 +259,51 @@ export interface DiscoverInsights {
   top_tv_genres: Taste[];
   disliked_genres: Taste[];
   top_keywords: Taste[];
+  top_people: Taste[];
   signals_used: number;
+  top_studios: StudioEntry[];
+  top_contributors: ContributingTitle[];
+  negative_contributors: ContributingTitle[];
+}
+
+export interface TitleSeconds {
+  tmdb_id: number;
+  media_type: string;
+  title: string;
+  poster_path: string;
+  seconds: number;
+}
+
+export interface ActivityStats {
+  total_seconds: number;
+  total_titles: number;
+  current_streak: number;
+  longest_streak: number;
+  avg_seconds_per_active_day: number;
+  titles_this_year: number;
+  this_year_seconds: number;
+  last_year_seconds: number;
+  by_year: Record<string, number>;
+  by_month_this_year: number[];
+  by_month_last_year: number[];
+  by_day_of_week: number[];
+  by_hour_of_day: number[];
+  calendar: Record<string, number>;
+  titles_watched_this_year: TitleSeconds[];
+}
+
+export interface StudioEntry {
+  id: number;
+  name: string;
+  count: number;
+}
+
+export interface ContributingTitle {
+  tmdb_id: number;
+  media_type: string;
+  title: string;
+  poster_path: string;
+  weight: number;
 }
 
 // A /search/person result. profile_path / known_for posters arrive as fully
@@ -333,12 +408,16 @@ export const api = {
     request(`/tv/episodes?id=${id}&season=${season}`),
 
   // ── Streams & subtitles (addons) ──────────────────────────────────────────────
-  getStreams: (tmdbId: number, opts: StreamQuery = {}): Promise<Stream[]> => {
+  getStreams: (
+    tmdbId: number,
+    opts: StreamQuery = {},
+    signal?: AbortSignal,
+  ): Promise<Stream[]> => {
     const p = new URLSearchParams({ id: String(tmdbId) });
     if (opts.type) p.set("type", opts.type);
     if (opts.season != null) p.set("season", String(opts.season));
     if (opts.episode != null) p.set("episode", String(opts.episode));
-    return request(`/streams?${p}`);
+    return request(`/streams?${p}`, signal ? { signal } : undefined);
   },
 
   getSubtitles: (p: {
@@ -353,64 +432,129 @@ export const api = {
     return request(`/subtitles?${q}`);
   },
 
+  // Streams NDJSON quality-badge results for a batch of typed ids
+  // ("movie:603", "tv:1396") from /api/quality/batch, calling onEntry for
+  // each line as it arrives. Deliberately bypasses the concurrency limiter —
+  // same rationale as the progress SSE and speedtest above: this is a
+  // long-lived streaming connection that would otherwise hold one of the 8
+  // slots open for its whole duration and starve every other fetch on the
+  // page. Swallows AbortError so callers can just pass a signal and not
+  // special-case cancellation.
+  streamQualityBatch: async (
+    ids: string[],
+    onEntry: (id: string, quality: string) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    if (ids.length === 0) return;
+    try {
+      const res = await fetch(
+        `${BASE}/quality/batch?ids=${ids.map(encodeURIComponent).join(",")}`,
+        withAuth({ signal }),
+      );
+      if (!res.ok || !res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const { id, quality } = JSON.parse(line);
+            onEntry(id, quality);
+          } catch {
+            /* ignore malformed frames */
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as { name?: string } | null)?.name === "AbortError") return;
+      throw e;
+    }
+  },
+
   // ── Player: source URL builders ───────────────────────────────────────────────
   //
   // These return strings rather than fetching — the URL is handed to mpv, a
   // <track src>, or EventSource, which handle their own loading.
 
-  /** Direct torrent stream (or the original URL if src is already absolute). */
-  playUrl: (src: string): string =>
-    isHashSrc(src) ? `${BASE}/play?hash=${src}` : src,
-
-  hlsMasterUrl: (sessionId: string): string =>
-    `${BASE}/hls/${sessionId}/master.m3u8`,
-
-  subtitleExtractUrl: (src: string, index: number): string => {
-    const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
-    return `${BASE}/subtitle/extract?${q}&index=${index}`;
+  /**
+   * Direct torrent stream (or the original URL if src is already absolute).
+   * For a hash src, season/episode (D1) let the backend pick the right file
+   * out of a season-pack torrent instead of always streaming its largest
+   * file — omitted entirely for a movie or an already-absolute src.
+   */
+  playUrl: (
+    src: string,
+    opts?: { season?: number; episode?: number },
+  ): string => {
+    if (!isHashSrc(src)) return src;
+    const p = new URLSearchParams({ hash: src });
+    if (opts?.season != null) p.set("season", String(opts.season));
+    if (opts?.episode != null) p.set("episode", String(opts.episode));
+    return `${BASE}/play?${p}`;
   },
 
   subtitleProxyUrl: (externalUrl: string): string =>
     `${BASE}/subtitle-proxy?url=${encodeURIComponent(externalUrl)}`,
 
-  progressStreamUrl: (src: string): string =>
-    `${BASE}/progress/stream?hash=${src}`,
+  /**
+   * Direct-URL stream routed through the backend proxy. Needed when the
+   * origin requires extra headers (Referer/Origin) that mpv wouldn't send —
+   * the backend remembered them when it listed the stream and re-attaches
+   * them. Only URLs the backend itself returned from /api/streams are
+   * accepted.
+   */
+  playProxyUrl: (streamUrl: string): string =>
+    `${BASE}/play?url=${encodeURIComponent(streamUrl)}`,
+
+  /**
+   * SSE progress endpoint. season/episode (mirrors playUrl) let the backend
+   * report progress on just the selected episode's file in a season-pack
+   * torrent, instead of the whole torrent's (misleading) aggregate.
+   */
+  progressStreamUrl: (
+    src: string,
+    opts?: { season?: number; episode?: number },
+  ): string => {
+    const p = new URLSearchParams({ hash: src });
+    if (opts?.season != null) p.set("season", String(opts.season));
+    if (opts?.episode != null) p.set("episode", String(opts.episode));
+    return `${BASE}/progress/stream?${p}`;
+  },
 
   /** Fixed-size payload endpoint for the in-app bandwidth test. Caller measures blob size vs. elapsed time. */
   speedtestUrl: (): string => `${BASE}/speedtest`,
 
-  // ── Player: probe & HLS session ───────────────────────────────────────────────
+  /**
+   * Routes a raw TMDB image path (e.g. a JustWatch provider logoPath, which —
+   * unlike Media.poster_path — never goes through the backend, so it still
+   * arrives as a bare TMDB-relative path) through the backend's image-cache
+   * proxy (internal/imgcache/F4), instead of building an image.tmdb.org URL
+   * directly. BASE is module-private, so this is the one place allowed to
+   * construct an /api/img/ URL — everywhere else must go through this helper
+   * rather than hardcoding the backend origin.
+   */
+  imgUrl: (size: string, path: string): string => `${BASE}/img/${size}${path}`,
 
-  /** Generic probe endpoint; caller supplies the result shape. */
-  probe: <T = unknown>(src: string, signal?: AbortSignal): Promise<T> => {
-    const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
-    return request(`/probe?${q}`, signal ? { signal } : undefined);
-  },
-
-  hlsStart: (
-    body: {
-      input: string;
-      tracks: unknown[];
-      duration: number;
-      videoCodec: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<{ sessionID: string }> =>
-    request(`/hls/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    }),
-
-  // Fire-and-forget teardown. keepalive lets it complete during page unload /
-  // component destroy, when a normal fetch would be cancelled. Not awaited.
-  hlsStop: (sessionId: string): void => {
-    fetch(`${BASE}/hls/stop/${sessionId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      keepalive: true,
-    }).catch((e) => console.error("hls stop failed for " + sessionId, e));
+  /**
+   * Fire-and-forget: tells the backend to start background-downloading a
+   * torrent's selected file (F7's next-episode prefetch). The backend starts
+   * the download in a goroutine and responds 202 immediately — this resolves
+   * as soon as the request is accepted, not when the download finishes.
+   */
+  prefetchDownload: (
+    hash: string,
+    opts?: { season?: number; episode?: number },
+  ): Promise<{ started: boolean }> => {
+    const p = new URLSearchParams({ hash });
+    if (opts?.season != null) p.set("season", String(opts.season));
+    if (opts?.episode != null) p.set("episode", String(opts.episode));
+    return request(`/prefetch-download?${p}`, { method: "POST" });
   },
 
   // ── Settings ─────────────────────────────────────────────────────────────────
@@ -421,6 +565,15 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
+    }),
+
+  testDiscoveryAlgorithm: (
+    url: string,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    request(`/discover/algorithm/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
     }),
 
   // ── Addons ───────────────────────────────────────────────────────────────────
@@ -451,7 +604,80 @@ export const api = {
     });
   },
 
-  getWatchOptions: (tmdbId: number, mediaType: string): Promise<WatchOption[]> =>
+  getCatalogs: (): Promise<CatalogRef[]> => request(`/catalogs`),
+
+  catalogPage: (
+    addonId: string,
+    catalogType: string,
+    catalogId: string,
+    skip: number,
+    limit?: number,
+  ): Promise<{ medias: Media[]; nextSkip: number }> => {
+    const p = new URLSearchParams({
+      addonId,
+      catalogType,
+      catalogId,
+      skip: String(skip),
+    });
+    if (limit != null) p.set("limit", String(limit));
+    return request(`/catalog?${p}`);
+  },
+
+  toggleCatalog: (
+    addonId: string,
+    catalogKey: string,
+    enabled: boolean,
+  ): Promise<void> => {
+    const p = new URLSearchParams({ id: addonId, catalog: catalogKey });
+    return request(`/addons/catalog?${p}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
+  // ── Nuvio plugin repos ───────────────────────────────────────────────────────
+  getNuvioRepos: (): Promise<NuvioRepo[]> => request(`/nuvio/repos`),
+
+  addNuvioRepo: (url: string): Promise<NuvioRepo> =>
+    request(`/nuvio/repos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }),
+
+  removeNuvioRepo: (id: string): Promise<void> =>
+    request(`/nuvio/repos?${new URLSearchParams({ id })}`, {
+      method: "DELETE",
+    }),
+
+  setNuvioRepoEnabled: (id: string, enabled: boolean): Promise<void> =>
+    request(`/nuvio/repos?${new URLSearchParams({ id })}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+
+  refreshNuvioRepo: (id: string): Promise<void> =>
+    request(`/nuvio/repos/refresh?${new URLSearchParams({ id })}`, {
+      method: "POST",
+    }),
+
+  setNuvioScraperEnabled: (
+    repoId: string,
+    scraperId: string,
+    enabled: boolean,
+  ): Promise<void> =>
+    request(`/nuvio/scrapers?${new URLSearchParams({ repoId, scraperId })}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+
+  getWatchOptions: (
+    tmdbId: number,
+    mediaType: string,
+  ): Promise<WatchOption[]> =>
     request(`/watch-options?id=${tmdbId}&type=${mediaType}`),
 
   getTimestamps: (
@@ -627,7 +853,10 @@ export const api = {
   // ── Profile / insights ───────────────────────────────────────────────────────
   libraryStats: (): Promise<LibraryStats> => request(`/library/stats`),
 
-  discoverInsights: (): Promise<DiscoverInsights> => request(`/discover/insights`),
+  discoverInsights: (): Promise<DiscoverInsights> =>
+    request(`/discover/insights`),
+
+  activityStats: (): Promise<ActivityStats> => request(`/library/activity`),
 
   // ── Auto-update ──────────────────────────────────────────────────────────────
 
@@ -648,8 +877,10 @@ export const api = {
   },
 
   // ── Profiles ──────────────────────────────────────────────────────────────────
-  profilesList: (): Promise<{ profiles: Profile[]; active_profile_id: string }> =>
-    request(`/profiles`),
+  profilesList: (): Promise<{
+    profiles: Profile[];
+    active_profile_id: string;
+  }> => request(`/profiles`),
 
   profileCreate: (name: string): Promise<Profile> =>
     request(`/profiles`, {
@@ -658,7 +889,10 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
-  profileRename: (id: string, name: string): Promise<{ id: string; name: string }> =>
+  profileRename: (
+    id: string,
+    name: string,
+  ): Promise<{ id: string; name: string }> =>
     request(`/profiles/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -679,7 +913,9 @@ export const api = {
     email: string,
     password: string,
     profile_name?: string,
-  ): Promise<{ access_token: string; profile: Profile } | { confirmation_required: true }> =>
+  ): Promise<
+    { access_token: string; profile: Profile } | { confirmation_required: true }
+  > =>
     request(`/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -693,7 +929,11 @@ export const api = {
     token: string,
     password: string,
     profile_name?: string,
-  ): Promise<{ access_token: string; refresh_token: string; profile: Profile }> =>
+  ): Promise<{
+    access_token: string;
+    refresh_token: string;
+    profile: Profile;
+  }> =>
     request(`/auth/register/confirm`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -703,7 +943,12 @@ export const api = {
   authLogin: (
     email: string,
     password: string,
-  ): Promise<{ access_token: string; refresh_token: string; profiles: Profile[]; active: Profile }> =>
+  ): Promise<{
+    access_token: string;
+    refresh_token: string;
+    profiles: Profile[];
+    active: Profile;
+  }> =>
     request(`/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -720,7 +965,12 @@ export const api = {
   authVerifyOTP: (
     email: string,
     token: string,
-  ): Promise<{ access_token: string; refresh_token: string; profiles: Profile[]; active: Profile }> =>
+  ): Promise<{
+    access_token: string;
+    refresh_token: string;
+    profiles: Profile[];
+    active: Profile;
+  }> =>
     request(`/auth/verify-otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -733,6 +983,25 @@ export const api = {
   authMe: (): Promise<{ profile: Profile; linked: boolean }> =>
     request(`/auth/me`),
 
-  authSync: (): Promise<{ status: string }> =>
+  // library_generation is absent on older backends / a noop (non-proprietary)
+  // build that 503s — callers fall back accordingly.
+  authSync: (): Promise<{ status: string; library_generation?: number }> =>
     request(`/auth/sync`, { method: "POST" }),
+
+  // Persistent client session — stored by the Go backend as a JSON file in
+  // the OS user-config dir (~/.config/cove/session.json). More reliable than
+  // Qt WebEngine localStorage, which may use in-memory storage.
+  clientSessionGet: (): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    email: string;
+  }> => request(`/client-session`),
+  clientSessionSave: (data: {
+    accessToken: string;
+    refreshToken: string;
+    email: string;
+  }): Promise<void> =>
+    request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
+  clientSessionDelete: (): Promise<void> =>
+    request(`/client-session`, { method: "DELETE" }),
 };

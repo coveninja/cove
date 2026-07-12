@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -61,22 +62,28 @@ func TestMergeFrom_LastWriteWins(t *testing.T) {
 	assert.Equal(t, StatusFinished, entries[0].Status)
 }
 
-func TestMergeFrom_MaxPosition(t *testing.T) {
+func TestMergeFrom_MostRecentProgressWins(t *testing.T) {
 	l := newLib(t)
-	p1 := &WatchProgress{ID: "p1", TmdbID: 1, MediaType: "movie", PositionSeconds: 100, WatchedAt: time.Now()}
+	base := time.Now()
+	p1 := &WatchProgress{ID: "p1", TmdbID: 1, MediaType: "movie", PositionSeconds: 100, WatchedAt: base}
 	l.MergeFrom(nil, []*WatchProgress{p1}, nil)
-	p2 := &WatchProgress{ID: "p2", TmdbID: 1, MediaType: "movie", PositionSeconds: 200, WatchedAt: time.Now()}
+
+	// A more recent write wins, even with a LOWER position — this is what
+	// makes "mark as unwatched" (position 0) and rewatch-from-start
+	// syncable. The old max-position rule reverted both.
+	p2 := &WatchProgress{ID: "p2", TmdbID: 1, MediaType: "movie", PositionSeconds: 0, Completed: false, WatchedAt: base.Add(time.Minute)}
 	l.MergeFrom(nil, []*WatchProgress{p2}, nil)
 	progs := l.AllProgress()
 	require.Len(t, progs, 1)
-	assert.Equal(t, float64(200), progs[0].PositionSeconds)
+	assert.Equal(t, float64(0), progs[0].PositionSeconds)
 
-	// Older position doesn't overwrite
-	p3 := &WatchProgress{ID: "p3", TmdbID: 1, MediaType: "movie", PositionSeconds: 50, WatchedAt: time.Now()}
+	// An older write never overwrites a newer one, regardless of position.
+	p3 := &WatchProgress{ID: "p3", TmdbID: 1, MediaType: "movie", PositionSeconds: 5000, WatchedAt: base.Add(-time.Hour)}
 	l.MergeFrom(nil, []*WatchProgress{p3}, nil)
 	progs = l.AllProgress()
 	require.Len(t, progs, 1)
-	assert.Equal(t, float64(200), progs[0].PositionSeconds)
+	assert.Equal(t, float64(0), progs[0].PositionSeconds)
+	assert.Equal(t, "p2", progs[0].ID)
 }
 
 func TestDismissal(t *testing.T) {
@@ -168,4 +175,87 @@ func TestHandlers_GetStats(t *testing.T) {
 	var st Stats
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&st))
 	assert.Equal(t, 0, st.Total)
+}
+
+// ── D2: TasteGeneration() bumps only on taste-relevant mutations ────────────
+
+func TestTasteGeneration_BumpsOnEntryUpsert(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	g0 := l.TasteGeneration()
+	body := `{"tmdb_id":123,"media_type":"movie","title":"Test Movie","status":"watch_later"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Greater(t, l.TasteGeneration(), g0)
+}
+
+func TestTasteGeneration_DoesNotBumpOnProgressPositionTick(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	// First write creates the entry — taste-relevant (auto-created "watching").
+	// Isolate the *second* write (a plain position tick, not completing
+	// anything) to verify it alone doesn't bump tasteGen.
+	post := func(pos float64, completed bool) {
+		body := bytes.NewBufferString(`{"tmdb_id":55,"media_type":"movie","position_seconds":` +
+			jsonFloat(pos) + `,"duration_seconds":6000,"completed":` + jsonBool(completed) + `}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+
+	post(10, false)
+	g0 := l.TasteGeneration()
+	post(20, false) // plain position tick — not near/at completion
+	assert.Equal(t, g0, l.TasteGeneration(), "a progress tick that doesn't complete must not bump tasteGen")
+}
+
+func TestTasteGeneration_BumpsOnCompletedTransition(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	post := func(pos float64, completed bool) {
+		body := bytes.NewBufferString(`{"tmdb_id":66,"media_type":"movie","position_seconds":` +
+			jsonFloat(pos) + `,"duration_seconds":6000,"completed":` + jsonBool(completed) + `}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+
+	post(10, false)
+	g0 := l.TasteGeneration()
+	post(6000, true) // transitions to Completed
+	assert.Greater(t, l.TasteGeneration(), g0, "a Completed transition must bump tasteGen")
+}
+
+func TestGeneration_NotDoubleBumpedByMergeFrom(t *testing.T) {
+	l := newLib(t)
+	g0 := l.Generation()
+	l.MergeFrom([]*LibraryEntry{{
+		ID: "id1", TmdbID: 1, MediaType: "movie", Title: "Test",
+		Status: StatusWatchLater, AddedAt: time.Now(), UpdatedAt: time.Now(),
+	}}, nil, nil)
+	// persist() bumps gen exactly once; MergeFrom must not add a second bump
+	// on top of it.
+	assert.Equal(t, g0+1, l.Generation())
+}
+
+func jsonFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+func jsonBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }

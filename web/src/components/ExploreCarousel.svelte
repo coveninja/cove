@@ -146,7 +146,7 @@
                     class="absolute inset-0 h-full w-full object-cover"
                   />
                 {:else}
-                  <div class="absolute inset-0 animate-pulse bg-muted"></div>
+                  <div class="absolute inset-0 bg-muted"></div>
                 {/if}
 
                 <div

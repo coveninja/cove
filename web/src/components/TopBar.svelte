@@ -53,7 +53,9 @@
     topbarVisible = true;
     clearTimeout(hideTimer);
     if (fullscreenInfo) {
-      hideTimer = setTimeout(() => { topbarVisible = false; }, 3000);
+      hideTimer = setTimeout(() => {
+        topbarVisible = false;
+      }, 3000);
     }
   }
 
@@ -127,7 +129,10 @@
 </script>
 
 <div
-  class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag] transition-opacity duration-300 {fullscreenInfo && !topbarVisible ? 'opacity-0 pointer-events-none' : 'opacity-100'}"
+  class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag] transition-opacity duration-300 {fullscreenInfo &&
+  !topbarVisible
+    ? 'opacity-0 pointer-events-none'
+    : 'opacity-100'}"
   role="menubar"
   tabindex="0"
   onmouseenter={() => {
@@ -159,25 +164,25 @@
 
   {#if !fullscreenInfo}
     <div
-            class="relative flex items-center rounded-full bg-background [webkit-app-region:no-drag]"
+      class="relative flex items-center rounded-full bg-background [webkit-app-region:no-drag]"
     >
       <svg
-              class="pointer-events-none absolute inset-0 z-0 h-full w-full transition-opacity duration-300"
-              class:opacity-100={loading}
-              class:opacity-0={!loading}
-              xmlns="http://www.w3.org/2000/svg"
+        class="pointer-events-none absolute inset-0 z-0 h-full w-full transition-opacity duration-300"
+        class:opacity-100={loading}
+        class:opacity-0={!loading}
+        xmlns="http://www.w3.org/2000/svg"
       >
         <rect
-                bind:this={rectEl}
-                x="0"
-                y="0"
-                width="100%"
-                height="100%"
-                rx="20"
-                fill="none"
-                class="stroke-accent"
-                stroke-width="2"
-                stroke-linecap="round"
+          bind:this={rectEl}
+          x="0"
+          y="0"
+          width="100%"
+          height="100%"
+          rx="20"
+          fill="none"
+          class="stroke-accent"
+          stroke-width="2"
+          stroke-linecap="round"
         />
       </svg>
 
@@ -186,11 +191,11 @@
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button
-                      variant="outline"
-                      size="icon"
-                      class="rounded-l-full rounded-r-none"
-                      disabled={!canGoBack}
-                      onclick={onGoBack}
+                variant="outline"
+                size="icon"
+                class="rounded-l-full rounded-r-none"
+                disabled={!canGoBack}
+                onclick={onGoBack}
               >
                 <ArrowLeft />
               </Button>
@@ -205,15 +210,15 @@
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button
-                      variant="outline"
-                      size="icon"
-                      class="rounded-none border-l-0 transition-all {currentPage?.type ===
-              'home'
-                ? 'text-accent hover:text-accent/75'
-                : 'bg-foreground'}"
-                      onclick={() => {
-                selectPage("home");
-              }}
+                variant="outline"
+                size="icon"
+                class="rounded-none border-l-0 transition-all {currentPage?.type ===
+                'home'
+                  ? 'text-accent hover:text-accent/75'
+                  : 'bg-foreground'}"
+                onclick={() => {
+                  selectPage("home");
+                }}
               >
                 <House />
               </Button>
@@ -226,14 +231,14 @@
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button
-                      variant="outline"
-                      size="icon"
-                      class="rounded-none border-l-0 {currentPage?.type === 'myList'
-                ? 'text-accent hover:text-accent/75'
-                : 'bg-foreground'}"
-                      onclick={() => {
-                selectPage("myList");
-              }}
+                variant="outline"
+                size="icon"
+                class="rounded-none border-l-0 {currentPage?.type === 'myList'
+                  ? 'text-accent hover:text-accent/75'
+                  : 'bg-foreground'}"
+                onclick={() => {
+                  selectPage("myList");
+                }}
               >
                 <Bookmark />
               </Button>
@@ -246,14 +251,14 @@
           <Tooltip.Root>
             <Tooltip.Trigger>
               <Button
-                      variant="outline"
-                      size="icon"
-                      class="rounded-none border-l-0 {currentPage?.type === 'explore'
-                ? 'text-accent hover:text-accent/75'
-                : 'bg-foreground'}"
-                      onclick={() => {
-                selectPage("explore");
-              }}
+                variant="outline"
+                size="icon"
+                class="rounded-none border-l-0 {currentPage?.type === 'explore'
+                  ? 'text-accent hover:text-accent/75'
+                  : 'bg-foreground'}"
+                onclick={() => {
+                  selectPage("explore");
+                }}
               >
                 <Flame />
               </Button>
@@ -265,20 +270,20 @@
         </div>
 
         <div
-                bind:this={searchOuter}
-                class="relative flex h-9 items-center rounded-l-none rounded-r-full border border-l-0 bg-transparent"
-                class:w-9={searchState === "hidden"}
-                class:w-[300px]={searchState === "active"}
-                role="search"
-                onmouseenter={() => toggleSearch(true)}
+          bind:this={searchOuter}
+          class="relative flex h-9 items-center rounded-l-none rounded-r-full border border-l-0 bg-transparent"
+          class:w-9={searchState === "hidden"}
+          class:w-[300px]={searchState === "active"}
+          role="search"
+          onmouseenter={() => toggleSearch(true)}
         >
           <div
-                  class="pointer-events-none absolute top-1/2 transition-all duration-300"
-                  class:left-2.5={searchState === "active"}
-                  style:left={searchState === "hidden" ? "50%" : undefined}
-                  style:transform={searchState === "hidden"
-            ? "translate(-50%, -50%)"
-            : "translateY(-50%)"}
+            class="pointer-events-none absolute top-1/2 transition-all duration-300"
+            class:left-2.5={searchState === "active"}
+            style:left={searchState === "hidden" ? "50%" : undefined}
+            style:transform={searchState === "hidden"
+              ? "translate(-50%, -50%)"
+              : "translateY(-50%)"}
           >
             {#if loading}
               <Spinner class="size-4" />
@@ -288,26 +293,26 @@
           </div>
 
           <input
-                  type="search"
-                  placeholder="Search..."
-                  class="h-full w-full border-0 bg-transparent pr-2 pl-8 text-sm outline-none focus:ring-0"
-                  class:opacity-0={searchState === "hidden"}
-                  class:opacity-100={searchState === "active"}
-                  bind:value={query}
-                  disabled={searchState === "hidden"}
-                  onfocus={() => {
-            searchFocused = true;
-            if (query.length > 0) {
-              openQuery();
-            }
-          }}
-                  onfocusout={() => {
-            searchFocused = false;
-            if (!topbarHovered) {
-              toggleSearch(false);
-            }
-          }}
-                  oninput={openQuery}
+            type="search"
+            placeholder="Search..."
+            class="h-full w-full border-0 bg-transparent pr-2 pl-8 text-sm outline-none focus:ring-0"
+            class:opacity-0={searchState === "hidden"}
+            class:opacity-100={searchState === "active"}
+            bind:value={query}
+            disabled={searchState === "hidden"}
+            onfocus={() => {
+              searchFocused = true;
+              if (query.length > 0) {
+                openQuery();
+              }
+            }}
+            onfocusout={() => {
+              searchFocused = false;
+              if (!topbarHovered) {
+                toggleSearch(false);
+              }
+            }}
+            oninput={openQuery}
           />
         </div>
       </div>
@@ -320,7 +325,11 @@
     {#if fullscreenInfo}
       <Tooltip.Root>
         <Tooltip.Trigger>
-          <Button variant="outline" size="icon" onclick={() => Player.toggleFullscreen()}>
+          <Button
+            variant="outline"
+            size="icon"
+            onclick={() => Player.toggleFullscreen()}
+          >
             {#if Player.isFullscreen}
               <Minimize2 />
             {:else}
@@ -359,7 +368,7 @@
           <p>Settings</p>
         </Tooltip.Content>
       </Tooltip.Root>
-      <AccountPopover />
+      <AccountPopover {onSelectPage} />
     {/if}
   </div>
 </div>

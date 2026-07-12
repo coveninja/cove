@@ -2,6 +2,15 @@
 
 //////////
 // source: addon.go
+/*
+Package addons manages Stremio-compatible provider/subtitle addons and a
+couple of bespoke "official" integrations (JustWatch availability, IntroDB
+timestamps) that aren't Stremio addons at all despite sharing the same
+AddonEntry shape. Fan-out across multiple enabled addons of the same kind
+runs one goroutine per addon under an overall deadline, with per-addon
+failures swallowed — one broken or slow addon should never break or stall
+the ones that work.
+*/
 
 export type AddonKind = string;
 export type AddonSource = string;
@@ -15,6 +24,27 @@ export interface ManifestResource {
   types: string[];
   idPrefixes: string[];
 }
+/**
+ * ManifestCatalogExtra describes one parameterisation dimension for a catalog
+ * (e.g. genre, skip). IsRequired true means the catalog can't be browsed
+ * without supplying that parameter — i.e. it's search-only.
+ */
+export interface ManifestCatalogExtra {
+  name: string;
+  isRequired: boolean;
+}
+/**
+ * ManifestCatalog is one catalog declared in a Stremio addon manifest. The
+ * custom UnmarshalJSON normalises both the modern extra:[{name,isRequired}]
+ * form and the legacy extraRequired/extraSupported:[]string form into the
+ * unified Extra field.
+ */
+export interface ManifestCatalog {
+  type: string;
+  id: string;
+  name: string;
+  extra?: ManifestCatalogExtra[];
+}
 export interface Manifest {
   id: string;
   name: string;
@@ -22,6 +52,7 @@ export interface Manifest {
   version: string;
   resources: ManifestResource[];
   types: string[];
+  catalogs?: ManifestCatalog[];
 }
 export interface AddonEntry {
   id: string;
@@ -30,6 +61,34 @@ export interface AddonEntry {
   kind: AddonKind;
   source: AddonSource;
   enabled: boolean;
+  /**
+   * DisabledCatalogs tracks per-catalog opt-outs. An absent key means the
+   * catalog is enabled (default-on, only explicit opt-outs are stored,
+   * mirroring how OfficialEnabled works for official addons). Persists via
+   * the existing addonStore JSON encode in store.go.
+   */
+  disabledCatalogs?: { [key: string]: boolean};
+}
+/**
+ * StremioMeta is one item from a Stremio catalog response.
+ */
+export interface StremioMeta {
+  id: string;
+  type: string;
+  name: string;
+  poster: string;
+  description: string;
+  releaseInfo: string;
+}
+/**
+ * CatalogRef is the DTO for a single enabled catalog sent to the frontend.
+ */
+export interface CatalogRef {
+  addonId: string;
+  addonName: string;
+  catalogType: string;
+  catalogId: string;
+  name: string;
 }
 export interface Subtitle {
   id: string;
@@ -43,6 +102,20 @@ export interface Stream {
   infoHash: string;
   addonName: string;
   subtitles?: Subtitle[];
+  /**
+   * SizeBytes is the stream's file size when the source reports it as a
+   * structured number (currently only Nuvio scrapers). Zero means unknown —
+   * callers fall back to parsing a size out of Title text (the ubiquitous
+   * but unstructured "💾 1.4 GB" convention used by most Stremio addons).
+   */
+  sizeBytes?: number /* int64 */;
+  /**
+   * Headers are extra HTTP headers (e.g. Referer/Origin) the origin CDN
+   * requires. Only Nuvio-sourced streams set this today; when present,
+   * /api/play proxies the request instead of redirecting, since a bare
+   * redirect can't carry them to the origin.
+   */
+  headers?: { [key: string]: string};
 }
 /**
  * WatchOption represents a streaming service availability entry from JustWatch.

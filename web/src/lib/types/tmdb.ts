@@ -2,14 +2,19 @@
 
 //////////
 // source: tmdb.go
+/*
+Package tmdb wraps The Movie Database API and registers the largest single
+group of HTTP routes in the app (search, details, images, videos,
+providers, similar-titles, genre lists, a batched quality-probe endpoint).
+TMDB concerns only live here — anything resembling personalization or
+taste scoring belongs in internal/discover instead, which depends on this
+package for raw metadata but never the reverse.
+*/
 
 /**
- * Client talks to the TMDB API. It owns the API key (previously threaded
- * through every function as a parameter) and the HTTP client (previously a
- * package global). Holding both on a struct lets callers construct independent
- * clients and inject a custom HTTP client in tests. Fields are unexported, so
- * tygo emits nothing for Client — only the data types (Media, Details,
- * MediaImages, ...) cross into the generated TS.
+ * Client talks to the TMDB API. Fields are unexported, so tygo emits nothing
+ * for Client — only the data types (Media, Details, MediaImages, ...) cross
+ * into the generated TS.
  */
 export interface Client {
 }
@@ -29,6 +34,13 @@ export interface Media {
   popularity: number /* float64 */;
   genre_ids?: number /* int */[];
   adult?: boolean;
+  /**
+   * OriginalLanguage is the ISO 639-1 code TMDB stores the title's original
+   * audio/language as (e.g. "ja" for a Japanese show). TMDB populates this on
+   * both list endpoints (search/discover) and single-item lookups
+   * (GetMediaByID), so no extra request is needed to get it.
+   */
+  original_language?: string;
 }
 export interface MediaDetails {
   imdb_id: string;
@@ -54,13 +66,14 @@ export interface TVEpisode {
   overview: string;
   still_path: string;
   air_date: string;
+  /**
+   * Runtime in minutes, as reported by TMDB's season endpoint; 0 when TMDB
+   * doesn't know it. Lets "mark as watched" record the episode's real
+   * duration instead of a placeholder.
+   */
+  runtime: number /* int */;
 }
 export interface Details {
-  /**
-   * Overview was missing entirely — TMDB always returns it, but Go's JSON
-   * decoder silently drops any source field with no matching destination
-   * field, so it never survived the unmarshal in GetDetails below.
-   */
   overview: string;
   genres: {
     id: number /* int */;
@@ -70,7 +83,14 @@ export interface Details {
   episode_run_time: number /* int */[];
   credits: {
     cast: {
+      id: number /* int */;
       name: string;
+      order: number /* int */;
+    }[];
+    crew: {
+      id: number /* int */;
+      name: string;
+      job: string;
     }[];
   };
   release_dates: {
@@ -98,6 +118,22 @@ export interface Details {
     }[]; // tv shows
   };
   origin_country: string[];
+  /**
+   * ProductionCompanies is the list of studios that produced this title
+   * (movies and TV). Present in the base details response — no extra
+   * append_to_response needed.
+   */
+  production_companies: {
+    id: number /* int */;
+    name: string;
+  }[];
+  /**
+   * Networks is the list of TV networks this show aired on (TV only).
+   */
+  networks: {
+    id: number /* int */;
+    name: string;
+  }[];
   number_of_seasons: number /* int */;
   number_of_episodes: number /* int */;
   seasons: TVSeason[];
@@ -216,6 +252,8 @@ export interface DiscoverParams {
   WithGenres: number /* int */[];
   WithoutGenres: number /* int */[];
   WithKeywords: number /* int */[];
+  WithoutKeywords: number /* int */[];
+  WithPeople: number /* int */[]; // matches either cast or crew credits
   MinVoteCount: number /* float64 */;
   MinVoteAverage: number /* float64 */;
   IncludeAdult: boolean;

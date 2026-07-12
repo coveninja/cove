@@ -1,16 +1,3 @@
-<script module lang="ts">
-  // Vidstack rejects pending media requests with "provider destroyed"
-  // when a player is torn down mid-flight. These are harmless; swallow
-  // only this exact message so real rejections still surface.
-  if (typeof window !== "undefined") {
-    window.addEventListener("unhandledrejection", (e) => {
-      const msg =
-        typeof e.reason === "string" ? e.reason : e.reason?.message;
-      if (msg === "provider destroyed") e.preventDefault();
-    });
-  }
-</script>
-
 <script lang="ts">
   import "vidstack/bundle";
   import "vidstack/svelte";
@@ -26,6 +13,22 @@
     VolumeOff,
   } from "lucide-svelte";
   import type { MediaPlayerElement } from "vidstack/elements";
+  import { Player } from "$lib/player/player.svelte";
+
+  // WHY: the pages in this app are always-mounted (toggled via class:hidden, never
+  // unmounted). When the native mpv player opens as a full-screen overlay,
+  // PlayerSimple elements on hidden pages stay in the DOM. The IntersectionObserver
+  // below fires only for off-screen elements, not for elements *covered* by an
+  // overlay, so trailers keep playing behind mpv. With loop=true (the default)
+  // they never stop. Each looping YouTube trailer allocates ~9 MB/s inside its
+  // iframe isolate, and after ~30-40 min the renderer OOM-kills (~8 GB RSS).
+  //
+  // Fix: derive `mpvBusy` from the mpv bridge singleton. When mpv has a file
+  // loaded (duration > 0), unmount the <media-player> entirely — destroying the
+  // YouTube iframe so it cannot allocate at all. When mpv closes (duration resets
+  // to 0), the {#key src} block recreates the element and autoplay resumes.
+  // In plain-browser dev mode, Player.available is false so the gate never fires.
+  const mpvBusy = $derived(Player.available && Player.duration > 0);
 
   let {
     src,
@@ -42,12 +45,29 @@
   } = $props();
 
   let player = $state<MediaPlayerElement | null>(null);
+  // True once the current player element has fired can-play. Reset whenever
+  // {#key src} recreates the element (via the player-change effect below).
+  // Gates the paused-watcher so it never calls play() on a not-yet-ready element.
+  let mediaReady = $state(false);
 
   // play() rejects with "provider destroyed" if the player is torn down
   // before it resolves. These rejections are safe to ignore.
   function safePlay(p: MediaPlayerElement): void {
     void p.play().catch(() => {});
   }
+
+  // Reset readiness whenever the underlying element is replaced ({#key src}).
+  $effect(() => {
+    player; // establish dependency
+    mediaReady = false;
+  });
+
+  // Reset paused intent when the source changes so the old play-state doesn't
+  // bleed into a new element that isn't loaded yet.
+  $effect(() => {
+    src; // establish dependency
+    paused = true;
+  });
 
   // Apply the current `muted` value to whatever provider is in use.
   //
@@ -103,10 +123,10 @@
     const handleCanPlay = () => {
       applyMuted();
       muteApplied = true;
-      if (autoplay) {
-        paused = false;
-        safePlay(p);
-      }
+      // Signal that this element is ready. The native `autoplay` attribute on
+      // <media-player> handles the actual play() call so we never call it here
+      // — vidstack knows the exact safe moment, avoiding "media is not ready".
+      mediaReady = true;
     };
     // Re-assert at play — this is the moment audio would otherwise start,
     // and YouTube ignores mute commands sent before its API is ready.
@@ -153,10 +173,12 @@
     applyMuted();
   });
 
-  // Apply parent-driven play/pause to the player.
+  // Apply parent-driven play/pause — but only after the element is ready.
+  // Gated on `mediaReady` so a stale `paused = false` from a previous source
+  // never triggers play() on a freshly-created, not-yet-loaded element.
   $effect(() => {
     const p = player;
-    if (!p) return;
+    if (!p || !mediaReady) return;
     if (paused && !p.paused) void Promise.resolve(p.pause()).catch(() => {});
     else if (!paused && p.paused) safePlay(p);
   });
@@ -181,78 +203,88 @@
   });
 </script>
 
-{#key src}
-  <media-player
-    bind:this={player}
-    {src}
-    {loop}
-    playsinline
-    class="group/player relative h-full w-full bg-black {Class}"
-  >
-    <media-provider class="h-full w-full"></media-provider>
-    <button
-      type="button"
-      aria-label="Toggle playback"
-      class="absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-none bg-transparent p-0"
-      onclick={(e) => {
-        e.stopPropagation();
-        if (!player) return;
-        if (player.paused) safePlay(player);
-        else void Promise.resolve(player.pause()).catch(() => {});
-      }}
-    ></button>
+{#if mpvBusy}
+  <!-- mpv is active: keep the YouTube iframe fully destroyed while it plays. -->
+  {#if bg}
+    <img class="h-full w-full object-cover {Class}" alt="bg" src={bg} />
+  {:else}
+    <div class="h-full w-full bg-black {Class}"></div>
+  {/if}
+{:else}
+  {#key src}
+    <media-player
+      bind:this={player}
+      {src}
+      {loop}
+      autoplay={autoplay}
+      playsinline
+      class="group/player relative h-full w-full bg-black {Class}"
+    >
+      <media-provider class="h-full w-full"></media-provider>
+      <button
+        type="button"
+        aria-label="Toggle playback"
+        class="absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-none bg-transparent p-0"
+        onclick={(e) => {
+          e.stopPropagation();
+          if (!player) return;
+          if (player.paused) safePlay(player);
+          else void Promise.resolve(player.pause()).catch(() => {});
+        }}
+      ></button>
 
-    {#if bg}
-      <img
-        class="absolute inset-0 z-20 h-full w-full object-cover transition-opacity duration-300 group-data-started/player:pointer-events-none group-data-[started]/player:opacity-0"
-        alt="bg"
-        src={bg}
-      />
-    {/if}
-    {#if controls}
-      <media-controls
-        class="absolute inset-0 z-30 flex flex-col justify-end bg-linear-to-t from-black/80 via-black/20 to-transparent p-2 opacity-0 transition-opacity duration-200 data-visible:opacity-100"
-      >
-        <div
-          class="pointer-events-auto flex w-full items-center gap-4 text-white"
+      {#if bg}
+        <img
+          class="absolute inset-0 z-20 h-full w-full object-cover transition-opacity duration-300 group-data-started/player:pointer-events-none group-data-[started]/player:opacity-0"
+          alt="bg"
+          src={bg}
+        />
+      {/if}
+      {#if controls}
+        <media-controls
+          class="absolute inset-0 z-30 flex flex-col justify-end bg-linear-to-t from-black/80 via-black/20 to-transparent p-2 opacity-0 transition-opacity duration-200 data-visible:opacity-100"
         >
-          <media-play-button
-            class="group flex size-8 cursor-pointer items-center justify-center rounded transition-all outline-none hover:bg-white/20"
+          <div
+            class="pointer-events-auto flex w-full items-center gap-4 text-white"
           >
-            <Pause class="block size-4 group-data-paused:hidden" />
-            <Play class="hidden size-4 group-data-paused:block" />
-          </media-play-button>
+            <media-play-button
+              class="group flex size-8 cursor-pointer items-center justify-center rounded transition-all outline-none hover:bg-white/20"
+            >
+              <Pause class="block size-4 group-data-paused:hidden" />
+              <Play class="hidden size-4 group-data-paused:block" />
+            </media-play-button>
 
-          <media-mute-button
-            class="group flex size-8 cursor-pointer items-center justify-center rounded outline-none hover:bg-white/20"
-          >
-            <VolumeOff class="hidden size-4 group-data-muted:block" />
-            <Volume2 class="block size-4 group-data-muted:hidden" />
-          </media-mute-button>
+            <media-mute-button
+              class="group flex size-8 cursor-pointer items-center justify-center rounded outline-none hover:bg-white/20"
+            >
+              <VolumeOff class="hidden size-4 group-data-muted:block" />
+              <Volume2 class="block size-4 group-data-muted:hidden" />
+            </media-mute-button>
 
-          <media-time-slider
-            class="group relative flex h-6 flex-1 cursor-pointer touch-none items-center outline-none select-none"
-          >
-            <div
-              class="relative h-1 w-full rounded-sm bg-white/30 transition-[height] group-data-focus:h-1.5"
+            <media-time-slider
+              class="group relative flex h-6 flex-1 cursor-pointer touch-none items-center outline-none select-none"
             >
               <div
-                class="absolute h-full w-(--slider-fill) rounded-sm bg-accent"
-              ></div>
-            </div>
-          </media-time-slider>
+                class="relative h-1 w-full rounded-sm bg-white/30 transition-[height] group-data-focus:h-1.5"
+              >
+                <div
+                  class="absolute h-full w-(--slider-fill) rounded-sm bg-accent"
+                ></div>
+              </div>
+            </media-time-slider>
 
-          <media-fullscreen-button
-            class="group flex size-8 cursor-pointer items-center justify-center rounded outline-none hover:bg-white/20"
-          >
-            <Maximize class="block size-4 group-data-fullscreen:hidden" />
-            <Minimize class="hidden size-4 group-data-fullscreen:block" />
-          </media-fullscreen-button>
-        </div>
-      </media-controls>
-    {/if}
-  </media-player>
-{/key}
+            <media-fullscreen-button
+              class="group flex size-8 cursor-pointer items-center justify-center rounded outline-none hover:bg-white/20"
+            >
+              <Maximize class="block size-4 group-data-fullscreen:hidden" />
+              <Minimize class="hidden size-4 group-data-fullscreen:block" />
+            </media-fullscreen-button>
+          </div>
+        </media-controls>
+      {/if}
+    </media-player>
+  {/key}
+{/if}
 
 <style>
   media-player {

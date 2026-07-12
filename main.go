@@ -1,23 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
-	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
-	"time"
+	"syscall"
 
-	"github.com/coveninja/cove/internal/addons"
-	"github.com/coveninja/cove/internal/discover"
-	"github.com/coveninja/cove/internal/library"
-	"github.com/coveninja/cove/internal/player"
-	"github.com/coveninja/cove/internal/profiles"
-	"github.com/coveninja/cove/internal/settings"
-	supapkg "github.com/coveninja/cove/internal/supabase"
-	"github.com/coveninja/cove/internal/tmdb"
-	"github.com/coveninja/cove/internal/updater"
-	"github.com/coveninja/cove/internal/utils"
+	"github.com/coveninja/cove/internal/server"
 	"github.com/joho/godotenv"
 )
 
@@ -30,12 +20,12 @@ var Version = "dev"
 // During local development, set TMDB_API_KEY in a .env file instead.
 var TmdbApiKey = ""
 
-// Supabase credentials are injected at build time via -ldflags for release builds.
-// During local development, set them in a .env file instead.
+// Supabase credentials are injected at build time via -ldflags for release
+// builds. During local development, set them in a .env file instead. Only the
+// project URL and the publishable anon key are ever compiled in — anything
+// stronger (service key, JWT secret) must never ship inside a user binary.
 var SupabaseURL = ""
 var SupabaseAnonKey = ""
-var SupabaseServiceKey = ""
-var SupabaseJWTSecret = ""
 
 func main() {
 	// Load .env if present — for local development only.
@@ -55,101 +45,37 @@ func main() {
 	if apiKey == "" {
 		apiKey = TmdbApiKey
 	}
-	if apiKey == "" {
-		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
+
+	cfg := server.Config{
+		BindAddr:        os.Getenv("COVE_BIND_ADDR"),
+		RemoteBindAddr:  os.Getenv("COVE_REMOTE_ADDR"),
+		DataDir:         os.Getenv("COVE_DATA_DIR"),
+		CacheDir:        os.Getenv("COVE_CACHE_DIR"),
+		TorrentDir:      os.Getenv("COVE_TORRENT_DIR"),
+		TMDBAPIKey:      apiKey,
+		SupabaseURL:     SupabaseURL,
+		SupabaseAnonKey: SupabaseAnonKey,
+		Version:         Version,
 	}
 
-	// Profiles must be initialised first — all other packages are profile-scoped.
-	var addonMgr *addons.Manager
-	var st *settings.Store
-	var lib *library.Library
-
-	profileStore, err := profiles.New(func(profileID string) {
-		// Reload all data stores when the active profile switches.
-		if err := lib.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload library:", err)
-		}
-		if err := st.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload settings:", err)
-		}
-		if err := addonMgr.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload addons:", err)
-		}
-	})
+	handle, err := server.Start(cfg)
 	if err != nil {
-		log.Fatal("could not init profiles:", err)
-	}
-	activeID := profileStore.ActiveProfileID()
-
-	addonMgr = addons.New(activeID)
-
-	st, err = settings.New(activeID)
-	if err != nil {
-		log.Println("could not load settings:", err)
-	}
-	lib, err = library.New(activeID)
-	if err != nil {
-		log.Println("could not load library:", err)
+		log.Fatal(err)
 	}
 
-	tmdbClient := tmdb.New(apiKey)
-
-	// The torrent client is core functionality — if it can't start, there's
-	// nothing to stream, so a New failure is fatal.
-	p, err := player.New(tmdbClient, addonMgr)
-	if err != nil {
-		log.Fatal("could not init torrent client:", err)
-	}
-
-	mux := http.DefaultServeMux
-
-	addonMgr.SetupHandlers(mux, func(tmdbID int) string {
-		id, err := tmdbClient.GetTVIMDBId(tmdbID)
-		if err != nil {
-			return ""
-		}
-		return id
-	})
-	tmdbClient.SetupHandlers(mux, addonMgr)
-	p.SetupHandlers(mux)
-	st.SetupHandlers(mux)
-	lib.SetupHandlers(mux)
-	profileStore.SetupHandlers(mux)
-	updater.SetupHandlers(mux, Version)
-
-	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
-	// Env vars take precedence; compiled-in ldflags values are the fallback for
-	// release builds where no .env file is present.
-	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey, SupabaseServiceKey, SupabaseJWTSecret)
-	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
-	supaServer.SetupHandlers(mux)
-
-	disc := discover.New(tmdbClient, lib)
-	disc.SetupHandlers(mux)
-
+	// Flush the library's debounced writes (D3) on a clean shutdown so the
+	// last mutation before exit isn't lost to the ~1s debounce window the
+	// process didn't live to see. The Qt shell sends SIGTERM on normal quit
+	// (main.cpp's aboutToQuit handler); SIGINT covers `./cove` run directly
+	// in a terminal during development.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		ticker := time.NewTicker(30 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			p.CleanupTorrents()
-		}
+		<-sigCh
+		handle.Stop()
+		os.Exit(0)
 	}()
 
-	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}))
-
-	srv := &http.Server{
-		Addr:              ":6969",
-		ReadHeaderTimeout: 10 * time.Second,
-		// Don't set WriteTimeout — torrent streaming is long-lived
-	}
-
-	log.Println("Server Running on: 6969")
-	log.Fatal(srv.ListenAndServe())
+	// Block forever while the server runs — main must not return.
+	select {}
 }

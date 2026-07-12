@@ -33,7 +33,8 @@
 
   let data = $state<SearchResults>(empty());
   let keywords: { id: number; name: string }[] = $state([]);
-  let qualityMap = new SvelteMap<number, string>();
+  // svelte-ignore non_reactive_update
+    let qualityMap = new SvelteMap<number, string>();
 
   // ── Controls ──────────────────────────────────────────────────────────────────
   const sortOptions = [
@@ -177,49 +178,65 @@
   }
 
   // ── Best-effort stream of cached download qualities for the title results ─────
-  function streamQuality(ids: number[]): void {
+  // Module-scoped controller (not per-call) so a new search always aborts
+  // whatever NDJSON stream the previous one left running — otherwise a slow
+  // prior response could keep writing into qualityMap after the user has
+  // already moved on to a new query.
+  let qualityAbort: AbortController | null = null;
+
+  function streamQuality(ids: { id: number; type: "movie" | "tv" }[]): void {
+    qualityAbort?.abort();
     if (ids.length === 0) return;
-    fetch(`http://localhost:6969/api/quality/batch?ids=${ids.join(",")}`)
-      .then(async (r) => {
-        const reader = r.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const { id, quality } = JSON.parse(line);
-              qualityMap.set(Number(id), quality);
-            } catch {
-              /* empty */
-            }
-          }
-        }
-      })
+    qualityAbort = new AbortController();
+    const typedIds = ids.map((m) => `${m.type}:${m.id}`);
+    api
+      .streamQualityBatch(
+        typedIds,
+        (id, quality) => {
+          // Backend echoes the canonical typed id ("movie:603") — qualityMap
+          // stays keyed by the bare numeric tmdb id (how MediaCard reads it).
+          const numeric = Number(id.split(":").pop());
+          if (!Number.isNaN(numeric)) qualityMap.set(numeric, quality);
+        },
+        qualityAbort.signal,
+      )
       .catch(() => {});
   }
 
   // ── Debounced search ──────────────────────────────────────────────────────────
+  // Sequence-token guard (same idea as App.svelte's quickPlayToken): the
+  // debounce timer only prevents overlapping *timers*, not overlapping
+  // *fetches* — once a timer fires, its awaited request keeps running even
+  // if a newer keystroke starts another one. Without this, a slower older
+  // response can land after and overwrite a faster newer one.
+  let searchSeq = 0;
+
   $effect(() => {
     const q = query.trim();
     const timeout = setTimeout(async () => {
+      const seq = ++searchSeq;
+      // A new search invalidates whatever quality-badge NDJSON stream the
+      // previous one kicked off — abort it now rather than waiting for this
+      // search's own streamQuality() call, so a slow prior response can't
+      // keep writing into qualityMap after the user has moved on.
+      qualityAbort?.abort();
       if (!q) {
         data = empty();
         keywords = [];
         qualityMap = new SvelteMap();
         return;
       }
+      // Drop stale quality badges before each new search so entries from a
+      // previous query don't bleed into the incoming results.
+      qualityMap = new SvelteMap();
       await animateText(query);
       loading = true;
       const [res, kw] = await Promise.all([
         api.searchMulti(q).catch(() => empty()),
         api.getKeywords(q).catch(() => []),
       ]);
+      // Superseded by a newer search while this one was in flight — discard.
+      if (seq !== searchSeq) return;
       // Guard against null sections (e.g. an empty array serialized as null).
       data = {
         movies: res.movies ?? [],
@@ -230,9 +247,15 @@
       keywords = kw ?? [];
       loading = false;
 
-      streamQuality([...data.movies, ...data.tv].map((m) => m.id));
+      streamQuality([
+        ...data.movies.map((m) => ({ id: m.id, type: "movie" as const })),
+        ...data.tv.map((m) => ({ id: m.id, type: "tv" as const })),
+      ]);
     }, 400);
-    return () => clearTimeout(timeout);
+    return () => {
+      clearTimeout(timeout);
+      qualityAbort?.abort();
+    };
   });
 </script>
 

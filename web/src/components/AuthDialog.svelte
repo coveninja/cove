@@ -52,7 +52,7 @@
     loading = true; error = "";
     try {
       const res = await api.authLogin(email, password);
-      auth.setSession(res.access_token, email, res.profiles, res.active, res.refresh_token);
+      await auth.setSession(res.access_token, email, res.profiles, res.active, res.refresh_token);
       libraryChanged.update((n) => n + 1);
       onclose();
     } catch (e) {
@@ -81,7 +81,7 @@
     loading = true; error = "";
     try {
       const res = await api.authVerifyOTP(otpEmail, otpCode);
-      auth.setSession(res.access_token, otpEmail, res.profiles, res.active, res.refresh_token);
+      await auth.setSession(res.access_token, otpEmail, res.profiles, res.active, res.refresh_token);
       libraryChanged.update((n) => n + 1);
       onclose();
     } catch (e) {
@@ -96,22 +96,18 @@
     if (!email || !password) { error = "Email and password are required."; return; }
     loading = true; error = "";
     try {
-      const res = await api.authRegister(email, password, profileName || undefined);
+      api.authRegister(email, password, profileName || undefined).then((e) => {
+        console.log(e)
+      });
 
-      if ("confirmation_required" in res) {
-        pendingEmail = email;
-        pendingPassword = password;
-        pendingProfileName = profileName;
-        otpCode = "";
-        error = "";
-        loading = false;
-        view = "register-otp";
-        return;
-      }
-
-      auth.setSession(res.access_token, email, [res.profile], res.profile);
-      libraryChanged.update((n) => n + 1);
-      onclose();
+      pendingEmail = email;
+      pendingPassword = password;
+      pendingProfileName = profileName;
+      otpCode = "";
+      error = "";
+      loading = false;
+      view = "register-otp";
+      return;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -129,7 +125,7 @@
         pendingPassword,
         pendingProfileName || undefined,
       );
-      auth.setSession(res.access_token, pendingEmail, [res.profile], res.profile, res.refresh_token);
+      await auth.setSession(res.access_token, pendingEmail, [res.profile], res.profile, res.refresh_token);
       libraryChanged.update((n) => n + 1);
       view = "success";
     } catch (e) {
@@ -141,11 +137,13 @@
   }
 </script>
 
-<!-- Backdrop -->
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<!-- Backdrop: click-outside-to-close. role="presentation" = decorative overlay;
+     Escape closes via the inner dialog's natural keyboard flow. -->
 <div
   class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+  role="presentation"
   onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onkeydown={(e) => { if (e.key === "Escape") onclose(); }}
 >
   <div class="relative w-full max-w-sm rounded-xl border border-border bg-background p-6 shadow-2xl">
     {#if view !== "success"}

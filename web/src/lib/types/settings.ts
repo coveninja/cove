@@ -2,10 +2,17 @@
 
 //////////
 // source: settings.go
+/*
+Package settings persists a single flat Settings struct per profile as
+JSON, served whole-object over GET/PUT with no partial-merge semantics —
+a PUT that omits a field writes its Go zero value, not the previous
+value. Select-style preferences (e.g. streamSelectionMode,
+discoveryAlgorithm) are plain strings with no server-side enum
+validation; the frontend owns the allowed-value metadata and UI.
+*/
 
 /**
  * Settings holds all user-configurable preferences persisted to disk.
- * Add new fields here; they'll be zero-valued on first load and safe to extend.
  */
 export interface Settings {
   /**
@@ -18,20 +25,20 @@ export interface Settings {
   /**
    * Provider / streams
    */
-  defaultProvider: string; // e.g. "torrentio", "debrid"
-  preferHLS: boolean; // use HLS pipeline over direct stream
+  defaultProvider: string;
   /**
    * Stream auto-selection
    */
   autoSelectStream: boolean; // skip the manual stream list and play immediately
   streamSelectionMode: string; // "balanced" | "seeders" | "quality" | "smallest" | "bandwidth"
   measuredBandwidthMbps: number /* float64 */; // from the in-app speed test; 0 = never measured
+  sourcePreference: string; // "" (none) | "torrent" | "direct" — additive ranking boost, doesn't exclude
   /**
    * Subtitles
    */
   subtitlesEnabled: boolean;
   defaultSubtitleLang: string; // ISO 639-1 e.g. "en"
-  defaultAudioLang: string; // ISO 639-1 e.g. "en"
+  defaultAudioLang: string; // ISO 639-1 e.g. "en", or "original" to match the title's original_language
   subtitleSize: number /* float64 */; // percentage, 50–200
   subtitlePosition: number /* float64 */; // percent from bottom, 2–90
   subtitleBackground: boolean; // dark box behind subtitle text
@@ -47,14 +54,51 @@ export interface Settings {
   autoSkipRecap: boolean;
   autoSkipCredits: boolean;
   autoSkipPreview: boolean;
+  /**
+   * Onboarding
+   */
+  onboardingDone: boolean;
+  /**
+   * Discovery
+   */
+  discoveryAlgorithm: string; // "smart" | "popularity" | "custom"
+  customAlgorithmUrl: string; // used when discoveryAlgorithm == "custom"
+  /**
+   * Predictive prefetch (Phase E) — background-warms stream caches for
+   * continue-watching titles and next episodes so playback starts near-
+   * instantly. Default true; the worker checks this each cycle and the
+   * completion-trigger respects it too.
+   */
+  prefetchStreams: boolean;
+  /**
+   * PrefetchNextEpisode background-downloads the next TV episode's top-ranked
+   * torrent stream once the current episode's file finishes downloading, so
+   * playback of the next episode starts near-instantly. Default true.
+   */
+  prefetchNextEpisode: boolean;
+  /**
+   * Remote access (Phase 5) — exposes the backend on 0.0.0.0 so LAN devices
+   * (e.g. the Android app in thin-client mode) can reach it. Settings are
+   * per-profile; remote access follows whichever profile is currently active.
+   * RemoteAccessEnabled: when true the server listens on 0.0.0.0:<port> in
+   * addition to the always-on loopback listener. The loopback listener is
+   * never restarted.
+   * RemoteAccessToken: a 32-byte hex string generated once (crypto/rand) the
+   * first time RemoteAccessEnabled is set to true, then persisted and never
+   * auto-rotated. Every request arriving on the LAN listener must supply this
+   * token via X-Cove-Token header or ?token= query param.
+   */
+  remoteAccessEnabled: boolean;
+  remoteAccessToken: string;
+  /**
+   * Sync bookkeeping — stamped server-side on every local write, used to resolve
+   * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
+   */
+  updatedAt: string;
 }
 /**
- * Store ── Service ──────────────────────────────────────────────────────────────────
- * Store owns the package's mutable state (previously package globals). The
- * data type is already named Settings, so the service is named Store; New
- * returns *Store and the handlers hang off it. Fields are unexported, so tygo
- * emits nothing for Store — only the Settings data type crosses into the
- * generated TS.
+ * Store owns the package's mutable state. Fields are unexported, so tygo emits
+ * nothing for Store — only the Settings data type crosses into the generated TS.
  */
 export interface Store {
 }

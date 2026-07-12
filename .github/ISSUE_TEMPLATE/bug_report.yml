@@ -1,0 +1,101 @@
+name: Bug report
+description: Something is broken or not working as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! The log file is the single
+        most useful thing you can attach — please don't skip that field.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong?
+      placeholder: The app opens, shows the loading screen, then nothing happens.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch Cove
+        2. Search for a title
+        3. Click play
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Cove version
+      description: Shown in Settings, or the version of the installer/release you downloaded.
+      placeholder: e.g. 0.23.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install Cove?
+      options:
+        - Windows installer (.exe)
+        - Windows zip / auto-updater
+        - Flatpak
+        - Arch package (PKGBUILD/AUR)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Windows 11 24H2, Arch Linux, Fedora 42
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware (GPU + CPU)
+      description: Mainly the GPU — rendering issues are often driver-specific. Mention if it's a laptop with hybrid graphics.
+      placeholder: e.g. RX 7700XT + Ryzen 5 3600
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: shell.log
+      description: |
+        Cove writes everything (shell, backend, mpv) to `shell.log`. **It is wiped on every launch**, so reproduce the problem first, then grab the file *before* starting Cove again.
+
+        - **Windows:** press `Win+R`, paste `%APPDATA%\cove\shell.log`, press Enter
+        - **Linux:** `~/.config/cove/shell.log`
+        - **Flatpak:** `~/.var/app/io.github.coveninja.Cove/config/cove/shell.log`
+
+        Paste the contents below (it will be formatted automatically), or drag the file into the issue.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, screen recordings, addon/scraper setup, anything that seems relevant.
+    validations:
+      required: false

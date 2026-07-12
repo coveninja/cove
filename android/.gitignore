@@ -1,0 +1,18 @@
+# Gradle build outputs
+build/
+.gradle/
+
+# Android Studio IDE files
+.idea/
+*.iml
+local.properties
+
+# gomobile-generated AAR (built by `make android-aar`; not committed)
+app/libs/*.aar
+
+# Generated Gradle wrapper jar (run `gradle wrapper` once locally to create it)
+gradle/wrapper/gradle-wrapper.jar
+
+# Signing keystores — NEVER commit; release key lives outside the repo
+*.jks
+*.keystore

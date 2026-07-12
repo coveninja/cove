@@ -21,6 +21,7 @@
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import StarRating from "./StarRating.svelte";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
+  import { libraryChanged } from "$lib/stores/library";
 
   let {
     media,
@@ -42,6 +43,7 @@
       season?: number,
       episode?: number,
       episodeName?: string,
+      candidates?: Stream[],
     ) => void;
     onclose: () => void;
     onsimilar?: (m: Media) => void;
@@ -81,6 +83,7 @@
   $effect(() => {
     detailsLoading = true;
     const type = media.media_type;
+    let stale = false;
     Promise.all([
       api.getVideos(media),
       api.getSimilar(media),
@@ -88,6 +91,7 @@
       api.getImages(media),
     ])
       .then(([vids, similarList, details, img]) => {
+        if (stale) return;
         images = img;
         videoUrl = getVideoOpt(vids, "Trailer", { randomize: true }) ?? null;
         similar = similarList;
@@ -119,9 +123,11 @@
         detailsLoading = false;
       })
       .catch((err) => {
+        if (stale) return;
         console.error("MediaExpandedModal details fetch failed", err);
         detailsLoading = false;
       });
+    return () => { stale = true; };
   });
 
   const overviewParagraphs = $derived(
@@ -157,9 +163,11 @@
   let dismissed = $state(false);
 
   $effect(() => {
+    let stale = false;
     api
       .libraryGet(media.id, media.media_type)
       .then((result) => {
+        if (stale) return;
         if (!result) {
           libraryEntry = null;
           movieProgress = null;
@@ -175,7 +183,8 @@
           tvProgressList = result.progress;
         }
       })
-      .catch(console.error);
+      .catch((err) => { if (!stale) console.error(err); });
+    return () => { stale = true; };
   });
 
   async function toggleDismissed(): Promise<void> {
@@ -184,6 +193,7 @@
     try {
       if (next) await api.notInterested(media);
       else await api.undoNotInterested(media);
+      libraryChanged.update((n) => n + 1);
     } catch {
       dismissed = !next;
     }
@@ -231,8 +241,9 @@
     season?: number,
     episode?: number,
     episodeName?: string,
+    candidates?: Stream[],
   ): void {
-    onplaystream?.(stream, season, episode, episodeName);
+    onplaystream?.(stream, season, episode, episodeName, candidates);
     onclose();
   }
 
@@ -352,14 +363,16 @@
         <div class="flex flex-col gap-4 p-5 sm:p-7">
           <!-- Action row -->
           <div class="flex flex-wrap items-center gap-3">
-            <Button
-              class="h-11 grow rounded-md border-b border-accent bg-accent px-6 text-base font-semibold text-accent-foreground hover:bg-accent-foreground hover:text-accent sm:grow-0"
-              variant="default"
-              onclick={watchNow}
-            >
-              <Play class="size-4 fill-current" />
-              {watchButtonLabel}
-            </Button>
+            <!-- Title + rating + metadata -->
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <span class="text-2xl font-bold">{title}</span>
+              {#if year}<Badge variant="outline">{year}</Badge>{/if}
+              <Badge variant="outline" class="text-yellow-400">
+                <Star class="size-4 fill-current" />
+                {media.vote_average?.toFixed(1)}
+                <span class="font-bold">TMDB</span>
+              </Badge>
+            </div>
 
             <div class="ml-auto flex items-center gap-2">
               <StarRating
@@ -385,18 +398,6 @@
               />
             </div>
           </div>
-
-          <!-- Title + rating + metadata -->
-          <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span class="text-xl font-semibold">{title}</span>
-            {#if year}<Badge variant="outline">{year}</Badge>{/if}
-            <Badge variant="outline" class="text-yellow-400">
-              <Star class="size-4 fill-current" />
-              {media.vote_average?.toFixed(1)}
-              <span class="font-bold">TMDB</span>
-            </Badge>
-          </div>
-
           <div class="flex flex-wrap items-center gap-2 text-sm">
             {#if ageRating}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs"
@@ -511,19 +512,30 @@
             </div>
           </div>
 
-          <Button
-            class="h-11 rounded-md"
-            variant="outline"
-            onclick={() => (showStreams = !showStreams)}
-          >
-            <ListVideo class="size-4" />
-            {streamsToggleLabel}
-            <ChevronDown
-              class="size-4 transition-transform duration-200 {showStreams
+          <div class="flex flex-1 grow py-4 gap-3">
+            <Button
+                    class="h-11 flex-35 rounded-md border-b border-accent bg-accent px-6 text-base font-semibold text-accent-foreground hover:bg-accent-foreground hover:text-accent"
+                    variant="default"
+                    onclick={watchNow}
+            >
+              <Play class="size-4 fill-current" />
+              {watchButtonLabel}
+            </Button>
+
+            <Button
+                    class="h-11 flex-65 rounded-md"
+                    variant="outline"
+                    onclick={() => (showStreams = !showStreams)}
+            >
+              <ListVideo class="size-4" />
+              {streamsToggleLabel}
+              <ChevronDown
+                      class="size-4 transition-transform duration-200 {showStreams
                 ? 'rotate-180'
                 : ''}"
-            />
-          </Button>
+              />
+            </Button>
+          </div>
 
           <!-- Expandable stream / episode browser -->
           {#if showStreams}
@@ -534,7 +546,8 @@
                 season?: number,
                 episode?: number,
                 episodeName?: string,
-              ) => playStream(s, season, episode, episodeName)}
+                candidates?: Stream[],
+              ) => playStream(s, season, episode, episodeName, candidates)}
               bind:maxQuality={streamMaxQuality}
               {streamActive}
               {activeSeason}
@@ -562,6 +575,8 @@
                     <img
                       src={item.poster_path}
                       alt={item.media_type === "tv" ? item.name : item.title}
+                      loading="lazy"
+                      decoding="async"
                       class="aspect-2/3 w-full object-cover transition-opacity hover:opacity-75"
                     />
                   </div>

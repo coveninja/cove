@@ -19,18 +19,19 @@
   import MyListPage from "./components/MyListPage.svelte";
   import { settings } from "$lib/stores/settings";
   import { onMount, setContext } from "svelte";
-  import { scale } from "svelte/transition";
+  import { scale, fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import {
-    pickBestStream,
-    type StreamSelectionMode,
-  } from "$lib/streamSelection";
+  import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { api, type UpdateCheckResult, setTokenSource } from "$lib/api";
-  import InsightsPage from "./components/InsightsPage.svelte";
+  import MyAccountPage from "./components/MyAccountPage.svelte";
   import ExplorePage from "./components/ExplorePage.svelte";
+  import CatalogGridPage from "./components/CatalogGridPage.svelte";
   import UpdateModal from "./components/UpdateModal.svelte";
+  import OnboardingPage from "./components/OnboardingPage.svelte";
+  import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import { Spinner } from "$lib/components/ui/spinner";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
   // avoiding any $effect timing gap between auth state changing and the token
@@ -39,6 +40,8 @@
 
   let query = $state("");
   let updateInfo = $state<UpdateCheckResult | null>(null);
+  let splashVisible = $state(true);
+  let showOnboarding = $state(false);
 
   // The media whose detail overlay (the single app-level MediaExpandedModal)
   // is currently open. Opening one no longer navigates to a page — the overlay
@@ -67,10 +70,29 @@
     episode?: number;
     episodeName?: string;
     subtitles: { id: string; url: string; lang: string }[];
+    // B2: runner-up streams (ranked, best-first) to fall back to if `stream`
+    // never actually starts — see handlePlaybackFailed. Session-local only;
+    // no Go/tygo type carries this. Manual stream-list picks carry no
+    // candidates (undefined) — an explicit user pick is never silently
+    // swapped for another stream, it just gets the watchdog UI.
+    candidates?: Stream[];
+    // How many candidates have already failed for this playback attempt —
+    // caps the auto-advance chain (see handlePlaybackFailed).
+    attempt?: number;
   };
 
   let playerSession = $state<PlayerSession | null>(null);
   let playerMode = $state<"full" | null>(null);
+
+  // Covers the gap between a "Watch" click and playerSession being set — the
+  // fetchStreamsWithRetry/rankStreams/tvEpisodes work in quickPlay, none of
+  // which shows anything today.
+  let quickPlayPending = $state<{ media: Media; message: string } | null>(null);
+
+  // Not $state — bumped on every quickPlay call so a stale call (superseded
+  // by a newer "Watch" click before the first one resolved) can detect it's
+  // stale and skip touching quickPlayPending/playerSession.
+  let quickPlayToken = 0;
 
   const canGoBack = $derived(playerMode === "full" || pageHistory.length > 0);
 
@@ -115,13 +137,23 @@
       : null,
   );
 
+  // Focus-triggered auth sync bookkeeping (not $state — plain instance vars
+  // read/written only from the onFocus handler below).
+  let lastAuthSyncMs = 0;
+  let lastLibraryGeneration: number | null = null;
+
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
     setMode("dark");
-    settings.load();
-
-    // Initialize auth: load local profiles + restore any existing Supabase session.
-    auth.init(api).catch(console.error);
+    // Wait for both settings and auth to resolve before revealing the app.
+    Promise.all([settings.load(), auth.init().catch(console.error)]).then(
+      () => {
+        splashVisible = false;
+        if (!$settings.onboardingDone) {
+          showOnboarding = true;
+        }
+      },
+    );
 
     // Non-blocking background update check. Failures are silently swallowed
     // since the user may be offline or on a dev build (which skips the check
@@ -148,6 +180,11 @@
       );
     };
     const onRejection = (e: PromiseRejectionEvent) => {
+      // Vidstack rejects pending media requests with "provider destroyed"
+      // when a player is torn down mid-flight. These are harmless; swallow
+      // only this exact message so real rejections still surface.
+      const msg = typeof e.reason === "string" ? e.reason : (e.reason as { message?: string } | null)?.message;
+      if (msg === "provider destroyed") { e.preventDefault(); return; }
       if (isAbort(e.reason)) e.preventDefault();
     };
     const onError = (e: ErrorEvent) => {
@@ -158,19 +195,41 @@
     window.addEventListener("unhandledrejection", onRejection);
     window.addEventListener("error", onError);
 
-    // Pull remote changes on window focus when signed in.
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", onContextMenu);
+
+    // Pull remote changes on window focus when signed in. Guarded so rapid
+    // focus/blur cycling (alt-tabbing) doesn't trigger a sync — and downstream
+    // refetch storm across every MediaCard + ContinueWatching — on every
+    // single focus.
     const onFocus = () => {
-      if (!auth.isGuest) {
-        api.authSync().then(() => {
-          libraryChanged.update((n) => n + 1);
-        }).catch(() => {});
-      }
+      if (auth.isGuest) return;
+      const now = Date.now();
+      if (now - lastAuthSyncMs < 60_000) return;
+      lastAuthSyncMs = now;
+      api
+        .authSync()
+        .then((res) => {
+          // Only bump when the library actually changed remotely. Older
+          // backends / a noop build (503) omit library_generation entirely —
+          // fall back to the old always-bump behavior for those.
+          if (typeof res.library_generation === "number") {
+            if (res.library_generation !== lastLibraryGeneration) {
+              lastLibraryGeneration = res.library_generation;
+              libraryChanged.update((n) => n + 1);
+            }
+          } else {
+            libraryChanged.update((n) => n + 1);
+          }
+        })
+        .catch(() => {});
     };
     window.addEventListener("focus", onFocus);
 
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
+      document.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("focus", onFocus);
     };
   });
@@ -286,6 +345,12 @@
 
       osc.start(now);
       osc.stop(now + 0.25);
+      // The destination retains connected nodes even after stop() — without
+      // this, every episode start leaks an oscillator+gain pair in the graph.
+      osc.addEventListener("ended", () => {
+        osc.disconnect();
+        gain.disconnect();
+      });
     } catch (e) {
       console.error("playStartSound failed", e);
     }
@@ -297,7 +362,10 @@
     season?: number,
     episode?: number,
     episodeName?: string,
+    candidates?: Stream[],
+    attempt = 0,
   ): void {
+    quickPlayPending = null;
     playStartSound();
 
     playerSession = {
@@ -307,6 +375,8 @@
       episode,
       episodeName,
       subtitles: [],
+      candidates,
+      attempt,
     };
     playerMode = "full";
 
@@ -333,21 +403,35 @@
   // Streams often come back empty on the first hit while indexers are still
   // searching — StreamsList handles that by polling every second; quickPlay
   // does the same here rather than giving up after one empty response.
+  // `signal` short-circuits both the retry loop and the fetch itself once a
+  // newer quickPlay call has superseded this one (see quickPlayAbort below).
   async function fetchStreamsWithRetry(
-    fetcher: () => Promise<Stream[]>,
+    fetcher: (signal: AbortSignal) => Promise<Stream[]>,
+    signal: AbortSignal,
   ): Promise<Stream[]> {
-    for (let attempt = 0; attempt < 15; attempt++) {
+    // 8 attempts at 2s (B4), not 15 at 1s — A3's per-addon negative cache
+    // makes each retry hit-or-miss the same 20s-TTL cache entry either way,
+    // so the tighter interval mostly just burned more requests.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (signal.aborted) return [];
       try {
-        const res = await fetcher();
+        const res = await fetcher(signal);
         if (Array.isArray(res) && res.length > 0) return res;
       } catch (e) {
+        if ((e as { name?: string } | null)?.name === "AbortError") return [];
         console.error("quickPlay: failed to fetch streams", e);
         return [];
       }
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 2000));
     }
     return [];
   }
+
+  // Aborts the previous quickPlay's in-flight stream fetch the moment a new
+  // one starts — quickPlayToken alone only prevents a stale response from
+  // being *acted on*, it doesn't stop the superseded request from running to
+  // completion on the wire.
+  let quickPlayAbort: AbortController | null = null;
 
   // Used by "Watch"/"Continue" buttons on media cards: skip the media page
   // entirely and go straight to picking a stream and playing it, the same
@@ -360,26 +444,51 @@
     season?: number,
     episode?: number,
   ): Promise<void> {
+    const myToken = ++quickPlayToken;
+    quickPlayAbort?.abort();
+    const ctrl = new AbortController();
+    quickPlayAbort = ctrl;
+    quickPlayPending = { media, message: "Finding streams…" };
+
     const isTV = media.media_type === "tv";
     const targetSeason = isTV ? (season ?? 1) : undefined;
     const targetEpisode = isTV ? (episode ?? 1) : undefined;
 
-    const streams = await fetchStreamsWithRetry(() =>
-      api.getStreams(
-        media.id,
-        isTV
-          ? { type: "tv", season: targetSeason, episode: targetEpisode }
-          : {},
-      ),
+    const streams = await fetchStreamsWithRetry(
+      (signal) =>
+        api.getStreams(
+          media.id,
+          isTV
+            ? { type: "tv", season: targetSeason, episode: targetEpisode }
+            : {},
+          signal,
+        ),
+      ctrl.signal,
     );
-    if (streams.length === 0) return;
+    if (myToken !== quickPlayToken) return;
+    if (streams.length === 0) {
+      quickPlayPending = { media, message: "No stream found" };
+      setTimeout(() => {
+        if (myToken === quickPlayToken) quickPlayPending = null;
+      }, 2500);
+      return;
+    }
 
     const mode =
       ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
-    const best = pickBestStream(streams, mode, {
+    const ranked = rankStreams(streams, mode, {
       measuredBandwidthMbps: $settings?.measuredBandwidthMbps,
+      preferredProvider: $settings?.defaultProvider,
+      sourcePreference: $settings?.sourcePreference,
     });
-    if (!best) return;
+    const best = ranked[0] ?? null;
+    if (!best) {
+      quickPlayPending = { media, message: "No stream found" };
+      setTimeout(() => {
+        if (myToken === quickPlayToken) quickPlayPending = null;
+      }, 2500);
+      return;
+    }
 
     let episodeName: string | undefined;
     if (isTV) {
@@ -392,8 +501,69 @@
         console.error("quickPlay: failed to fetch episode name", e);
       }
     }
+    if (myToken !== quickPlayToken) return;
 
-    startPlayback(media, best, targetSeason, targetEpisode, episodeName);
+    // Runner-up candidates (B2) so the playback watchdog can auto-advance if
+    // `best` turns out to be dead, without a full re-fetch.
+    startPlayback(
+      media,
+      best,
+      targetSeason,
+      targetEpisode,
+      episodeName,
+      ranked.slice(0, 5),
+      0,
+    );
+  }
+
+  // ─── Playback-start watchdog: auto-advance / give up (B2) ──────────────────
+  // Tiny inline toast — there's no toast/notification library in this app, so
+  // this mirrors Player.svelte's own "feedback flash" pattern rather than
+  // pulling one in for two short-lived messages.
+  let playbackToast = $state<string | null>(null);
+  let playbackToastTimer: ReturnType<typeof setTimeout> | undefined;
+  function showPlaybackToast(text: string, ms = 3000): void {
+    playbackToast = text;
+    clearTimeout(playbackToastTimer);
+    playbackToastTimer = setTimeout(() => (playbackToast = null), ms);
+  }
+
+  // Fired by <Player> (via onPlaybackFailed) when the current stream never
+  // actually started — a startup timeout or a stalled/dead torrent. Drops
+  // the dead stream from the candidate list and tries the next one, up to 3
+  // fallback attempts; once exhausted (or there were no candidates to begin
+  // with — a manual stream-list pick), closes the player and reopens the
+  // media detail so the user sees the manual stream list instead of a
+  // frozen loading screen.
+  function handlePlaybackFailed(): void {
+    const session = playerSession;
+    if (!session) return;
+
+    const deadKey = session.stream.url || session.stream.infoHash;
+    const remaining = (session.candidates ?? []).filter(
+      (c) => (c.url || c.infoHash) !== deadKey,
+    );
+    const attempt = session.attempt ?? 0;
+    const next = remaining[0];
+
+    if (next && attempt < 3) {
+      showPlaybackToast("Stream didn't start — trying another…");
+      startPlayback(
+        session.media,
+        next,
+        session.season,
+        session.episode,
+        session.episodeName,
+        remaining.slice(1),
+        attempt + 1,
+      );
+      return;
+    }
+
+    const media = session.media;
+    closePlayer();
+    showPlaybackToast("Couldn't start playback automatically", 4000);
+    selectMedia(media);
   }
 
   // mpv's surface always fills the whole window behind the web UI. Make the app
@@ -439,9 +609,18 @@
           const m = selectedMedia;
           if (m) quickPlay(m, season, episode);
         }}
-        onplaystream={(stream, season, episode, episodeName) => {
+        onplaystream={(stream, season, episode, episodeName, candidates) => {
           const m = selectedMedia;
-          if (m) startPlayback(m, stream, season, episode, episodeName);
+          if (m)
+            startPlayback(
+              m,
+              stream,
+              season,
+              episode,
+              episodeName,
+              candidates,
+              0,
+            );
         }}
         onsimilar={(m) => selectMedia(m)}
         onclose={() => (selectedMedia = null)}
@@ -483,27 +662,39 @@
       <!-- Hidden (not unmounted) while the player is full, so its opaque page
            background doesn't block the transparent player from revealing mpv,
            and page state/scroll survive opening and closing the player. -->
-      <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
-        <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
+      <div
+        class="h-full w-full bg-background"
+        class:invisible={playerMode === "full"}
+      >
+        <div
+          class="h-full w-full bg-background"
+          class:invisible={playerMode === "full"}
+        >
           <div class="h-full" class:hidden={currentPage.type !== "settings"}>
             <SettingsPage />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "query"}>
             <QueryPage
-                    bind:query
-                    bind:loading
-                    onSelectMedia={selectMedia}
-                    onSuggested={(name) => { query = name; changePage({ type: "query", query: name }); }}
-                    onWatch={quickPlay}
-                    onSelectPerson={(p) => (selectedPerson = p)}
-                    onSelectProvider={(p) => (selectedProvider = p)}
+              bind:query
+              bind:loading
+              onSelectMedia={selectMedia}
+              onSuggested={(name) => {
+                query = name;
+                changePage({ type: "query", query: name });
+              }}
+              onWatch={quickPlay}
+              onSelectPerson={(p) => (selectedPerson = p)}
+              onSelectProvider={(p) => (selectedProvider = p)}
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
-            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
+            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} visible={currentPage.type === "home"} onChangePage={changePage} />
           </div>
-          <div class="h-full" class:hidden={currentPage.type !== "insights"}>
-            <InsightsPage />
+          <div class="h-full" class:hidden={currentPage.type !== "account"}>
+            <MyAccountPage
+              visible={currentPage.type === "account"}
+              onSelectPerson={(p) => (selectedPerson = p)}
+            />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
             <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
@@ -511,8 +702,61 @@
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
             <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />
           </div>
+          <div class="h-full" class:hidden={currentPage.type !== "catalog"}>
+            <CatalogGridPage
+              addonId={currentPage.type === "catalog" ? currentPage.addonId : ""}
+              catalogType={currentPage.type === "catalog" ? currentPage.catalogType : ""}
+              catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
+              name={currentPage.type === "catalog" ? currentPage.name : ""}
+              onSelectMedia={selectMedia}
+              onWatch={quickPlay}
+            />
+          </div>
         </div>
       </div>
+
+      {#if quickPlayPending && !playerSession}
+        <!--
+          Covers the gap between a "Watch" click and playerSession being set,
+          i.e. before <PlayerComponent> even mounts (and before its own
+          "Connecting to peers…"/"Buffering…" loading screen can show
+          anything). Mirrors that loading screen's visual style — blurred
+          poster backdrop, Spinner, status text — for a seamless handoff.
+        -->
+        <div
+          class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black"
+          transition:fade={{ duration: 150 }}
+        >
+          {#if quickPlayPending.media.poster_path}
+            <div
+              class="absolute inset-0 scale-110 bg-cover bg-center"
+              style="background-image: url('{quickPlayPending.media
+                .poster_path}'); filter: blur(5px); opacity: 0.35;"
+            ></div>
+            <div class="absolute inset-0 bg-black/65"></div>
+            <img
+              src={quickPlayPending.media.poster_path}
+              alt={quickPlayPending.media.media_type === "tv"
+                ? quickPlayPending.media.name
+                : quickPlayPending.media.title}
+              class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
+            />
+          {:else}
+            <div class="absolute inset-0 bg-black/65"></div>
+            <span
+              class="relative z-10 px-8 text-center text-3xl font-bold text-white"
+            >
+              {quickPlayPending.media.media_type === "tv"
+                ? quickPlayPending.media.name
+                : quickPlayPending.media.title}
+            </span>
+          {/if}
+          <Spinner class="relative z-10 mt-6 size-10" />
+          <p class="relative z-10 mt-4 text-sm text-white/50">
+            {quickPlayPending.message}
+          </p>
+        </div>
+      {/if}
 
       {#if playerSession}
         <!--
@@ -529,12 +773,27 @@
             easing: cubicOut,
           }}
         >
+          <!-- Streams whose origin needs extra headers (Nuvio CDNs) must go
+               through the backend proxy — mpv fetching the raw URL directly
+               would drop the Referer/Origin the host requires. -->
           <PlayerComponent
-            src={playerSession.stream.infoHash || playerSession.stream.url}
+            src={playerSession.stream.infoHash ||
+              (playerSession.stream.headers
+                ? api.playProxyUrl(playerSession.stream.url)
+                : playerSession.stream.url)}
             media={playerSession.media}
             externalSubtitles={playerSession.subtitles}
             season={playerSession.season}
             episode={playerSession.episode}
+            onPlaybackFailed={handlePlaybackFailed}
+            onPlayNext={(s, e) => {
+              const m = playerSession?.media;
+              if (m) quickPlay(m, s, e);
+            }}
+            onPlayStream={(stream, s, e, name, candidates) => {
+              const m = playerSession?.media;
+              if (m) startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+            }}
           />
         </div>
       {/if}
@@ -544,6 +803,32 @@
 
 {#if updateInfo}
   <UpdateModal info={updateInfo} ondismiss={() => (updateInfo = null)} />
+{/if}
+
+{#if playbackToast}
+  <div
+    class="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center"
+    transition:fade={{ duration: 150 }}
+  >
+    <div
+      class="rounded-full bg-black/80 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm"
+    >
+      {playbackToast}
+    </div>
+  </div>
+{/if}
+
+{#if showOnboarding}
+  <div
+    transition:fade={{ duration: 200 }}
+    class="fixed inset-0 z-50 flex items-center justify-center bg-background"
+  >
+    <OnboardingPage onclose={() => (showOnboarding = false)} />
+  </div>
+{/if}
+
+{#if splashVisible}
+  <SplashScreen />
 {/if}
 
 <ModeWatcher defaultMode="dark" />

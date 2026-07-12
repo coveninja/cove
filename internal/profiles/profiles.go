@@ -1,3 +1,9 @@
+// Package profiles manages local, Netflix-style user profiles — not to be
+// confused with content-rating/kid-mode, which is a separate, unrelated
+// concept inside internal/discover. Switching the active profile reloads
+// library, settings, and addons in place via an onChange callback the caller
+// registers in New(), so those packages never need their own profile-
+// switching logic.
 package profiles
 
 import (
@@ -33,7 +39,8 @@ type Store struct {
 	mu       sync.RWMutex
 	disk     diskStore
 	path     string
-	onChange func(profileID string) // called when active profile switches
+	onChange func(profileID string)                                      // called when active profile switches
+	onDelete func(profileID string, supabaseUID *string, userJWT string) // called after deletion for remote cleanup
 }
 
 // New loads profiles.json from the per-user config directory. On first run it
@@ -141,6 +148,25 @@ func (s *Store) All() []Profile {
 	return out
 }
 
+// SetOnDelete registers a hook called after a profile is deleted, so the
+// caller can clean up remote data. It runs asynchronously from the HTTP
+// handler goroutine.
+func (s *Store) SetOnDelete(fn func(profileID string, supabaseUID *string, userJWT string)) {
+	s.onDelete = fn
+}
+
+// Get returns a copy of the profile with the given ID, and whether it was found.
+func (s *Store) Get(id string) (Profile, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.disk.Profiles {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return Profile{}, false
+}
+
 // SetActive switches to the given profile ID and triggers onChange.
 func (s *Store) SetActive(id string) error {
 	s.mu.Lock()
@@ -189,29 +215,110 @@ func (s *Store) Rename(id, name string) error {
 	return fmt.Errorf("profile %q not found", id)
 }
 
-// Delete removes a profile. Returns an error if it is the primary profile.
+// Delete removes a profile and its per-profile data files from disk. Returns
+// an error if the profile does not exist or is the primary profile. If the
+// deleted profile was active, the primary profile becomes active and onChange
+// is fired asynchronously.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	idx := -1
 	for i, p := range s.disk.Profiles {
-		if p.ID != id {
-			continue
+		if p.ID == id {
+			if p.IsPrimary {
+				s.mu.Unlock()
+				return fmt.Errorf("cannot delete the primary profile")
+			}
+			idx = i
+			break
 		}
-		if p.IsPrimary {
-			return fmt.Errorf("cannot delete the primary profile")
-		}
-		s.disk.Profiles = append(s.disk.Profiles[:i], s.disk.Profiles[i+1:]...)
-		if s.disk.ActiveProfileID == id {
-			for _, pp := range s.disk.Profiles {
-				if pp.IsPrimary {
-					s.disk.ActiveProfileID = pp.ID
-					break
-				}
+	}
+	if idx == -1 {
+		s.mu.Unlock()
+		return fmt.Errorf("profile %q not found", id)
+	}
+	wasActive := s.disk.ActiveProfileID == id
+	s.disk.Profiles = append(s.disk.Profiles[:idx], s.disk.Profiles[idx+1:]...)
+	newActiveID := s.disk.ActiveProfileID
+	if wasActive {
+		for _, pp := range s.disk.Profiles {
+			if pp.IsPrimary {
+				newActiveID = pp.ID
+				break
 			}
 		}
-		return s.write()
+		s.disk.ActiveProfileID = newActiveID
 	}
-	return fmt.Errorf("profile %q not found", id)
+	if err := s.write(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+
+	for _, base := range []string{"library", "settings", "addons", "nuvio", "activity"} {
+		path, err := utils.ConfigPath(ProfileFileName(base, id))
+		if err != nil {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("profiles: remove %s: %v", ProfileFileName(base, id), err)
+		}
+	}
+
+	if wasActive && s.onChange != nil {
+		go s.onChange(newActiveID)
+	}
+	return nil
+}
+
+// AdoptID rewrites a local profile's ID to newID, renaming its per-profile
+// data files to the new name. Used when a signed-in account already owns a
+// remote profile: the local profile adopts the remote identity so every
+// device pulls and pushes the same rows. Unlike SetActive, onChange runs
+// synchronously so the caller can merge remote data into the reloaded stores
+// as soon as this returns.
+func (s *Store) AdoptID(oldID, newID string) error {
+	s.mu.Lock()
+	idx := -1
+	for i, p := range s.disk.Profiles {
+		if p.ID == newID {
+			s.mu.Unlock()
+			return fmt.Errorf("profile %q already exists", newID)
+		}
+		if p.ID == oldID {
+			idx = i
+		}
+	}
+	if idx == -1 {
+		s.mu.Unlock()
+		return fmt.Errorf("profile %q not found", oldID)
+	}
+	for _, base := range []string{"library", "settings", "addons", "nuvio", "activity"} {
+		src, err1 := utils.ConfigPath(ProfileFileName(base, oldID))
+		dst, err2 := utils.ConfigPath(ProfileFileName(base, newID))
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			log.Printf("profiles: adopt %s: %v", ProfileFileName(base, oldID), err)
+		}
+	}
+	s.disk.Profiles[idx].ID = newID
+	isActive := s.disk.ActiveProfileID == oldID
+	if isActive {
+		s.disk.ActiveProfileID = newID
+	}
+	err := s.write()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if isActive && s.onChange != nil {
+		s.onChange(newID)
+	}
+	return nil
 }
 
 // LinkSupabase stores the Supabase user ID on a profile.
@@ -309,15 +416,34 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]string{"id": id, "name": body.Name})
 
 	case http.MethodDelete:
+		p, ok := s.Get(id)
+		if !ok {
+			http.Error(w, "profile not found", http.StatusBadRequest)
+			return
+		}
 		if err := s.Delete(id); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if s.onDelete != nil {
+			jwt := bearerFromRequest(r)
+			go s.onDelete(id, p.SupabaseUID, jwt)
 		}
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// bearerFromRequest extracts the JWT from an Authorization: Bearer header.
+// Returns "" if the header is absent or malformed.
+func bearerFromRequest(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(h, "Bearer ")
 }
 
 // newUUID generates a random UUIDv4.

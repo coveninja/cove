@@ -1,5 +1,5 @@
 // src/lib/stores/settings.ts
-import { writable, derived, Subscriber, Unsubscriber } from "svelte/store";
+import { writable, Subscriber, Unsubscriber } from "svelte/store";
 import type { Settings } from "$lib/types/settings";
 import { api } from "$lib/api";
 
@@ -8,8 +8,7 @@ const DEFAULTS: Settings = {
   defaultVolume: 1.0,
   autoPlay: false,
   rememberPosition: true,
-  defaultProvider: "torrentio",
-  preferHLS: true,
+  defaultProvider: "",
   subtitlesEnabled: false,
   defaultSubtitleLang: "en",
   defaultAudioLang: "en",
@@ -17,6 +16,7 @@ const DEFAULTS: Settings = {
   autoSelectStream: true,
   streamSelectionMode: null,
   measuredBandwidthMbps: 0,
+  sourcePreference: "",
   subtitleSize: 150,
   subtitlePosition: 8,
   subtitleBackground: true,
@@ -25,6 +25,14 @@ const DEFAULTS: Settings = {
   autoSkipRecap: false,
   autoSkipCredits: false,
   autoSkipPreview: false,
+  onboardingDone: false,
+  discoveryAlgorithm: "smart",
+  customAlgorithmUrl: "",
+  prefetchStreams: true,
+  prefetchNextEpisode: true,
+  updatedAt: "",
+  remoteAccessEnabled: false,
+  remoteAccessToken: ""
 };
 
 function createSettingsStore(): {
@@ -61,8 +69,3 @@ function createSettingsStore(): {
 }
 
 export const settings = createSettingsStore();
-
-// Convenience derived stores for single-flag subscriptions.
-export const openOnMute = derived(settings, ($s) => $s.openOnMute);
-export const defaultProvider = derived(settings, ($s) => $s.defaultProvider);
-export const autoPlay = derived(settings, ($s) => $s.autoPlay);

@@ -3,14 +3,16 @@
   import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
+  import { mediaFromEntry } from "$lib/mediaFromEntry";
   import { ChevronLeft, ChevronRight } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
   import ContinueWatchingCard, {
     type ContinueItem,
   } from "./cards/ContinueWatchingCard.svelte";
-  import { SvelteDate, SvelteMap } from "svelte/reactivity";
+  import { SvelteMap } from "svelte/reactivity";
   import { animate } from "animejs";
+  import { nextAiredEpisode as nextAiredEpisodeShared } from "$lib/nextEpisode";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -50,13 +52,6 @@
     return p;
   }
 
-  function hasAired(ep: TVEpisode): boolean {
-    if (!ep.air_date) return false;
-    const today = new SvelteDate();
-    today.setHours(0, 0, 0, 0);
-    return new Date(ep.air_date + "T00:00:00").getTime() <= today.getTime();
-  }
-
   async function episodeStill(
     id: number,
     season: number,
@@ -66,28 +61,15 @@
     return eps.find((e) => e.episode_number === episode)?.still_path ?? "";
   }
 
-  // The next *aired* episode after (season, episode): the following episode in
-  // the same season, else the first of the next season. An existing-but-unaired
-  // next episode means the user is caught up → null (the New Episodes row owns
-  // that case).
-  // TVEpisode has no season_number, so we return the season we queried with.
-  async function nextAiredEpisode(
+  // Wraps the shared nextAiredEpisode (see $lib/nextEpisode) with this row's
+  // own per-load season cache, so a show's resume-point lookup and its
+  // roll-forward check share fetches instead of hitting the same season twice.
+  function nextAiredEpisode(
     id: number,
     season: number,
     episode: number,
   ): Promise<{ season: number; episode: TVEpisode } | null> {
-    const same = await fetchSeason(id, season);
-    const inSeason = same.find((e) => e.episode_number === episode + 1);
-    if (inSeason)
-      return hasAired(inSeason) ? { season, episode: inSeason } : null;
-
-    const next = await fetchSeason(id, season + 1);
-    const first = next
-      .filter((e) => e.episode_number >= 1)
-      .toSorted((a, b) => a.episode_number - b.episode_number)[0];
-    if (first)
-      return hasAired(first) ? { season: season + 1, episode: first } : null;
-    return null;
+    return nextAiredEpisodeShared(id, season, episode, fetchSeason);
   }
 
   function latestProgress(progress: WatchProgress[]): WatchProgress | null {
@@ -99,15 +81,14 @@
   }
 
   function toMedia(entry: LibraryEntry): Media {
-    return {
+    return mediaFromEntry({
       id: entry.tmdb_id,
       media_type: entry.media_type,
       title: entry.title,
       name: entry.title,
       poster_path: entry.poster_path,
       vote_average: entry.vote_average,
-      overview: "",
-    } as unknown as Media;
+    });
   }
 
   async function buildItem(entry: LibraryEntry): Promise<ContinueItem | null> {
@@ -193,7 +174,14 @@
     };
   }
 
+  // Sequence-token guard: libraryChanged can bump rapidly (e.g. a burst of
+  // progress saves), firing loadContinue again before the previous run's
+  // fetches — and the seasonCache reset below — have settled. Without this,
+  // an older run's results can land after and overwrite a newer run's.
+  let loadSeq = 0;
+
   async function loadContinue(): Promise<void> {
+    const seq = ++loadSeq;
     loading = true;
     seasonCache = new SvelteMap();
     try {
@@ -201,6 +189,8 @@
       // auto-creates one server-side), so this is the right starting set.
       const entries = await api.libraryList("watching");
       const results = await Promise.all(entries.map(buildItem));
+      // Superseded by a newer load while this one was in flight — discard.
+      if (seq !== loadSeq) return;
       items = results
         .filter((r): r is ContinueItem => r !== null)
         .toSorted(
@@ -208,7 +198,7 @@
             new Date(b.watchedAt).getTime() - new Date(a.watchedAt).getTime(),
         );
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 

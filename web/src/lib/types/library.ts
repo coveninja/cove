@@ -2,6 +2,15 @@
 
 //////////
 // source: library.go
+/*
+Package library is the local watch-history store: library entries (status,
+rating), per-episode watch progress, and "not interested" dismissals,
+persisted as JSON per profile under the OS config directory. It exposes
+TasteSignals() and Generation() as the sole interface the recommendation
+engine (internal/discover) consumes — neither package imports the other,
+so a personalization feature can evolve independently of how watch history
+is stored.
+*/
 
 export type Status = string;
 export const StatusWatchLater: Status = "watch_later";
@@ -13,7 +22,7 @@ export const StatusDropped: Status = "dropped";
  */
 export interface LibraryEntry {
   id: string; // UUIDv4
-  profile_id?: string; // null until profile is wired up
+  profile_id?: string;
   tmdb_id: number /* int */;
   media_type: string; // "movie" | "tv"
   title: string;
@@ -70,6 +79,36 @@ export interface TasteSignal {
   UserRating?: number /* float64 */; // user's 0–5 rating; nil if unrated
   Completed: boolean; // any progress record for this title is completed
   Dismissed: boolean;
+  /**
+   * Title and PosterPath are populated for entry-backed signals so that
+   * downstream consumers (e.g. discover's contributing-title view) can
+   * render a poster row without a second TMDB lookup. The PosterPath is
+   * already rewritten to route through the local image-cache proxy.
+   * Progress-only and dismissal-only signals leave these empty.
+   */
+  Title: string;
+  PosterPath: string;
+  /**
+   * LastInteractionAt is the most recent time the user touched this title
+   * (rated/status change, a watch, or a dismissal). Lets discover decay old
+   * signals instead of weighing a five-year-old favorite the same as
+   * yesterday's.
+   */
+  LastInteractionAt: string;
+}
+/**
+ * ProgressSaveEvent is emitted (best-effort, outside any lock) on every
+ * successful POST to /api/library/progress. It carries enough context for an
+ * activity log to credit watch-time deltas without knowing library internals.
+ */
+export interface ProgressSaveEvent {
+  ProgressKey: string; // library's progressKey() value for this record
+  TmdbID: number /* int */;
+  MediaType: string;
+  Position: number /* float64 */;
+  Duration: number /* float64 */;
+  Completed: boolean;
+  At: string;
 }
 export interface Stats {
   total: number /* int */; // library entries (dismissals excluded)
@@ -84,13 +123,9 @@ export interface Stats {
 }
 /**
  * Library ── Service ──────────────────────────────────────────────────────────────────
- * Library owns all of the package's mutable state. It used to live in package
- * globals; holding it on a struct lets callers construct (and tests spin up)
- * independent instances, and removes the hidden coupling between Init and the
- * handlers. Fields are unexported on purpose: nothing outside this package
- * touches them, and keeping them unexported means tygo emits nothing for this
- * type — only the JSON data types (LibraryEntry, WatchProgress, diskStore)
- * cross into the generated TS.
+ * Library owns all of the package's mutable state. Fields are unexported, so
+ * tygo emits nothing for this type — only the JSON data types (LibraryEntry,
+ * WatchProgress, diskStore) cross into the generated TS.
  */
 export interface Library {
 }

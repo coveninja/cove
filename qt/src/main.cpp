@@ -8,19 +8,25 @@
 //   ./cove_shell --play <file>   → plays <file> behind a translucent test overlay
 
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHostAddress>
+#include <QIcon>
+#include <QLockFile>
 #include <QMimeDatabase>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QStandardPaths>
 #include <QSurfaceFormat>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 #include <QtWebEngineQuick/QtWebEngineQuick>
@@ -30,7 +36,110 @@
 #include <functional>
 #include <memory>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
+#ifdef Q_OS_LINUX
+#include <sys/prctl.h>
+#endif
+
+#ifdef Q_OS_UNIX
+#include <QSocketNotifier>
+#include <csignal>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
+#include "GpuWorkaround.h"
 #include "MpvObject.h"
+
+// Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
+// properties (data, resources, states, transform, etc.) that don't have notify
+// signals. WebChannel's introspection emits one per property at startup; they
+// have no effect on functionality.
+static QtMessageHandler s_defaultMsgHandler = nullptr;
+static QFile *s_logFile = nullptr;
+static QString s_logFilePath;
+
+static void msgFilter(QtMsgType type, const QMessageLogContext &ctx,
+                      const QString &msg) {
+  if (type == QtWarningMsg &&
+      msg.contains(QLatin1String("has no notify signal")))
+    return;
+  if (s_logFile && s_logFile->isOpen()) {
+    QTextStream ts(s_logFile);
+    ts << msg << '\n';
+    ts.flush();
+  }
+  s_defaultMsgHandler(type, ctx, msg);
+}
+
+// Opens <config dir>/cove/shell.log, truncated each run. cove_shell is built
+// WIN32-subsystem on Windows (see CMakeLists.txt) so it has no console —
+// without this file, every qInfo()/qWarning() below is discarded and a
+// startup failure is completely undiagnosable.
+static void openLogFile() {
+  const QString dir = QDir(QStandardPaths::writableLocation(
+                                QStandardPaths::GenericConfigLocation))
+                          .filePath("cove");
+  QDir().mkpath(dir);
+  s_logFilePath = QDir(dir).filePath("shell.log");
+  s_logFile = new QFile(s_logFilePath);
+  if (!s_logFile->open(QIODevice::WriteOnly | QIODevice::Truncate |
+                        QIODevice::Text)) {
+    delete s_logFile;
+    s_logFile = nullptr;
+  }
+}
+
+#ifdef Q_OS_UNIX
+// Terminal launches (make run, konsole) are quit with Ctrl+C or kill, which
+// bypasses Qt: the process dies without aboutToQuit, so the GPU crash
+// sentinel would survive and the next launch would spuriously escalate the
+// workaround level. Bridge SIGINT/SIGTERM/SIGHUP into a clean quit via the
+// self-pipe trick (only write() is safe inside a signal handler).
+static int s_sigFds[2] = {-1, -1};
+
+static void installUnixSignalBridge(QCoreApplication *app) {
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, s_sigFds) != 0)
+    return;
+  struct sigaction sa = {};
+  sa.sa_handler = [](int) {
+    const char byte = 1;
+    (void)!::write(s_sigFds[0], &byte, 1);
+  };
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
+  ::sigaction(SIGINT, &sa, nullptr);
+  ::sigaction(SIGTERM, &sa, nullptr);
+  ::sigaction(SIGHUP, &sa, nullptr);
+  auto *notifier =
+      new QSocketNotifier(s_sigFds[1], QSocketNotifier::Read, app);
+  QObject::connect(notifier, &QSocketNotifier::activated, app, [] {
+    char byte;
+    (void)!::read(s_sigFds[1], &byte, 1);
+    QCoreApplication::quit();
+  });
+}
+#endif
+
+// Surfaces a fatal startup failure to the user, then exits. A QML-rendered
+// error screen would depend on the same Qt Quick/OpenGL stack that's the top
+// suspect for a startup failure in the first place; MessageBoxW works even
+// if that stack itself is what's broken. Non-Windows builds still have a
+// console, so the qWarning() below is enough there.
+static void reportStartupFailure(const QString &reason) {
+  qWarning().noquote() << "[shell] startup failed:" << reason;
+#ifdef Q_OS_WIN
+  const QString text =
+      reason + QStringLiteral("\n\nLog file: ") + s_logFilePath;
+  MessageBoxW(nullptr, reinterpret_cast<const wchar_t *>(text.utf16()),
+              L"Cove — Startup Error", MB_OK | MB_ICONERROR);
+#endif
+  if (qApp)
+    qApp->exit(1);
+}
 
 // ── Static file server ───────────────────────────────────────────────────────
 class StaticServer : public QTcpServer {
@@ -39,7 +148,7 @@ public:
       : QTcpServer(parent), m_root(QDir(root).absolutePath()) {}
 
   QUrl start() {
-    if (!listen(QHostAddress::LocalHost, 0)) {
+    if (!listen(QHostAddress::LocalHost, 5174)) {
       qWarning() << "[shell] static server failed to listen:" << errorString();
       return {};
     }
@@ -53,11 +162,26 @@ protected:
     auto buffer = std::make_shared<QByteArray>();
     connect(sock, &QTcpSocket::readyRead, this, [this, sock, buffer]() {
       buffer->append(sock->readAll());
-      if (buffer->indexOf("\r\n\r\n") < 0)
+      if (buffer->indexOf("\r\n\r\n") < 0) {
+        // Guard against a stalled or malformed client growing the buffer
+        // indefinitely; abort once we've received 64 KiB without a header end.
+        if (buffer->size() > 64 * 1024) {
+          sock->abort();
+          sock->deleteLater();
+        }
         return;
+      }
       serve(sock, *buffer);
     });
     connect(sock, &QTcpSocket::disconnected, sock, &QObject::deleteLater);
+    // Abort connections that never complete an HTTP request within 10s.
+    // respond() always sends Connection: close + disconnectFromHost(), so sock
+    // is never kept alive past a served request — the singleShot auto-cancels
+    // when sock is destroyed after a normal request completes.
+    QTimer::singleShot(10000, sock, [sock]() {
+      sock->abort();
+      sock->deleteLater();
+    });
   }
 
 private:
@@ -126,6 +250,28 @@ private:
 };
 
 // ── Backend (Go sidecar) ─────────────────────────────────────────────────────
+// The aboutToQuit handler in main() covers clean shutdowns, but a crashed or
+// SIGKILLed shell never reaches it, leaving an orphan backend holding :6969
+// (which then makes the next launch fail its port bind). Tie the child's
+// lifetime to ours at the OS level: PDEATHSIG on Linux, a kill-on-close Job
+// Object on Windows.
+
+#ifdef Q_OS_WIN
+static HANDLE backendJob() {
+  static HANDLE job = [] {
+    HANDLE h = CreateJobObjectW(nullptr, nullptr);
+    if (h) {
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+      info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info,
+                              sizeof(info));
+    }
+    return h;
+  }();
+  return job;
+}
+#endif
+
 static QProcess *startBackend(const QString &exePath, QObject *parent) {
   auto *proc = new QProcess(parent);
   proc->setProcessChannelMode(QProcess::MergedChannels);
@@ -134,27 +280,69 @@ static QProcess *startBackend(const QString &exePath, QObject *parent) {
     for (const QString &line : out.split('\n', Qt::SkipEmptyParts))
       qInfo().noquote() << "[go]" << line;
   });
+#ifdef Q_OS_LINUX
+  proc->setChildProcessModifier(
+      [] { prctl(PR_SET_PDEATHSIG, SIGTERM); });
+#endif
+  // anacrolix/torrent selects mmap file IO in an init() that runs before
+  // main(), so this can only be controlled via the environment. mmap maps
+  // entire multi-GB torrent files into virtual memory, which balloons RSS.
+  QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+  env.insert(QStringLiteral("TORRENT_STORAGE_DEFAULT_FILE_IO"), QStringLiteral("classic"));
+  proc->setProcessEnvironment(env);
   proc->start(exePath, {});
+#ifdef Q_OS_WIN
+  if (HANDLE job = backendJob(); job && proc->processId() != 0) {
+    HANDLE child = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE,
+                               static_cast<DWORD>(proc->processId()));
+    if (child) {
+      AssignProcessToJobObject(job, child);
+      CloseHandle(child);
+    }
+  }
+#endif
   return proc;
 }
 
-static void waitForBackend(quint16 port, std::function<void()> onReady) {
+// Polls 127.0.0.1:port until it accepts a connection, then calls onReady.
+// Calls onTimeout instead if the backend never comes up within timeoutMs —
+// without this, a backend that's alive but never binds the port (or never
+// started at all) left the shell polling forever with no window and no
+// error, indistinguishable from the app doing nothing.
+static void waitForBackend(quint16 port, int timeoutMs,
+                            std::function<void()> onReady,
+                            std::function<void()> onTimeout) {
   auto *timer = new QTimer;
   timer->setInterval(150);
-  QObject::connect(timer, &QTimer::timeout, timer, [timer, port, onReady]() {
-    auto *probe = new QTcpSocket;
-    QObject::connect(probe, &QTcpSocket::connected, probe,
-                     [timer, probe, onReady]() {
-                       timer->stop();
-                       timer->deleteLater();
-                       probe->abort();
-                       probe->deleteLater();
-                       onReady();
-                     });
-    QObject::connect(probe, &QTcpSocket::errorOccurred, probe,
-                     [probe]() { probe->deleteLater(); });
-    probe->connectToHost(QHostAddress::LocalHost, port);
-  });
+  auto elapsed = std::make_shared<QElapsedTimer>();
+  elapsed->start();
+  QObject::connect(
+      timer, &QTimer::timeout, timer,
+      [timer, port, timeoutMs, onReady, onTimeout, elapsed]() {
+        if (elapsed->hasExpired(timeoutMs)) {
+          timer->stop();
+          timer->deleteLater();
+          onTimeout();
+          return;
+        }
+        // Parent probe to the timer so any pending probe is freed when the
+        // timer is destroyed (timeout path or app quit).
+        // Use timer as the context object (not probe) so Qt auto-disconnects
+        // this slot when the timer is destroyed — a late `connected` signal
+        // after the timeout must not touch the freed timer.
+        auto *probe = new QTcpSocket(timer);
+        QObject::connect(probe, &QTcpSocket::connected, timer,
+                         [timer, probe, onReady]() {
+                           timer->stop();
+                           timer->deleteLater();
+                           probe->abort();
+                           probe->deleteLater();
+                           onReady();
+                         });
+        QObject::connect(probe, &QTcpSocket::errorOccurred, probe,
+                         [probe]() { probe->deleteLater(); });
+        probe->connectToHost(QHostAddress::LocalHost, port);
+      });
   timer->start();
 }
 
@@ -169,11 +357,9 @@ static QString readQWebChannelJs() {
 }
 
 // Inject qwebchannel.js into every page at document creation so window.QWebChannel
-// exists before the app's JS runs. Installed on the default profile (which the
-// QML WebEngineView uses) BEFORE the engine loads, so it covers the first
-// navigation too. WebEngineScript isn't creatable from QML in Qt 6, so this is
-// done here where QWebEngineScript is a proper value type.
-static void installBridgeScript() {
+// exists before the app's JS runs. WebEngineScript isn't creatable from QML in
+// Qt 6, so this is done in C++ where QWebEngineScript is a proper value type.
+static void installBridgeScript(QWebEngineProfile *profile) {
   const QString src = readQWebChannelJs();
   if (src.isEmpty())
     return;
@@ -183,7 +369,7 @@ static void installBridgeScript() {
   script.setInjectionPoint(QWebEngineScript::DocumentCreation);
   script.setWorldId(QWebEngineScript::MainWorld);
   script.setRunsOnSubFrames(false);
-  QWebEngineProfile::defaultProfile()->scripts()->insert(script);
+  profile->scripts()->insert(script);
 }
 
 // Translucent test overlay: exercises the QWebChannel bridge by connecting to
@@ -248,6 +434,45 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
 }
 
 int main(int argc, char *argv[]) {
+  // Suppress noisy-but-benign Qt WebChannel property warnings before anything
+  // else logs. The returned pointer is the Qt default handler.
+  s_defaultMsgHandler = qInstallMessageHandler(msgFilter);
+
+  // QCommandLineParser needs an app instance, which doesn't exist yet.
+  // Pre-scan raw argv for the one flag that must be read before
+  // QtWebEngineQuick::initialize().
+  int gpuWorkaroundOverride = -1;
+  for (int i = 1; i < argc; ++i) {
+    const QLatin1String arg(argv[i]);
+    if (arg == QLatin1String("--gpu-workaround") && i + 1 < argc) {
+      const char *val = argv[i + 1];
+      if (val[0] >= '0' && val[0] <= '2' && val[1] == '\0')
+        gpuWorkaroundOverride = val[0] - '0';
+      break;
+    }
+    const QLatin1String eqPrefix("--gpu-workaround=");
+    if (arg.startsWith(eqPrefix) && arg.size() == eqPrefix.size() + 1) {
+      const char c = argv[i][eqPrefix.size()];
+      if (c >= '0' && c <= '2')
+        gpuWorkaroundOverride = c - '0';
+      break;
+    }
+  }
+
+  // Must precede WebEngine init so [gpu] diagnostics reach shell.log.
+  openLogFile();
+
+#ifdef Q_OS_LINUX
+  // QtWebEngine 6.11 on native Wayland (observed on Hyprland) leaks renderer-side
+  // frame buffers without bound — private RSS grows ~12 MB/s during video playback
+  // until the renderer dies with std::bad_alloc / "Fatal process out of memory"
+  // (exit 64000). Under XWayland (xcb) the same buffer pool is bounded and was
+  // measured flat for over an hour. Default to xcb until the upstream bug is fixed;
+  // an explicitly-set QT_QPA_PLATFORM still wins (e.g. a user testing a patched Qt).
+  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+    qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
+
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
   // (mpv renders via OpenGL), and give the default surface an alpha channel so
   // the transparent web layer can composite.
@@ -257,11 +482,30 @@ int main(int argc, char *argv[]) {
   fmt.setAlphaBufferSize(8);
   QSurfaceFormat::setDefaultFormat(fmt);
 
+  const GpuWorkaround::ApplyResult gpuState =
+      GpuWorkaround::applyBeforeInit(gpuWorkaroundOverride);
+
   QtWebEngineQuick::initialize();
   QGuiApplication app(argc, argv);
   app.setApplicationName("cove");
   app.setOrganizationName("coveninja");
+  app.setWindowIcon(QIcon(QStringLiteral(":/cove.png")));
+  QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                   [] { GpuWorkaround::markStartupSuccessful(); });
+#ifdef Q_OS_UNIX
+  installUnixSignalBridge(&app);
+#endif
 
+  // Single-instance guard. QLockFile detects stale locks from crashed
+  // processes (it records the holder's PID), so a crash never wedges future
+  // launches the way the old "did port 5174 bind?" heuristic could.
+  QLockFile instanceLock(QDir::temp().filePath("cove_shell.lock"));
+  if (!instanceLock.tryLock(0)) {
+    reportStartupFailure(
+        QStringLiteral("Cove is already running (another instance holds the "
+                       "instance lock)."));
+    return 0;
+  }
   qmlRegisterType<MpvObject>("mpv", 1, 0, "MpvObject");
 
   QCommandLineParser parser;
@@ -275,22 +519,33 @@ int main(int argc, char *argv[]) {
 #endif
   QCommandLineOption webrootOpt("webroot", "Path to the renderer build dir.",
                                 "path", "../../web/dist");
-  QCommandLineOption apiPortOpt("api-port", "Backend API port.", "port", "6969");
   QCommandLineOption playOpt(
       "play", "Compositing test: play this media file behind a test overlay.",
       "file");
   QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
+  QCommandLineOption gpuWorkaroundOpt(
+      "gpu-workaround",
+      "GPU workaround level: 0=off, 1=QTWEBENGINE_FORCE_USE_GBM=0 (Vulkan fallback; may render incorrectly on some drivers), 2=level 1 + --disable-gpu (software raster, auto-recovery target). Pins the level for this run; overrides COVE_GPU_WORKAROUND and disables auto-escalation.",
+      "level");
   parser.addOption(backendOpt);
   parser.addOption(webrootOpt);
-  parser.addOption(apiPortOpt);
   parser.addOption(playOpt);
   parser.addOption(devOpt);
+  parser.addOption(gpuWorkaroundOpt);
   parser.process(app);
+
+  // After process(): --help/--version exit the process directly without
+  // firing aboutToQuit, and must not leave a crash sentinel behind. The GPU
+  // crash window only opens when the WebEngineView loads, further down.
+  GpuWorkaround::commitState(gpuState);
 
   const QString backendPath =
       QFileInfo(parser.value(backendOpt)).absoluteFilePath();
   const QString webRoot = QFileInfo(parser.value(webrootOpt)).absoluteFilePath();
-  const quint16 apiPort = parser.value(apiPortOpt).toUShort();
+  // The API port is pinned across the stack (backend bind, web bundle's BASE
+  // URL, index.html CSP) — a configurable flag here would only pretend it can
+  // be changed.
+  constexpr quint16 apiPort = 6969;
     const QString testFile =
       parser.isSet(playOpt)
           ? QFileInfo(parser.value(playOpt)).absoluteFilePath()
@@ -299,9 +554,23 @@ int main(int argc, char *argv[]) {
 
   QQmlApplicationEngine engine;
 
+  // If QML object creation fails (e.g. missing deployed qml/ modules), surface
+  // it immediately rather than leaving the user with a silent, windowless process.
+  QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                   &engine, [] {
+                     reportStartupFailure(
+                         "Failed to load UI (main.qml) \xe2\x80\x94 the install may be "
+                         "missing Qt QML components. See shell.log for details.");
+                   });
+
   // Must run before the WebEngineView navigates so the script covers the first
   // load (the QML view uses the default profile this installs onto).
-  installBridgeScript();
+  // WebEngineScript isn't creatable from QML in Qt 6, so this is done here.
+  installBridgeScript(QWebEngineProfile::defaultProfile());
+  // The Go backend already disk-caches all images and serves them from
+  // localhost with immutable Cache-Control headers, so Chromium's own HTTP
+  // cache is redundant and grows unbounded. Disable it.
+  QWebEngineProfile::defaultProfile()->setHttpCacheType(QWebEngineProfile::NoCache);
 
   auto loadScene = [&](const QString &url, const QString &mpvFile) {
     engine.rootContext()->setContextProperty("launchUrl", url);
@@ -313,6 +582,8 @@ int main(int argc, char *argv[]) {
     // Test mode — no backend needed for a local file.
     qInfo().noquote() << "[shell] compositing test, playing:" << testFile;
     loadScene(testOverlayUrl(), testFile);
+    // The GPU abort strikes within seconds of the first WebEngineView load.
+    QTimer::singleShot(30000, qApp, [] { GpuWorkaround::markStartupSuccessful(); });
   } else {
     qInfo().noquote() << "[shell] backend:" << backendPath
                       << (QFileInfo::exists(backendPath) ? "(ok)" : "(MISSING)");
@@ -320,53 +591,173 @@ int main(int argc, char *argv[]) {
 
     auto *server = new StaticServer(webRoot, &app);
     const QUrl baseUrl = server->start();
-    if (baseUrl.isEmpty())
+    if (baseUrl.isEmpty()) {
+      reportStartupFailure(QStringLiteral(
+          "Local static server failed to bind 127.0.0.1:5174 (port already "
+          "in use by another instance?)."));
       return 1;
+    }
     qInfo().noquote() << "[shell] serving renderer at" << baseUrl.toString();
 
-    QProcess *backend = startBackend(backendPath, &app);
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, [backend]() {
-      if (backend->state() == QProcess::NotRunning)
+    // shuttingDown gates the crash-restart logic below: QProcess::terminate()
+    // (called from aboutToQuit) fires the same `finished` signal a real crash
+    // would, so without this flag a normal app quit would look exactly like
+    // a crash and trigger a pointless restart-and-immediately-quit cycle.
+    auto shuttingDown = std::make_shared<bool>(false);
+
+    // currentBackend always points at whichever QProcess is presently live —
+    // a restart replaces it with a new QProcess, so aboutToQuit (registered
+    // once, below) must dereference this rather than closing over a single
+    // QProcess* that a later restart would make stale.
+    auto currentBackend = std::make_shared<QProcess *>(nullptr);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [shuttingDown, currentBackend]() {
+      *shuttingDown = true;
+      QProcess *backend = *currentBackend;
+      if (!backend || backend->state() == QProcess::NotRunning)
         return;
       backend->terminate();
       if (!backend->waitForFinished(2000))
         backend->kill();
     });
 
-    // Exit code 42 signals that the backend applied an update and wants the
-    // shell to restart so the new binaries are loaded. Re-exec this process
-    // with the same arguments, then quit the current instance.
-    // On Windows the backend cannot rename its own .exe while running, so it
-    // writes cove.exe.new and exits; we perform the rename here, when the
-    // process is guaranteed to be gone.
-    QObject::connect(
-        backend,
-        QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        [&app, backendPath](int exitCode, QProcess::ExitStatus) {
-          if (exitCode == 42) {
-#ifdef Q_OS_WIN
-            const QString newExe = backendPath + ".new";
-            if (QFile::exists(newExe)) {
-              QFile::remove(backendPath + ".old");
-              QFile::rename(backendPath, backendPath + ".old");
-              QFile::rename(newExe, backendPath);
-            }
-#endif
-            const QStringList args = QCoreApplication::arguments().mid(1);
-            QProcess::startDetached(QCoreApplication::applicationFilePath(),
-                                    args);
-            app.quit();
-          }
-        });
+    // Restart-with-backoff bookkeeping for a crash *after* the backend was
+    // already up and serving (a startup failure still goes through
+    // reportStartupFailure via `settled`, unchanged). windowTimer resets the
+    // count whenever more than 60s has elapsed since the first restart in
+    // the current burst, so a backend that crashes rarely (e.g. once a day)
+    // always gets a fresh 3 attempts rather than accumulating toward the cap
+    // forever.
+    auto restartCount = std::make_shared<int>(0);
+    auto restartWindow = std::make_shared<QElapsedTimer>();
+    constexpr int maxRestartsPerWindow = 3;
+    constexpr int restartWindowMs = 60000;
 
-waitForBackend(apiPort, [loadScene, baseUrl, isDev]() {
-      qInfo().noquote() << "[shell] backend up — loading UI";
-      if (isDev) {
-        loadScene(QStringLiteral("http://localhost:5173"), QString());
-      } else {
-        loadScene(baseUrl.toString(), QString());
-      }
-    });
+    // launchBackend starts the backend, wires up its error/exit signals, and
+    // waits for it to answer on apiPort. `first` controls whether a
+    // successful connect navigates the WebEngineView (only needed once — on
+    // a post-crash restart the view is already showing the app and simply
+    // resumes working the moment /api answers again, no reload needed).
+    // Declared as a shared_ptr<std::function<...>> (rather than a plain
+    // lambda) so the `finished` handler can invoke it again on a later
+    // crash — a lambda can't capture itself directly.
+    auto launchBackend = std::make_shared<std::function<void(bool)>>();
+    *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, apiPort,
+                       shuttingDown, currentBackend, restartCount, restartWindow,
+                       launchBackend](bool first) {
+      QProcess *backend = startBackend(backendPath, &app);
+      *currentBackend = backend;
+
+      // Guards against reportStartupFailure firing twice (e.g. errorOccurred
+      // and finished both fire for a crashed process) and against a late
+      // failure signal arriving after the backend was already confirmed ready.
+      auto settled = std::make_shared<bool>(false);
+
+      QObject::connect(
+          backend, &QProcess::errorOccurred, &app,
+          [backend, backendPath, settled](QProcess::ProcessError) {
+            if (*settled)
+              return;
+            *settled = true;
+            reportStartupFailure(
+                QStringLiteral("Backend process failed to start: %1 (path: %2)")
+                    .arg(backend->errorString(), backendPath));
+          });
+
+      // Exit code 42 signals that the backend applied an update and wants the
+      // shell to restart so the new binaries are loaded. Re-exec this process
+      // with the same arguments, then quit the current instance.
+      // On Windows the backend cannot rename its own .exe while running, so it
+      // writes cove.exe.new and exits; we perform the rename here, when the
+      // process is guaranteed to be gone.
+      QObject::connect(
+          backend,
+          QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+          [&app, backendPath, settled, shuttingDown, restartCount, restartWindow,
+           launchBackend](int exitCode, QProcess::ExitStatus) {
+            if (exitCode == 42) {
+#ifdef Q_OS_WIN
+              const QString newExe = backendPath + ".new";
+              if (QFile::exists(newExe)) {
+                QFile::remove(backendPath + ".old");
+                QFile::rename(backendPath, backendPath + ".old");
+                QFile::rename(newExe, backendPath);
+              }
+#endif
+              const QStringList args = QCoreApplication::arguments().mid(1);
+              QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                      args);
+              app.quit();
+              return;
+            }
+            if (!*settled) {
+              *settled = true;
+              reportStartupFailure(
+                  QStringLiteral(
+                      "Backend exited before it was ready (exit code %1).")
+                      .arg(exitCode));
+              return;
+            }
+            // The backend was up and serving, then died — a post-startup
+            // crash rather than a failed launch. A deliberate shutdown
+            // (terminate() from aboutToQuit) fires this same signal, so
+            // check shuttingDown before treating it as one.
+            if (*shuttingDown)
+              return;
+
+            if (!restartWindow->isValid() || restartWindow->hasExpired(restartWindowMs)) {
+              restartWindow->start();
+              *restartCount = 0;
+            }
+            ++*restartCount;
+            if (*restartCount > maxRestartsPerWindow) {
+              reportStartupFailure(QStringLiteral(
+                  "Backend crashed repeatedly (exit code %1).").arg(exitCode));
+              return;
+            }
+            qWarning().noquote()
+                << "[shell] backend crashed (exit code" << exitCode << ") — restarting ("
+                << *restartCount << "/" << maxRestartsPerWindow << " in this window)";
+            (*launchBackend)(/*first=*/false);
+          });
+
+      waitForBackend(
+          apiPort, 20000,
+          [loadScene, baseUrl, isDev, settled, first]() {
+            if (*settled)
+              return;
+            *settled = true;
+            if (first) {
+              qInfo().noquote() << "[shell] backend up — loading UI";
+              if (isDev) {
+                loadScene(QStringLiteral("http://localhost:5173"), QString());
+              } else {
+                loadScene(baseUrl.toString(), QString());
+              }
+              // The GPU abort strikes within seconds of the first WebEngineView load.
+              QTimer::singleShot(30000, qApp,
+                                 [] { GpuWorkaround::markStartupSuccessful(); });
+            } else {
+              qInfo().noquote() << "[shell] backend recovered after restart";
+            }
+          },
+          [apiPort, settled, first]() {
+            if (*settled)
+              return;
+            *settled = true;
+            if (first) {
+              reportStartupFailure(
+                  QStringLiteral(
+                      "Backend did not respond on 127.0.0.1:%1 within 20s.")
+                      .arg(apiPort));
+            } else {
+              reportStartupFailure(QStringLiteral(
+                  "Backend restarted but did not respond on 127.0.0.1:%1 within 20s.")
+                                        .arg(apiPort));
+            }
+          });
+    };
+
+    (*launchBackend)(/*first=*/true);
   }
 
   return app.exec();

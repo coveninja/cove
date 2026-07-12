@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Solid dark-gray fill in 2:3 poster aspect ratio. Rendered as placeholder
+     while Coil loads the real poster image. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="2dp"
+    android:height="3dp"
+    android:viewportWidth="2"
+    android:viewportHeight="3">
+    <path
+        android:fillColor="#171717"
+        android:pathData="M0,0H2V3H0Z"/>
+</vector>

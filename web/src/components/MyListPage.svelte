@@ -16,8 +16,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
-  import InsightsPage from "./InsightsPage.svelte";
-  import {SvelteSet} from "svelte/reactivity";
+  import { SvelteSet } from "svelte/reactivity";
 
   let {
     onSelectMedia,
@@ -367,8 +366,8 @@
   }
 
   $effect(() => {
-    if (entries?.length === 0){
-      return
+    if (entries?.length === 0) {
+      return;
     }
     for (const entry of entries) {
       ensureMediaLoaded(entry); // no-op if cached; fires in parallel otherwise
@@ -598,6 +597,8 @@
                     <img
                       src={entry.poster_path}
                       alt={entry.title}
+                      loading="lazy"
+                      decoding="async"
                       class="aspect-2/3 w-full rounded-md object-cover opacity-60"
                     />
                   {/if}
@@ -616,7 +617,6 @@
           </section>
         {/each}
       {/if}
-      <InsightsPage />
     </ScrollArea>
   {/if}
 </div>

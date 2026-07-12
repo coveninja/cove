@@ -3,7 +3,7 @@
 
   # Cove
 
-  A media streaming desktop app for Linux and Windows. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio-compatible addons, and a built-in mpv player.
+  A media streaming app for Linux, Windows, and Android. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
 
   [![CI](https://github.com/coveninja/cove/actions/workflows/release.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/release.yml)
   [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
@@ -16,13 +16,20 @@
 ## Features
 
 - **Stream anything** — connects to Stremio-compatible addon sources and streams directly in the app
-- **Built-in player** — hardware-accelerated mpv playback with subtitle support and progress saving
+- **Extend with plugins** — add community JS scraper plugins for additional stream sources, sandboxed and opt-in per scraper
+- **Built-in player** — hardware-accelerated mpv playback with subtitle support, live buffering/download progress, and progress saving
+- **Smart stream picker** — auto-selects the best available stream using a configurable strategy (quality, size, reliability, or a connection-speed match via a built-in speed test), or sort/filter candidates yourself
+- **Skip intro & recap** — auto-skip buttons for intro, recap, and credits segments during playback, independently toggleable
+- **Where to watch** — see which legal streaming/rental services carry a title alongside the stream picker
 - **Discover** — personalized recommendations based on your watch history, ratings, and taste profile
 - **Library** — track what you've watched, mark favorites, and pick up where you left off with continue watching
 - **Explore** — browse trending, upcoming releases, genres, and curated categories
 - **Insights** — view your watch stats and genre/actor taste breakdown
 - **Search** — find any movie or TV show by title
+- **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
+- **Multiple profiles** — profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
+- **Android app** — native Kotlin/Compose client with the same embedded Go backend and mpv playback; runs standalone, or connects to your desktop Cove over LAN in remote mode
 
 ## Install
 
@@ -46,8 +53,14 @@ flatpak run io.github.coveninja.Cove
 ```
 
 ### Windows
+> **⚠️ Experimental:** Windows support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
 
 Download `cove-windows-amd64-setup.exe` from the [latest release](https://github.com/coveninja/cove/releases/latest) and run the installer. Or grab `cove-windows-amd64.zip` for a portable install.
+
+### Android
+
+Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
+
 
 ## Build from source
 
@@ -75,6 +88,7 @@ make go      # build the Go backend binary
 make web     # build the Svelte frontend
 make qt      # build the Qt shell
 make dev     # full build + regenerate TypeScript types from Go structs
+make android # build the Android APK (gomobile AAR + Gradle; see android/README.md)
 ```
 
 ### Frontend checks
@@ -88,4 +102,11 @@ npm run format  # prettier
 
 ## Configuration
 
-Addon URLs can be configured in the app's Settings page. The default setup includes some built-in addons but provides no streams apart from official sources.
+A fresh profile ships with no provider addons and no plugin repos enabled — only two hardcoded "official" integrations (streaming-availability lookup, intro/recap timestamps) work out of the box. To get streams, add one or more Stremio-compatible addon URLs and/or community plugin repos in the app's Settings page.
+
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the Go backend, Svelte frontend, and Qt shell fit together, the playback data flow, and the open-source/proprietary build-tag split
+- [docs/API.md](docs/API.md) — HTTP endpoint reference
+- [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup and code style for contributors
+- [android/README.md](android/README.md) — Android app: toolchain setup, emulator, build/install loops, release signing

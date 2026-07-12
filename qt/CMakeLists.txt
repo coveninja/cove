@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(cove_shell LANGUAGES CXX)
 
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -32,13 +36,22 @@ else()
     set(MPV_LINK_TARGET PkgConfig::MPV)
 endif()
 
-# WIN32 suppresses the console window on Windows; no effect on other platforms.
-add_executable(cove_shell WIN32
+set(APP_SOURCES
   src/main.cpp
   src/MpvObject.cpp
   src/MpvObject.h
+  src/GpuWorkaround.cpp
+  src/GpuWorkaround.h
   resources.qrc
 )
+# resources/cove.rc embeds resources/cove.ico into cove_shell.exe (taskbar,
+# Explorer, shortcut icon). Only Windows toolchains can compile a .rc file.
+if(WIN32)
+    list(APPEND APP_SOURCES resources/cove.rc)
+endif()
+
+# WIN32 suppresses the console window on Windows; no effect on other platforms.
+add_executable(cove_shell WIN32 ${APP_SOURCES})
 
 if(WIN32)
     target_include_directories(cove_shell PRIVATE "${MPV_INCLUDE_TARGET}")

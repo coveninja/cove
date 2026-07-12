@@ -14,12 +14,14 @@
     loading = false,
     onSelect = () => {},
     onWatch,
+    onSeeAll,
   } = $props<{
     header?: string | null;
     medias?: Media[];
     loading?: boolean;
     onSelect?: (media: Media) => void;
     onWatch?: (media: Media, season?: number, episode?: number) => void;
+    onSeeAll?: () => void;
   }>();
 
   let trackEl = $state<HTMLElement | null>(null);
@@ -45,6 +47,14 @@
     {#if header}
       <div class="ml-12 flex items-center justify-between px-1">
         <h2 class="text-lg font-semibold">{header}</h2>
+        {#if onSeeAll}
+          <button
+            onclick={onSeeAll}
+            class="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            See all →
+          </button>
+        {/if}
       </div>
     {/if}
 
@@ -72,7 +82,7 @@
           {/each}
         {:else}
           {#each medias as media (media.media_type + "-" + media.id)}
-            <div class="w-36 shrink-0" style="scroll-snap-align: start;">
+            <div class="w-36 shrink-0" style="scroll-snap-align: start; content-visibility: auto; contain-intrinsic-size: 144px 216px;">
               <MediaCard
                 {media}
                 onclick={() => onSelect(media)}

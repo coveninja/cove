@@ -5,7 +5,10 @@
 #   make dev        # regenerate TS types, build everything, launch the shell
 #   make go|web|qt  # build a single component
 #   make web-dev    # Vite dev server (browser only — no mpv bridge)
-#   make patch      # bump patch version, commit, tag (then: git push origin master v<ver>)
+#   make patch      # bump patch version, stage all pending changes, commit, tag
+#                   # (optionally: make patch TITLE="..." MSG="..." to override the
+#                   # commit title / add a commit message body note)
+#                   # (then: git push origin master v<ver>)
 #   make clean      # remove build artifacts
 
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -15,7 +18,30 @@ QT_DIR    := qt
 QT_BUILD  := $(QT_DIR)/build
 SHELL_BIN := $(QT_BUILD)/cove_shell
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean
+# Auto-detect injected private implementations and compose build tags.
+# After `make inject-private`, client.go and/or discover.go are present
+# and the real implementations compile in automatically.
+_empty :=
+_space := $(_empty) $(_empty)
+, := ,
+_PRIVATE_TAGS := $(strip \
+  $(if $(wildcard internal/supabase/client.go),supabase) \
+  $(if $(wildcard internal/discover/discover.go),discover))
+_BUILD_TAGS := $(subst $(_space),$(,),$(_PRIVATE_TAGS))
+_TAG_FLAGS  := $(if $(_BUILD_TAGS),-tags $(_BUILD_TAGS))
+
+# Android SDK paths — override on the command line if your SDK lives elsewhere.
+# ANDROID_NDK_HOME points to the versioned NDK installed by sdkmanager.
+ANDROID_HOME     ?= $(HOME)/Android/Sdk
+ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
+
+# Targets that drive the Android toolchain export these so that gomobile,
+# sdkmanager, avdmanager, and Gradle all pick up the same SDK without
+# requiring the caller to pre-export them in the shell.
+export ANDROID_HOME
+export ANDROID_NDK_HOME
+
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean android-aar android android-install
 
 all: build
 
@@ -23,8 +49,10 @@ all: build
 build: go web qt
 
 ## Go backend binary (repo root). Static build — no cgo.
+## Private build tags (supabase, discover) are added automatically when the
+## corresponding implementation files are present (run `make inject-private` first).
 go:
-	CGO_ENABLED=0 go build -ldflags "-X main.Version=$(VERSION)" -o $(GO_BIN) .
+	CGO_ENABLED=0 go build $(_TAG_FLAGS) -ldflags "-X main.Version=$(VERSION)" -o $(GO_BIN) .
 
 ## Frontend → web/dist (Vite).
 web:
@@ -72,13 +100,29 @@ hot: go qt
 hot-debug: go qt
 	QTWEBENGINE_REMOTE_DEBUGGING=9222 bash scripts/dev-hot.sh
 
-## Bump patch version in web/package.json, commit, and tag for release.
+## Bump patch version in web/package.json, stage all pending changes, commit,
+## and tag for release. Pass TITLE="..." to override the default commit title
+## and/or MSG="..." to add a commit message body note (multi-line is fine),
+## e.g. `make patch TITLE="fix quick-play loading state"`.
 ## Then push with: git push origin master v<version>
+##
+## TITLE/MSG reach the recipe via the environment ($$TITLE/$$MSG), NOT via
+## make's $(...) substitution: make pastes $(MSG) into the recipe text
+## verbatim, so a message containing real newlines used to split the recipe
+## into broken shell lines ("unexpected EOF while looking for matching quote").
+## Environment values pass through the shell untouched, newlines and all.
+export TITLE MSG
 patch:
 	cd $(WEB_DIR) && npm version patch --no-git-tag-version
 	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
-	git add $(WEB_DIR)/package.json $(WEB_DIR)/package-lock.json && \
-	git commit -m "chore: bump version to v$$NEW_VER" && \
+	TITLE="$${TITLE:-chore: bump version to v$$NEW_VER}"; \
+	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$$NEW_VER\" date=\"$$(date +%Y-%m-%d)\"/>|" flatpak/io.github.coveninja.Cove.metainfo.xml && \
+	git add -A && \
+	if [ -n "$$MSG" ]; then \
+		git commit -m "$$TITLE" -m "$$MSG"; \
+	else \
+		git commit -m "$$TITLE"; \
+	fi && \
 	git tag "v$$NEW_VER" && \
 	echo "" && \
 	echo "  Tagged v$$NEW_VER — push with: git push origin master v$$NEW_VER"
@@ -88,6 +132,29 @@ inject-private:
 	git submodule update --init
 	cp _private/cove-auth/*.go internal/supabase/
 	cp _private/cove-discover/*.go internal/discover/
+
+## Build the gomobile AAR for Android arm64 + amd64 (API 29+).
+## arm64 targets real devices; amd64 is required for the x86_64 emulator AVD.
+## Prerequisites:
+##   1. gomobile: go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
+##   2. ANDROID_HOME / ANDROID_NDK_HOME set (defaults above, override as needed)
+##   3. JDK 17 (gomobile invokes javac when packaging the AAR)
+## Private build tags (supabase, discover) are added automatically when the
+## corresponding implementation files are present (run `make inject-private` first).
+android-aar:
+	mkdir -p android/app/libs
+	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm64,android/amd64 -androidapi 29 $(_TAG_FLAGS) -o android/app/libs/cove.aar ./mobile
+
+## Build the Android debug APK. Requires all android-aar prerequisites above.
+android: android-aar
+	cd android && ./gradlew assembleDebug
+
+## Install the debug APK on a connected device / running emulator and launch.
+## For UI-only iterations that don't require an AAR rebuild, run:
+##   cd android && ./gradlew installDebug
+android-install: android
+	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.coveninja.cove/.MainActivity
 
 ## Remove build artifacts.
 clean:
