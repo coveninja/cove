@@ -331,36 +331,50 @@ jobs:
           cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build qt/build
 
-      - name: Bundle Qt DLLs (windeployqt)
-        shell: pwsh
-        run: |
-          windeployqt --qmldir qt/qml qt/build/cove_shell.exe
-          # MPV_DLL was set by the Generate MSVC import library step
-          Copy-Item "${{ env.MPV_DLL }}" qt/build/mpv-2.dll
-
-          # cove_shell forces Qt Quick onto the OpenGL RHI (main.cpp — mpv only
-          # implements OpenGL rendering). On machines with a missing/broken GPU
-          # driver, opengl32sw.dll (Qt's bundled Mesa software rasterizer) is
-          # the only fallback; windeployqt should bundle it automatically, but
-          # fail loudly here instead of shipping a build that can silently
-          # fail to open a window on such machines.
-          if (-not (Test-Path "qt/build/opengl32sw.dll")) {
-            Write-Error "opengl32sw.dll missing from windeployqt output — Windows builds without a working GPU driver would fail to render with no fallback."
-            exit 1
-          }
-
       - name: Assemble staging directory
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force staging/web | Out-Null
           Copy-Item cove.exe staging/
           Copy-Item qt/build/cove_shell.exe staging/
-          # DLLs and Qt plugin subdirs placed by windeployqt
-          Get-ChildItem qt/build -Filter "*.dll" | Copy-Item -Destination staging/
-          foreach ($d in @("platforms","imageformats","iconengines","styles","tls","translations","resources")) {
-            if (Test-Path "qt/build/$d") { Copy-Item -Recurse "qt/build/$d" staging/ }
-          }
+          # MPV_DLL was set by the Generate MSVC import library step
+          Copy-Item "${{ env.MPV_DLL }}" staging/mpv-2.dll
           Copy-Item -Recurse web/dist/* staging/web/
+
+      - name: Bundle Qt runtime (windeployqt)
+        shell: pwsh
+        run: |
+          # Run windeployqt against the *staged* exe so its entire output
+          # (Qt DLLs, plugin dirs, qml/, resources/, translations/,
+          # QtWebEngineProcess.exe, VC++ runtime DLLs) lands in the package
+          # directly. Cherry-picking files out of qt/build instead has
+          # silently dropped required pieces (qml/, QtWebEngineProcess.exe)
+          # and shipped Windows builds that open a dead window.
+          windeployqt --qmldir qt/qml --compiler-runtime staging/cove_shell.exe
+
+      - name: Sanity-check staged package
+        shell: pwsh
+        run: |
+          $missing = @()
+          # opengl32sw.dll: cove_shell forces Qt Quick onto the OpenGL RHI
+          # (main.cpp — mpv only implements OpenGL rendering), so Qt's bundled
+          # Mesa software rasterizer is the only fallback on machines with a
+          # missing/broken GPU driver.
+          # QtWebEngineProcess.exe: the Chromium renderer — without it the
+          # WebEngineView silently renders nothing.
+          # vcruntime140.dll: from --compiler-runtime; without it a machine
+          # lacking the VC++ redist can't start cove_shell.exe at all.
+          foreach ($f in @("opengl32sw.dll", "QtWebEngineProcess.exe", "vcruntime140.dll")) {
+            if (-not (Test-Path "staging/$f")) { $missing += $f }
+          }
+          # qml/: the QML modules main.qml imports; without them the shell
+          # runs but never creates a window.
+          if (-not (Test-Path "staging/qml/QtQuick")) { $missing += "qml/QtQuick/" }
+          if (-not (Get-ChildItem "staging/resources" -Filter "*.pak" -ErrorAction SilentlyContinue)) { $missing += "resources/*.pak" }
+          if ($missing) {
+            Write-Error ("Staged Windows package is incomplete — missing: " + ($missing -join ", "))
+            exit 1
+          }
 
       - name: Create zip (for auto-updater)
         shell: pwsh

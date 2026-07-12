@@ -554,6 +554,15 @@ int main(int argc, char *argv[]) {
 
   QQmlApplicationEngine engine;
 
+  // If QML object creation fails (e.g. missing deployed qml/ modules), surface
+  // it immediately rather than leaving the user with a silent, windowless process.
+  QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                   &engine, [] {
+                     reportStartupFailure(
+                         "Failed to load UI (main.qml) \xe2\x80\x94 the install may be "
+                         "missing Qt QML components. See shell.log for details.");
+                   });
+
   // Must run before the WebEngineView navigates so the script covers the first
   // load (the QML view uses the default profile this installs onto).
   // WebEngineScript isn't creatable from QML in Qt 6, so this is done here.

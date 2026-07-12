@@ -14,7 +14,7 @@
   <launchable type="desktop-id">io.github.coveninja.Cove.desktop</launchable>
   <url type="homepage">https://github.com/Arcadyi/cove</url>
   <releases>
-    <release version="0.23.7" date="2026-07-12"/>
+    <release version="0.23.8" date="2026-07-12"/>
   </releases>
   <content_rating type="oars-1.1"/>
 </component>
