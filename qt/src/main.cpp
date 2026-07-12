@@ -462,6 +462,17 @@ int main(int argc, char *argv[]) {
   // Must precede WebEngine init so [gpu] diagnostics reach shell.log.
   openLogFile();
 
+#ifdef Q_OS_LINUX
+  // QtWebEngine 6.11 on native Wayland (observed on Hyprland) leaks renderer-side
+  // frame buffers without bound — private RSS grows ~12 MB/s during video playback
+  // until the renderer dies with std::bad_alloc / "Fatal process out of memory"
+  // (exit 64000). Under XWayland (xcb) the same buffer pool is bounded and was
+  // measured flat for over an hour. Default to xcb until the upstream bug is fixed;
+  // an explicitly-set QT_QPA_PLATFORM still wins (e.g. a user testing a patched Qt).
+  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+    qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
+
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
   // (mpv renders via OpenGL), and give the default surface an alpha channel so
   // the transparent web layer can composite.

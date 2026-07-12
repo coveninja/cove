@@ -345,6 +345,12 @@
 
       osc.start(now);
       osc.stop(now + 0.25);
+      // The destination retains connected nodes even after stop() — without
+      // this, every episode start leaks an oscillator+gain pair in the graph.
+      osc.addEventListener("ended", () => {
+        osc.disconnect();
+        gain.disconnect();
+      });
     } catch (e) {
       console.error("playStartSound failed", e);
     }

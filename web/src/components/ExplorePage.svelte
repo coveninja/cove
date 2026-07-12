@@ -24,11 +24,13 @@
   let selectedGenreId = $state<number | null>(null);
 
   // The single ExploreCarousel at the top (popular or selected genre).
+  // Starts idle (loading: false); the $effect sets loading: true right before
+  // the fetch begins so skeletons only appear once a request is actually in flight.
   let featuredRow = $state<Row>({
     key: "featured",
     header: "Popular movies",
     medias: [],
-    loading: true,
+    loading: false,
   });
 
   // SmallRecommendations rows — one per genre, always present regardless of chip selection.

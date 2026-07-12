@@ -229,6 +229,15 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		// mpv's per-seek Range requests reuse existing TLS connections.
 		Transport:     p.proxyTransport,
 		FlushInterval: -1,
+		// Origin rejections (403 expired signature, 404 pulled file) reach mpv
+		// but were otherwise invisible in the backend log, making dead direct
+		// streams indistinguishable from player-side failures.
+		ModifyResponse: func(resp *http.Response) error {
+			if resp.StatusCode >= 400 {
+				log.Printf("stream proxy: origin %s returned %d", target.Host, resp.StatusCode)
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Println("stream proxy:", err)
 			w.WriteHeader(http.StatusBadGateway)
@@ -906,6 +915,10 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			}
 			headers, known := p.lookupStream(streamURL)
 			if !known {
+				// Loud on purpose: mpv sees this 403 but the UI only shows a
+				// generic spinner-then-fail, and the registry losing an entry
+				// (backend restart, 30-min TTL) is otherwise undiagnosable.
+				log.Printf("play: rejected stream url not in registry (restarted backend or entry expired?): %.120s", streamURL)
 				http.Error(w, "unknown stream url (list streams first)", http.StatusForbidden)
 				return
 			}
