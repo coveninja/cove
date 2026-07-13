@@ -269,6 +269,7 @@
           </Tooltip.Root>
         </div>
 
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
         <div
           bind:this={searchOuter}
           class="relative flex h-9 items-center rounded-l-none rounded-r-full border border-l-0 bg-transparent"
@@ -276,6 +277,10 @@
           class:w-[300px]={searchState === "active"}
           role="search"
           onmouseenter={() => toggleSearch(true)}
+          onclick={() => {
+            // Touch devices never fire mouseenter — expand on tap instead.
+            if (searchState === "hidden") toggleSearch(true);
+          }}
         >
           <div
             class="pointer-events-none absolute top-1/2 transition-all duration-300"

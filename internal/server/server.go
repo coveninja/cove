@@ -32,6 +32,7 @@ import (
 	"github.com/coveninja/cove/internal/tmdb"
 	"github.com/coveninja/cove/internal/updater"
 	"github.com/coveninja/cove/internal/utils"
+	"github.com/coveninja/cove/internal/webstatic"
 )
 
 // Config holds all startup parameters for the Cove backend. Every field is a
@@ -361,6 +362,7 @@ func Start(cfg Config) (*Handle, error) {
 	disc.SetupHandlers(mux)
 
 	clientsession.SetupHandlers(mux)
+	webstatic.Mount(mux)
 
 	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {

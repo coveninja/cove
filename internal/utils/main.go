@@ -37,7 +37,13 @@ func CorsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		origin := r.Header.Get("Origin")
 
 		if origin != "" {
-			if allowedOrigins[origin] {
+			// Same-origin: the page was served by this server itself (the
+			// embedded web UI on Android loads from the backend's own address).
+			// A hostile page on another origin can never match r.Host here, so
+			// this keeps the CSRF posture of the allowlist intact.
+			sameOrigin := origin == "http://"+r.Host
+
+			if allowedOrigins[origin] || sameOrigin {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin, X-Requested-With")

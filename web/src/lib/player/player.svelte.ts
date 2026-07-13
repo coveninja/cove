@@ -45,6 +45,7 @@ interface MpvBridge {
   addSubtitle(url: string, title: string, lang: string): void;
   setVolume(volume: number): void;
   setFullscreen(fullscreen: boolean): void;
+  setMpvProperty(name: string, value: string): void;
   requestState(): void;
 }
 
@@ -70,6 +71,7 @@ class MpvPlayer {
   volume = $state(100); // 0–100
   ended = $state(false);
   isFullscreen = $state(false);
+  playbackSpeed = $state(1);
 
   audioTracks = $state<MpvTrack[]>([]);
   subtitleTracks = $state<MpvTrack[]>([]);
@@ -165,7 +167,15 @@ class MpvPlayer {
     // showing (and autoplay-advancing past) the next episode's up-next
     // overlay within moments of it starting.
     this.#seekLockUntil = Date.now() + 500;
+    // mpv keeps `speed` across loadfile on the same instance; a 2× pick from a
+    // previous session must not leak into the next one.
+    if (this.playbackSpeed !== 1) this.setPlaybackSpeed(1);
     this.#mpv?.play(url);
+  }
+
+  setPlaybackSpeed(speed: number): void {
+    this.playbackSpeed = speed;
+    this.#mpv?.setMpvProperty("speed", String(speed));
   }
 
   pause(): void {

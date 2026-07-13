@@ -48,6 +48,8 @@ android {
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         val backendUrl = localProps.getProperty("BACKEND_URL", "http://127.0.0.1:6969/api")
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
+        val webUrl = localProps.getProperty("WEB_URL", "http://127.0.0.1:6969")
+        buildConfigField("String", "WEB_URL", "\"$webUrl\"")
         // Supabase auth — publishable anon key only; service key must never enter BuildConfig.
         val supabaseUrl = localProps.getProperty("SUPABASE_URL", "")
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
@@ -144,4 +146,7 @@ dependencies {
 
     // MediaSessionCompat — lock-screen / headset transport controls for PlayerActivity.
     implementation("androidx.media:media:1.7.0")
+
+    // WebKit extensions — required by Milestone 3 for WebViewCompat / asset loader.
+    implementation("androidx.webkit:webkit:1.12.1")
 }

@@ -27,8 +27,9 @@ _space := $(_empty) $(_empty)
 _PRIVATE_TAGS := $(strip \
   $(if $(wildcard internal/supabase/client.go),supabase) \
   $(if $(wildcard internal/discover/discover.go),discover))
-_BUILD_TAGS := $(subst $(_space),$(,),$(_PRIVATE_TAGS))
-_TAG_FLAGS  := $(if $(_BUILD_TAGS),-tags $(_BUILD_TAGS))
+_BUILD_TAGS   := $(subst $(_space),$(,),$(_PRIVATE_TAGS))
+_TAG_FLAGS    := $(if $(_BUILD_TAGS),-tags $(_BUILD_TAGS))
+_ANDROID_TAGS := embedweb$(if $(_BUILD_TAGS),$(,)$(_BUILD_TAGS))
 
 # Android SDK paths — override on the command line if your SDK lives elsewhere.
 # ANDROID_NDK_HOME points to the versioned NDK installed by sdkmanager.
@@ -141,9 +142,9 @@ inject-private:
 ##   3. JDK 17 (gomobile invokes javac when packaging the AAR)
 ## Private build tags (supabase, discover) are added automatically when the
 ## corresponding implementation files are present (run `make inject-private` first).
-android-aar:
+android-aar: web
 	mkdir -p android/app/libs
-	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm64,android/amd64 -androidapi 29 $(_TAG_FLAGS) -o android/app/libs/cove.aar ./mobile
+	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm64,android/amd64 -androidapi 29 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
 
 ## Build the Android debug APK. Requires all android-aar prerequisites above.
 android: android-aar
@@ -152,9 +153,17 @@ android: android-aar
 ## Install the debug APK on a connected device / running emulator and launch.
 ## For UI-only iterations that don't require an AAR rebuild, run:
 ##   cd android && ./gradlew installDebug
+##
+## Svelte HMR on device (edit web/ with instant reload, no reinstall):
+##   1. cd web && npm run dev
+##   2. adb reverse tcp:5173 tcp:5173
+##   3. add WEB_URL=http://127.0.0.1:5173 to android/local.properties, reinstall once
+##   Remove the WEB_URL line to return to the embedded UI (127.0.0.1:6969).
+## mpv video renders BLACK under the emulator's SwiftShader GPU — test playback
+## on a real device or a windowed emulator started with -gpu host.
 android-install: android
 	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-	adb shell am start -n com.coveninja.cove/.MainActivity
+	adb shell am start -n com.coveninja.cove/.WebViewActivity
 
 ## Remove build artifacts.
 clean:

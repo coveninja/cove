@@ -2,10 +2,17 @@ import { mount } from "svelte";
 
 import "./assets/app.css";
 
-import App from "./App.svelte";
+import { isAndroid } from "$lib/platform";
 
-const app = mount(App, {
-  target: document.getElementById("app")!,
-});
+async function init() {
+  const target = document.getElementById("app")!;
+  if (isAndroid()) {
+    const { default: MobileApp } = await import("./mobile/MobileApp.svelte");
+    mount(MobileApp, { target });
+  } else {
+    const { default: App } = await import("./App.svelte");
+    mount(App, { target });
+  }
+}
 
-export default app;
+init();

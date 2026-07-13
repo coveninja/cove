@@ -146,3 +146,21 @@ func TestCorsMiddleware_DisallowedOrigin_POST_Forbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rr.Code)
 	assert.False(t, ran, "handler must not run for a forbidden cross-origin write")
 }
+
+// A same-origin write is allowed regardless of the allowlist: the embedded
+// web UI (Android) is served by the backend itself, so its Origin matches
+// the request Host. A hostile page on another origin can never match Host.
+func TestCorsMiddleware_SameOrigin_POST_Allowed(t *testing.T) {
+	ran := false
+	handler := CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		ran = true
+		w.WriteHeader(http.StatusTeapot)
+	})
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:6969/auth/login", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:6969")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	assert.Equal(t, http.StatusTeapot, rr.Code)
+	assert.True(t, ran, "handler must run for a same-origin write")
+}
