@@ -482,9 +482,25 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           gomobile init
 
+      # `make android-aar` embeds web/dist into the AAR (-tags embedweb), so
+      # the frontend must be installable and buildable here too.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
       # `make android-aar` composes -tags supabase,discover automatically once
       # the private implementations above are present, mirroring desktop builds.
+      # It runs `make web` first; pass the same Vite env the desktop web builds use.
       - name: Build Go backend AAR (gomobile)
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
         run: make android-aar
 
       # Android reads runtime secrets from local.properties → BuildConfig
