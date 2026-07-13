@@ -53,11 +53,11 @@ flatpak run io.github.coveninja.Cove
 ```
 
 ### Windows
-> **⚠️ Experimental:** Windows support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
 
 Download `cove-windows-amd64-setup.exe` from the [latest release](https://github.com/coveninja/cove/releases/latest) and run the installer. Or grab `cove-windows-amd64.zip` for a portable install.
 
 ### Android
+> **⚠️ Experimental:** Mobile support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
 
 Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
 
