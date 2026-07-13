@@ -503,6 +503,24 @@
           <Separator />
 
           <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="allow-uploading" class="text-sm font-medium"
+                >Upload while streaming</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Share downloaded pieces back to peers (max 1 MiB/s). Improves
+                download speed; turn off to never upload.
+              </p>
+            </div>
+            <Switch
+              id="allow-uploading"
+              checked={draft.allowUploading}
+              onCheckedChange={(v) => patch("allowUploading", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
             <div class="pr-4">
               <Label class="text-sm font-medium">Selection strategy</Label>
               <p class="text-xs text-muted-foreground">

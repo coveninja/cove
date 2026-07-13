@@ -30,6 +30,7 @@ const DEFAULTS: Settings = {
   customAlgorithmUrl: "",
   prefetchStreams: true,
   prefetchNextEpisode: true,
+  allowUploading: true,
   updatedAt: "",
   remoteAccessEnabled: false,
   remoteAccessToken: ""

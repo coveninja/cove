@@ -140,9 +140,11 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   // Surface only real errors; flip to terminal=yes + msg-level=all=v to debug.
   mpv_set_option_string(m_mpv, "terminal", "yes");
   mpv_set_option_string(m_mpv, "msg-level", "all=error");
-  // mpv defaults to ~150 MiB forward + 50 MiB back per network stream. Cap to
-  // something reasonable so the player doesn't hoard memory on large files.
-  mpv_set_option_string(m_mpv, "demuxer-max-bytes",      "50MiB");
+  // mpv defaults to ~150 MiB forward + 50 MiB back per network stream. mpv
+  // runs in its own process so this cache doesn't affect the WebEngine renderer
+  // memory. 100 MiB forward gives the demuxer more runway for seek recovery
+  // without approaching the ~150 MiB default; back-bytes stay at 10 MiB.
+  mpv_set_option_string(m_mpv, "demuxer-max-bytes",      "100MiB");
   mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "10MiB");
 
   if (mpv_initialize(m_mpv) < 0) {

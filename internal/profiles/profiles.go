@@ -13,11 +13,17 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/coveninja/cove/internal/utils"
 )
+
+// validProfileID matches the IDs this store generates (UUIDv4) with a little
+// slack for remote-issued IDs. Profile IDs become file-name components
+// (ProfileFileName), so the character set must exclude path separators and "..".
+var validProfileID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // Profile is one named identity within a Cove installation. A single Supabase
 // account can own many profiles; each profile has its own library, settings,
@@ -277,6 +283,9 @@ func (s *Store) Delete(id string) error {
 // synchronously so the caller can merge remote data into the reloaded stores
 // as soon as this returns.
 func (s *Store) AdoptID(oldID, newID string) error {
+	if !validProfileID.MatchString(newID) {
+		return fmt.Errorf("invalid profile id %q", newID)
+	}
 	s.mu.Lock()
 	idx := -1
 	for i, p := range s.disk.Profiles {
@@ -389,6 +398,11 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 	sub := ""
 	if len(parts) == 2 {
 		sub = parts[1]
+	}
+
+	if !validProfileID.MatchString(id) {
+		http.Error(w, "invalid profile id", http.StatusBadRequest)
+		return
 	}
 
 	if sub == "activate" && r.Method == http.MethodPost {

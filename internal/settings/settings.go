@@ -73,6 +73,12 @@ type Settings struct {
 	// playback of the next episode starts near-instantly. Default true.
 	PrefetchNextEpisode bool `json:"prefetchNextEpisode"`
 
+	// AllowUploading enables uploading pieces to peers while streaming (capped
+	// at 1 MiB/s in the player). Improves download speed via BitTorrent
+	// reciprocity — tit-for-tat peers unchoke us faster when we reciprocate.
+	// Off means never upload. Default true.
+	AllowUploading bool `json:"allowUploading"`
+
 	// Remote access (Phase 5) — opens a separate LAN listener so other devices
 	// (e.g. the Android app in thin-client mode) can reach this backend over the
 	// local network. Settings are per-profile; remote access follows whichever
@@ -124,6 +130,7 @@ var defaultSettings = Settings{
 	PrefetchStreams:       true,
 	SourcePreference:      "",
 	PrefetchNextEpisode:   true,
+	AllowUploading:        true,
 	RemoteAccessEnabled:   false,
 	RemoteAccessToken:     "",
 }

@@ -30,9 +30,12 @@ import (
 
 	"log/slog"
 
+	"golang.org/x/time/rate"
+
 	"github.com/anacrolix/torrent"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/nuvio"
+	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/tmdb"
 	"github.com/coveninja/cove/internal/utils"
 )
@@ -78,6 +81,11 @@ type Player struct {
 	// connection pool) instead of allocating one per request avoids leaking
 	// idle connections and keeps TLS handshake overhead to a single session.
 	proxyTransport *http.Transport
+
+	// settings is the active settings store, used to read per-torrent user
+	// preferences (e.g. AllowUploading) without requiring a player restart.
+	// May be nil if the settings store failed to initialise.
+	settings *settings.Store
 }
 
 type streamHeaderEntry struct {
@@ -129,7 +137,7 @@ type torrentState struct {
 // dataDir, when non-empty, overrides the default torrentDataDirDefault
 // (os.TempDir()/cove-torrents) as the directory where downloaded torrent
 // pieces are stored. Pass an empty string to use the platform default.
-func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager, dataDir string) (*Player, error) {
+func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager, dataDir string, st *settings.Store) (*Player, error) {
 	if dataDir == "" {
 		dataDir = torrentDataDirDefault
 	}
@@ -139,9 +147,15 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 	// mismatch. hashNoiseFilter passes everything else through unchanged.
 	cfg.Slogger = slog.New(hashNoiseFilter{slog.Default().Handler()})
 	cfg.DataDir = dataDir
-	cfg.EstablishedConnsPerTorrent = 20 // default 50; playback needs far fewer peers
-	cfg.MaxUnverifiedBytes = 32 << 20   // default 64 MiB of un-hashed piece data in RAM
-	cfg.NoUpload = true                 // playback client, not a seed box
+	cfg.EstablishedConnsPerTorrent = 50 // library default; more peers = faster piece acquisition
+	cfg.HalfOpenConnsPerTorrent = 50    // default 25; dial more peers in parallel during swarm ramp-up
+	cfg.MaxUnverifiedBytes = 64 << 20   // library default of un-hashed piece data in RAM
+	// Upload capped instead of NoUpload: never uploading gets us choked by
+	// tit-for-tat peers; modest reciprocity buys materially faster downloads.
+	// Whether uploading happens at all is the user's AllowUploading setting,
+	// applied per torrent — this only caps the rate when it's on.
+	cfg.UploadRateLimiter = rate.NewLimiter(1<<20, 1<<20) // 1 MiB/s
+	cfg.DialRateLimiter = rate.NewLimiter(30, 30)         // default 10/s; reach full peer connectivity sooner
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, err
@@ -152,6 +166,9 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConnsPerHost:   16,               // Go default 2; mpv seek bursts otherwise redo TCP+TLS per request
+		ForceAttemptHTTP2:     true,             // custom DialContext disables h2 by default; enables multiplexed Range requests
+		IdleConnTimeout:       90 * time.Second, // keep conns warm across pause/seek gaps
 	}
 	return &Player{
 		client:         client,
@@ -162,6 +179,7 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		streamHeaders:  map[string]streamHeaderEntry{},
 		dataDir:        dataDir,
 		proxyTransport: transport,
+		settings:       st,
 	}, nil
 }
 
@@ -406,6 +424,17 @@ func (p *Player) addReader(infoHash string, delta int) {
 	p.activeTorrentsMu.Unlock()
 }
 
+// applyUploadPolicy sets the torrent's upload policy according to the current
+// AllowUploading setting. Called every time a torrent handle is acquired so a
+// settings toggle takes effect from the next play without restarting the client.
+func (p *Player) applyUploadPolicy(t *torrent.Torrent) {
+	if p.settings != nil && p.settings.Get().AllowUploading {
+		t.AllowDataUpload()
+	} else {
+		t.DisallowDataUpload()
+	}
+}
+
 // getTorrentFile resolves the torrent for infoHash (fetching its metadata if
 // this is the first request for it) and selects which file within it to
 // stream — see selectFile for the season/episode matching logic. season and
@@ -419,6 +448,7 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 		t := st.torrent
 		st.lastUsed = time.Now()
 		p.activeTorrentsMu.Unlock()
+		p.applyUploadPolicy(t)
 		return selectFile(t, season, episode)
 	}
 	p.activeTorrentsMu.Unlock()
@@ -427,6 +457,10 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 	if err != nil {
 		return nil, fmt.Errorf("invalid magnet for %s: %w", infoHash, err)
 	}
+
+	// Apply upload policy immediately — before GotInfo — so the torrent's
+	// upload behaviour is set from the moment we join the swarm.
+	p.applyUploadPolicy(t)
 
 	// Bound the metadata fetch. A dead swarm never fires GotInfo, and without a
 	// deadline this blocks the request goroutine forever — the original cause
@@ -635,7 +669,20 @@ func (p *Player) StreamTorrent(infoHash string, season, episode *int, w http.Res
 	// readahead lets the client fetch pieces ahead of playback so a seek
 	// doesn't stall.
 	reader.SetResponsive()
-	reader.SetReadahead(16 << 20) // 16 MiB
+	reader.SetReadahead(32 << 20) // 32 MiB — doubled from 16 MiB for smoother seeking
+
+	// Prioritise the tail of the file so MP4 moov atom / MKV cue data arrives
+	// quickly. mpv seeks to end-of-file on open to read container metadata;
+	// without pre-warming those pieces startup stalls waiting on random pieces
+	// from the end. PiecePriorityHigh sits below the reader's Readahead/Now
+	// priorities so it can't starve the play cursor.
+	tor := file.Torrent()
+	plen := tor.Info().PieceLength
+	tailPieces := int(3<<20/plen) + 1 // pieces covering the file's last ~3 MiB
+	start := max(file.BeginPieceIndex(), file.EndPieceIndex()-tailPieces)
+	for i := start; i < file.EndPieceIndex(); i++ {
+		tor.Piece(i).SetPriority(torrent.PiecePriorityHigh)
+	}
 
 	http.ServeContent(w, r, file.DisplayPath(), time.Time{}, reader)
 }

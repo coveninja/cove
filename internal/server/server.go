@@ -315,7 +315,7 @@ func Start(cfg Config) (*Handle, error) {
 
 	// The torrent client is core functionality — if it can't start, there's
 	// nothing to stream, so a New failure is fatal.
-	p, err := player.New(tmdbClient, addonMgr, nuvioMgr, cfg.TorrentDir)
+	p, err := player.New(tmdbClient, addonMgr, nuvioMgr, cfg.TorrentDir, st)
 	if err != nil {
 		return nil, fmt.Errorf("could not init torrent client: %w", err)
 	}

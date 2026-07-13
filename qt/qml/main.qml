@@ -1,6 +1,11 @@
 import QtQuick
 import QtQuick.Window
 import QtWebEngine
+// Not referenced directly — WebEngineView loads these delegates (tooltips,
+// context menus, JS dialogs) at runtime, and windeployqt only ships QML
+// modules it sees imported. Without this line Windows builds log
+// "Default ui delegate ToolTip.qml can not be found".
+import QtWebEngine.ControlsDelegates
 import QtWebChannel
 import mpv
 

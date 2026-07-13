@@ -167,9 +167,15 @@ func (c *Cache) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Regex-validated above: neither component can contain "/" or "..", so
-	// this join can never escape dir regardless of what a caller sends.
-	cachePath := filepath.Join(c.dir, size+"_"+file)
+	name := size + "_" + file
+	// fileNameRe and validSizes already forbid separators and "..", but
+	// filepath.IsLocal makes the containment explicit (and is a sanitizer
+	// static analyzers recognize, unlike the regex above).
+	if !filepath.IsLocal(name) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	cachePath := filepath.Join(c.dir, name)
 
 	if serveFromDisk(w, r, cachePath, file) {
 		return

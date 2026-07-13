@@ -18,8 +18,15 @@
 //                 (software raster for the web layer; mpv has its own GL path
 //                 and is unaffected). The auto-escalation target.
 //
+// Auto-recovery: after two consecutive healthy launches at level 2 the next
+// launch probes level 0 (full GPU rendering). A probe crash re-escalates to
+// level 2 immediately; after two failed probes the machine stays at level 2
+// until the Qt version changes, which resets all state for a fresh cycle.
+// Pinned levels (COVE_GPU_WORKAROUND / --gpu-workaround) never participate in
+// the recovery logic and never modify persisted state.
+//
 // State lives next to shell.log in <GenericConfigLocation>/cove/:
-//   gpu_workaround.ini - persisted level + the Qt version it was probed on
+//   gpu_workaround.ini - persisted level, Qt version, and recovery counters
 //   gpu_starting.lock  - the startup sentinel (existence is the crash signal)
 namespace GpuWorkaround {
 
@@ -31,6 +38,11 @@ struct ApplyResult {
   bool sentinelFound = false; // previous launch died before proving healthy
   bool wasEscalated = false;  // level was bumped above storedLevel
   bool wasOverridden = false; // pinned via COVE_GPU_WORKAROUND/--gpu-workaround
+  // Recovery counters — carried from applyBeforeInit to commitState so the
+  // ini is not re-read mid-launch.
+  int successes = 0;    // consecutive healthy launches at an auto-applied level > 0
+  bool probing = false; // this launch is a de-escalation probe
+  int failedProbes = 0; // probes that ended in a crash
 };
 
 // Decide the effective level and apply its environment variables. Must run
