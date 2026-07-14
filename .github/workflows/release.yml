@@ -285,7 +285,20 @@ jobs:
               echo "No changes to push"
             else
               git commit -m "Update to ${{ github.ref_name }}"
-              git push origin master
+              # AUR'"'"'s SSH endpoint intermittently drops the connection
+              # mid-handshake (unrelated to auth/config); retry a few times
+              # before failing the job.
+              for attempt in 1 2 3 4 5; do
+                if git push origin master; then
+                  break
+                fi
+                echo "push attempt $attempt failed, retrying in 15s..."
+                sleep 15
+                if [ "$attempt" = 5 ]; then
+                  echo "git push failed after 5 attempts"
+                  exit 1
+                fi
+              done
             fi
           '
 
