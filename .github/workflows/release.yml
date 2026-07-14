@@ -227,6 +227,64 @@ jobs:
             cove-linux-amd64.tar.gz.sha256
             PKGBUILD
 
+  aur-publish:
+    name: Publish to AUR
+    needs: [package]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    # Arch container gives us makepkg (for --printsrcinfo) without hand-rolling
+    # pacman setup on a plain ubuntu runner.
+    container: archlinux:base
+    steps:
+      - name: Install git, openssh, base-devel
+        run: |
+          pacman -Sy --noconfirm git openssh base-devel
+
+      - name: Download generated PKGBUILD from this release
+        run: |
+          curl -L -o PKGBUILD \
+            "https://github.com/coveninja/cove/releases/download/${{ github.ref_name }}/PKGBUILD"
+
+      - name: Set up SSH for AUR
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur
+            User aur
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Push to AUR
+        run: |
+          # base-devel's makepkg refuses to run as root; create an
+          # unprivileged user to run it under, matching normal Arch usage.
+          useradd -m builder
+          chown -R builder:builder "$PWD" /root/.ssh 2>/dev/null || true
+          cp -r /root/.ssh /home/builder/.ssh
+          chown -R builder:builder /home/builder/.ssh
+
+          su builder -c '
+            set -e
+            git clone ssh://aur@aur.archlinux.org/cove-bin.git aur-repo
+            cp PKGBUILD aur-repo/
+            cd aur-repo
+            makepkg --printsrcinfo > .SRCINFO
+            git config user.name "coveninja-bot"
+            git config user.email "actions@github.com"
+            git add PKGBUILD .SRCINFO
+            if git diff --cached --quiet; then
+              echo "No changes to push"
+            else
+              git commit -m "Update to ${{ github.ref_name }}"
+              git push origin master
+            fi
+          '
+
   package-windows:
     name: Package release asset (Windows)
     needs: [go, web]
