@@ -405,6 +405,69 @@
     Player.seek((seg.seg.end_ms ?? Player.duration * 1000) / 1000);
   }
 
+  // ─── Seek bar chapter markers ─────────────────────────────────────────────────
+
+  type ChapterBar = {
+    startFrac: number;
+    endFrac: number;
+    type: "content" | "intro" | "recap" | "credits" | "preview";
+  };
+
+  // Splits the timeline into content + named segment chapters whenever we have
+  // both timestamp data and a known duration. Returns null when unified bar is
+  // needed (no data, or all segments collapsed to a single chapter).
+  const chapterBars = $derived.by((): ChapterBar[] | null => {
+    if (!timestamps) return null;
+    if (!Player.duration) return null;
+    const durMs = Player.duration * 1000;
+
+    const named: { startMs: number; endMs: number; type: string }[] = [];
+    const addAll = (arr: TimestampSegment[] | undefined, type: string) =>
+      arr?.forEach((s) =>
+        named.push({ startMs: s.start_ms ?? 0, endMs: s.end_ms ?? durMs, type }),
+      );
+    addAll(timestamps.intro, "intro");
+    addAll(timestamps.recap, "recap");
+    addAll(timestamps.credits, "credits");
+    addAll(timestamps.preview, "preview");
+    if (named.length === 0) return null;
+
+    named.sort((a, b) => a.startMs - b.startMs);
+
+    const bars: ChapterBar[] = [];
+    let pos = 0;
+    for (const seg of named) {
+      if (seg.startMs > pos)
+        bars.push({ startFrac: pos / durMs, endFrac: seg.startMs / durMs, type: "content" });
+      bars.push({
+        startFrac: seg.startMs / durMs,
+        endFrac: Math.min(seg.endMs / durMs, 1),
+        type: seg.type as ChapterBar["type"],
+      });
+      pos = seg.endMs;
+    }
+    if (pos < durMs) bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
+
+    return bars.length > 1 ? bars : null;
+  });
+
+  function segmentBgClass(type: ChapterBar["type"]): string {
+    switch (type) {
+      case "intro":   return "bg-amber-400/50";
+      case "recap":   return "bg-blue-400/50";
+      case "credits": return "bg-purple-400/50";
+      case "preview": return "bg-green-400/50";
+      default:        return "";
+    }
+  }
+
+  // Fraction (0–100) of a chapter pill covered up to the given global timeline fraction.
+  function pillFill(chapter: ChapterBar, frac: number): number {
+    if (frac >= chapter.endFrac) return 100;
+    if (frac <= chapter.startFrac) return 0;
+    return ((frac - chapter.startFrac) / (chapter.endFrac - chapter.startFrac)) * 100;
+  }
+
   // ── Auto-select preferred audio track ────────────────────────────────────────
 
   $effect(() => {
@@ -931,19 +994,44 @@
           onkeydown={handleSeekbarKeydown}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
-          <!-- Track background -->
-          <div class="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/25">
-            {#if isHash && torrent.progress > 0 && torrent.progress < 100}
+          {#if chapterBars}
+            <!-- Segmented: each chapter is its own rounded pill with a gap -->
+            <div class="absolute inset-x-0 top-1/2 flex h-1.5 -translate-y-1/2 gap-0.5">
+              {#each chapterBars as chapter}
+                <div
+                  class="relative h-full overflow-hidden rounded-full {chapter.type !== 'content' ? segmentBgClass(chapter.type) : 'bg-white/25'}"
+                  style="flex: {chapter.endFrac - chapter.startFrac}"
+                >
+                  <!-- Torrent buffer fill -->
+                  {#if isHash && torrent.progress > 0 && torrent.progress < 100}
+                    <div
+                      class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
+                      style="width: {pillFill(chapter, torrent.progress / 100)}%"
+                    ></div>
+                  {/if}
+                  <!-- Playback progress fill -->
+                  <div
+                    class="pointer-events-none absolute inset-y-0 left-0 bg-white"
+                    style="width: {pillFill(chapter, Player.duration ? displayPos / Player.duration : 0)}%"
+                  ></div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <!-- Unified bar (no timestamp data) -->
+            <div class="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/25">
+              {#if isHash && torrent.progress > 0 && torrent.progress < 100}
+                <div
+                  class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
+                  style="width: {torrent.progress}%"
+                ></div>
+              {/if}
               <div
-                class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
-                style="width: {torrent.progress}%"
+                class="pointer-events-none absolute inset-y-0 left-0 bg-white"
+                style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
               ></div>
-            {/if}
-            <div
-              class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-              style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-            ></div>
-          </div>
+            </div>
+          {/if}
           <!-- Thumb -->
           <div
             class="pointer-events-none absolute top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/20"
