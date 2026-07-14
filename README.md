@@ -1,17 +1,37 @@
 <div align="center">
   <img src="web/src/assets/CoveIcon.svg" alt="Cove" width="120" />
 
-  # Cove
+# Cove
 
-  A media streaming app for Linux, Windows, and Android. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
+A media streaming app for Linux, Windows, and Android. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
 
-  [![CI](https://github.com/coveninja/cove/actions/workflows/release.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/release.yml)
-  [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
-  [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-  [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-  [![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
-  [![Qt](https://img.shields.io/badge/Qt-6-41CD52?logo=qt&logoColor=white)](https://www.qt.io)
+[![CI](https://github.com/coveninja/cove/actions/workflows/release.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
+[![Qt](https://img.shields.io/badge/Qt-6-41CD52?logo=qt&logoColor=white)](https://www.qt.io)
+
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20android-informational)](#install)
+[![Downloads](https://img.shields.io/github/downloads/coveninja/cove/total)](https://github.com/coveninja/cove/releases/latest)
+[![Stars](https://img.shields.io/github/stars/coveninja/cove?style=social)](https://github.com/coveninja/cove/stargazers)
+[![Issues](https://img.shields.io/github/issues/coveninja/cove)](https://github.com/coveninja/cove/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 </div>
+
+> **Disclaimer:** Cove is a media player and organizer, not a content host. It does not provide, index, or distribute any media itself — a fresh install has zero sources configured. Any streams come from third-party Stremio-compatible addons or community plugins that *you* choose to add. You're responsible for what you connect to and for complying with the laws in your jurisdiction.
+
+## Table of Contents
+
+- [Features](#features)
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [Development](#development)
+- [Configuration](#configuration)
+- [Documentation](#documentation)
+- [Community & Support](#community--support)
+- [Star History](#star-history)
+- [Roadmap / Known Limitations](#roadmap--known-limitations)
 
 ## Features
 
@@ -61,6 +81,9 @@ Download `cove-windows-amd64-setup.exe` from the [latest release](https://github
 
 Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
 
+### macOS
+
+Not currently supported. There's no native build or packaging for macOS yet — see [Roadmap](#roadmap--known-limitations).
 
 ## Build from source
 
@@ -72,6 +95,8 @@ cd cove
 echo "TMDB_API_KEY=your_key_here" > .env
 make run  # builds everything and launches the app
 ```
+
+> Need a TMDB key? Create a free account at [themoviedb.org](https://www.themoviedb.org/), then generate one under **Settings → API** in your account.
 
 ### Development
 
@@ -110,3 +135,26 @@ A fresh profile ships with no provider addons and no plugin repos enabled — on
 - [docs/API.md](docs/API.md) — HTTP endpoint reference
 - [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup and code style for contributors
 - [android/README.md](android/README.md) — Android app: toolchain setup, emulator, build/install loops, release signing
+
+## Community & Support
+
+- **Bugs & feature requests:** [GitHub Issues](https://github.com/coveninja/cove/issues)
+- **Questions & discussion:** [GitHub Discussions](https://github.com/coveninja/cove/discussions)
+
+New contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and code style before opening a PR.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=coveninja%2Fcove&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=coveninja/cove&type=date&theme=dark&legend=top-left&sealed_token=4GbbMkGKGiaXN1d60vfao3mhJl3TIFYWtueyZuta_mcDXrGkF63OQqyv4VgSp4DbPhGKYc8UNJubllPuYou3pnWPc9IAmJuem_27FHCoO_20WiA7vsx4LQ" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=coveninja/cove&type=date&legend=top-left&sealed_token=4GbbMkGKGiaXN1d60vfao3mhJl3TIFYWtueyZuta_mcDXrGkF63OQqyv4VgSp4DbPhGKYc8UNJubllPuYou3pnWPc9IAmJuem_27FHCoO_20WiA7vsx4LQ" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=coveninja/cove&type=date&legend=top-left&sealed_token=4GbbMkGKGiaXN1d60vfao3mhJl3TIFYWtueyZuta_mcDXrGkF63OQqyv4VgSp4DbPhGKYc8UNJubllPuYou3pnWPc9IAmJuem_27FHCoO_20WiA7vsx4LQ" />
+ </picture>
+</a>
+
+## Roadmap / Known Limitations
+
+- **Android** is experimental — expect rough edges (see [Install](#install))
+- **macOS** is not yet supported — no native build exists
+- Have a request? Open an [issue](https://github.com/coveninja/cove/issues) to discuss it
