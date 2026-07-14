@@ -26,6 +26,7 @@ type Manager struct {
 	mu              sync.RWMutex
 	stremioAddons   []AddonEntry
 	officialEnabled map[string]bool // persisted enabled-state overrides for official addons
+	updatedAt       time.Time       // last local mutation time; used for LWW sync resolution
 	client          *http.Client
 	storePath       string
 	imdbLookup      func(tmdbID int) string // returns IMDB ID for a TV show, or "" on failure
@@ -118,6 +119,7 @@ func New(profileID string, imdbLookup func(tmdbID int) string) *Manager {
 	if store.OfficialEnabled != nil {
 		m.officialEnabled = store.OfficialEnabled
 	}
+	m.updatedAt = store.UpdatedAt
 	return m
 }
 
@@ -139,6 +141,7 @@ func (m *Manager) SetProfile(profileID string) error {
 	} else {
 		m.officialEnabled = make(map[string]bool)
 	}
+	m.updatedAt = store.UpdatedAt
 	m.mu.Unlock()
 	return nil
 }
@@ -532,15 +535,68 @@ func (m *Manager) FindAddonURL(addonID string) (string, bool) {
 	return "", false
 }
 
-// saveL persists the current state. Must be called with m.mu write-locked.
+// saveL persists the current state and stamps updatedAt to now. Must be
+// called with m.mu write-locked.
 func (m *Manager) saveL() error {
 	if m.storePath == "" {
 		return nil
 	}
+	m.updatedAt = time.Now().UTC()
 	return saveStore(m.storePath, addonStore{
 		StremioAddons:   m.stremioAddons,
 		OfficialEnabled: m.officialEnabled,
+		UpdatedAt:       m.updatedAt,
 	})
+}
+
+// UpdatedAt returns the timestamp of the last local mutation to this store.
+// Used by sync to send a data-mutation timestamp to Supabase instead of
+// wall-clock time, keeping last-write-wins convergent across devices.
+func (m *Manager) UpdatedAt() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.updatedAt
+}
+
+// MergeFrom applies a remote addon configuration using whole-store
+// last-write-wins: a no-op when remoteUpdatedAt is not strictly after the
+// local updatedAt. When the remote wins, stremio-source entries replace the
+// local stremio list and official-source entries update the officialEnabled map
+// (and carry DisabledCatalogs where applicable). The store is persisted with
+// UpdatedAt = remoteUpdatedAt (NOT time.Now()) so LWW converges across devices.
+//
+// Guard: an account that has never pushed addons will have no remote row; the
+// caller must distinguish "no remote row" from "remote row with empty list" and
+// pass entries = nil / call this method only when a remote row is present.
+func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !remoteUpdatedAt.After(m.updatedAt) {
+		return
+	}
+	// Rebuild from the pulled entries.
+	var stremio []AddonEntry
+	for _, e := range entries {
+		switch e.Source {
+		case SourceStremio:
+			stremio = append(stremio, e)
+		case SourceOfficial:
+			m.officialEnabled[e.ID] = e.Enabled
+		}
+	}
+	m.stremioAddons = stremio
+	m.updatedAt = remoteUpdatedAt
+	// Save directly with remoteUpdatedAt so the on-disk timestamp reflects the
+	// data mutation time, not the moment this merge ran.
+	if m.storePath != "" {
+		if err := saveStore(m.storePath, addonStore{
+			StremioAddons:   m.stremioAddons,
+			OfficialEnabled: m.officialEnabled,
+			UpdatedAt:       remoteUpdatedAt,
+		}); err != nil {
+			log.Println("addons: MergeFrom persist:", err)
+		}
+	}
 }
 
 // detectKind classifies an addon as a stream provider or subtitle provider based

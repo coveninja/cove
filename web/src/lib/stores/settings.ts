@@ -43,7 +43,7 @@ function createSettingsStore(): {
     invalidate?: () => void,
   ) => Unsubscriber;
   load: () => Promise<void>;
-  save: (patch: Partial<Settings>) => void;
+  save: (patch: Partial<Settings>) => Promise<void>;
 } {
   const { subscribe, set, update } = writable<Settings>(DEFAULTS);
 
@@ -55,15 +55,18 @@ function createSettingsStore(): {
     }
   }
 
-  function save(patch: Partial<Settings>): void {
+  function save(patch: Partial<Settings>): Promise<void> {
+    let next!: Settings;
     update((current) => {
-      const next = { ...current, ...patch };
-      // Optimistic update — persist in the background.
-      api
-        .updateSettings(next)
-        .catch((e) => console.error("Failed to save settings:", e));
+      next = { ...current, ...patch };
       return next;
     });
+    // Optimistic update is already applied above; persist in the background.
+    // The .catch ensures non-awaiting callers never produce unhandled rejections.
+    return api
+      .updateSettings(next)
+      .then(() => undefined)
+      .catch((e) => { console.error("Failed to save settings:", e); });
   }
 
   return { subscribe, load, save };

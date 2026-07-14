@@ -146,6 +146,10 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   // without approaching the ~150 MiB default; back-bytes stay at 10 MiB.
   mpv_set_option_string(m_mpv, "demuxer-max-bytes",      "100MiB");
   mpv_set_option_string(m_mpv, "demuxer-max-back-bytes", "10MiB");
+  // Fast-start: don't pause immediately when cache is empty at startup; only
+  // pause if the cache stays empty for more than 2 s (cache-pause-wait).
+  mpv_set_option_string(m_mpv, "cache-pause-initial",    "no");
+  mpv_set_option_string(m_mpv, "cache-pause-wait",       "2");
 
   if (mpv_initialize(m_mpv) < 0) {
     qWarning("[mpv] mpv_initialize() failed — video playback unavailable");

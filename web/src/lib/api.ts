@@ -985,8 +985,13 @@ export const api = {
 
   // library_generation is absent on older backends / a noop (non-proprietary)
   // build that 503s — callers fall back accordingly.
-  authSync: (): Promise<{ status: string; library_generation?: number }> =>
-    request(`/auth/sync`, { method: "POST" }),
+  // push_error reflects the PREVIOUS completed push (the current one is async);
+  // "" or absent means the last push fully succeeded.
+  authSync: (): Promise<{
+    status: string;
+    library_generation?: number;
+    push_error?: string;
+  }> => request(`/auth/sync`, { method: "POST" }),
 
   // Persistent client session — stored by the Go backend as a JSON file in
   // the OS user-config dir (~/.config/cove/session.json). More reliable than

@@ -12,7 +12,7 @@
         (API 28+). FOREGROUND_SERVICE_MEDIA_PLAYBACK is required to declare
         foregroundServiceType="mediaPlayback" (API 34+). POST_NOTIFICATIONS
         is required to show the persistent notification (API 33+); requested
-        at runtime in MainActivity — denied permission just hides the notification.
+        at runtime in WebViewActivity — denied permission just hides the notification.
     -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -43,27 +43,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!--
-            MainActivity: Compose UI (parked). No longer the launcher; kept for
-            reference during the WebView migration. exported=false since there is
-            no longer an intent-filter that requires it to be exported.
-        -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="false" />
-
-        <!--
-            PlayerActivity: landscape-friendly. exported=true so the adb am-start
-            debug hook in Part D works from the host shell; Phase 4 may restrict
-            this back to false once the launcher lives in-app.
-            configChanges handles rotation without re-creating the activity.
-        -->
-        <activity
-            android:name=".player.PlayerActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:screenOrientation="sensorLandscape" />
 
         <!--
             CoveService: foreground media-playback service that owns the Go backend.

@@ -259,3 +259,85 @@ func jsonBool(b bool) string {
 	}
 	return "false"
 }
+
+// ── RegenerateIDsNotIn tests ──────────────────────────────────────────────────
+
+func TestRegenerateIDsNotIn_RegeneratesNonOwned(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	// Seed a library entry and a progress row with IDs that are NOT in the owned set.
+	e := &LibraryEntry{ID: "foreign-entry-id", TmdbID: 1, MediaType: "movie", Title: "T",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
+	p := &WatchProgress{ID: "foreign-progress-id", TmdbID: 1, MediaType: "movie",
+		LibraryEntryID: "foreign-entry-id", WatchedAt: now}
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+
+	gen0 := l.Generation()
+
+	// Both IDs are absent from the owned sets → should be regenerated.
+	l.RegenerateIDsNotIn(map[string]bool{}, map[string]bool{})
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.NotEqual(t, "foreign-entry-id", entries[0].ID, "entry ID should be regenerated")
+	assert.NotEmpty(t, entries[0].ID)
+
+	progress := l.AllProgress()
+	require.Len(t, progress, 1)
+	assert.NotEqual(t, "foreign-progress-id", progress[0].ID, "progress ID should be regenerated")
+	// LibraryEntryID must follow the entry's new ID.
+	assert.Equal(t, entries[0].ID, progress[0].LibraryEntryID, "LibraryEntryID should be remapped to the new entry ID")
+
+	assert.Greater(t, l.Generation(), gen0, "generation must bump after regen")
+}
+
+func TestRegenerateIDsNotIn_OwnershipPreservesIDs(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	e := &LibraryEntry{ID: "owned-entry", TmdbID: 2, MediaType: "tv", Title: "T",
+		Status: StatusWatching, AddedAt: now, UpdatedAt: now}
+	p := &WatchProgress{ID: "owned-progress", TmdbID: 2, MediaType: "tv",
+		LibraryEntryID: "owned-entry", WatchedAt: now}
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+
+	// Both IDs ARE in the owned sets → must not change.
+	l.RegenerateIDsNotIn(
+		map[string]bool{"owned-entry": true},
+		map[string]bool{"owned-progress": true},
+	)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "owned-entry", entries[0].ID, "owned entry ID must not change")
+
+	progress := l.AllProgress()
+	require.Len(t, progress, 1)
+	assert.Equal(t, "owned-progress", progress[0].ID, "owned progress ID must not change")
+}
+
+func TestRegenerateIDsNotIn_MixedOwnership(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	eOwned := &LibraryEntry{ID: "owned-e", TmdbID: 3, MediaType: "movie", Title: "A",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
+	eForeign := &LibraryEntry{ID: "foreign-e", TmdbID: 4, MediaType: "movie", Title: "B",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
+	l.MergeFrom([]*LibraryEntry{eOwned, eForeign}, nil, nil)
+
+	l.RegenerateIDsNotIn(
+		map[string]bool{"owned-e": true},
+		map[string]bool{},
+	)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 2)
+	ids := make(map[string]bool)
+	for _, e := range entries {
+		ids[e.ID] = true
+	}
+	assert.True(t, ids["owned-e"], "owned-e must survive regeneration")
+	assert.False(t, ids["foreign-e"], "foreign-e must have been replaced with a new UUID")
+}

@@ -53,6 +53,14 @@
   let selectedProvider: Provider | null = $state(null);
 
   let loading = $state(false);
+  // Displayed when a push sync error is detected; auto-clears after 5 s.
+  let syncErrorToast = $state<string | null>(null);
+  let syncErrorTimer: ReturnType<typeof setTimeout> | undefined;
+  function showSyncError(msg: string) {
+    syncErrorToast = msg;
+    clearTimeout(syncErrorTimer);
+    syncErrorTimer = setTimeout(() => (syncErrorToast = null), 5000);
+  }
 
   let currentPage = $state<Page>({ type: "home" });
   let pageHistory = $state<Page[]>([]);
@@ -104,6 +112,8 @@
   // read/written only from the onFocus handler below).
   let lastAuthSyncMs = 0;
   let lastLibraryGeneration: number | null = null;
+  // Track the last push error surfaced this session to avoid spamming the user.
+  let lastShownPushErr = "";
 
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
@@ -183,6 +193,15 @@
             }
           } else {
             libraryChanged.update((n) => n + 1);
+          }
+          // Pull merged settings (including onboardingDone) into the frontend store.
+          settings.load().catch(() => {});
+          // Surface push errors — only when the message is non-empty and
+          // differs from what we already told the user this session (no spam).
+          if (res.push_error && res.push_error !== lastShownPushErr) {
+            lastShownPushErr = res.push_error;
+            console.warn("Sync push error:", res.push_error);
+            showSyncError("Sync issue: some data failed to upload");
           }
         })
         .catch(() => {});
@@ -335,6 +354,14 @@
       "cove-playing",
       playback.playerMode === "full",
     );
+  });
+
+  // Dismiss onboarding reactively when the flag arrives via sync or login.
+  // Only dismisses — onMount remains the sole entry point.
+  $effect(() => {
+    if ($settings.onboardingDone && showOnboarding) {
+      showOnboarding = false;
+    }
   });
 </script>
 
@@ -568,6 +595,19 @@
       class="rounded-full bg-black/80 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm"
     >
       {playback.playbackToast}
+    </div>
+  </div>
+{/if}
+
+{#if syncErrorToast}
+  <div
+    class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center"
+    transition:fade={{ duration: 150 }}
+  >
+    <div
+      class="rounded-full bg-destructive/90 px-4 py-2 text-sm font-medium text-destructive-foreground shadow-lg backdrop-blur-sm"
+    >
+      {syncErrorToast}
     </div>
   </div>
 {/if}

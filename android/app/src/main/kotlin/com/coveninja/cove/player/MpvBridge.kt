@@ -3,7 +3,6 @@ package com.coveninja.cove.player
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.SurfaceHolder
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -78,10 +77,11 @@ class MpvBridge(
     private var stoppedByUser = false
 
     // ── Surface-readiness guard ───────────────────────────────────────────────
-    // An INVISIBLE SurfaceView never fires surfaceCreated, so MPVLib.attachSurface()
-    // never runs and a loadfile issued before the surface exists silently fails
-    // (vo=gpu init → no video). Fix: make the view VISIBLE in play() to trigger
-    // surface creation, then defer the loadfile until surfaceCreated fires.
+    // Unlike SurfaceView, a TextureView creates its SurfaceTexture regardless of
+    // visibility. However we still gate loadfile on surface availability so that
+    // play() issued before the first onSurfaceTextureAvailable callback defers
+    // the command correctly. We still set the view INVISIBLE when stopped and
+    // VISIBLE on play/FILE_LOADED to hide the video layer when not in use.
     private var surfaceReady   = false
     private var pendingPlayUrl: String? = null
 
@@ -163,25 +163,23 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
         // Fallback: Activity calls injectShimFallback() from WebViewClient.onPageStarted
         // when DOCUMENT_START_SCRIPT is unavailable.
 
-        // Register a second SurfaceHolder.Callback to track surface readiness.
-        // MpvPlayerView's own callback (registered inside create() above) runs
-        // first and calls MPVLib.attachSurface() — our callback fires after it,
-        // so it is safe to issue MPVLib.command() immediately in surfaceCreated.
-        // SurfaceHolder callbacks are delivered on the main thread.
-        mpvView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                if (destroyed) return
+        // Wire MpvPlayerView's TextureView callbacks so we know when the surface
+        // is ready for MPVLib commands. MpvPlayerView.create() has already called
+        // MPVLib.attachSurface() in onSurfaceTextureAvailable before invoking
+        // onSurfaceReady, so issuing MPVLib.command() here is safe.
+        // Callbacks are invoked on the main thread by the TextureView machinery.
+        mpvView.onSurfaceReady = {
+            if (!destroyed) {
                 surfaceReady = true
                 pendingPlayUrl?.let { url ->
                     pendingPlayUrl = null
                     MPVLib.command(arrayOf("loadfile", url))
                 }
             }
-            override fun surfaceChanged(holder: SurfaceHolder, f: Int, w: Int, h: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                surfaceReady = false
-            }
-        })
+        }
+        mpvView.onSurfaceDestroyed = {
+            surfaceReady = false
+        }
     }
 
     /** Fallback shim injection — called by the Activity's onPageStarted. */

@@ -217,7 +217,7 @@
       });
     }
     if (isLast) {
-      settings.save({ onboardingDone: true });
+      await settings.save({ onboardingDone: true });
       onclose();
     } else {
       stepIndex += 1;

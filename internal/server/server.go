@@ -350,7 +350,7 @@ func Start(cfg Config) (*Handle, error) {
 	// Env vars take precedence; compiled-in ldflags values are the fallback for
 	// release builds where no .env file is present.
 	supaCfg := supapkg.ConfigFromEnv(cfg.SupabaseURL, cfg.SupabaseAnonKey)
-	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
+	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr, nuvioMgr, act)
 	supaServer.SetupHandlers(mux)
 	profileStore.SetOnDelete(func(profileID string, uid *string, jwt string) {
 		if err := supaServer.CleanupDeletedProfile(jwt, profileID, uid); err != nil {

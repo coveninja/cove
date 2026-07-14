@@ -8,13 +8,17 @@ package supabase
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/settings"
 )
 
@@ -57,33 +61,48 @@ func (c *Config) RemoteProfilesForUser(userJWT, supabaseUID string) ([]remotePro
 	return out, nil
 }
 
-// PushLibrary uploads all local library entries, progress records, and dismissals
-// for a profile to Supabase. Existing remote rows are merged (last-write-wins).
-func (c *Config) PushLibrary(userJWT, profileID string, lib *library.Library) error {
-	entries := lib.AllEntries()
-	if len(entries) > 0 {
-		rows := make([]map[string]any, 0, len(entries))
-		for _, e := range entries {
-			pid := profileID
-			e.ProfileID = &pid
-			rows = append(rows, entryToMap(e))
+// isRLSError reports whether an error from a PostgREST call is an RLS
+// violation (PostgreSQL error code 42501 — "insufficient_privilege").
+func isRLSError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "42501")
+}
+
+// fetchOwnedIDs returns the set of row IDs owned by profileID in table.
+// Uses &select=id to minimise the payload.
+func (c *Config) fetchOwnedIDs(userJWT, table, profileID string) (map[string]bool, error) {
+	q := "profile_id=eq." + url.QueryEscape(profileID) + "&select=id"
+	rows, err := c.Select(userJWT, table, q)
+	if err != nil {
+		return nil, err
+	}
+	owned := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		var row struct {
+			ID string `json:"id"`
 		}
-		if err := c.Upsert(userJWT, "library_entries", rows); err != nil {
-			return fmt.Errorf("push library entries: %w", err)
+		if err := json.Unmarshal(r, &row); err == nil && row.ID != "" {
+			owned[row.ID] = true
 		}
 	}
+	return owned, nil
+}
 
-	progress := lib.AllProgress()
-	if len(progress) > 0 {
-		rows := make([]map[string]any, 0, len(progress))
-		for _, p := range progress {
-			pid := profileID
-			p.ProfileID = &pid
-			rows = append(rows, progressToMap(p))
-		}
-		if err := c.Upsert(userJWT, "watch_progress", rows); err != nil {
-			return fmt.Errorf("push watch progress: %w", err)
-		}
+// PushLibrary uploads all local library entries, progress records, and dismissals
+// for a profile to Supabase. Existing remote rows are merged (last-write-wins).
+//
+// On an RLS 42501 rejection from entries or progress (cross-user row-ID
+// contamination from the pre-RLS era): fetches the profile's owned remote IDs,
+// calls lib.RegenerateIDsNotIn to assign fresh UUIDs to the conflicting rows,
+// then retries the upsert once. Errors are collected across all three tables so
+// a progress failure does not prevent dismissals from being pushed.
+func (c *Config) PushLibrary(userJWT, profileID string, lib *library.Library) error {
+	var errs []error
+
+	if err := c.pushEntries(userJWT, profileID, lib); err != nil {
+		errs = append(errs, fmt.Errorf("push library entries: %w", err))
+	}
+	if err := c.pushProgress(userJWT, profileID, lib); err != nil {
+		errs = append(errs, fmt.Errorf("push watch progress: %w", err))
 	}
 
 	dismissals := lib.AllDismissals()
@@ -98,10 +117,93 @@ func (c *Config) PushLibrary(userJWT, profileID string, lib *library.Library) er
 			})
 		}
 		if err := c.Upsert(userJWT, "dismissals", rows); err != nil {
-			return fmt.Errorf("push dismissals: %w", err)
+			errs = append(errs, fmt.Errorf("push dismissals: %w", err))
 		}
 	}
+	return errors.Join(errs...)
+}
+
+// pushEntries upserts library_entries; on RLS 42501 regenerates IDs and retries once.
+func (c *Config) pushEntries(userJWT, profileID string, lib *library.Library) error {
+	entries := lib.AllEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	rows := buildEntryRows(entries, profileID)
+	err := c.Upsert(userJWT, "library_entries", rows)
+	if err == nil {
+		return nil
+	}
+	if !isRLSError(err) {
+		return err
+	}
+	// RLS rejection: repair cross-user ID contamination and retry once.
+	log.Printf("supabase: RLS error pushing library_entries for profile %s — regenerating IDs", profileID)
+	ownedEntry, errFetch := c.fetchOwnedIDs(userJWT, "library_entries", profileID)
+	if errFetch != nil {
+		return fmt.Errorf("fetch owned entry IDs: %w; original: %w", errFetch, err)
+	}
+	ownedProgress, errFetch := c.fetchOwnedIDs(userJWT, "watch_progress", profileID)
+	if errFetch != nil {
+		return fmt.Errorf("fetch owned progress IDs: %w; original: %w", errFetch, err)
+	}
+	lib.RegenerateIDsNotIn(ownedEntry, ownedProgress)
+	rows = buildEntryRows(lib.AllEntries(), profileID)
+	if retryErr := c.Upsert(userJWT, "library_entries", rows); retryErr != nil {
+		return fmt.Errorf("retry after ID regen: %w", retryErr)
+	}
 	return nil
+}
+
+// pushProgress upserts watch_progress; on RLS 42501 regenerates IDs and retries once.
+func (c *Config) pushProgress(userJWT, profileID string, lib *library.Library) error {
+	progress := lib.AllProgress()
+	if len(progress) == 0 {
+		return nil
+	}
+	rows := buildProgressRows(progress, profileID)
+	err := c.Upsert(userJWT, "watch_progress", rows)
+	if err == nil {
+		return nil
+	}
+	if !isRLSError(err) {
+		return err
+	}
+	log.Printf("supabase: RLS error pushing watch_progress for profile %s — regenerating IDs", profileID)
+	ownedEntry, errFetch := c.fetchOwnedIDs(userJWT, "library_entries", profileID)
+	if errFetch != nil {
+		return fmt.Errorf("fetch owned entry IDs: %w; original: %w", errFetch, err)
+	}
+	ownedProgress, errFetch := c.fetchOwnedIDs(userJWT, "watch_progress", profileID)
+	if errFetch != nil {
+		return fmt.Errorf("fetch owned progress IDs: %w; original: %w", errFetch, err)
+	}
+	lib.RegenerateIDsNotIn(ownedEntry, ownedProgress)
+	rows = buildProgressRows(lib.AllProgress(), profileID)
+	if retryErr := c.Upsert(userJWT, "watch_progress", rows); retryErr != nil {
+		return fmt.Errorf("retry after ID regen: %w", retryErr)
+	}
+	return nil
+}
+
+func buildEntryRows(entries []*library.LibraryEntry, profileID string) []map[string]any {
+	rows := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		pid := profileID
+		e.ProfileID = &pid
+		rows = append(rows, entryToMap(e))
+	}
+	return rows
+}
+
+func buildProgressRows(progress []*library.WatchProgress, profileID string) []map[string]any {
+	rows := make([]map[string]any, 0, len(progress))
+	for _, p := range progress {
+		pid := profileID
+		p.ProfileID = &pid
+		rows = append(rows, progressToMap(p))
+	}
+	return rows
 }
 
 // PushSettings uploads current settings for the profile.
@@ -118,9 +220,10 @@ func (c *Config) PushSettings(userJWT, profileID string, st *settings.Store) err
 }
 
 // PushAddons uploads current addon configuration for the profile.
-// PushAddons syncs Stremio-addon config cross-device. Nuvio repo/scraper
-// config (internal/nuvio) is a conscious, documented gap for this iteration —
-// it is not covered by cross-device sync yet.
+// The row's updated_at reflects mgr.UpdatedAt() (the last local mutation time)
+// so the remote timestamp stays stable when content hasn't changed — avoiding
+// spurious LWW wins that would overwrite a newer remote with an older local
+// snapshot just because push ran after the remote was written from another device.
 func (c *Config) PushAddons(userJWT, profileID string, mgr *addons.Manager) error {
 	entries := mgr.GetEntries()
 	data, err := json.Marshal(entries)
@@ -128,6 +231,33 @@ func (c *Config) PushAddons(userJWT, profileID string, mgr *addons.Manager) erro
 		return err
 	}
 	return c.Upsert(userJWT, "profile_addons", []any{map[string]any{
+		"profile_id": profileID,
+		"data":       json.RawMessage(data),
+		"updated_at": mgr.UpdatedAt(),
+	}})
+}
+
+// PushNuvio uploads the current nuvio repo/scraper configuration for the profile.
+// The row's updated_at reflects the store's last local mutation time (from
+// SnapshotJSON) so cross-device LWW converges correctly.
+func (c *Config) PushNuvio(userJWT, profileID string, mgr *nuvio.Manager) error {
+	data, updatedAt := mgr.SnapshotJSON()
+	return c.Upsert(userJWT, "profile_nuvio", []any{map[string]any{
+		"profile_id": profileID,
+		"data":       json.RawMessage(data),
+		"updated_at": updatedAt,
+	}})
+}
+
+// PushActivity uploads the current activity (insights) store for the profile.
+// Activity uses per-bucket max merge semantics (no timestamp gate), so push
+// time is used for updated_at — the remote timestamp is informational only.
+func (c *Config) PushActivity(userJWT, profileID string, act *activity.Store) error {
+	data, err := act.SnapshotJSON()
+	if err != nil {
+		return err
+	}
+	return c.Upsert(userJWT, "profile_activity", []any{map[string]any{
 		"profile_id": profileID,
 		"data":       json.RawMessage(data),
 		"updated_at": time.Now().UTC(),
@@ -140,6 +270,22 @@ type PulledData struct {
 	Progress   []*library.WatchProgress
 	Dismissals []*library.Dismissal
 	Settings   *settings.Settings
+
+	// Addons — AddonsPresent distinguishes "no remote row" (account that never
+	// pushed addons) from "remote row with empty list" so callers can avoid
+	// wiping local addons when the remote has no data.
+	Addons          []addons.AddonEntry
+	AddonsUpdatedAt time.Time
+	AddonsPresent   bool
+
+	// Nuvio — NuvioPresent distinguishes "no remote row" from empty.
+	NuvioData      json.RawMessage
+	NuvioUpdatedAt time.Time
+	NuvioPresent   bool
+
+	// Activity — ActivityPresent distinguishes "no remote row" from empty.
+	ActivityData    json.RawMessage
+	ActivityPresent bool
 }
 
 // PullAll downloads all Supabase data for the given profile.
@@ -203,6 +349,49 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		}
 	}
 
+	// Addons
+	addonRows, err := c.Select(userJWT, "profile_addons", "profile_id=eq."+url.QueryEscape(profileID))
+	if err == nil && len(addonRows) > 0 {
+		var row struct {
+			Data      json.RawMessage `json:"data"`
+			UpdatedAt time.Time       `json:"updated_at"`
+		}
+		if err := json.Unmarshal(addonRows[0], &row); err == nil {
+			var entries []addons.AddonEntry
+			if err := json.Unmarshal(row.Data, &entries); err == nil {
+				out.Addons = entries
+				out.AddonsUpdatedAt = row.UpdatedAt
+				out.AddonsPresent = true
+			}
+		}
+	}
+
+	// Nuvio
+	nuvioRows, err := c.Select(userJWT, "profile_nuvio", "profile_id=eq."+url.QueryEscape(profileID))
+	if err == nil && len(nuvioRows) > 0 {
+		var row struct {
+			Data      json.RawMessage `json:"data"`
+			UpdatedAt time.Time       `json:"updated_at"`
+		}
+		if err := json.Unmarshal(nuvioRows[0], &row); err == nil {
+			out.NuvioData = row.Data
+			out.NuvioUpdatedAt = row.UpdatedAt
+			out.NuvioPresent = true
+		}
+	}
+
+	// Activity
+	actRows, err := c.Select(userJWT, "profile_activity", "profile_id=eq."+url.QueryEscape(profileID))
+	if err == nil && len(actRows) > 0 {
+		var row struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(actRows[0], &row); err == nil {
+			out.ActivityData = row.Data
+			out.ActivityPresent = true
+		}
+	}
+
 	return out, nil
 }
 
@@ -249,13 +438,17 @@ func progressToMap(p *library.WatchProgress) map[string]any {
 // table rows must go first: their RLS policies prove ownership through the
 // profiles row (profile_id IN (SELECT id FROM profiles WHERE user_id =
 // auth.uid())), so once the parent row is gone a child DELETE silently
-// matches nothing and the rows are orphaned forever. Child cleanup is
-// best-effort so one failure does not abort the rest; the parent row goes
-// last.
+// matches nothing and the rows are orphaned forever. If ANY child-table
+// delete fails, the function returns immediately without deleting the parent
+// profiles row — a partial cleanup is recoverable on retry; an orphaned
+// parent (with all its inaccessible child rows) is not.
 func (c *Config) DeleteProfileData(userJWT, profileID string) error {
-	for _, table := range []string{"library_entries", "watch_progress", "dismissals", "profile_settings", "profile_addons"} {
+	for _, table := range []string{
+		"library_entries", "watch_progress", "dismissals",
+		"profile_settings", "profile_addons", "profile_nuvio", "profile_activity",
+	} {
 		if err := c.Delete(userJWT, table, "profile_id=eq."+url.QueryEscape(profileID)); err != nil {
-			log.Printf("supabase: delete %s for profile %s: %v", table, profileID, err)
+			return fmt.Errorf("delete %s (aborting to avoid orphaned profile row): %w", table, err)
 		}
 	}
 	if err := c.Delete(userJWT, "profiles", "id=eq."+url.QueryEscape(profileID)); err != nil {

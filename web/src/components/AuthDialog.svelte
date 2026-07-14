@@ -12,6 +12,7 @@
   import { auth } from "$lib/stores/auth.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { libraryChanged } from "$lib/stores/library";
+  import { settings } from "$lib/stores/settings";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -53,6 +54,7 @@
     try {
       const res = await api.authLogin(email, password);
       await auth.setSession(res.access_token, email, res.profiles, res.active, res.refresh_token);
+      await settings.load();
       libraryChanged.update((n) => n + 1);
       onclose();
     } catch (e) {
@@ -82,6 +84,7 @@
     try {
       const res = await api.authVerifyOTP(otpEmail, otpCode);
       await auth.setSession(res.access_token, otpEmail, res.profiles, res.active, res.refresh_token);
+      await settings.load();
       libraryChanged.update((n) => n + 1);
       onclose();
     } catch (e) {
@@ -126,6 +129,7 @@
         pendingProfileName || undefined,
       );
       await auth.setSession(res.access_token, pendingEmail, [res.profile], res.profile, res.refresh_token);
+      await settings.load();
       libraryChanged.update((n) => n + 1);
       view = "success";
     } catch (e) {

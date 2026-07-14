@@ -229,11 +229,11 @@ func TestGetAllStreams_NoStreamResourceSkipped(t *testing.T) {
 
 	// An addon with no Resources at all should be skipped even if KindProvider.
 	noResources := AddonEntry{
-		ID:      "no-res",
-		URL:     srv.URL,
-		Kind:    KindProvider,
-		Source:  SourceStremio,
-		Enabled: true,
+		ID:       "no-res",
+		URL:      srv.URL,
+		Kind:     KindProvider,
+		Source:   SourceStremio,
+		Enabled:  true,
 		Manifest: Manifest{ID: "no-res", Name: "no-res"},
 	}
 	m := newTestManager([]AddonEntry{noResources})
@@ -315,4 +315,134 @@ func TestGetAllSubtitles_Parallel(t *testing.T) {
 	assert.Less(t, elapsed, 1*time.Second)
 	require.Len(t, subs, 1)
 	assert.Equal(t, "en", subs[0].Lang)
+}
+
+// ── MergeFrom tests ───────────────────────────────────────────────────────────
+
+func stremioEntry(id string) AddonEntry {
+	return AddonEntry{
+		ID:       id,
+		URL:      "https://example.com/" + id,
+		Kind:     KindProvider,
+		Source:   SourceStremio,
+		Enabled:  true,
+		Manifest: Manifest{ID: id, Name: id},
+	}
+}
+
+func officialEntry(id string, enabled bool) AddonEntry {
+	return AddonEntry{
+		ID:       id,
+		Source:   SourceOfficial,
+		Enabled:  enabled,
+		Manifest: Manifest{ID: id, Name: id},
+	}
+}
+
+func TestMergeFrom_RemoteNewerReplaces(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := &Manager{
+		client:          &http.Client{},
+		stremioAddons:   []AddonEntry{stremioEntry("local-addon")},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+		storePath:       t.TempDir() + "/addons-test.json",
+	}
+
+	localTime := time.Now().Add(-1 * time.Hour)
+	m.updatedAt = localTime
+
+	remote := []AddonEntry{stremioEntry("remote-addon")}
+	remoteTime := time.Now()
+
+	m.MergeFrom(remote, remoteTime)
+
+	entries := m.GetEntries()
+	// Should contain official addons + the one remote stremio addon (not local-addon).
+	var stremioNames []string
+	for _, e := range entries {
+		if e.Source == SourceStremio {
+			stremioNames = append(stremioNames, e.ID)
+		}
+	}
+	require.Len(t, stremioNames, 1)
+	assert.Equal(t, "remote-addon", stremioNames[0])
+	assert.Equal(t, remoteTime, m.UpdatedAt())
+}
+
+func TestMergeFrom_LocalNewerNoOp(t *testing.T) {
+	m := &Manager{
+		client:          &http.Client{},
+		stremioAddons:   []AddonEntry{stremioEntry("local-addon")},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+
+	m.updatedAt = time.Now() // local is newer
+
+	remote := []AddonEntry{stremioEntry("remote-addon")}
+	remoteTime := time.Now().Add(-1 * time.Hour) // remote is older
+
+	m.MergeFrom(remote, remoteTime)
+
+	// Local should be unchanged.
+	entries := m.GetEntries()
+	var stremioNames []string
+	for _, e := range entries {
+		if e.Source == SourceStremio {
+			stremioNames = append(stremioNames, e.ID)
+		}
+	}
+	require.Len(t, stremioNames, 1)
+	assert.Equal(t, "local-addon", stremioNames[0])
+}
+
+func TestMergeFrom_OfficialEnabledRebuilt(t *testing.T) {
+	m := &Manager{
+		client: &http.Client{},
+		officialEnabled: map[string]bool{
+			"cove.justwatch": true,
+		},
+		streamCache: make(map[string]streamCacheEntry),
+	}
+	m.updatedAt = time.Now().Add(-1 * time.Hour)
+
+	// Remote has JustWatch disabled and IntroSkip enabled.
+	remote := []AddonEntry{
+		officialEntry("cove.justwatch", false),
+		officialEntry("cove.introdb", true),
+	}
+	m.MergeFrom(remote, time.Now())
+
+	m.mu.RLock()
+	jw := m.officialEnabled["cove.justwatch"]
+	intro := m.officialEnabled["cove.introdb"]
+	m.mu.RUnlock()
+
+	assert.False(t, jw, "JustWatch should be disabled per remote")
+	assert.True(t, intro, "IntroSkip should be enabled per remote")
+}
+
+func TestMergeFrom_EqualTimeNoOp(t *testing.T) {
+	ts := time.Now()
+	m := &Manager{
+		client:          &http.Client{},
+		stremioAddons:   []AddonEntry{stremioEntry("local")},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+		updatedAt:       ts,
+	}
+
+	// Same timestamp — should not replace.
+	m.MergeFrom([]AddonEntry{stremioEntry("remote")}, ts)
+
+	entries := m.GetEntries()
+	var stremioNames []string
+	for _, e := range entries {
+		if e.Source == SourceStremio {
+			stremioNames = append(stremioNames, e.ID)
+		}
+	}
+	require.Len(t, stremioNames, 1)
+	assert.Equal(t, "local", stremioNames[0])
 }

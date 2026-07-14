@@ -1,13 +1,19 @@
 package com.coveninja.cove.player
 
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.util.Log
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.Surface
+import android.view.TextureView
 import dev.jdtech.mpv.MPVLib
 
 /**
- * SurfaceView-based wrapper around MPVLib (dev.jdtech.mpv:libmpv:0.5.1).
+ * TextureView-based wrapper around MPVLib (dev.jdtech.mpv:libmpv:0.5.1).
+ *
+ * TextureView is used instead of SurfaceView to fix a compositing flicker
+ * on real devices: transparent-WebView-over-SurfaceView triggers vendor
+ * compositor quirks. TextureView is composited as a regular GL texture,
+ * so the WebView above it is correctly blended with no tearing.
  *
  * 0.5.1 ships the classic static-method API: MPVLib.create(context),
  * MPVLib.init(), MPVLib.command([...]), MPVLib.observeProperty(name, fmt).
@@ -15,13 +21,22 @@ import dev.jdtech.mpv.MPVLib
  *
  * Lifecycle:
  *   val view = MpvPlayerView(context)
- *   view.create()                    // sets options + inits mpv
+ *   view.onSurfaceReady = { /* surface is live, safe to loadfile */ }
+ *   view.onSurfaceDestroyed = { /* surface gone */ }
+ *   view.create()                    // sets options + inits mpv; callbacks assigned before this
  *   MPVLib.addObserver(myObserver)
- *   // SurfaceHolder.Callback attaches/detaches the surface automatically
- *   view.loadFile(url, headers)      // mpv starts once surface attaches
+ *   // SurfaceTextureListener attaches/detaches the surface automatically
  *   view.destroy()                   // call from Activity.onDestroy()
  */
-class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
+class MpvPlayerView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
+
+    /** Invoked on the main thread when the TextureView's surface is ready for rendering. */
+    var onSurfaceReady: (() -> Unit)? = null
+
+    /** Invoked on the main thread when the TextureView's surface is destroyed. */
+    var onSurfaceDestroyed: (() -> Unit)? = null
+
+    private var surface: Surface? = null
 
     /** Create and initialise the MPV instance. Must be called before any other method. */
     fun create() {
@@ -41,10 +56,15 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         MPVLib.setOptionString("force-window", "yes")
         MPVLib.setOptionString("keep-open", "yes")
 
-        // Network / cache: modest values for mobile
+        // Network / cache: fast-start rationale — reduce readahead to 4 s so
+        // playback begins quickly; disable pause-on-cache-empty at startup
+        // (cache-pause-initial=no) and only pause when cache is critically low
+        // (cache-pause-wait=2 s). keeps cache=yes and 32 MiB ceiling.
         MPVLib.setOptionString("cache", "yes")
         MPVLib.setOptionString("demuxer-max-bytes", "32MiB")
-        MPVLib.setOptionString("demuxer-readahead-secs", "20")
+        MPVLib.setOptionString("demuxer-readahead-secs", "4")
+        MPVLib.setOptionString("cache-pause-initial", "no")
+        MPVLib.setOptionString("cache-pause-wait", "2")
 
         // Suppress verbose log output
         MPVLib.setOptionString("terminal", "no")
@@ -63,13 +83,17 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
         // so we can build the track-picker UI and perform language auto-select.
         MPVLib.observeProperty("track-list",       MPVLib.MPV_FORMAT_STRING)
 
-        holder.addCallback(this)
+        // TextureView fills the view with video; the WebView above provides UI
+        // transparency. Marking opaque avoids a redundant alpha-compositing pass.
+        isOpaque = true
+
+        surfaceTextureListener = this
         Log.d(TAG, "MPV created and initialised")
     }
 
     /**
      * Queue a file for playback. Safe to call before the surface is ready —
-     * mpv buffers the command and starts decoding once surfaceCreated fires.
+     * mpv buffers the command and starts decoding once onSurfaceTextureAvailable fires.
      *
      * @param url     Direct HTTP URL, or the backend's /api/play?hash=… URL.
      * @param headers Optional "Key: Value\n…" string for http-header-fields.
@@ -101,30 +125,40 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
     /** Release mpv. Must be called from Activity.onDestroy(). */
     fun destroy() {
-        holder.removeCallback(this)
+        surfaceTextureListener = null
         try { MPVLib.detachSurface() } catch (_: Exception) {}
+        surface?.release()
+        surface = null
         MPVLib.destroy()
         Log.d(TAG, "MPV destroyed")
     }
 
-    // ── SurfaceHolder.Callback ────────────────────────────────────────────────
+    // ── TextureView.SurfaceTextureListener ───────────────────────────────────
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        Log.d(TAG, "surfaceCreated — attaching surface")
-        MPVLib.attachSurface(holder.surface)
-        // Tell mpv to start rendering if it was waiting for a surface
-        MPVLib.setPropertyString("android-surface-size",
-            "${holder.surfaceFrame.width()}x${holder.surfaceFrame.height()}")
+    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+        Log.d(TAG, "onSurfaceTextureAvailable ${width}×${height}")
+        surface = Surface(st)
+        MPVLib.attachSurface(surface)
+        MPVLib.setPropertyString("android-surface-size", "${width}x${height}")
+        onSurfaceReady?.invoke()
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        Log.d(TAG, "surfaceChanged ${width}×${height}")
+    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {
+        Log.d(TAG, "onSurfaceTextureSizeChanged ${width}×${height}")
         MPVLib.setPropertyString("android-surface-size", "${width}x${height}")
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
-        Log.d(TAG, "surfaceDestroyed — detaching surface")
+    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+        Log.d(TAG, "onSurfaceTextureDestroyed — detaching surface")
+        onSurfaceDestroyed?.invoke()
         try { MPVLib.detachSurface() } catch (_: Exception) {}
+        surface?.release()
+        surface = null
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
+        // no-op: frame updates are handled entirely by mpv's render thread
     }
 
     companion object {

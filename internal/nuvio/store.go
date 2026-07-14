@@ -3,12 +3,16 @@ package nuvio
 import (
 	"encoding/json"
 	"os"
+	"time"
 
 	"github.com/coveninja/cove/internal/utils"
 )
 
 type nuvioStore struct {
 	Repos []Repo `json:"repos"`
+	// UpdatedAt records when the store was last mutated locally. Used for
+	// whole-store LWW resolution during cross-device sync.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
 func loadStore(path string) (nuvioStore, error) {

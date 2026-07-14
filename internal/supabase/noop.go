@@ -9,8 +9,10 @@ package supabase
 import (
 	"net/http"
 
+	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/utils"
@@ -32,6 +34,8 @@ func NewServer(
 	_ *library.Library,
 	_ *settings.Store,
 	_ *addons.Manager,
+	_ *nuvio.Manager,
+	_ *activity.Store,
 ) *Server {
 	return &Server{}
 }

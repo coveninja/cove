@@ -116,7 +116,7 @@ type TasteSignal struct {
 // successful POST to /api/library/progress. It carries enough context for an
 // activity log to credit watch-time deltas without knowing library internals.
 type ProgressSaveEvent struct {
-	ProgressKey string    // library's progressKey() value for this record
+	ProgressKey string // library's progressKey() value for this record
 	TmdbID      int
 	MediaType   string
 	Position    float64
@@ -211,6 +211,50 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	// tasteGen is a distinct counter (D2): MergeFrom pulls in
 	// entries/progress/dismissals wholesale, all taste-relevant.
 	l.tasteGen.Add(1)
+}
+
+// RegenerateIDsNotIn reassigns new UUIDs to every entry and progress row whose
+// ID is non-empty and NOT present in the corresponding owned set. This is called
+// after a Supabase RLS 42501 rejection to repair cross-user row-ID contamination
+// (rows whose ID collides with a row owned by a different user) before retrying
+// the upsert.
+//
+// When an entry ID changes, all progress rows whose LibraryEntryID referenced
+// the old ID are updated to the new ID. Persists synchronously and bumps the
+// library generation.
+func (l *Library) RegenerateIDsNotIn(ownedEntryIDs, ownedProgressIDs map[string]bool) {
+	l.mu.Lock()
+	// remap: old entry ID → new entry ID, for patching progress rows.
+	remap := make(map[string]string)
+	for key, e := range l.db.Entries {
+		if e.ID == "" || ownedEntryIDs[e.ID] {
+			continue
+		}
+		oldID := e.ID
+		e.ID = newUUID()
+		l.db.Entries[key] = e
+		remap[oldID] = e.ID
+	}
+	for key, p := range l.db.Progress {
+		// Remap LibraryEntryID if the parent entry was regenerated.
+		if newID, ok := remap[p.LibraryEntryID]; ok {
+			p.LibraryEntryID = newID
+		}
+		if p.ID == "" || ownedProgressIDs[p.ID] {
+			if remap[p.LibraryEntryID] != "" {
+				// LibraryEntryID changed even if progress ID is fine — persist.
+				l.db.Progress[key] = p
+			}
+			continue
+		}
+		p.ID = newUUID()
+		l.db.Progress[key] = p
+	}
+	if err := l.writeNow(); err != nil {
+		log.Println("library: RegenerateIDsNotIn persist:", err)
+	}
+	l.gen.Add(1)
+	l.mu.Unlock()
 }
 
 // TasteSignals returns one signal per title the user has any history with —

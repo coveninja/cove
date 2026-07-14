@@ -10,7 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.util.Log
 import com.coveninja.cove.BuildConfig
-import com.coveninja.cove.MainActivity
+import com.coveninja.cove.WebViewActivity
 import java.io.File
 
 /**
@@ -99,7 +99,7 @@ class CoveService : Service() {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, WebViewActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL_ID)

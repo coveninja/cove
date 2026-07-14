@@ -276,6 +276,10 @@ func (s *Store) applyTokenPolicy(incoming Settings) Settings {
 // on every synced device (e.g. the phone's embedded backend), which is both a
 // security concern and a functional bug. This mirrors the nuvio-config exclusion
 // precedent — per-device runtime configuration must not roam across devices.
+//
+// OnboardingDone is a monotonic flag: once true it must never be reset. There is
+// no redo-onboarding feature, so a fresh-device pull must not clobber a flag that
+// was set on another device.
 func (s *Store) MergeFrom(incoming Settings) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -285,6 +289,8 @@ func (s *Store) MergeFrom(incoming Settings) {
 	// Always preserve device-local remote-access config (see comment above).
 	incoming.RemoteAccessEnabled = s.cached.RemoteAccessEnabled
 	incoming.RemoteAccessToken = s.cached.RemoteAccessToken
+	// Ratchet: onboarding completion is irreversible — once true, never reset.
+	incoming.OnboardingDone = incoming.OnboardingDone || s.cached.OnboardingDone
 	s.cached = incoming
 	if err := s.write(); err != nil {
 		log.Println("settings: merge write:", err)
@@ -341,6 +347,11 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			s.mu.Lock()
 			incoming = s.applyTokenPolicy(incoming)
 			incoming.UpdatedAt = time.Now().UTC()
+			// Stale frontend stores PUT full blobs; once onboarding is done it
+			// must not be reset by a store that loaded before completion was persisted.
+			if s.cached.OnboardingDone {
+				incoming.OnboardingDone = true
+			}
 			s.cached = incoming
 			err := s.write()
 			s.mu.Unlock()

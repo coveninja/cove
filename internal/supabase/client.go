@@ -222,10 +222,7 @@ func (c *Config) authPost(path string, body any) (*authResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Cap auth response reads at 4 MiB — Supabase auth payloads are small
-	// JWTs and error messages; anything larger indicates an unexpected
-	// response or a network error page we should not buffer in full.
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, _ := io.ReadAll(resp.Body)
 
 	var ar authResponse
 	if err := json.Unmarshal(data, &ar); err != nil {
@@ -380,10 +377,7 @@ func (c *Config) restReq(userJWT, method, table string, query string, body any) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Cap REST response reads at 4 MiB — PostgREST result sets for this app's
-	// sync payloads are small; a larger response almost certainly means an
-	// unexpected error page or a misconfigured endpoint.
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("supabase REST %s %s: %s", method, table, data)

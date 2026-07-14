@@ -2,6 +2,7 @@ package nuvio
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -33,6 +34,7 @@ const overallDeadline = 25 * time.Second
 type Manager struct {
 	mu        sync.RWMutex
 	repos     []Repo
+	updatedAt time.Time // last local mutation time; used for LWW sync resolution
 	client    *http.Client
 	storePath string
 
@@ -117,6 +119,7 @@ func New(profileID string) *Manager {
 		return m
 	}
 	m.repos = store.Repos
+	m.updatedAt = store.UpdatedAt
 	return m
 }
 
@@ -133,6 +136,7 @@ func (m *Manager) SetProfile(profileID string) error {
 	m.mu.Lock()
 	m.storePath = path
 	m.repos = store.Repos
+	m.updatedAt = store.UpdatedAt
 	m.mu.Unlock()
 	return nil
 }
@@ -166,12 +170,47 @@ func (m *Manager) HasEnabledScrapers() bool {
 	return false
 }
 
-// saveL persists the current state. Must be called with m.mu held.
+// saveL persists the current state and stamps updatedAt to now. Must be
+// called with m.mu write-locked.
 func (m *Manager) saveL() error {
 	if m.storePath == "" {
 		return nil
 	}
-	return saveStore(m.storePath, nuvioStore{Repos: m.repos})
+	m.updatedAt = time.Now().UTC()
+	return saveStore(m.storePath, nuvioStore{Repos: m.repos, UpdatedAt: m.updatedAt})
+}
+
+// SnapshotJSON marshals the whole nuvio store and returns it along with the
+// last-mutation timestamp for cross-device sync. Safe for concurrent use.
+func (m *Manager) SnapshotJSON() ([]byte, time.Time) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	data, _ := json.Marshal(nuvioStore{Repos: m.repos, UpdatedAt: m.updatedAt})
+	return data, m.updatedAt
+}
+
+// MergeFromJSON applies a remote nuvio store blob using whole-store
+// last-write-wins gated on UpdatedAt. When the remote wins, repos are replaced
+// and the on-disk store is persisted with UpdatedAt = remoteUpdatedAt (NOT
+// time.Now()) for LWW convergence. Runtime state (m.repos) is updated so
+// scrapers reflecting the merged config are available immediately; the stream
+// cache is intentionally not invalidated (stale cached results expire normally).
+func (m *Manager) MergeFromJSON(data []byte, remoteUpdatedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !remoteUpdatedAt.After(m.updatedAt) {
+		return nil
+	}
+	var s nuvioStore
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	m.repos = s.Repos
+	m.updatedAt = remoteUpdatedAt
+	if m.storePath == "" {
+		return nil
+	}
+	return saveStore(m.storePath, nuvioStore{Repos: m.repos, UpdatedAt: remoteUpdatedAt})
 }
 
 // enabledScraper pairs a scraper with the repo it came from, snapshotted

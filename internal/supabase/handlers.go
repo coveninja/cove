@@ -12,9 +12,12 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/utils"
@@ -22,22 +25,35 @@ import (
 
 // Server wires together all the auth + sync HTTP handlers.
 type Server struct {
-	cfg          *Config
-	profileStore *profiles.Store
-	lib          *library.Library
-	st           *settings.Store
-	addonMgr     *addons.Manager
+	cfg           *Config
+	profileStore  *profiles.Store
+	lib           *library.Library
+	st            *settings.Store
+	addonMgr      *addons.Manager
+	nuvioMgr      *nuvio.Manager
+	activityStore *activity.Store
 
 	// pushMu serializes background pushes; pushQueued coalesces bursts so
 	// rapid sync calls queue at most one extra push run instead of spawning
 	// an unbounded pile of overlapping goroutines.
 	pushMu     sync.Mutex
 	pushQueued atomic.Bool
+
+	// pushErrMu guards lastPushErr and lastPushAt, which are written by the
+	// push goroutine and read by handleSync. lastPushErr holds a joined
+	// summary of all push errors from the most-recently-completed push run,
+	// or "" on full success. Note that handleSync reports the PREVIOUS
+	// completed push — the current one triggered by the sync call is async.
+	pushErrMu   sync.Mutex
+	lastPushErr string
+	lastPushAt  time.Time
 }
 
-// pushAsync uploads the profile's library/settings/addons in the background.
-// A push already queued behind a running one will observe this call's data
-// too, so additional requests are dropped rather than stacked.
+// pushAsync uploads the profile's library/settings/addons/nuvio/activity in
+// the background. A push already queued behind a running one will observe
+// this call's data too, so additional requests are dropped rather than stacked.
+// After the push completes (success or partial failure), lastPushErr and
+// lastPushAt are updated so the next handleSync response can surface them.
 func (s *Server) pushAsync(userJWT, profileID, context string) {
 	if !s.pushQueued.CompareAndSwap(false, true) {
 		return
@@ -46,15 +62,48 @@ func (s *Server) pushAsync(userJWT, profileID, context string) {
 		s.pushMu.Lock()
 		defer s.pushMu.Unlock()
 		s.pushQueued.Store(false)
+
+		var pushErrs []string
+
 		if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
 			log.Println(context+": push library:", err)
+			pushErrs = append(pushErrs, "library: "+err.Error())
 		}
 		if err := s.cfg.PushSettings(userJWT, profileID, s.st); err != nil {
 			log.Println(context+": push settings:", err)
+			pushErrs = append(pushErrs, "settings: "+err.Error())
 		}
 		if err := s.cfg.PushAddons(userJWT, profileID, s.addonMgr); err != nil {
 			log.Println(context+": push addons:", err)
+			pushErrs = append(pushErrs, "addons: "+err.Error())
 		}
+		if s.nuvioMgr != nil {
+			if err := s.cfg.PushNuvio(userJWT, profileID, s.nuvioMgr); err != nil {
+				log.Println(context+": push nuvio:", err)
+				pushErrs = append(pushErrs, "nuvio: "+err.Error())
+			}
+		}
+		if s.activityStore != nil {
+			if err := s.cfg.PushActivity(userJWT, profileID, s.activityStore); err != nil {
+				log.Println(context+": push activity:", err)
+				pushErrs = append(pushErrs, "activity: "+err.Error())
+			}
+		}
+
+		var joined string
+		if len(pushErrs) > 0 {
+			for i, e := range pushErrs {
+				if i > 0 {
+					joined += "; "
+				}
+				joined += e
+			}
+		}
+
+		s.pushErrMu.Lock()
+		s.lastPushErr = joined
+		s.lastPushAt = time.Now()
+		s.pushErrMu.Unlock()
 	}()
 }
 
@@ -66,8 +115,18 @@ func NewServer(
 	lib *library.Library,
 	st *settings.Store,
 	mgr *addons.Manager,
+	nuvioMgr *nuvio.Manager,
+	activityStore *activity.Store,
 ) *Server {
-	return &Server{cfg: cfg, profileStore: ps, lib: lib, st: st, addonMgr: mgr}
+	return &Server{
+		cfg:           cfg,
+		profileStore:  ps,
+		lib:           lib,
+		st:            st,
+		addonMgr:      mgr,
+		nuvioMgr:      nuvioMgr,
+		activityStore: activityStore,
+	}
 }
 
 // SetupHandlers registers all /api/auth/* endpoints on mux.
@@ -347,12 +406,20 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	// Push local → remote (catches any records that failed during initial push).
 	s.pushAsync(token, s.profileStore.ActiveProfile().ID, "supabase sync")
 
+	// Snapshot the last completed push error before responding.
+	// Note: this reflects the PREVIOUS completed push; the push triggered
+	// above is async and its result will be visible on the next sync call.
+	s.pushErrMu.Lock()
+	lastErr := s.lastPushErr
+	s.pushErrMu.Unlock()
+
 	// library_generation lets the frontend tell whether the merge actually
 	// changed anything, so an idle focus-triggered sync doesn't force a full
 	// UI refetch.
 	jsonOK(w, map[string]any{
 		"status":             "ok",
 		"library_generation": s.lib.Generation(),
+		"push_error":         lastErr,
 	})
 }
 
@@ -446,5 +513,25 @@ func (s *Server) mergeRemote(supabaseUID, userJWT string) {
 
 	if pulled.Settings != nil {
 		s.st.MergeFrom(*pulled.Settings)
+	}
+
+	// Addons: guard against no-remote-row so an account that never pushed
+	// addons doesn't wipe locally configured ones.
+	if pulled.AddonsPresent {
+		s.addonMgr.MergeFrom(pulled.Addons, pulled.AddonsUpdatedAt)
+	}
+
+	// Nuvio: guard against no-remote-row.
+	if pulled.NuvioPresent && s.nuvioMgr != nil && len(pulled.NuvioData) > 0 {
+		if err := s.nuvioMgr.MergeFromJSON(pulled.NuvioData, pulled.NuvioUpdatedAt); err != nil {
+			log.Println("supabase: merge nuvio:", err)
+		}
+	}
+
+	// Activity: guard against no-remote-row.
+	if pulled.ActivityPresent && s.activityStore != nil && len(pulled.ActivityData) > 0 {
+		if err := s.activityStore.MergeFromJSON(pulled.ActivityData); err != nil {
+			log.Println("supabase: merge activity:", err)
+		}
 	}
 }

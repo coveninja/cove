@@ -3,6 +3,7 @@ package addons
 import (
 	"encoding/json"
 	"os"
+	"time"
 
 	"github.com/coveninja/cove/internal/utils"
 )
@@ -10,6 +11,9 @@ import (
 type addonStore struct {
 	StremioAddons   []AddonEntry    `json:"stremioAddons"`
 	OfficialEnabled map[string]bool `json:"officialEnabled,omitempty"`
+	// UpdatedAt records when the store was last mutated locally. Used for
+	// whole-store LWW resolution during cross-device sync.
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
 func loadStore(path string) (addonStore, error) {

@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -304,5 +305,125 @@ func TestBackfillBucketsByLocalTime(t *testing.T) {
 	}
 	if got := day.ByHour[wantHour]; got != 1000 {
 		t.Errorf("backfill local-time bucket: expected 1000 seconds in hour %d of %s, got %d", wantHour, wantDate, got)
+	}
+}
+
+// ── MergeFromJSON tests ───────────────────────────────────────────────────────
+
+func TestMergeFromJSON_MaxSemantics(t *testing.T) {
+	s := newTestStore(t)
+
+	// Seed local: 2024-01-01, hour 10 → 60 s, title "1:movie" → 60 s.
+	// Use delta=60 which is ≤90 so it gets credited.
+	base := time.Date(2024, 1, 1, 10, 0, 0, 0, time.Local)
+	s.OnProgressSave(library.ProgressSaveEvent{
+		ProgressKey: "1:movie",
+		TmdbID:      1,
+		MediaType:   "movie",
+		Position:    60,
+		At:          base,
+	})
+
+	// Remote snapshot: higher ByHour value (200 vs 60), lower ByTitle for
+	// "1:movie" (40 vs 60 → local wins), new "2:tv" title, higher LastPos.
+	remoteJSON := `{"days":{"2024-01-01":{"by_hour":[0,0,0,0,0,0,0,0,0,0,200,0,0,0,0,0,0,0,0,0,0,0,0,0],"by_title":{"1:movie":40,"2:tv":300}}},"last_pos":{"1:movie":90},"backfilled":true}`
+
+	if err := s.MergeFromJSON([]byte(remoteJSON)); err != nil {
+		t.Fatalf("MergeFromJSON: %v", err)
+	}
+
+	s.mu.RLock()
+	day := s.db.Days["2024-01-01"]
+	lastPos := s.db.LastPos["1:movie"]
+	backfilled := s.db.Backfilled
+	s.mu.RUnlock()
+
+	if day == nil {
+		t.Fatal("expected day entry after merge")
+	}
+	// Local hour 10 was 60, remote is 200 → max = 200.
+	if got := day.ByHour[10]; got != 200 {
+		t.Errorf("ByHour[10]: want 200, got %d", got)
+	}
+	// Local "1:movie" was 60, remote is 40 → max = 60 (local wins).
+	if got := day.ByTitle["1:movie"]; got != 60 {
+		t.Errorf("ByTitle[1:movie]: want 60 (local wins), got %d", got)
+	}
+	// Remote "2:tv" = 300 not in local → should be merged.
+	if got := day.ByTitle["2:tv"]; got != 300 {
+		t.Errorf("ByTitle[2:tv]: want 300, got %d", got)
+	}
+	// LastPos: local was 60 (from the progress save), remote is 90 → max = 90.
+	if lastPos != 90 {
+		t.Errorf("LastPos[1:movie]: want 90 (remote wins), got %f", lastPos)
+	}
+	// Backfilled: local was false, remote was true → OR = true.
+	if !backfilled {
+		t.Error("Backfilled should be true after merging remote=true")
+	}
+}
+
+func TestMergeFromJSON_Idempotent(t *testing.T) {
+	s := newTestStore(t)
+
+	remoteJSON := `{"days":{"2024-02-15":{"by_hour":[0,0,0,0,0,0,0,0,500,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"by_title":{"3:movie":500}}},"last_pos":{},"backfilled":false}`
+
+	// Merge twice — should yield identical state.
+	if err := s.MergeFromJSON([]byte(remoteJSON)); err != nil {
+		t.Fatalf("first MergeFromJSON: %v", err)
+	}
+
+	snap1, err := s.SnapshotJSON()
+	if err != nil {
+		t.Fatalf("SnapshotJSON after first merge: %v", err)
+	}
+
+	if err := s.MergeFromJSON([]byte(remoteJSON)); err != nil {
+		t.Fatalf("second MergeFromJSON: %v", err)
+	}
+
+	snap2, err := s.SnapshotJSON()
+	if err != nil {
+		t.Fatalf("SnapshotJSON after second merge: %v", err)
+	}
+
+	// The snapshots won't be byte-identical (map ordering) but the content must
+	// be equivalent — unmarshal both and compare the relevant fields.
+	var d1, d2 diskStore
+	if err := json.Unmarshal(snap1, &d1); err != nil {
+		t.Fatalf("unmarshal snap1: %v", err)
+	}
+	if err := json.Unmarshal(snap2, &d2); err != nil {
+		t.Fatalf("unmarshal snap2: %v", err)
+	}
+	day1 := d1.Days["2024-02-15"]
+	day2 := d2.Days["2024-02-15"]
+	if day1 == nil || day2 == nil {
+		t.Fatal("expected day entry in both snapshots")
+	}
+	if day1.ByHour[8] != day2.ByHour[8] {
+		t.Errorf("ByHour[8] not idempotent: %d vs %d", day1.ByHour[8], day2.ByHour[8])
+	}
+	if day1.ByTitle["3:movie"] != day2.ByTitle["3:movie"] {
+		t.Errorf("ByTitle[3:movie] not idempotent")
+	}
+}
+
+func TestMergeFromJSON_BackfilledOR(t *testing.T) {
+	s := newTestStore(t)
+	// Local: backfilled=true; remote: backfilled=false → result must be true.
+	s.mu.Lock()
+	s.db.Backfilled = true
+	s.mu.Unlock()
+
+	if err := s.MergeFromJSON([]byte(`{"days":{},"last_pos":{},"backfilled":false}`)); err != nil {
+		t.Fatalf("MergeFromJSON: %v", err)
+	}
+
+	s.mu.RLock()
+	got := s.db.Backfilled
+	s.mu.RUnlock()
+	if !got {
+		t.Error("Backfilled should remain true when local=true, remote=false")
 	}
 }
