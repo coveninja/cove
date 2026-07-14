@@ -236,40 +236,44 @@ jobs:
     # pacman setup on a plain ubuntu runner.
     container: archlinux:base
     steps:
-      - name: Install git, openssh, base-devel
+      - name: Install git, openssh, base-devel, create builder user
         run: |
           pacman -Sy --noconfirm git openssh base-devel
+          # base-devel's makepkg refuses to run as root; do everything below
+          # as an unprivileged user, matching normal Arch usage. Setting up
+          # SSH directly in its home dir (rather than as root and copying
+          # over) avoids ownership/ordering pitfalls that broke host key
+          # verification.
+          useradd -m builder
 
-      - name: Download generated PKGBUILD from this release
+      - name: Set up SSH for AUR (as builder)
         run: |
-          curl -L -o PKGBUILD \
-            "https://github.com/coveninja/cove/releases/download/${{ github.ref_name }}/PKGBUILD"
+          install -d -m 700 -o builder -g builder /home/builder/.ssh
 
-      - name: Set up SSH for AUR
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
-          cat >> ~/.ssh/config <<EOF
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > /home/builder/.ssh/aur
+          chmod 600 /home/builder/.ssh/aur
+          chown builder:builder /home/builder/.ssh/aur
+
+          ssh-keyscan -H aur.archlinux.org >> /home/builder/.ssh/known_hosts
+          chmod 600 /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/known_hosts
+
+          cat >> /home/builder/.ssh/config <<EOF
           Host aur.archlinux.org
             IdentityFile ~/.ssh/aur
             User aur
             StrictHostKeyChecking accept-new
           EOF
-          chmod 600 ~/.ssh/config
+          chmod 600 /home/builder/.ssh/config
+          chown builder:builder /home/builder/.ssh/config
 
-      - name: Push to AUR
+      - name: Download generated PKGBUILD from this release, push to AUR (as builder)
         run: |
-          # base-devel's makepkg refuses to run as root; create an
-          # unprivileged user to run it under, matching normal Arch usage.
-          useradd -m builder
-          chown -R builder:builder "$PWD" /root/.ssh 2>/dev/null || true
-          cp -r /root/.ssh /home/builder/.ssh
-          chown -R builder:builder /home/builder/.ssh
-
           su builder -c '
             set -e
+            cd ~
+            curl -L -o PKGBUILD \
+              "https://github.com/coveninja/cove/releases/download/${{ github.ref_name }}/PKGBUILD"
             git clone ssh://aur@aur.archlinux.org/cove-bin.git aur-repo
             cp PKGBUILD aur-repo/
             cd aur-repo
