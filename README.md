@@ -49,7 +49,7 @@ A media streaming app for Linux, Windows, and Android. Discover, track, and stre
 - **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
 - **Multiple profiles** — profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
-- **Android app** — native Kotlin/Compose client with the same embedded Go backend and mpv playback; runs standalone, or connects to your desktop Cove over LAN in remote mode
+- **Android & Android TV App** — native Kotlin/Compose client with the same embedded Go backend and mpv playback; runs standalone, or connects to your desktop Cove over LAN in remote mode
 
 ## Install
 
@@ -76,10 +76,12 @@ flatpak run io.github.coveninja.Cove
 
 Download `cove-windows-amd64-setup.exe` from the [latest release](https://github.com/coveninja/cove/releases/latest) and run the installer. Or grab `cove-windows-amd64.zip` for a portable install.
 
-### Android
-> **⚠️ Experimental:** Mobile support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
+### Android & Android TV
+> **⚠️ Experimental:** Mobile & TV support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
 
 Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
+
+The same APK runs on Android TV — Cove detects the TV environment automatically and loads a D-pad-navigable 10-foot UI.
 
 ### macOS
 
@@ -155,6 +157,6 @@ New contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev 
 
 ## Roadmap / Known Limitations
 
-- **Android** is experimental — expect rough edges (see [Install](#install))
+- **Android & Android TV** are experimental — expect rough edges (see [Install](#install))
 - **macOS** is not yet supported — no native build exists
 - Have a request? Open an [issue](https://github.com/coveninja/cove/issues) to discuss it

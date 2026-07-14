@@ -44,6 +44,7 @@ class MpvBridge(
     private val mpvView: MpvPlayerView,
     private val webView: WebView,
     private val listener: PlatformListener,
+    private val platformName: String = "android",
 ) : MPVLib.EventObserver {
 
     // ── Platform callbacks (invoked on main thread) ───────────────────────────
@@ -100,7 +101,7 @@ class MpvBridge(
     // in player.svelte.ts complete before the bridge fires requestState().
 
     private val SHIM_JS: String = """
-window.__covePlatform='android';
+window.__covePlatform='$platformName';
 window.__coveCaps=${codecCapsJson()};
 window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
 (function(){
@@ -214,6 +215,14 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
         mainHandler.post {
             MPVLib.command(arrayOf("seek",
                 String.format(Locale.US, "%.3f", seconds), "absolute"))
+        }
+    }
+
+    /** Seek relative to the current position — used by MediaSession FF/RW callbacks. */
+    fun seekRelativeOnMain(deltaSeconds: Double) {
+        mainHandler.post {
+            MPVLib.command(arrayOf("seek",
+                String.format(Locale.US, "%.3f", deltaSeconds), "relative"))
         }
     }
 

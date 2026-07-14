@@ -42,7 +42,7 @@ ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
 export ANDROID_HOME
 export ANDROID_NDK_HOME
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean android-aar android android-install
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean android-aar android android-install tv-avd tv-install
 
 all: build
 
@@ -162,6 +162,25 @@ android: android-aar
 ## mpv video renders BLACK under the emulator's SwiftShader GPU — test playback
 ## on a real device or a windowed emulator started with -gpu host.
 android-install: android
+	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+	adb shell am start -n com.coveninja.cove/.WebViewActivity
+
+## One-time: create the Android TV emulator AVD (AOSP TV, API 36, x86_64 —
+## the only x86_64 TV image left in Google's SDK repo; google_atv is arm64-only now).
+## Launch it windowed with GPU passthrough (mpv is black under SwiftShader):
+##   $(ANDROID_HOME)/emulator/emulator -avd cove-tv -gpu host
+tv-avd:
+	$(ANDROID_HOME)/cmdline-tools/latest/bin/sdkmanager "system-images;android-36;android-tv;x86_64"
+	$(ANDROID_HOME)/cmdline-tools/latest/bin/avdmanager create avd --name cove-tv --package "system-images;android-36;android-tv;x86_64" --device tv_1080p --force
+	# avdmanager defaults to hw.keyboard=no, which blocks ALL host-keyboard input
+	# (incl. arrow keys / Enter) — with it enabled the host keyboard acts as the
+	# remote: arrows = D-pad, Enter = OK, Esc = Back.
+	sed -i 's/^hw.keyboard = no/hw.keyboard = yes/' $(HOME)/.android/avd/cove-tv.avd/config.ini
+	@echo "AVD 'cove-tv' created. Launch with: $(ANDROID_HOME)/emulator/emulator -avd cove-tv -gpu host"
+
+## Install + launch on the TV emulator/device. Same APK as android-install —
+## the app picks the TV shell at runtime (UiModeManager → __covePlatform).
+tv-install: android
 	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 	adb shell am start -n com.coveninja.cove/.WebViewActivity
 

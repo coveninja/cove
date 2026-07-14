@@ -1,8 +1,10 @@
 package com.coveninja.cove
 
 import android.Manifest
+import android.app.UiModeManager
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -44,6 +46,7 @@ import okhttp3.Request
 class WebViewActivity : ComponentActivity() {
 
     private var webView: WebView? = null
+    private var isTV = false
 
     // ── M3/M4: mpv + bridge ───────────────────────────────────────────────────
     private var mpvView: MpvPlayerView? = null
@@ -158,12 +161,12 @@ class WebViewActivity : ComponentActivity() {
                 ctrl.hide(WindowInsetsCompat.Type.systemBars())
                 ctrl.systemBarsBehavior =
                     WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                if (!isTV) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             } else {
                 ctrl.show(WindowInsetsCompat.Type.systemBars())
                 ctrl.systemBarsBehavior =
                     WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                if (!isTV) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         }
     }
@@ -179,8 +182,12 @@ class WebViewActivity : ComponentActivity() {
         val wv  = webView ?: return
         val top = lastSafeTopCss
         val bot = lastSafeBottomCss
-        val js  = "document.documentElement.style.setProperty('--cove-safe-top','${top}px');" +
-                  "document.documentElement.style.setProperty('--cove-safe-bottom','${bot}px');"
+        // Guarded: the insets listener can fire mid-navigation, before the new
+        // document has a documentElement — unguarded access throws a console
+        // TypeError on every page (re)load.
+        val js  = "var de=document.documentElement;" +
+                  "if(de){de.style.setProperty('--cove-safe-top','${top}px');" +
+                  "de.style.setProperty('--cove-safe-bottom','${bot}px');}"
         wv.evaluateJavascript(js, null)
     }
 
@@ -199,7 +206,9 @@ class WebViewActivity : ComponentActivity() {
                     PlaybackStateCompat.ACTION_PLAY
                         or PlaybackStateCompat.ACTION_PAUSE
                         or PlaybackStateCompat.ACTION_PLAY_PAUSE
-                        or PlaybackStateCompat.ACTION_SEEK_TO,
+                        or PlaybackStateCompat.ACTION_SEEK_TO
+                        or PlaybackStateCompat.ACTION_FAST_FORWARD
+                        or PlaybackStateCompat.ACTION_REWIND,
                 )
                 .build()
         )
@@ -210,8 +219,13 @@ class WebViewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Detect Android TV upfront — used to suppress phone-only APIs below.
+        isTV = (getSystemService(Context.UI_MODE_SERVICE) as UiModeManager)
+            .currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+
         // Runtime permission for the persistent backend notification (API 33+).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // Not requested on TV — notification prompts are not supported by Leanback.
+        if (!isTV && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         }
 
@@ -312,6 +326,9 @@ class WebViewActivity : ComponentActivity() {
                         override fun onPlay()            { bridge?.resumeOnMain() }
                         override fun onPause()           { bridge?.pauseOnMain() }
                         override fun onSeekTo(pos: Long) { bridge?.seekOnMain(pos / 1000.0) }
+                        // FF/RW: ±30 s relative seek — sent by media remotes and lock-screen controls.
+                        override fun onFastForward()     { bridge?.seekRelativeOnMain(30.0) }
+                        override fun onRewind()          { bridge?.seekRelativeOnMain(-30.0) }
                     })
                     isActive = false
                 }
@@ -319,7 +336,8 @@ class WebViewActivity : ComponentActivity() {
 
                 // MpvBridge: create() registers addDocumentStartJavaScript (if
                 // supported) and initialises mpv. Must happen before loadUrl.
-                val br = MpvBridge(mpv, wv, platformListener)
+                val br = MpvBridge(mpv, wv, platformListener,
+                    platformName = if (isTV) "androidtv" else "android")
                 bridge = br
                 br.create()
 
@@ -357,10 +375,12 @@ class WebViewActivity : ComponentActivity() {
                         val top = lastSafeTopCss
                         val bot = lastSafeBottomCss
                         if (top >= 0f) {
-                            val js = "document.documentElement.style.setProperty(" +
+                            // Same documentElement guard as injectSafeArea.
+                            val js = "var de=document.documentElement;" +
+                                     "if(de){de.style.setProperty(" +
                                      "'--cove-safe-top','${top}px');" +
-                                     "document.documentElement.style.setProperty(" +
-                                     "'--cove-safe-bottom','${bot}px');"
+                                     "de.style.setProperty(" +
+                                     "'--cove-safe-bottom','${bot}px');}"
                             view.evaluateJavascript(js, null)
                         }
                     }
