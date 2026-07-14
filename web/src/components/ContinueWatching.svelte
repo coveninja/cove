@@ -23,7 +23,7 @@
   }: {
     onWatch?: (m: Media, season?: number, episode?: number) => void;
     onSelectMedia: (m: Media) => void;
-    navEnabled: boolean | null;
+    navEnabled: boolean;
   } = $props();
 
   let items = $state<ContinueItem[]>([]);

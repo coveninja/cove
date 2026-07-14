@@ -15,7 +15,7 @@
   import TvPlayer from "./components/TvPlayer.svelte";
   import SettingsPage from "../components/SettingsPage.svelte";
   import MyAccountPage from "../components/MyAccountPage.svelte";
-  import OnboardingPage from "../components/OnboardingPage.svelte";
+  import TvOnboardingPage from "./pages/TvOnboardingPage.svelte";
   import SplashScreen from "../components/SplashScreen.svelte";
 
   import { settings } from "$lib/stores/settings";
@@ -148,11 +148,19 @@
     );
   });
 
+  // Dismiss onboarding and restore shell focus.
+  // Used by both the onclose callback and the reactive effect below.
+  async function dismissOnboarding(): Promise<void> {
+    showOnboarding = false;
+    await tick();
+    focusFirst();
+  }
+
   // Dismiss onboarding reactively when the flag arrives via sync or login.
   // Only dismisses — onMount remains the sole entry point.
   $effect(() => {
     if ($settings.onboardingDone && showOnboarding) {
-      showOnboarding = false;
+      void dismissOnboarding();
     }
   });
 
@@ -317,8 +325,12 @@
         }
         // Focus the first navigable element after the shell is ready so the
         // remote's D-pad is immediately active.
-        await tick();
-        focusFirst();
+        // Skip when onboarding is shown — TvOnboardingPage manages its own
+        // initial focus and focusFirst() here would steal it to the side-nav.
+        if (!showOnboarding) {
+          await tick();
+          focusFirst();
+        }
       },
     );
 
@@ -583,6 +595,17 @@
         />
       {/key}
     {/if}
+
+    <!-- Onboarding overlay: mounted INSIDE .tv-shell so focus-ring CSS applies.
+         Fixed positioning is unaffected by DOM placement (same note as above). -->
+    {#if showOnboarding}
+      <div
+        transition:fade={{ duration: 200 }}
+        class="fixed inset-0 z-50 bg-background"
+      >
+        <TvOnboardingPage onclose={dismissOnboarding} />
+      </div>
+    {/if}
   </div>
 </Tooltip.Provider>
 
@@ -611,15 +634,6 @@
     >
       {syncErrorToast}
     </div>
-  </div>
-{/if}
-
-{#if showOnboarding}
-  <div
-    transition:fade={{ duration: 200 }}
-    class="fixed inset-0 z-50 flex items-center justify-center bg-background"
-  >
-    <OnboardingPage onclose={() => (showOnboarding = false)} />
   </div>
 {/if}
 
