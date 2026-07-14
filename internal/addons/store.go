@@ -25,8 +25,19 @@ func loadStore(path string) (addonStore, error) {
 	if err != nil {
 		return s, err
 	}
-	err = json.Unmarshal(data, &s)
-	return s, err
+	if err := json.Unmarshal(data, &s); err != nil {
+		return s, err
+	}
+	// Stores written before UpdatedAt existed carry a zero timestamp, which
+	// would make their (real) addon config lose every LWW sync merge and push
+	// a zero updated_at that no other device accepts. Fall back to the file's
+	// mtime so pre-existing data participates in sync ordering sensibly.
+	if s.UpdatedAt.IsZero() && (len(s.StremioAddons) > 0 || len(s.OfficialEnabled) > 0) {
+		if fi, statErr := os.Stat(path); statErr == nil {
+			s.UpdatedAt = fi.ModTime().UTC()
+		}
+	}
+	return s, nil
 }
 
 func saveStore(path string, s addonStore) error {
