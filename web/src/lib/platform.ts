@@ -2,7 +2,24 @@ declare global {
   interface Window {
     __covePlatform?: string;
     __coveApp?: { minimizeApp(): void };
+    __coveCaps?: CodecCaps;
   }
+}
+
+/** Hardware video-decoder support probed by the Android shell (MediaCodecList). */
+export interface CodecCaps {
+  hevcMain10: boolean;
+  av1: boolean;
+}
+
+/**
+ * The device's hardware decode capabilities, or null when unknown (desktop,
+ * browser dev). Injected by MpvBridge's SHIM_JS on Android. Null means
+ * "assume everything is supported" — only a confirmed gap should influence
+ * stream ranking.
+ */
+export function codecCaps(): CodecCaps | null {
+  return window.__coveCaps ?? null;
 }
 
 /**

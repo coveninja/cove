@@ -1,8 +1,11 @@
 package com.coveninja.cove.player
 
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.SurfaceHolder
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -77,11 +80,10 @@ class MpvBridge(
     private var stoppedByUser = false
 
     // ── Surface-readiness guard ───────────────────────────────────────────────
-    // Unlike SurfaceView, a TextureView creates its SurfaceTexture regardless of
-    // visibility. However we still gate loadfile on surface availability so that
-    // play() issued before the first onSurfaceTextureAvailable callback defers
-    // the command correctly. We still set the view INVISIBLE when stopped and
-    // VISIBLE on play/FILE_LOADED to hide the video layer when not in use.
+    // An INVISIBLE SurfaceView never fires surfaceCreated, so MPVLib.attachSurface()
+    // never runs and a loadfile issued before the surface exists silently fails
+    // (vo=gpu init → no video). Fix: make the view VISIBLE in play() to trigger
+    // surface creation, then defer the loadfile until surfaceCreated fires.
     private var surfaceReady   = false
     private var pendingPlayUrl: String? = null
 
@@ -99,6 +101,7 @@ class MpvBridge(
 
     private val SHIM_JS: String = """
 window.__covePlatform='android';
+window.__coveCaps=${codecCapsJson()};
 window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
 (function(){
   var h={};
@@ -163,23 +166,25 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
         // Fallback: Activity calls injectShimFallback() from WebViewClient.onPageStarted
         // when DOCUMENT_START_SCRIPT is unavailable.
 
-        // Wire MpvPlayerView's TextureView callbacks so we know when the surface
-        // is ready for MPVLib commands. MpvPlayerView.create() has already called
-        // MPVLib.attachSurface() in onSurfaceTextureAvailable before invoking
-        // onSurfaceReady, so issuing MPVLib.command() here is safe.
-        // Callbacks are invoked on the main thread by the TextureView machinery.
-        mpvView.onSurfaceReady = {
-            if (!destroyed) {
+        // Register a second SurfaceHolder.Callback to track surface readiness.
+        // MpvPlayerView's own callback (registered inside create() above) runs
+        // first and calls MPVLib.attachSurface() — our callback fires after it,
+        // so it is safe to issue MPVLib.command() immediately in surfaceCreated.
+        // SurfaceHolder callbacks are delivered on the main thread.
+        mpvView.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                if (destroyed) return
                 surfaceReady = true
                 pendingPlayUrl?.let { url ->
                     pendingPlayUrl = null
                     MPVLib.command(arrayOf("loadfile", url))
                 }
             }
-        }
-        mpvView.onSurfaceDestroyed = {
-            surfaceReady = false
-        }
+            override fun surfaceChanged(holder: SurfaceHolder, f: Int, w: Int, h: Int) {}
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                surfaceReady = false
+            }
+        })
     }
 
     /** Fallback shim injection — called by the Activity's onPageStarted. */
@@ -306,6 +311,39 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
         // (contains only numeric/boolean/string values with no free-text injection risk).
         webView.evaluateJavascript(
             "window.__mpvEmit&&window.__mpvEmit('tracksChanged',$tracksJson)", null)
+    }
+
+    // ── Device codec capabilities ─────────────────────────────────────────────
+    //
+    // Exposed to the web layer as window.__coveCaps so stream ranking can
+    // demote releases this device cannot hardware-decode (a 10-bit HEVC
+    // stream on a decoder without Main 10 silently falls back to software
+    // decoding, which mid-range SoCs cannot sustain at 1080p).
+
+    private fun codecCapsJson(): String {
+        var hevcMain10 = false
+        var av1 = false
+        try {
+            for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
+                if (info.isEncoder || !info.isHardwareAccelerated) continue
+                for (type in info.supportedTypes) {
+                    when (type.lowercase(Locale.US)) {
+                        "video/hevc" -> {
+                            val profiles = info.getCapabilitiesForType(type).profileLevels
+                            if (profiles.any {
+                                    it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
+                                    it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
+                                    it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus
+                                }) hevcMain10 = true
+                        }
+                        "video/av01" -> av1 = true
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "codec caps probe failed: ${e.message}")
+        }
+        return """{"hevcMain10":$hevcMain10,"av1":$av1}"""
     }
 
     // ── Track-list normalisation ──────────────────────────────────────────────

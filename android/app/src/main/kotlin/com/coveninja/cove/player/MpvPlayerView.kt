@@ -1,19 +1,14 @@
 package com.coveninja.cove.player
 
 import android.content.Context
-import android.graphics.SurfaceTexture
 import android.util.Log
-import android.view.Surface
-import android.view.TextureView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import dev.jdtech.mpv.MPVLib
+import java.io.File
 
 /**
- * TextureView-based wrapper around MPVLib (dev.jdtech.mpv:libmpv:0.5.1).
- *
- * TextureView is used instead of SurfaceView to fix a compositing flicker
- * on real devices: transparent-WebView-over-SurfaceView triggers vendor
- * compositor quirks. TextureView is composited as a regular GL texture,
- * so the WebView above it is correctly blended with no tearing.
+ * SurfaceView-based wrapper around MPVLib (dev.jdtech.mpv:libmpv:0.5.1).
  *
  * 0.5.1 ships the classic static-method API: MPVLib.create(context),
  * MPVLib.init(), MPVLib.command([...]), MPVLib.observeProperty(name, fmt).
@@ -21,32 +16,41 @@ import dev.jdtech.mpv.MPVLib
  *
  * Lifecycle:
  *   val view = MpvPlayerView(context)
- *   view.onSurfaceReady = { /* surface is live, safe to loadfile */ }
- *   view.onSurfaceDestroyed = { /* surface gone */ }
- *   view.create()                    // sets options + inits mpv; callbacks assigned before this
+ *   view.create()                    // sets options + inits mpv
  *   MPVLib.addObserver(myObserver)
- *   // SurfaceTextureListener attaches/detaches the surface automatically
+ *   // SurfaceHolder.Callback attaches/detaches the surface automatically
+ *   view.loadFile(url, headers)      // mpv starts once surface attaches
  *   view.destroy()                   // call from Activity.onDestroy()
  */
-class MpvPlayerView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
-
-    /** Invoked on the main thread when the TextureView's surface is ready for rendering. */
-    var onSurfaceReady: (() -> Unit)? = null
-
-    /** Invoked on the main thread when the TextureView's surface is destroyed. */
-    var onSurfaceDestroyed: (() -> Unit)? = null
-
-    private var surface: Surface? = null
+class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
 
     /** Create and initialise the MPV instance. Must be called before any other method. */
     fun create() {
         MPVLib.create(context)
 
-        // Video: GPU path with Android context; hwdec=auto falls back to software
-        // automatically — important for the x86_64 emulator (Swiftshader).
+        // Subtitle fonts: Android has no fontconfig, so libass starts with ZERO
+        // fonts — text subtitles (SRT and most ASS) get selected and "rendered"
+        // but no glyph ever appears. mpv loads font files from the `fonts/`
+        // subdirectory of its config dir, so stage a system font there once and
+        // point config-dir at it. (Copying ONE font, not sub-fonts-dir=/system/fonts:
+        // libass reads memory fonts whole, and the full system set is >100 MB.)
+        setupSubtitleFont()
+
+        // Video: GPU path with Android context. hwdec is pinned to direct
+        // mediacodec (surface output), NOT auto: auto prefers mediacodec-copy,
+        // whose surfaceless ByteBuffer mode hard-fails on MediaTek decoders for
+        // 10-bit HEVC ("MediaCodec 0x0 failed to start") and drops the whole
+        // stream to software decode, which mid-range SoCs can't sustain. Direct
+        // mediacodec still falls back to software automatically when the codec
+        // is unavailable (e.g. the x86_64 emulator under Swiftshader).
         MPVLib.setOptionString("vo", "gpu")
         MPVLib.setOptionString("gpu-context", "android")
-        MPVLib.setOptionString("hwdec", "auto")
+        // Dumb mode disables FBOs/PBOs and the advanced upload/render paths.
+        // Budget Mali/MediaTek drivers (e.g. Mali-G52 on mt6768) mis-render
+        // mpv's default pipeline to a black surface; dumb mode's plain
+        // texture-and-blit path is what those drivers can actually run.
+        MPVLib.setOptionString("gpu-dumb-mode", "yes")
+        MPVLib.setOptionString("hwdec", "mediacodec")
         MPVLib.setOptionString("hwdec-codecs", "h264,hevc,vp8,vp9,av1")
 
         // Audio: audiotrack is Android's native path
@@ -56,10 +60,9 @@ class MpvPlayerView(context: Context) : TextureView(context), TextureView.Surfac
         MPVLib.setOptionString("force-window", "yes")
         MPVLib.setOptionString("keep-open", "yes")
 
-        // Network / cache: fast-start rationale — reduce readahead to 4 s so
-        // playback begins quickly; disable pause-on-cache-empty at startup
-        // (cache-pause-initial=no) and only pause when cache is critically low
-        // (cache-pause-wait=2 s). keeps cache=yes and 32 MiB ceiling.
+        // Network / cache: start playback after ~4s of buffer instead of a
+        // 20s pre-fill; the 32MiB demuxer buffer keeps filling ahead after
+        // start, and cache-pause-wait bounds rebuffer pauses.
         MPVLib.setOptionString("cache", "yes")
         MPVLib.setOptionString("demuxer-max-bytes", "32MiB")
         MPVLib.setOptionString("demuxer-readahead-secs", "4")
@@ -83,17 +86,13 @@ class MpvPlayerView(context: Context) : TextureView(context), TextureView.Surfac
         // so we can build the track-picker UI and perform language auto-select.
         MPVLib.observeProperty("track-list",       MPVLib.MPV_FORMAT_STRING)
 
-        // TextureView fills the view with video; the WebView above provides UI
-        // transparency. Marking opaque avoids a redundant alpha-compositing pass.
-        isOpaque = true
-
-        surfaceTextureListener = this
+        holder.addCallback(this)
         Log.d(TAG, "MPV created and initialised")
     }
 
     /**
      * Queue a file for playback. Safe to call before the surface is ready —
-     * mpv buffers the command and starts decoding once onSurfaceTextureAvailable fires.
+     * mpv buffers the command and starts decoding once surfaceCreated fires.
      *
      * @param url     Direct HTTP URL, or the backend's /api/play?hash=… URL.
      * @param headers Optional "Key: Value\n…" string for http-header-fields.
@@ -104,6 +103,48 @@ class MpvPlayerView(context: Context) : TextureView(context), TextureView.Surfac
         }
         MPVLib.command(arrayOf("loadfile", url))
         Log.d(TAG, "loadfile → $url")
+    }
+
+    /**
+     * Stage a default subtitle font under mpv's config dir and enable it.
+     * Runs between MPVLib.create() and MPVLib.init() — config-dir is an
+     * init-time option. Best-effort: on failure mpv still plays video,
+     * subtitles just stay glyph-less as before.
+     */
+    private fun setupSubtitleFont() {
+        try {
+            val configDir = File(context.filesDir, "mpv")
+            val fontsDir = File(configDir, "fonts").apply { mkdirs() }
+            // subfont.ttf at the config-dir ROOT is load-bearing: mpv passes
+            // that exact file to libass as the default/fallback font, which is
+            // what actually renders SRT-style "sans-serif" subs — memory fonts
+            // from fonts/ are matched strictly by family name ("Roboto") and
+            // provide no fallback, so alone they still render zero glyphs
+            // ("fontselect: failed to find any fallback with glyph 0x0").
+            // The fonts/ copy stays so ASS subs can match a real family too.
+            val rootFont = File(configDir, "subfont.ttf")
+            val familyFont = File(fontsDir, "subfont.ttf")
+            if (!rootFont.exists() || rootFont.length() == 0L) {
+                // Roboto ships on all AOSP-derived devices; DroidSans is a
+                // legacy alias kept as fallback on some vendor skins.
+                val source = listOf(
+                    "/system/fonts/Roboto-Regular.ttf",
+                    "/system/fonts/DroidSans.ttf",
+                    "/system/fonts/NotoSans-Regular.ttf",
+                ).map(::File).firstOrNull { it.canRead() }
+                if (source == null) {
+                    Log.w(TAG, "no readable system font found — subtitles will not render")
+                    return
+                }
+                source.copyTo(rootFont, overwrite = true)
+                source.copyTo(familyFont, overwrite = true)
+                Log.d(TAG, "staged subtitle font from ${source.path}")
+            }
+            MPVLib.setOptionString("config", "yes")
+            MPVLib.setOptionString("config-dir", configDir.absolutePath)
+        } catch (e: Exception) {
+            Log.w(TAG, "subtitle font setup failed: ${e.message}")
+        }
     }
 
     fun pause()       = MPVLib.setPropertyBoolean("pause", true)
@@ -125,40 +166,30 @@ class MpvPlayerView(context: Context) : TextureView(context), TextureView.Surfac
 
     /** Release mpv. Must be called from Activity.onDestroy(). */
     fun destroy() {
-        surfaceTextureListener = null
+        holder.removeCallback(this)
         try { MPVLib.detachSurface() } catch (_: Exception) {}
-        surface?.release()
-        surface = null
         MPVLib.destroy()
         Log.d(TAG, "MPV destroyed")
     }
 
-    // ── TextureView.SurfaceTextureListener ───────────────────────────────────
+    // ── SurfaceHolder.Callback ────────────────────────────────────────────────
 
-    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-        Log.d(TAG, "onSurfaceTextureAvailable ${width}×${height}")
-        surface = Surface(st)
-        MPVLib.attachSurface(surface)
-        MPVLib.setPropertyString("android-surface-size", "${width}x${height}")
-        onSurfaceReady?.invoke()
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        Log.d(TAG, "surfaceCreated — attaching surface")
+        MPVLib.attachSurface(holder.surface)
+        // Tell mpv to start rendering if it was waiting for a surface
+        MPVLib.setPropertyString("android-surface-size",
+            "${holder.surfaceFrame.width()}x${holder.surfaceFrame.height()}")
     }
 
-    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) {
-        Log.d(TAG, "onSurfaceTextureSizeChanged ${width}×${height}")
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        Log.d(TAG, "surfaceChanged ${width}×${height}")
         MPVLib.setPropertyString("android-surface-size", "${width}x${height}")
     }
 
-    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-        Log.d(TAG, "onSurfaceTextureDestroyed — detaching surface")
-        onSurfaceDestroyed?.invoke()
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        Log.d(TAG, "surfaceDestroyed — detaching surface")
         try { MPVLib.detachSurface() } catch (_: Exception) {}
-        surface?.release()
-        surface = null
-        return true
-    }
-
-    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {
-        // no-op: frame updates are handled entirely by mpv's render thread
     }
 
     companion object {

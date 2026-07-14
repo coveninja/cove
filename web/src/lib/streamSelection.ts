@@ -6,6 +6,7 @@
 
 import type { Stream } from "$lib/types/addons";
 import { inferQuality } from "$lib/utils";
+import { codecCaps } from "$lib/platform";
 
 export type StreamSelectionMode =
   | "balanced"
@@ -158,6 +159,31 @@ const PROVIDER_BOOST = 0.15;
 // both the preferred provider AND the preferred source type gets 0.3.
 const SOURCE_BOOST = 0.15;
 
+// Streams the device cannot hardware-decode sink hard: mode metrics are
+// normalized 0..1 and the positive boosts cap at 0.3, so -0.5 pushes an
+// unsupported release below every supported alternative while still letting
+// it play when it's genuinely the only candidate (never a hard filter).
+const UNSUPPORTED_CODEC_PENALTY = 0.5;
+
+// Release-name heuristics for codecs that need explicit hardware support.
+// 10-bit HEVC ("x265 10bit", "HEVC Main 10", "Hi10P") software-decodes at
+// well under realtime on phone SoCs whose decoder lacks the Main 10 profile,
+// and AV1 is the same story on anything without an AV1 block.
+const TEN_BIT_RE = /10.?bits?\b|\bhi10p?\b|\bmain ?10\b/i;
+const AV1_RE = /\bav1\b/i;
+
+/** True when the device is known (via the Android shell's MediaCodecList
+ * probe) to lack hardware decode for what this release name advertises.
+ * Desktop/browser have no probe — codecCaps() is null and nothing sinks. */
+function isUnsupportedCodec(s: Stream): boolean {
+  const caps = codecCaps();
+  if (!caps) return false;
+  const text = `${s.name} ${s.title}`;
+  if (!caps.hevcMain10 && TEN_BIT_RE.test(text)) return true;
+  if (!caps.av1 && AV1_RE.test(text)) return true;
+  return false;
+}
+
 function scoreCandidates(
   streams: Stream[],
   preferredProvider?: string,
@@ -177,7 +203,9 @@ function scoreCandidates(
       quality: inferQuality(s),
       isPreferred,
       boost:
-        (isPreferred ? PROVIDER_BOOST : 0) + (matchesSource ? SOURCE_BOOST : 0),
+        (isPreferred ? PROVIDER_BOOST : 0) +
+        (matchesSource ? SOURCE_BOOST : 0) -
+        (isUnsupportedCodec(s) ? UNSUPPORTED_CODEC_PENALTY : 0),
     };
   });
 }

@@ -740,8 +740,11 @@
   //   - Center double-tap: undo the toggle only (no seek).
   //   - Movement threshold: 12px to distinguish taps from scroll/drag.
   //
-  // Touch events on control buttons are stopPropagation'd, so only taps on the
-  // transparent overlay area reach this handler.
+  // The control containers only stop propagation of CLICK events — touchend
+  // still bubbles from every button to this root handler (click-stoppers were
+  // enough in browser dev, where mouse input fires no touch events at all).
+  // So taps that originate on an interactive element are ignored here: the
+  // button's own click handler is the action, not a controls toggle.
 
   let containerEl = $state<HTMLDivElement | null>(null);
   let tapState: { time: number; x: number } | null = null;
@@ -749,6 +752,9 @@
   function handleTouchEnd(e: TouchEvent): void {
     const touch = e.changedTouches[0];
     if (!touch) return;
+
+    const target = e.target instanceof Element ? e.target : null;
+    if (target?.closest('button, a, input, [role="slider"]')) return;
 
     const x = touch.clientX;
     const now = Date.now();
