@@ -35,10 +35,10 @@
 
 ### Arch / CachyOS (PKGBUILD)
 
-One-liner install:
+Install via the AUR:
 
 ```sh
-cd "$(mktemp -d)" && curl -LO https://github.com/coveninja/cove/releases/latest/download/PKGBUILD && makepkg -si
+yay -S cove-bin
 ```
 
 Or download `PKGBUILD` from the [latest release](https://github.com/coveninja/cove/releases/latest) manually and run `makepkg -si` in the same directory. To update, repeat with the new release's `PKGBUILD`.
