@@ -190,7 +190,7 @@
     {/each}
 
     <!-- Continue watching -->
-    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
+    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} navEnabled={false} />
 
     <!-- Taste-driven rows -->
     {#each rows as row (row.key)}

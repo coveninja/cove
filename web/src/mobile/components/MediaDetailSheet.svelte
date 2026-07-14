@@ -482,6 +482,17 @@
           class="size-12 shrink-0 rounded-lg"
         />
 
+        <!-- Not interested -->
+        <Button
+                variant={dismissed ? "destructive" : "outline"}
+                size="icon"
+                class="size-12 shrink-0 rounded-lg"
+                onclick={toggleDismissed}
+                title={dismissed ? "Undo not interested" : "Not interested"}
+        >
+          <ThumbsDown class="size-4" />
+        </Button>
+
         <!-- Star rating -->
         <StarRating
           {libraryEntry}
@@ -489,17 +500,6 @@
           {lastAiredSeason}
           {lastAiredEpisode}
         />
-
-        <!-- Not interested -->
-        <Button
-          variant={dismissed ? "destructive" : "outline"}
-          size="icon"
-          class="size-12 shrink-0 rounded-lg"
-          onclick={toggleDismissed}
-          title={dismissed ? "Undo not interested" : "Not interested"}
-        >
-          <ThumbsDown class="size-4" />
-        </Button>
       </div>
 
       <!-- Episodes / choose a source toggle -->

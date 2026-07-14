@@ -177,7 +177,7 @@
   Full-bleed portrait hero: backdrop fills width at ~56vw height, gradient fades
   into background at the bottom so content rows flow directly below.
 -->
-<div class="relative w-full overflow-hidden" style="height: clamp(320px, 56vw, 480px);">
+<div class="relative w-full overflow-hidden" style="height: clamp(420px, 56vw, 480px);">
   <!-- Backdrop images: all pre-loaded, current one shown via opacity -->
   {#each backdropUrls as url, i (i)}
     {#if url}

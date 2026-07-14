@@ -190,7 +190,7 @@
       />
     {/each}
 
-    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
+    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} navEnabled={true}/>
 
     {#each rows as row (row.key)}
       <SmallRecommendations
