@@ -47,6 +47,18 @@ body:
       required: true
 
   - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Desktop — Windows
+        - Desktop — Linux
+        - Android (phone / tablet)
+        - Android TV
+    validations:
+      required: true
+
+  - type: dropdown
     id: install-method
     attributes:
       label: How did you install Cove?
@@ -55,6 +67,7 @@ body:
         - Windows zip / auto-updater
         - Flatpak
         - Arch package (PKGBUILD/AUR)
+        - Android APK (GitHub release / in-app updater)
         - Built from source
     validations:
       required: true
@@ -63,29 +76,31 @@ body:
     id: os
     attributes:
       label: Operating system
-      placeholder: e.g. Windows 11 24H2, Arch Linux, Fedora 42
+      placeholder: e.g. Windows 11 24H2, Arch Linux, Android 14, Google TV 12
     validations:
       required: true
 
   - type: input
     id: hardware
     attributes:
-      label: Hardware (GPU + CPU)
-      description: Mainly the GPU — rendering issues are often driver-specific. Mention if it's a laptop with hybrid graphics.
-      placeholder: e.g. RX 7700XT + Ryzen 5 3600
+      label: Hardware
+      description: On desktop, mainly the GPU — rendering issues are often driver-specific (mention if it's a laptop with hybrid graphics). On Android/Android TV, the exact device model — playback issues are usually specific to the SoC/GPU.
+      placeholder: e.g. RX 7700XT + Ryzen 5 3600, Pixel 8, Chromecast with Google TV 4K
     validations:
       required: false
 
   - type: textarea
     id: logs
     attributes:
-      label: shell.log
+      label: Logs (shell.log / logcat)
       description: |
-        Cove writes everything (shell, backend, mpv) to `shell.log`. **It is wiped on every launch**, so reproduce the problem first, then grab the file *before* starting Cove again.
+        **Desktop:** Cove writes everything (shell, backend, mpv) to `shell.log`. **It is wiped on every launch**, so reproduce the problem first, then grab the file *before* starting Cove again.
 
         - **Windows:** press `Win+R`, paste `%APPDATA%\cove\shell.log`, press Enter
         - **Linux:** `~/.config/cove/shell.log`
         - **Flatpak:** `~/.var/app/io.github.coveninja.Cove/config/cove/shell.log`
+
+        **Android / Android TV:** there is no log file — logs go to the system log. If you have `adb` set up, reproduce the problem, then run `adb logcat -d > cove-log.txt` and attach the file. If you can't use adb, skip this field and describe the problem as precisely as you can.
 
         Paste the contents below (it will be formatted automatically), or drag the file into the issue.
       render: text
