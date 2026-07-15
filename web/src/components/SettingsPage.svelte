@@ -9,6 +9,7 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
+  import { isAndroid, isAndroidTV } from "$lib/platform";
   import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
   import { api } from "$lib/api";
@@ -31,6 +32,10 @@
   let saved = $state(false);
   let saveTimer: ReturnType<typeof setTimeout>;
 
+  // Auto-update toggle — native pref, lives outside the Go settings store so
+  // it is readable before the backend is up. Only rendered on Android / Android TV.
+  let autoUpdateEnabled = $state(true);
+
   onMount(async () => {
     await settings.load();
     const unsub = settings.subscribe((v) => {
@@ -39,6 +44,10 @@
     unsub();
     loadAddons();
     loadNuvioRepos();
+    // Read the native auto-update preference. The method is optional — absent
+    // on desktop where __coveApp is undefined.
+    const nativeVal = window.__coveApp?.getAutoUpdateEnabled?.();
+    if (typeof nativeVal === "boolean") autoUpdateEnabled = nativeVal;
   });
 
   function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -791,6 +800,28 @@
                     : `Failed: ${algorithmTestResult.error}`}
                 </p>
               {/if}
+            </div>
+          {/if}
+
+          {#if isAndroid() || isAndroidTV()}
+            <Separator class="my-2" />
+            <div class="flex items-center justify-between py-3">
+              <div>
+                <Label for="auto-update" class="text-sm font-medium"
+                  >Auto-update</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Automatically download and install updates on launch.
+                </p>
+              </div>
+              <Switch
+                id="auto-update"
+                checked={autoUpdateEnabled}
+                onCheckedChange={(v) => {
+                  autoUpdateEnabled = v;
+                  window.__coveApp?.setAutoUpdateEnabled?.(v);
+                }}
+              />
             </div>
           {/if}
         </Tabs.Content>

@@ -103,7 +103,7 @@ class MpvBridge(
     private val SHIM_JS: String = """
 window.__covePlatform='$platformName';
 window.__coveCaps=${codecCapsJson()};
-window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();}};
+window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEnabled:function(){return CoveApp.getAutoUpdateEnabled();},setAutoUpdateEnabled:function(e){CoveApp.setAutoUpdateEnabled(e);}};
 (function(){
   var h={};
   window.__mpvEmit=function(name){

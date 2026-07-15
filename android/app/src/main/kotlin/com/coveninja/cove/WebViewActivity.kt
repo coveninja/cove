@@ -1,11 +1,16 @@
 package com.coveninja.cove
 
 import android.Manifest
+import android.app.PendingIntent
 import android.app.UiModeManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -25,7 +30,9 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.core.view.ViewCompat
@@ -36,12 +43,20 @@ import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewFeature
 import com.coveninja.cove.player.MpvBridge
 import com.coveninja.cove.player.MpvPlayerView
+import com.coveninja.cove.updater.ApkUpdater
+import com.coveninja.cove.updater.PackageInstallerReceiver
+import com.coveninja.cove.updater.UpdatePrefs
+import com.coveninja.cove.updater.UpdateResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 
 class WebViewActivity : ComponentActivity() {
 
@@ -68,6 +83,14 @@ class WebViewActivity : ComponentActivity() {
     // ── Safe-area insets (CSS px; −1 until the first inset callback fires) ────
     private var lastSafeTopCss    = -1f
     private var lastSafeBottomCss = -1f
+
+    // ── Updater UI refs (non-null only while the updater screen is shown) ─────
+    private var updaterStatusText: TextView? = null
+    private var updaterProgressBar: ProgressBar? = null
+
+    // Runtime receiver for ACTION_INSTALL_FAILED — registered in startInstallFlow,
+    // unregistered in onDestroy (and on fallback to normal UI).
+    private var installFailedReceiver: BroadcastReceiver? = null
 
     // ── Audio-focus listener (mirrors PlayerActivity exactly) ─────────────────
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -255,9 +278,8 @@ class WebViewActivity : ComponentActivity() {
             )
         })
 
-        // Back: if no WebView yet, fall back to backgrounding immediately.
-        // Otherwise, always dispatch Escape into the page — the mobile web shell
-        // is now the authority on when to background the app (via CoveApp.minimizeApp()).
+        // Back: if no WebView yet (including during the updater screen), background
+        // the app immediately. Otherwise, always dispatch Escape into the page.
         onBackPressedDispatcher.addCallback(this) {
             val wv  = webView ?: run { moveTaskToBack(true); return@addCallback }
             val esc = "document.dispatchEvent(new KeyboardEvent('keydown'," +
@@ -269,6 +291,20 @@ class WebViewActivity : ComponentActivity() {
 
         // Initialise AudioManager early (safe before any playback starts).
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        // Start the update check concurrently with the backend startup ping so
+        // we don't pay the 5 s timeout on top of the backend warm-up time.
+        // Any exception (offline, rate-limited, malformed JSON) produces null
+        // and the app launches normally — fail-open by design.
+        val updateCheck = lifecycleScope.async(Dispatchers.IO) {
+            if (!UpdatePrefs.isEnabled()) return@async null
+            try {
+                withTimeout(5_000) { ApkUpdater().checkForUpdate(BuildConfig.VERSION_CODE) }
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Update check failed: ${e.message}")
+                null
+            }
+        }
 
         // Poll /api/ping until the embedded Go backend is reachable.
         val pingUrl = BuildConfig.BACKEND_URL.replace("/api", "") + "/api/ping"
@@ -291,110 +327,267 @@ class WebViewActivity : ComponentActivity() {
                 if (!ready) delay(500)
             }
 
-            // Backend is up — build the real UI on the main thread.
+            // Backend is up — check update result then branch: updater or normal UI.
+            // The inner withTimeout can't interrupt OkHttp's blocking execute()
+            // (no suspension points), so bound the wait here too: a black-hole
+            // network must never delay launch beyond ~5 s.
+            val result = withTimeoutOrNull(5_000) { updateCheck.await() }
             withContext(Dispatchers.Main) {
-
-                // ── M3: mpv surface (INVISIBLE until FILE_LOADED) ─────────────
-                val mpv = MpvPlayerView(this@WebViewActivity).apply {
-                    visibility = View.INVISIBLE
+                if (result != null) {
+                    showUpdaterView()
+                    startInstallFlow(result)
+                } else {
+                    buildNormalUI()
                 }
-                mpvView = mpv
-
-                // ── M3: bridge (JS shim + MPVLib adapter) ────────────────────
-                val wv = WebView(this@WebViewActivity).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    setBackgroundColor(Color.TRANSPARENT)
-                }
-                webView = wv
-
-                // Audio-focus request (created once; request/abandon per-session)
-                audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                            .build()
-                    )
-                    .setOnAudioFocusChangeListener(audioFocusListener)
-                    .build()
-
-                // MediaSession — inactive until onFileLoaded
-                val session = MediaSessionCompat(this@WebViewActivity, "CovePlayer").apply {
-                    setCallback(object : MediaSessionCompat.Callback() {
-                        override fun onPlay()            { bridge?.resumeOnMain() }
-                        override fun onPause()           { bridge?.pauseOnMain() }
-                        override fun onSeekTo(pos: Long) { bridge?.seekOnMain(pos / 1000.0) }
-                        // FF/RW: ±30 s relative seek — sent by media remotes and lock-screen controls.
-                        override fun onFastForward()     { bridge?.seekRelativeOnMain(30.0) }
-                        override fun onRewind()          { bridge?.seekRelativeOnMain(-30.0) }
-                    })
-                    isActive = false
-                }
-                mediaSession = session
-
-                // MpvBridge: create() registers addDocumentStartJavaScript (if
-                // supported) and initialises mpv. Must happen before loadUrl.
-                val br = MpvBridge(mpv, wv, platformListener,
-                    platformName = if (isTV) "androidtv" else "android")
-                bridge = br
-                br.create()
-
-                // Register the JS interfaces BEFORE loadUrl so they are available
-                // immediately when the page's JS runs.
-                wv.addJavascriptInterface(br.jsInterface, "CoveMpv")
-                wv.addJavascriptInterface(AppJsInterface(), "CoveApp")
-
-                // A dark overlay placed above everything; hidden in onPageFinished
-                // so there is no blank-white flash while the Svelte bundle loads.
-                val pageOverlay = FrameLayout(this@WebViewActivity).apply {
-                    setBackgroundColor(Color.parseColor("#0A0A0A"))
-                    addView(
-                        ProgressBar(this@WebViewActivity).apply { isIndeterminate = true },
-                        FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER),
-                    )
-                }
-
-                wv.webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                        // Fallback shim injection when DOCUMENT_START_SCRIPT is
-                        // unavailable. When it IS supported, the shim was already
-                        // registered in br.create() and this is a no-op.
-                        if (!WebViewFeature.isFeatureSupported(
-                                androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                            br.injectShimFallback()
-                        }
-                    }
-
-                    override fun onPageFinished(view: WebView, url: String) {
-                        // Svelte app has painted — remove the loading overlay.
-                        pageOverlay.visibility = View.GONE
-                        // Re-inject safe-area values so a reload / HMR navigation
-                        // doesn't lose the custom properties set before page load.
-                        val top = lastSafeTopCss
-                        val bot = lastSafeBottomCss
-                        if (top >= 0f) {
-                            // Same documentElement guard as injectSafeArea.
-                            val js = "var de=document.documentElement;" +
-                                     "if(de){de.style.setProperty(" +
-                                     "'--cove-safe-top','${top}px');" +
-                                     "de.style.setProperty(" +
-                                     "'--cove-safe-bottom','${bot}px');}"
-                            view.evaluateJavascript(js, null)
-                        }
-                    }
-                }
-
-                setContentView(FrameLayout(this@WebViewActivity).apply {
-                    // ── M3: mpv surface renders behind the transparent web layer ──
-                    addView(mpv,        FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-                    addView(wv,         FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-                    addView(pageOverlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-                })
-
-                wv.loadUrl(BuildConfig.WEB_URL)
             }
+        }
+    }
+
+    // ── Normal UI builder ─────────────────────────────────────────────────────
+    // Extracted from the original withContext(Dispatchers.Main) block so it can
+    // be called either directly (no update) or as a fallback from startInstallFlow.
+    // Must be called on the main thread.
+
+    private fun buildNormalUI() {
+
+        // ── M3: mpv surface (INVISIBLE until FILE_LOADED) ─────────────
+        val mpv = MpvPlayerView(this).apply {
+            visibility = View.INVISIBLE
+        }
+        mpvView = mpv
+
+        // ── M3: bridge (JS shim + MPVLib adapter) ────────────────────
+        val wv = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        webView = wv
+
+        // Audio-focus request (created once; request/abandon per-session)
+        audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener(audioFocusListener)
+            .build()
+
+        // MediaSession — inactive until onFileLoaded
+        val session = MediaSessionCompat(this, "CovePlayer").apply {
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay()            { bridge?.resumeOnMain() }
+                override fun onPause()           { bridge?.pauseOnMain() }
+                override fun onSeekTo(pos: Long) { bridge?.seekOnMain(pos / 1000.0) }
+                // FF/RW: ±30 s relative seek — sent by media remotes and lock-screen controls.
+                override fun onFastForward()     { bridge?.seekRelativeOnMain(30.0) }
+                override fun onRewind()          { bridge?.seekRelativeOnMain(-30.0) }
+            })
+            isActive = false
+        }
+        mediaSession = session
+
+        // MpvBridge: create() registers addDocumentStartJavaScript (if
+        // supported) and initialises mpv. Must happen before loadUrl.
+        val br = MpvBridge(mpv, wv, platformListener,
+            platformName = if (isTV) "androidtv" else "android")
+        bridge = br
+        br.create()
+
+        // Register the JS interfaces BEFORE loadUrl so they are available
+        // immediately when the page's JS runs.
+        wv.addJavascriptInterface(br.jsInterface, "CoveMpv")
+        wv.addJavascriptInterface(AppJsInterface(), "CoveApp")
+
+        // A dark overlay placed above everything; hidden in onPageFinished
+        // so there is no blank-white flash while the Svelte bundle loads.
+        val pageOverlay = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#0A0A0A"))
+            addView(
+                ProgressBar(this@WebViewActivity).apply { isIndeterminate = true },
+                FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.CENTER),
+            )
+        }
+
+        wv.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                // Fallback shim injection when DOCUMENT_START_SCRIPT is
+                // unavailable. When it IS supported, the shim was already
+                // registered in br.create() and this is a no-op.
+                if (!WebViewFeature.isFeatureSupported(
+                        androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    br.injectShimFallback()
+                }
+            }
+
+            override fun onPageFinished(view: WebView, url: String) {
+                // Svelte app has painted — remove the loading overlay.
+                pageOverlay.visibility = View.GONE
+                // Re-inject safe-area values so a reload / HMR navigation
+                // doesn't lose the custom properties set before page load.
+                val top = lastSafeTopCss
+                val bot = lastSafeBottomCss
+                if (top >= 0f) {
+                    // Same documentElement guard as injectSafeArea.
+                    val js = "var de=document.documentElement;" +
+                             "if(de){de.style.setProperty(" +
+                             "'--cove-safe-top','${top}px');" +
+                             "de.style.setProperty(" +
+                             "'--cove-safe-bottom','${bot}px');}"
+                    view.evaluateJavascript(js, null)
+                }
+            }
+        }
+
+        setContentView(FrameLayout(this).apply {
+            // ── M3: mpv surface renders behind the transparent web layer ──
+            addView(mpv,        FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(wv,         FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(pageOverlay, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        })
+
+        wv.loadUrl(BuildConfig.WEB_URL)
+    }
+
+    // ── Updater screen ────────────────────────────────────────────────────────
+
+    /**
+     * Shows a blocking "Updating Cove…" screen while the download and install
+     * proceed. No focusable elements — TV D-pad safe. Back press backgrounds
+     * the app via the existing onBackPressedDispatcher callback (webView is
+     * still null at this point so it falls through to moveTaskToBack).
+     */
+    private fun showUpdaterView() {
+        val dp = resources.displayMetrics.density
+
+        val titleView = TextView(this).apply {
+            text = "Updating Cove…"
+            textSize = 20f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            isFocusable = false
+        }
+        val statusView = TextView(this).apply {
+            text = "Preparing…"
+            textSize = 14f
+            setTextColor(0xFFAAAAAA.toInt())
+            gravity = Gravity.CENTER
+            isFocusable = false
+        }
+        val progressView = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = false
+            max = 100
+            progress = 0
+            isFocusable = false
+        }
+
+        updaterStatusText  = statusView
+        updaterProgressBar = progressView
+
+        setContentView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#0F0F0F"))
+            val pad = (24 * dp).toInt()
+            setPadding(pad, pad, pad, pad)
+
+            val marginBottom16 = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+                .also { it.bottomMargin = (16 * dp).toInt() }
+            val marginBottom24 = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+                .also { it.bottomMargin = (24 * dp).toInt() }
+            val noMargin = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+
+            addView(titleView,    marginBottom16)
+            addView(statusView,   marginBottom24)
+            addView(progressView, noMargin)
+        })
+    }
+
+    /**
+     * Downloads and installs [result]. Shows progress in the updater view.
+     * Registers a runtime receiver for [PackageInstallerReceiver.ACTION_INSTALL_FAILED]
+     * so that any failure falls back to [buildNormalUI] instead of leaving
+     * the user stuck on the updater screen.
+     *
+     * Must be called on the main thread (registers a receiver and updates UI).
+     */
+    private fun startInstallFlow(result: UpdateResult) {
+        // Register a runtime receiver to catch install failures from PackageInstallerReceiver
+        // and fall back to the normal app UI. Unregistered in onDestroy.
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                android.util.Log.w(TAG, "Install failed broadcast received — falling back to normal UI")
+                unregisterInstallFailedReceiver()
+                buildNormalUI()
+            }
+        }
+        installFailedReceiver = receiver
+
+        val filter = IntentFilter(PackageInstallerReceiver.ACTION_INSTALL_FAILED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+
+        // Download on IO, post progress to the main thread via mainHandler.
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val destFile = File(cacheDir, "cove-update.apk")
+                val updater = ApkUpdater()
+                updater.cleanStaleCacheFiles(cacheDir)
+
+                mainHandler.post {
+                    updaterStatusText?.text = "Downloading…"
+                }
+
+                updater.downloadAndVerify(result.apkUrl, result.shaUrl, destFile) { progress ->
+                    mainHandler.post {
+                        updaterProgressBar?.progress = progress
+                        updaterStatusText?.text = "Downloading… $progress%"
+                    }
+                }
+
+                // Download + verify succeeded — hand off to PackageInstaller.
+                withContext(Dispatchers.Main) {
+                    updaterStatusText?.text = "Installing…"
+                    updaterProgressBar?.isIndeterminate = true
+                }
+
+                // FLAG_MUTABLE is mandatory on API 31+: PackageInstaller writes
+                // EXTRA_STATUS and EXTRA_INTENT into the PendingIntent's extras.
+                // An IMMUTABLE intent silently breaks the callback.
+                val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                } else {
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                }
+                val statusIntent = PendingIntent.getBroadcast(
+                    this@WebViewActivity,
+                    0,
+                    Intent(this@WebViewActivity, PackageInstallerReceiver::class.java),
+                    piFlags,
+                )
+                // Stays on the IO dispatcher: streaming the APK into the session
+                // is heavy disk I/O and would ANR on the main thread.
+                updater.installApk(this@WebViewActivity, destFile, statusIntent)
+                // PackageInstaller will now fire PackageInstallerReceiver asynchronously.
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Update flow failed: ${e.message}", e)
+                unregisterInstallFailedReceiver()
+                withContext(Dispatchers.Main) { buildNormalUI() }
+            }
+        }
+    }
+
+    private fun unregisterInstallFailedReceiver() {
+        installFailedReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: IllegalArgumentException) {}
+            installFailedReceiver = null
         }
     }
 
@@ -407,6 +600,7 @@ class WebViewActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterInstallFailedReceiver()
         bridge?.destroy()
         bridge = null
         mpvView = null
@@ -430,5 +624,22 @@ class WebViewActivity : ComponentActivity() {
         fun minimizeApp() {
             mainHandler.post { moveTaskToBack(true) }
         }
+
+        /** Returns the current auto-update preference. Thread-safe (SharedPreferences read). */
+        @JavascriptInterface
+        fun getAutoUpdateEnabled(): Boolean = UpdatePrefs.isEnabled()
+
+        /**
+         * Persists the auto-update preference from the web settings UI.
+         * SharedPreferences.apply() is async and thread-safe — no need to post.
+         */
+        @JavascriptInterface
+        fun setAutoUpdateEnabled(enabled: Boolean) {
+            UpdatePrefs.setEnabled(enabled)
+        }
+    }
+
+    companion object {
+        private const val TAG = "WebViewActivity"
     }
 }

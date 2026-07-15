@@ -11,6 +11,7 @@ import com.coveninja.cove.api.ServerModeStore
 import com.coveninja.cove.auth.TokenStore
 import com.coveninja.cove.service.CoveService
 import com.coveninja.cove.sync.SyncCoordinator
+import com.coveninja.cove.updater.UpdatePrefs
 
 /**
  * Application subclass. Only assembles configuration and starts CoveService.
@@ -38,6 +39,10 @@ class CoveApplication : Application() {
         // CoveApiClient (BASE URL + token interceptor) before any network call.
         ServerModeStore.init(this)
         CoveApiClient.applyMode(ServerModeStore.get())
+
+        // Initialise the auto-update preference store. Must happen before
+        // WebViewActivity reads UpdatePrefs.isEnabled() in its onCreate.
+        UpdatePrefs.init(this)
 
         // Initialise Keystore-backed token storage and pre-load any saved JWT
         // into CoveApiClient so the Authorization header is ready before the

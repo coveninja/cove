@@ -1,7 +1,11 @@
 declare global {
   interface Window {
     __covePlatform?: string;
-    __coveApp?: { minimizeApp(): void };
+    __coveApp?: {
+      minimizeApp(): void;
+      getAutoUpdateEnabled?(): boolean;
+      setAutoUpdateEnabled?(enabled: boolean): void;
+    };
     __coveCaps?: CodecCaps;
   }
 }

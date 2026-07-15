@@ -51,6 +51,11 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY", "")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        // UPDATE_BASE_URL overrides the GitHub API endpoint for local end-to-end
+        // update testing (e.g. "http://10.0.2.2:8000" pointing at python -m http.server).
+        // Empty string (the default) means use the real api.github.com endpoint.
+        val updateBaseUrl = localProps.getProperty("UPDATE_BASE_URL", "")
+        buildConfigField("String", "UPDATE_BASE_URL", "\"$updateBaseUrl\"")
     }
 
     // Release signing — CI-only. The keystore never lives in the repo: the

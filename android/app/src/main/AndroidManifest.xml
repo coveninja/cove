@@ -19,6 +19,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
+        REQUEST_INSTALL_PACKAGES is required for PackageInstaller to commit a
+        session. The system enforces the "install unknown apps" per-source grant
+        at install time; this permission just unlocks the API. On first use the
+        system prompts the user; subsequent self-updates are silent on API 31+
+        once Cove becomes its own installer-of-record.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
         Android TV: leanback is declared not-required so one APK installs on
         both phones and TVs; touchscreen not-required is mandatory for TV
         devices to pass install-time feature filtering.
@@ -71,6 +80,29 @@
             android:name=".service.CoveService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!--
+            Receives PackageInstaller commit status callbacks (STATUS_PENDING_USER_ACTION,
+            STATUS_SUCCESS, failure codes). Targeted via explicit component from
+            WebViewActivity so no intent-filter is needed. Not exported — only
+            this app's PendingIntent can trigger it.
+        -->
+        <receiver
+            android:name=".updater.PackageInstallerReceiver"
+            android:exported="false" />
+
+        <!--
+            Fires after a self-update installs successfully. ACTION_MY_PACKAGE_REPLACED
+            is exempt from background-broadcast restrictions (it is in the allowed-list
+            documented in the Android docs). Not exported — the OS delivers it directly.
+        -->
+        <receiver
+            android:name=".updater.PostUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>
