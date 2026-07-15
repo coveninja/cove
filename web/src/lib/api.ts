@@ -477,6 +477,22 @@ export const api = {
     }
   },
 
+  // Probes the liveness and Content-Length of a batch of direct-URL stream
+  // candidates. Results are returned in input order; URLs the backend's stream
+  // registry doesn't recognise come back with alive: false. Used by
+  // rankStreamsWithProbe to demote dead links before auto-select commits.
+  probeStreams: (
+    streams: { url: string }[],
+    timeoutMs = 700,
+    signal?: AbortSignal,
+  ): Promise<{ results: { url: string; alive: boolean; contentLength: number }[] }> =>
+    request(`/streams/probe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ streams, timeoutMs }),
+      ...(signal ? { signal } : {}),
+    }),
+
   // ── Player: source URL builders ───────────────────────────────────────────────
   //
   // These return strings rather than fetching — the URL is handed to mpv, a

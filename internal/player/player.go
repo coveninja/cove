@@ -82,6 +82,12 @@ type Player struct {
 	// idle connections and keeps TLS handshake overhead to a single session.
 	proxyTransport *http.Transport
 
+	// probeClient HEAD-checks direct stream URLs for /api/streams/probe. Built
+	// on SafeTransport (public-address-only) with a short header timeout —
+	// liveness check, not a delivery path — and kept separate from the
+	// streaming proxy transport so probe stalls never affect active playback.
+	probeClient *http.Client
+
 	// settings is the active settings store, used to read per-torrent user
 	// preferences (e.g. AllowUploading) without requiring a player restart.
 	// May be nil if the settings store failed to initialise.
@@ -170,6 +176,20 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		ForceAttemptHTTP2:     true,             // custom DialContext disables h2 by default; enables multiplexed Range requests
 		IdleConnTimeout:       90 * time.Second, // keep conns warm across pause/seek gaps
 	}
+	// Probe transport: SafeTransport (public-address-only) with a short
+	// ResponseHeaderTimeout — liveness check only, not a delivery path.
+	probeTransport := utils.SafeTransport()
+	probeTransport.ResponseHeaderTimeout = 800 * time.Millisecond
+	probeTransport.MaxIdleConnsPerHost = 5
+	probeClient := &http.Client{
+		Transport: probeTransport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 	return &Player{
 		client:         client,
 		activeTorrents: map[string]*torrentState{},
@@ -179,6 +199,7 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		streamHeaders:  map[string]streamHeaderEntry{},
 		dataDir:        dataDir,
 		proxyTransport: transport,
+		probeClient:    probeClient,
 		settings:       st,
 	}, nil
 }
@@ -262,6 +283,77 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// probeURL sends a HEAD request (or a Range GET fallback when the server
+// returns 405/501) to check whether a direct stream URL is alive. Returns
+// (alive, contentLength). contentLength is 0 when unknown. Respects ctx for
+// the overall probe timeout; connection reuse is handled by p.probeClient.
+func (p *Player) probeURL(ctx context.Context, streamURL string, headers map[string]string) (alive bool, contentLength int64) {
+	makeReq := func(method string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, method, streamURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	}
+
+	drainClose := func(resp *http.Response) {
+		if resp != nil && resp.Body != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+		}
+	}
+
+	// --- HEAD attempt ---
+	req, err := makeReq(http.MethodHead)
+	if err != nil {
+		return false, 0
+	}
+	resp, err := p.probeClient.Do(req)
+	if err != nil {
+		return false, 0
+	}
+
+	if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
+		drainClose(resp)
+		// Server refuses HEAD — retry with a 1-byte Range GET.
+		req, err = makeReq(http.MethodGet)
+		if err != nil {
+			return false, 0
+		}
+		req.Header.Set("Range", "bytes=0-0")
+		resp, err = p.probeClient.Do(req)
+		if err != nil {
+			return false, 0
+		}
+		defer drainClose(resp)
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			// Parse the total file size from Content-Range: bytes 0-0/TOTAL.
+			if cr := resp.Header.Get("Content-Range"); cr != "" {
+				if idx := strings.LastIndex(cr, "/"); idx >= 0 {
+					if n, perr := strconv.ParseInt(cr[idx+1:], 10, 64); perr == nil && n > 0 {
+						return true, n
+					}
+				}
+			}
+			return true, 0
+		}
+		return false, 0
+	}
+
+	defer drainClose(resp)
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		cl := resp.ContentLength
+		if cl < 0 {
+			cl = 0
+		}
+		return true, cl
+	}
+	return false, 0
 }
 
 // videoExtensions is the set of container extensions selectFile considers a
@@ -943,6 +1035,84 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			log.Println(err)
 			return
 		}
+	}))
+
+	// POST /api/streams/probe — HEAD-checks a batch of direct-URL streams and
+	// reports which are reachable. Only URLs previously issued by /api/streams
+	// (in the rememberStream registry) are probed — unknown URLs return alive:false
+	// without making any outbound request, so this can't be used as a proxy.
+	//
+	// Request:  {"streams":[{"url":"..."}], "timeoutMs":700}
+	// Response: {"results":[{"url":"...","alive":true,"contentLength":123}]}
+	mux.HandleFunc("/api/streams/probe", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			Streams []struct {
+				URL string `json:"url"`
+			} `json:"streams"`
+			TimeoutMs int `json:"timeoutMs"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if len(req.Streams) == 0 || len(req.Streams) > 10 {
+			http.Error(w, "streams must contain 1–10 entries", http.StatusBadRequest)
+			return
+		}
+
+		timeoutMs := req.TimeoutMs
+		if timeoutMs == 0 {
+			timeoutMs = 700
+		}
+		if timeoutMs < 100 {
+			timeoutMs = 100
+		}
+		if timeoutMs > 800 {
+			timeoutMs = 800
+		}
+
+		type probeResult struct {
+			URL           string `json:"url"`
+			Alive         bool   `json:"alive"`
+			ContentLength int64  `json:"contentLength,omitempty"`
+		}
+
+		results := make([]probeResult, len(req.Streams))
+		for i, s := range req.Streams {
+			results[i].URL = s.URL
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutMs)*time.Millisecond)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		for i, s := range req.Streams {
+			headers, known := p.lookupStream(s.URL)
+			if !known {
+				continue // results[i].Alive stays false — not our URL
+			}
+			wg.Add(1)
+			go func(idx int, streamURL string, hdrs map[string]string) {
+				defer wg.Done()
+				alive, cl := p.probeURL(ctx, streamURL, hdrs)
+				results[idx].Alive = alive
+				if cl > 0 {
+					results[idx].ContentLength = cl
+				}
+			}(i, s.URL, headers)
+		}
+		wg.Wait()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Results []probeResult `json:"results"`
+		}{Results: results})
 	}))
 
 	mux.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {

@@ -8,7 +8,7 @@ import type { Stream } from "$lib/types/addons";
 import type { PlayerSession } from "$lib/types/types";
 import { get } from "svelte/store";
 import { settings } from "$lib/stores/settings";
-import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
+import { rankStreamsWithProbe, type StreamSelectionMode } from "$lib/streamSelection";
 import { api } from "$lib/api";
 import { Player } from "$lib/player/player.svelte";
 
@@ -179,11 +179,13 @@ class PlaybackStore {
 
     const s = get(settings);
     const mode = (s?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
-    const ranked = rankStreams(streams, mode, {
+    const ranked = await rankStreamsWithProbe(streams, mode, {
       measuredBandwidthMbps: s?.measuredBandwidthMbps,
       preferredProvider: s?.defaultProvider,
       sourcePreference: s?.sourcePreference,
-    });
+      probeEnabled: s?.probeStreams ?? true,
+    }, ctrl.signal);
+    if (myToken !== this.#quickPlayToken) return;
     const best = ranked[0] ?? null;
     if (!best) {
       this.quickPlayPending = { media, message: "No stream found" };
@@ -256,6 +258,17 @@ class PlaybackStore {
     this.closePlayer();
     this.showPlaybackToast("Couldn't start playback automatically", 4000);
     this.#openMediaDetail?.(media);
+  }
+
+  /** Cancels an in-progress quickPlay: aborts the in-flight stream fetch,
+   * bumps the stale-token counter so any completions that slip through the
+   * abort window hit the existing guards and exit silently, and clears the
+   * loading overlay. Safe to call at any time; no-ops when idle.
+   */
+  cancelQuickPlay(): void {
+    this.#quickPlayAbort?.abort();
+    this.#quickPlayToken++;
+    this.quickPlayPending = null;
   }
 
   closePlayer(): void {

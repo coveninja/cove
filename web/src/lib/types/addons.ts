@@ -95,6 +95,17 @@ export interface Subtitle {
   url: string;
   lang: string;
 }
+/**
+ * StreamBehaviorHints is the subset of Stremio's behaviorHints object we
+ * retain. VideoSize, when present, is a structured byte size — more reliable
+ * than parsing the free-text title — and is promoted into Stream.SizeBytes
+ * by classifyStream when SizeBytes is unset.
+ */
+export interface StreamBehaviorHints {
+  notWebReady?: boolean;
+  bingeGroup?: string;
+  videoSize?: number /* int64 */;
+}
 export interface Stream {
   name: string;
   title: string;
@@ -116,6 +127,25 @@ export interface Stream {
    * redirect can't carry them to the origin.
    */
   headers?: { [key: string]: string};
+  /**
+   * BehaviorHints is the raw hints object from the addon response. They were
+   * previously dropped at decode because the field didn't exist; adding it
+   * lets encoding/json pick them up. classifyStream promotes VideoSize into
+   * SizeBytes when the latter is unset.
+   */
+  behaviorHints?: StreamBehaviorHints;
+  /**
+   * Cached is true when confirmed debrid-cached (instant retrieval).
+   * Classifier is conservative, prefers false-negatives.
+   */
+  cached?: boolean;
+  /**
+   * Debrid is the detected debrid service ("RealDebrid", "AllDebrid",
+   * "Premiumize", "TorBox", "Offcloud", "Debrid-Link", or generic "Debrid");
+   * set for cached and uncached debrid streams; empty for plain
+   * torrents/unknown direct streams.
+   */
+  debrid?: string;
 }
 /**
  * WatchOption represents a streaming service availability entry from JustWatch.
@@ -127,6 +157,10 @@ export interface WatchOption {
   type: string; // "flatrate", "rent", or "buy"
   link: string; // JustWatch/provider page to open in browser
 }
+
+//////////
+// source: debrid.go
+
 
 //////////
 // source: introdb.go

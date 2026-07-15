@@ -79,6 +79,13 @@ type Settings struct {
 	// Off means never upload. Default true.
 	AllowUploading bool `json:"allowUploading"`
 
+	// ProbeStreams enables the pre-playback liveness probe: before auto-select
+	// commits to a stream, the top direct-URL candidates are HEAD-checked so
+	// dead scraper links get demoted instead of failing at playback. Costs
+	// ~700ms of auto-select latency; some CDNs refuse HEAD, in which case the
+	// probe falls back to a 1-byte Range GET.
+	ProbeStreams bool `json:"probeStreams"`
+
 	// Remote access (Phase 5) — opens a separate LAN listener so other devices
 	// (e.g. the Android app in thin-client mode) can reach this backend over the
 	// local network. Settings are per-profile; remote access follows whichever
@@ -131,6 +138,7 @@ var defaultSettings = Settings{
 	SourcePreference:      "",
 	PrefetchNextEpisode:   true,
 	AllowUploading:        true,
+	ProbeStreams:          true,
 	RemoteAccessEnabled:   false,
 	RemoteAccessToken:     "",
 }

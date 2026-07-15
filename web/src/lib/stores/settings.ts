@@ -31,6 +31,7 @@ const DEFAULTS: Settings = {
   prefetchStreams: true,
   prefetchNextEpisode: true,
   allowUploading: true,
+  probeStreams: true,
   updatedAt: "",
   remoteAccessEnabled: false,
   remoteAccessToken: ""

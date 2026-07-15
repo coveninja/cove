@@ -16,6 +16,7 @@
     getSizeBytes,
     isTorrentStream,
     rankStreams,
+    rankStreamsWithProbe,
     type StreamSelectionMode,
   } from "$lib/streamSelection";
   import {Skeleton} from "$lib/components/ui/skeleton";
@@ -373,16 +374,16 @@
       !alreadyPlayingThisSelection &&
       streams.length > 0
     ) {
-      const ranked = rankStreams(
-        streams,
-        ($settings.streamSelectionMode as StreamSelectionMode) ?? "balanced",
-        {
-          measuredBandwidthMbps: $settings.measuredBandwidthMbps,
-          preferredProvider: $settings.defaultProvider,
-          sourcePreference: $settings.sourcePreference,
-        },
-      );
-      const best = ranked[0] ?? null;
+      const selectionMode = ($settings.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+      const rankOpts = {
+        measuredBandwidthMbps: $settings.measuredBandwidthMbps,
+        preferredProvider: $settings.defaultProvider,
+        sourcePreference: $settings.sourcePreference,
+      };
+      // Synchronous initial ranking — drives the log line and the fallback
+      // used when the probe doesn't land before the 500ms window closes.
+      const initialRanking = rankStreams(streams, selectionMode, rankOpts);
+      const best = initialRanking[0] ?? null;
       if (best) {
         const mode = $settings.streamSelectionMode ?? "balanced";
         console.log(
@@ -390,20 +391,30 @@
           best,
         );
         autoPicking = true;
+        // Background probe: re-rank with dead links demoted and probed
+        // Content-Lengths filling unknown sizes. Fills probedRanking before
+        // the 500ms timer fires if the backend responds in time.
+        let probedRanking: Stream[] | null = null;
+        rankStreamsWithProbe(streams, selectionMode, { ...rankOpts, probeEnabled: $settings.probeStreams ?? true }, signal)
+          .then((ranked) => {
+            if (seq === fetchSeq && !autoPickCancelled) probedRanking = ranked;
+          })
+          .catch(() => {});
         // Small delay so the "Auto-selecting…" message and its cancel
         // button actually get a moment on screen before playback starts.
         autoPickTimer = setTimeout(() => {
           autoPickTimer = null;
           if (seq === fetchSeq && !autoPickCancelled) {
+            const ranking = probedRanking ?? initialRanking;
             // Pass a handful of runner-up candidates so App.svelte's
             // watchdog (B2) can auto-advance to the next one if this pick
             // turns out to be dead, without a full re-fetch.
             onPlayStream(
-              best,
+              ranking[0],
               selectedSeason ?? undefined,
               selectedEpisode?.episode_number,
               selectedEpisode?.name,
-              ranked.slice(0, 5),
+              ranking.slice(0, 5),
             );
           }
         }, 500);

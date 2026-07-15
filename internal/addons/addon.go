@@ -169,6 +169,16 @@ type Subtitle struct {
 	Lang string `json:"lang"`
 }
 
+// StreamBehaviorHints is the subset of Stremio's behaviorHints object we
+// retain. VideoSize, when present, is a structured byte size — more reliable
+// than parsing the free-text title — and is promoted into Stream.SizeBytes
+// by classifyStream when SizeBytes is unset.
+type StreamBehaviorHints struct {
+	NotWebReady bool   `json:"notWebReady,omitempty"`
+	BingeGroup  string `json:"bingeGroup,omitempty"`
+	VideoSize   int64  `json:"videoSize,omitempty"`
+}
+
 type Stream struct {
 	Name      string     `json:"name"`
 	Title     string     `json:"title"`
@@ -186,6 +196,19 @@ type Stream struct {
 	// /api/play proxies the request instead of redirecting, since a bare
 	// redirect can't carry them to the origin.
 	Headers map[string]string `json:"headers,omitempty"`
+	// BehaviorHints is the raw hints object from the addon response. They were
+	// previously dropped at decode because the field didn't exist; adding it
+	// lets encoding/json pick them up. classifyStream promotes VideoSize into
+	// SizeBytes when the latter is unset.
+	BehaviorHints *StreamBehaviorHints `json:"behaviorHints,omitempty"`
+	// Cached is true when confirmed debrid-cached (instant retrieval).
+	// Classifier is conservative, prefers false-negatives.
+	Cached bool `json:"cached,omitempty"`
+	// Debrid is the detected debrid service ("RealDebrid", "AllDebrid",
+	// "Premiumize", "TorBox", "Offcloud", "Debrid-Link", or generic "Debrid");
+	// set for cached and uncached debrid streams; empty for plain
+	// torrents/unknown direct streams.
+	Debrid string `json:"debrid,omitempty"`
 }
 
 // WatchOption represents a streaming service availability entry from JustWatch.

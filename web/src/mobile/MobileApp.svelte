@@ -8,7 +8,7 @@
   import type { Person, Provider } from "$lib/api";
   import MobilePlayer from "./components/MobilePlayer.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
-  import { Cog } from "lucide-svelte";
+  import { Cog, X } from "lucide-svelte";
 
   import type { Page } from "$lib/types/types";
   import MobileHomePage from "./pages/MobileHomePage.svelte";
@@ -181,6 +181,11 @@
 
     if (selectedMedia) {
       selectedMedia = null;
+      return;
+    }
+
+    if (playback.quickPlayPending) {
+      playback.cancelQuickPlay();
       return;
     }
 
@@ -504,6 +509,15 @@
           <p class="relative z-10 mt-4 text-sm text-white/50">
             {playback.quickPlayPending.message}
           </p>
+          <button
+            type="button"
+            class="relative z-10 mt-6 flex min-h-[44px] items-center gap-2 rounded-full border border-white/20 px-5 py-3 text-base text-white/60 transition active:bg-white/10 active:text-white"
+            onclick={() => playback.cancelQuickPlay()}
+            aria-label="Cancel"
+          >
+            <X class="size-5" />
+            Cancel
+          </button>
         </div>
       {/if}
 

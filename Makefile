@@ -42,7 +42,7 @@ ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
 export ANDROID_HOME
 export ANDROID_NDK_HOME
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch clean android-aar android android-install tv-avd tv-install
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch minor major clean android-aar android android-install tv-avd tv-install
 
 all: build
 
@@ -101,10 +101,13 @@ hot: go qt
 hot-debug: go qt
 	QTWEBENGINE_REMOTE_DEBUGGING=9222 bash scripts/dev-hot.sh
 
-## Bump patch version in web/package.json, stage all pending changes, commit,
-## and tag for release. Pass TITLE="..." to override the default commit title
-## and/or MSG="..." to add a commit message body note (multi-line is fine),
-## e.g. `make patch TITLE="fix quick-play loading state"`.
+## Bump the version in web/package.json, stage all pending changes, commit,
+## and tag for release. `make patch` bumps 0.22.5 -> 0.22.6, `make minor`
+## bumps 0.22.5 -> 0.23.0, `make major` bumps 0.22.5 -> 1.0.0 (the target
+## name is passed straight to `npm version`). Pass TITLE="..." to override
+## the default commit title and/or MSG="..." to add a commit message body
+## note (multi-line is fine). All commits since the last release tag are
+## appended to the commit body as GitHub links, underneath MSG.
 ## Then push with: git push origin master v<version>
 ##
 ## TITLE/MSG reach the recipe via the environment ($$TITLE/$$MSG), NOT via
@@ -113,14 +116,26 @@ hot-debug: go qt
 ## into broken shell lines ("unexpected EOF while looking for matching quote").
 ## Environment values pass through the shell untouched, newlines and all.
 export TITLE MSG
-patch:
-	cd $(WEB_DIR) && npm version patch --no-git-tag-version
+patch minor major:
+	cd $(WEB_DIR) && npm version $@ --no-git-tag-version
 	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
 	TITLE="$${TITLE:-chore: bump version to v$$NEW_VER}"; \
+	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || true); \
+	LOG=""; \
+	if [ -n "$$LAST_TAG" ]; then \
+		LOG=$$(git log --reverse --format="- %s%n  https://github.com/coveninja/cove/commit/%H" "$$LAST_TAG"..HEAD); \
+	fi; \
+	if [ -n "$$MSG" ] && [ -n "$$LOG" ]; then \
+		BODY=$$(printf '%s\n\nCommits since %s:\n%s' "$$MSG" "$$LAST_TAG" "$$LOG"); \
+	elif [ -n "$$LOG" ]; then \
+		BODY=$$(printf 'Commits since %s:\n%s' "$$LAST_TAG" "$$LOG"); \
+	else \
+		BODY="$$MSG"; \
+	fi; \
 	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$$NEW_VER\" date=\"$$(date +%Y-%m-%d)\"/>|" flatpak/io.github.coveninja.Cove.metainfo.xml && \
 	git add -A && \
-	if [ -n "$$MSG" ]; then \
-		git commit -m "$$TITLE" -m "$$MSG"; \
+	if [ -n "$$BODY" ]; then \
+		git commit -m "$$TITLE" -m "$$BODY"; \
 	else \
 		git commit -m "$$TITLE"; \
 	fi && \

@@ -290,6 +290,7 @@ func (m *Manager) getAllStreams(ctx context.Context, mediaType string, stremioID
 			tagged := make([]Stream, len(streams))
 			for j, s := range streams {
 				s.AddonName = addon.Manifest.Name
+				classifyStream(&s, addon.Manifest.Name, addon.URL)
 				tagged[j] = s
 			}
 			results[i] = tagged

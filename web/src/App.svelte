@@ -30,6 +30,7 @@
   import { auth } from "$lib/stores/auth.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import { Spinner } from "$lib/components/ui/spinner";
+  import { X } from "lucide-svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
   // avoiding any $effect timing gap between auth state changing and the token
@@ -65,7 +66,7 @@
   let currentPage = $state<Page>({ type: "home" });
   let pageHistory = $state<Page[]>([]);
 
-  const canGoBack = $derived(playback.playerMode === "full" || pageHistory.length > 0);
+  const canGoBack = $derived(playback.playerMode === "full" || pageHistory.length > 0 || !!playback.quickPlayPending);
 
   // Whether the active/floating stream belongs to the media page currently
   // on screen — used to stop the trailer from playing underneath it, and to
@@ -237,6 +238,12 @@
   function goBack(): void {
     // Navigating away dismisses the detail overlay.
     selectedMedia = null;
+
+    // Loading overlay is showing — cancel the in-flight quickPlay.
+    if (playback.quickPlayPending) {
+      playback.cancelQuickPlay();
+      return;
+    }
 
     // While the player is shown full-size, "back" closes the stream and reveals
     // the page underneath (which was only hidden, never left).
@@ -536,6 +543,15 @@
           <p class="relative z-10 mt-4 text-sm text-white/50">
             {playback.quickPlayPending.message}
           </p>
+          <button
+            type="button"
+            class="relative z-10 mt-6 flex items-center gap-2 rounded-full border border-white/20 px-4 py-2 text-sm text-white/60 transition hover:bg-white/10 hover:text-white"
+            onclick={() => playback.cancelQuickPlay()}
+            aria-label="Cancel"
+          >
+            <X class="size-4" />
+            Cancel
+          </button>
         </div>
       {/if}
 

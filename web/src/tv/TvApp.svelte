@@ -29,6 +29,7 @@
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
   import { navigate, focusFirst } from "./focus/focusStore.svelte";
+  import { X } from "lucide-svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -187,6 +188,15 @@
     }
   }
 
+  // ── quickPlayPending cancel button ref (autofocus when overlay appears) ──────
+  let cancelBtn = $state<HTMLButtonElement | null>(null);
+
+  $effect(() => {
+    if (playback.quickPlayPending && cancelBtn) {
+      cancelBtn.focus();
+    }
+  });
+
   // ── TvPlayer sheet-close hook for Escape priority ────────────────────────────
   // TvPlayer (M6) registers this via onRegisterCloseSheets; returns true if it
   // closed a sheet (caller stops processing Escape further).
@@ -238,6 +248,12 @@
       // Step 2: media detail open — close overlay and restore focus to opener
       if (selectedMedia) {
         await closeDetailOverlay();
+        return;
+      }
+
+      // Step 2.5: quickPlay loading overlay — cancel the in-flight fetch
+      if (playback.quickPlayPending) {
+        playback.cancelQuickPlay();
         return;
       }
 
@@ -532,6 +548,16 @@
           <p class="relative z-10 mt-4 text-base text-white/50">
             {playback.quickPlayPending.message}
           </p>
+          <button
+            bind:this={cancelBtn}
+            type="button"
+            class="relative z-10 mt-8 flex items-center gap-2 rounded-full border border-white/25 px-6 py-3 text-base text-white/70 transition hover:bg-white/10 hover:text-white"
+            onclick={() => playback.cancelQuickPlay()}
+            aria-label="Cancel"
+          >
+            <X class="size-5" />
+            Cancel
+          </button>
         </div>
       {/if}
 

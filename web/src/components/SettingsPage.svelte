@@ -530,6 +530,24 @@
           <Separator />
 
           <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="probe-streams" class="text-sm font-medium"
+                >Verify streams before auto-selecting</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Checks that top candidates are reachable before playback
+                starts. Adds a brief delay but avoids picking dead links.
+              </p>
+            </div>
+            <Switch
+              id="probe-streams"
+              checked={draft.probeStreams}
+              onCheckedChange={(v) => patch("probeStreams", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
             <div class="pr-4">
               <Label class="text-sm font-medium">Selection strategy</Label>
               <p class="text-xs text-muted-foreground">

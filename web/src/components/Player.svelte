@@ -580,14 +580,17 @@
   $effect(() => {
     if (appliedSubDefault || !canPlay) return;
     if (!$settings?.subtitlesEnabled) return;
-    appliedSubDefault = true;
     const lang = $settings.defaultSubtitleLang;
-
     const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
     if (embedded) {
+      appliedSubDefault = true;
       selectSubtitle({ kind: "embedded", id: embedded.id });
       return;
     }
+    // External list hasn't arrived yet — don't latch; this effect re-runs
+    // when the subtitle fetch resolves and externalSubtitles updates.
+    if (externalSubtitles.length === 0) return;
+    appliedSubDefault = true;
     const ext =
             externalSubtitles.find((s) => langMatches(s.lang, lang)) ?? externalSubtitles[0];
     if (ext) selectSubtitle({ kind: "external", id: ext.id });

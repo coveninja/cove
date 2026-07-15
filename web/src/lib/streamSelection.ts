@@ -7,6 +7,7 @@
 import type { Stream } from "$lib/types/addons";
 import { inferQuality } from "$lib/utils";
 import { codecCaps } from "$lib/platform";
+import { api } from "$lib/api";
 
 export type StreamSelectionMode =
   | "balanced"
@@ -94,18 +95,39 @@ export function getSizeBytes(stream: Stream): number {
   // size in free-text titles.
   if (stream.sizeBytes && stream.sizeBytes > 0) return stream.sizeBytes;
   const match = stream.title.match(/💾\s*([\d.]+)\s*(TB|GB|MB)/i);
-  if (!match) return 0;
-  const value = Number(match[1]);
-  switch (match[2].toUpperCase()) {
-    case "TB":
-      return value * 1024 ** 4;
-    case "GB":
-      return value * 1024 ** 3;
-    case "MB":
-      return value * 1024 ** 2;
-    default:
-      return 0;
+  if (match) {
+    const value = Number(match[1]);
+    switch (match[2].toUpperCase()) {
+      case "TB":
+        return value * 1024 ** 4;
+      case "GB":
+        return value * 1024 ** 3;
+      case "MB":
+        return value * 1024 ** 2;
+      default:
+        return 0;
+    }
   }
+  // Plain-text size tokens ("1.4 GB") for non-torrent streams only. Torrent
+  // titles are excluded to avoid false positives: release names and pack
+  // metadata often contain number+unit strings that don't represent file size.
+  if (!isTorrentStream(stream)) {
+    const plainMatch = stream.title.match(/\b([\d.]+)\s*(TB|GB|MB)\b/i);
+    if (plainMatch) {
+      const value = Number(plainMatch[1]);
+      switch (plainMatch[2].toUpperCase()) {
+        case "TB":
+          return value * 1024 ** 4;
+        case "GB":
+          return value * 1024 ** 3;
+        case "MB":
+          return value * 1024 ** 2;
+        default:
+          return 0;
+      }
+    }
+  }
+  return 0;
 }
 
 /** One-line summary for logging — "seeders / size / quality". */
@@ -136,6 +158,10 @@ interface ScoredStream {
    * matches, precomputed once per candidate so rankByBoosted doesn't need to
    * know about either concept. */
   boost: number;
+  /** True when confirmed dead by the pre-playback probe. Dead streams have
+   * DEAD_LINK_PENALTY subtracted from their boost so they sink below all live
+   * candidates while remaining in the ranked list for watchdog fallback. */
+  dead: boolean;
 }
 
 /** "" (none) | "torrent" | "direct" — see Settings.sourcePreference. */
@@ -165,6 +191,19 @@ const SOURCE_BOOST = 0.15;
 // it play when it's genuinely the only candidate (never a hard filter).
 const UNSUPPORTED_CODEC_PENALTY = 0.5;
 
+// Sinks confirmed-dead links below every live candidate (including
+// codec-penalized ones) while keeping them ranked so the watchdog fallback
+// list still has entries.
+const DEAD_LINK_PENALTY = 2.0;
+
+// Reliability scores for direct-URL (non-torrent) streams:
+//   - debrid-cached: instant retrieval, effectively always available
+//   - uncached debrid: goes through a download queue, much less reliable
+//   - plain direct HTTP: moderately reliable (single origin, no swarm backing)
+const CACHED_RELIABILITY = 0.95;
+const UNCACHED_DEBRID_RELIABILITY = 0.3;
+const DIRECT_RELIABILITY = 0.6;
+
 // Release-name heuristics for codecs that need explicit hardware support.
 // 10-bit HEVC ("x265 10bit", "HEVC Main 10", "Hi10P") software-decodes at
 // well under realtime on phone SoCs whose decoder lacks the Main 10 profile,
@@ -188,6 +227,8 @@ function scoreCandidates(
   streams: Stream[],
   preferredProvider?: string,
   sourcePreference?: string,
+  deadUrls?: ReadonlySet<string>,
+  probedSizes?: ReadonlyMap<string, number>,
 ): ScoredStream[] {
   return streams.map((s) => {
     const isTorrent = isTorrentStream(s);
@@ -195,17 +236,25 @@ function scoreCandidates(
     const matchesSource =
       (sourcePreference === "torrent" && isTorrent) ||
       (sourcePreference === "direct" && !isTorrent);
+    const dead = !!s.url && !!deadUrls?.has(s.url);
+    // Use probed Content-Length to fill unknown sizes (probe results; probe
+    // only covers non-torrent direct-URL candidates).
+    const baseSizeBytes = getSizeBytes(s);
+    const sizeBytes =
+      baseSizeBytes > 0 ? baseSizeBytes : (s.url ? (probedSizes?.get(s.url) ?? 0) : 0);
     return {
       stream: s,
       isTorrent,
       seeders: getSeeders(s),
-      sizeBytes: getSizeBytes(s),
+      sizeBytes,
       quality: inferQuality(s),
       isPreferred,
+      dead,
       boost:
         (isPreferred ? PROVIDER_BOOST : 0) +
         (matchesSource ? SOURCE_BOOST : 0) -
-        (isUnsupportedCodec(s) ? UNSUPPORTED_CODEC_PENALTY : 0),
+        (isUnsupportedCodec(s) ? UNSUPPORTED_CODEC_PENALTY : 0) -
+        (dead ? DEAD_LINK_PENALTY : 0),
     };
   });
 }
@@ -273,6 +322,10 @@ export interface PickBestOptions {
   preferredProvider?: string;
   /** "" | "torrent" | "direct" — see Settings.sourcePreference. */
   sourcePreference?: string;
+  /** URLs confirmed dead by the pre-playback probe; matched streams are demoted. */
+  deadUrls?: ReadonlySet<string>;
+  /** Probe results: contentLength fills unknown sizes when getSizeBytes returns 0. */
+  probedSizes?: ReadonlyMap<string, number>;
 }
 
 /**
@@ -291,7 +344,7 @@ export function rankStreams(
 ): Stream[] {
   if (streams.length === 0) return [];
 
-  const all = scoreCandidates(streams, opts.preferredProvider, opts.sourcePreference);
+  const all = scoreCandidates(streams, opts.preferredProvider, opts.sourcePreference, opts.deadUrls, opts.probedSizes);
   // A zero-seeder torrent will likely never actually start downloading, so
   // it's excluded from the primary pool — unless it's literally the only
   // option. Direct HTTP streams (Nuvio, etc.) have no seeder concept at
@@ -302,15 +355,18 @@ export function rankStreams(
 
   // Normalized 0..1 "will this actually start playing" score. Torrents need
   // peers to ramp up, so it's their seeder count relative to the best
-  // available. A direct HTTP stream has no such ramp-up but also no swarm
-  // backing it — no peer count to fall back on if the single origin server
-  // is slow or dead, unlike a torrent with many seeders. Scored as
-  // moderately (not fully) reliable: better than a middling torrent, worse
-  // than a well-seeded one, so seeders/bandwidth modes don't let an
-  // unverified HTTP link float to the top over a torrent with real swarm
-  // health just because HTTP streams used to be hardcoded to 1.0.
+  // available. For direct HTTP streams the score reflects how reliably the
+  // origin delivers the file: debrid-cached streams are instant, uncached
+  // debrid goes through a download queue, and plain HTTP is moderate (single
+  // origin, no swarm backing). Constants are defined near the top of the file.
   const reliability = (c: ScoredStream, maxSeeders: number) =>
-    c.isTorrent ? c.seeders / maxSeeders : 0.6;
+    c.isTorrent
+      ? c.seeders / maxSeeders
+      : c.stream.cached
+        ? CACHED_RELIABILITY
+        : c.stream.debrid
+          ? UNCACHED_DEBRID_RELIABILITY
+          : DIRECT_RELIABILITY;
 
   const qualityTiebreak = (a: ScoredStream, b: ScoredStream) => {
     const qDiff = qualityRank(b.quality) - qualityRank(a.quality);
@@ -429,4 +485,46 @@ export function pickBestStream(
   opts: PickBestOptions = {},
 ): Stream | null {
   return rankStreams(streams, mode, opts)[0] ?? null;
+}
+
+/**
+ * Ranks streams, then live-probes the top direct-URL candidates via the
+ * backend and re-ranks with dead links demoted and probed Content-Lengths
+ * filling unknown sizes. Falls back to the plain ranking when probing is
+ * disabled, fails, or finds no direct candidates.
+ */
+export async function rankStreamsWithProbe(
+  streams: Stream[],
+  mode: StreamSelectionMode,
+  opts: PickBestOptions & { probeEnabled: boolean },
+  signal?: AbortSignal,
+): Promise<Stream[]> {
+  const initial = rankStreams(streams, mode, opts);
+  if (!opts.probeEnabled) return initial;
+
+  // Only probe non-torrent streams that have a concrete URL — torrents are
+  // handled by swarm health (seeders), not a HEAD check.
+  const candidates = initial
+    .filter((s) => !isTorrentStream(s) && !!s.url)
+    .slice(0, 5);
+  if (candidates.length === 0) return initial;
+
+  try {
+    const res = await api.probeStreams(
+      candidates.map((s) => ({ url: s.url })),
+      700,
+      signal,
+    );
+    const deadUrls = new Set(
+      res.results.filter((r) => !r.alive).map((r) => r.url),
+    );
+    const probedSizes = new Map(
+      res.results
+        .filter((r) => r.alive && r.contentLength > 0)
+        .map((r) => [r.url, r.contentLength] as [string, number]),
+    );
+    return rankStreams(streams, mode, { ...opts, deadUrls, probedSizes });
+  } catch {
+    return initial;
+  }
 }
