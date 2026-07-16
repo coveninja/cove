@@ -176,22 +176,22 @@
   <div class="flex w-full flex-col justify-start gap-2 pb-8">
     <LargeRecommendationsCard bind:isPaused={areVideosPaused} {visible} />
 
+    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} navEnabled={true}/>
+
     {#each catalogRows as row (row.key)}
       {@const ref = catalogRefMap.get(row.key)}
       <SmallRecommendations
-        header={row.header}
-        medias={row.medias}
-        loading={row.loading}
-        onSelect={handleSelectMedia}
-        onWatch={handleOnWatch}
-        onSeeAll={ref
+              header={row.header}
+              medias={row.medias}
+              loading={row.loading}
+              onSelect={handleSelectMedia}
+              onWatch={handleOnWatch}
+              onSeeAll={ref
           ? () => onChangePage?.({ type: "catalog", addonId: ref.addonId, catalogType: ref.catalogType, catalogId: ref.catalogId, name: ref.name })
           : undefined}
       />
     {/each}
-
-    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} navEnabled={true}/>
-
+    
     {#each rows as row (row.key)}
       <SmallRecommendations
         header={row.header}
