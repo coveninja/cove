@@ -107,7 +107,9 @@ hot-debug: go qt
 ## name is passed straight to `npm version`). Pass TITLE="..." to override
 ## the default commit title and/or MSG="..." to add a commit message body
 ## note (multi-line is fine). All commits since the last release tag are
-## appended to the commit body as GitHub links, underneath MSG.
+## appended to the commit body underneath MSG as markdown links
+## ([subject](commit url)) — these render clickable in GitHub release notes
+## and PR/issue bodies, but show as raw markdown in the plain commit view.
 ## Then push with: git push origin master v<version>
 ##
 ## TITLE/MSG reach the recipe via the environment ($$TITLE/$$MSG), NOT via
@@ -123,7 +125,7 @@ patch minor major:
 	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || true); \
 	LOG=""; \
 	if [ -n "$$LAST_TAG" ]; then \
-		LOG=$$(git log --reverse --format="- %s%n  https://github.com/coveninja/cove/commit/%H" "$$LAST_TAG"..HEAD); \
+		LOG=$$(git log --reverse --format="- [%s](https://github.com/coveninja/cove/commit/%H)" "$$LAST_TAG"..HEAD); \
 	fi; \
 	if [ -n "$$MSG" ] && [ -n "$$LOG" ]; then \
 		BODY=$$(printf '%s\n\nCommits since %s:\n%s' "$$MSG" "$$LAST_TAG" "$$LOG"); \
