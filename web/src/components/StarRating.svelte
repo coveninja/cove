@@ -81,6 +81,9 @@
       const newRating = libraryEntry?.rating === star ? null : star;
 
       if (newRating === null) {
+        // Drop any hover preview so the cleared state is visible immediately —
+        // on touch devices there is no mouseleave to reset it otherwise.
+        hoverRating = 0;
         animateClear();
       } else {
         animateRatingSet(star);
@@ -125,7 +128,12 @@
         e.stopPropagation();
         handleRating(star);
       }}
-      onmouseenter={() => animateHoverIn(star)}
+      onpointerenter={(e) => {
+        // Hover preview is mouse-only: taps fire an emulated mouseenter with
+        // no matching leave, which would pin hoverRating and mask the real
+        // rating (e.g. an unrate looks like it did nothing on Android).
+        if (e.pointerType === "mouse") animateHoverIn(star);
+      }}
       aria-label="Rate {star} star{star !== 1 ? 's' : ''}"
       class="rounded p-0.5"
       style="will-change: transform;"
