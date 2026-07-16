@@ -28,7 +28,7 @@
   import { Spinner } from "$lib/components/ui/spinner";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
-  import { navigate, focusFirst } from "./focus/focusStore.svelte";
+  import { navigate, focusFirst, editableKeepsArrow } from "./focus/focusStore.svelte";
   import { X } from "lucide-svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
@@ -202,6 +202,13 @@
   // closed a sheet (caller stops processing Escape further).
   let closePlayerSheets: () => boolean = () => false;
 
+  const ARROW_DIRS = {
+    ArrowLeft: "left",
+    ArrowRight: "right",
+    ArrowUp: "up",
+    ArrowDown: "down",
+  } as const;
+
   // ── Editable guard (mirrors focusStore.svelte.ts — not exported from there) ──
   const EDITABLE_TYPES = new Set([
     "text",
@@ -292,28 +299,17 @@
       return;
     }
 
-    // Arrow keys: skip nav when an editable element owns the keyboard.
-    if (active && isEditable(active)) return;
-
-    switch (e.key) {
-      case "ArrowLeft":
-        e.preventDefault();
-        navigate("left");
-        break;
-      case "ArrowRight":
-        e.preventDefault();
-        navigate("right");
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        navigate("up");
-        break;
-      case "ArrowDown":
-        e.preventDefault();
-        navigate("down");
-        break;
-      // Enter: left to native activation — buttons activate, links follow, etc.
-    }
+    // Arrow keys → spatial nav. Editable elements keep the arrows that mean
+    // something to them (editableKeepsArrow: horizontal caret movement, all
+    // arrows in textareas, value stepping in number inputs); vertical arrows
+    // on single-line text inputs escape the field — the only D-pad way out
+    // of a search box without Back/Escape.
+    // Enter: left to native activation — buttons activate, links follow, etc.
+    const dir = ARROW_DIRS[e.key as keyof typeof ARROW_DIRS];
+    if (!dir) return;
+    if (active && editableKeepsArrow(active, dir)) return;
+    e.preventDefault();
+    navigate(dir);
   }
 
   // ── Bootstrap: settings + auth, then reveal app ───────────────────────────────
@@ -447,14 +443,27 @@
     <!-- Left rail: hidden while player or its loading overlay is up (mirrors
          BottomNav pattern in MobileApp). -->
     {#if !playback.playerSession && !playback.quickPlayPending}
-      <TvSideNav {currentPage} onNavigate={changePage} />
+      <!-- inert while onboarding or the detail overlay is up: those overlays
+           paint over the shell, but occlusion alone doesn't remove covered
+           elements from the focus engine's candidate set — without inert a
+           focus leak strands the D-pad behind the overlay (invisible ring,
+           Enter hits hidden nav). -->
+      <div class="contents" inert={showOnboarding || !!selectedMedia}>
+        <TvSideNav {currentPage} onNavigate={changePage} />
+      </div>
     {/if}
 
     <!-- Main content: overscan-padded, isolated z-stack so page z-indexes
          can't escape above the overlays that live outside this element. -->
+    <!-- inert only while the detail overlay is the TOPMOST surface: the
+         player and quickPlay loading overlays mount INSIDE main, so it must
+         un-inert the moment either of them exists (Cancel button / player
+         controls need focus even while selectedMedia is still set). -->
     <main
       class="relative isolate min-h-0 flex-1 overflow-hidden"
       style="padding: var(--tv-safe-inset);"
+      inert={showOnboarding ||
+        (!!selectedMedia && !playback.playerSession && !playback.quickPlayPending)}
     >
       <!-- Pages: always mounted, shown/hidden via class:hidden so state and
            scroll positions survive tab switching.  invisible (not just hidden)

@@ -70,6 +70,23 @@ function isEditable(el: Element): boolean {
   return false;
 }
 
+/**
+ * Returns true when an arrow press in `dir` belongs to the focused editable
+ * element rather than spatial navigation:
+ *  - left/right: always (caret movement);
+ *  - textarea / contenteditable: all four directions (multi-line caret);
+ *  - number inputs: up/down step the value;
+ *  - single-line text inputs: up/down have no caret meaning → returns false,
+ *    so the D-pad can leave the field without reaching for Back/Escape.
+ */
+export function editableKeepsArrow(el: Element, dir: Direction): boolean {
+  if (!isEditable(el)) return false;
+  if (dir === "left" || dir === "right") return true;
+  if (el instanceof HTMLInputElement && el.type.toLowerCase() !== "number")
+    return false;
+  return true;
+}
+
 /** Returns true when `el` is rendered and reachable via programmatic focus. */
 function isVisible(el: HTMLElement): boolean {
   if (el.offsetParent === null && el.getClientRects().length === 0) return false;
@@ -501,8 +518,10 @@ export function navigate(dir: Direction): void {
     return;
   }
 
-  // Never hijack arrow keys while an editable element owns the keyboard.
-  if (isEditable(active)) return;
+  // Editable elements keep the arrows that carry meaning for them (caret
+  // movement, number stepping); vertical arrows on single-line text inputs
+  // fall through so the D-pad can leave the field.
+  if (editableKeepsArrow(active, dir)) return;
 
   const sourceGroup = resolveGroup(active);
 

@@ -239,6 +239,11 @@
 
   let nextLoading = $state(false);
   async function handleNext(): Promise<void> {
+    // Re-entry guard instead of disabling the button: disabling a focused
+    // button drops focus to <body>, and the async step transitions
+    // (loadBrowseMedia, library upserts) leave it there for seconds — an
+    // arrow press in that window would strand the D-pad behind the overlay.
+    if (nextLoading) return;
     nextLoading = true;
     await next();
     nextLoading = false;
@@ -280,14 +285,22 @@
     }
   }
 
-  // After each step change, rescue focus if it unmounted out from under us
-  // (e.g. Next was focused then became disabled on the genres step).
+  // After each step change (and when a Next transition starts/ends), rescue
+  // focus if it unmounted out from under us (e.g. Next was focused then
+  // became disabled on the genres step) or ended up outside the overlay —
+  // focus resting outside rootEl is always wrong while onboarding is mounted.
   $effect(() => {
-    // Reactive dependency: re-run when stepIndex changes.
+    // Reactive dependencies: stepIndex and nextLoading.
     const _step = stepIndex;
+    const _loading = nextLoading;
     void tick().then(() => {
       const active = document.activeElement;
-      if (!active || !active.isConnected || active === document.body) {
+      if (
+        !active ||
+        !active.isConnected ||
+        active === document.body ||
+        !rootEl?.contains(active)
+      ) {
         rescueFocus();
       }
     });
@@ -767,7 +780,7 @@
       <div bind:this={nextBtnWrap}>
         <Button
           onclick={handleNext}
-          disabled={nextLoading || !canProceed}
+          disabled={!canProceed}
           class="h-12 min-w-36 px-8 text-lg"
         >
           {#if nextLoading}
