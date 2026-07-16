@@ -128,9 +128,9 @@ patch minor major:
 		LOG=$$(git log --reverse --format="- [%s](https://github.com/coveninja/cove/commit/%H)" "$$LAST_TAG"..HEAD); \
 	fi; \
 	if [ -n "$$MSG" ] && [ -n "$$LOG" ]; then \
-		BODY=$$(printf '%s\n\nCommits since %s:\n%s' "$$MSG" "$$LAST_TAG" "$$LOG"); \
+		BODY=$$(printf '%s\n\Changes from %s:\n%s' "$$MSG" "$$LAST_TAG" "$$LOG"); \
 	elif [ -n "$$LOG" ]; then \
-		BODY=$$(printf 'Commits since %s:\n%s' "$$LAST_TAG" "$$LOG"); \
+		BODY=$$(printf 'Changes from %s:\n%s' "$$LAST_TAG" "$$LOG"); \
 	else \
 		BODY="$$MSG"; \
 	fi; \
