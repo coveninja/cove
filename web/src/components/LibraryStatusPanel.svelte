@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type LibraryStatus, STATUS_LABELS } from "$lib/api";
+  import { api, type LibraryStatus, STATUS_LABELS, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import * as Popover from "$lib/components/ui/popover/index.js";
@@ -86,9 +86,9 @@
   onOpenChange={(o) => onpopoverchange?.(o)}
 >
   <Popover.Trigger>
-    <Button variant="default" {size} class={className}>
+    <Button variant="secondary" {size} class={className}>
       {#if inLibrary}
-        <BookmarkIcon class="size-4" />
+        <BookmarkIcon class="size-4 {STATUS_COLORS[libraryEntry.status as LibraryStatus].text}" />
       {:else}
         <BookmarkPlus />
       {/if}
@@ -103,17 +103,18 @@
             e.stopPropagation();
             handleStatus(value as LibraryStatus);
           }}
-          variant={isActive ? "default" : "outline"}
+          variant={isActive ? "secondary" : "outline"}
           class="w-full"
         >
           <span class="flex w-full items-center gap-3">
             <span class="size-4 shrink-0">
               {#if isActive}
                 <span use:animateBookmarkIn>
-                  <BookmarkIcon class="size-4" />
+                  <BookmarkIcon class="size-4 {STATUS_COLORS[value as LibraryStatus].text}" />
                 </span>
               {/if}
             </span>
+            <span class="size-2 shrink-0 rounded-full {STATUS_COLORS[value as LibraryStatus].dot}"></span>
             {label}
           </span>
         </Button>

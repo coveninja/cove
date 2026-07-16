@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
+  import { api, STATUS_LABELS, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import MobileMediaCard from "../components/MobileMediaCard.svelte";
@@ -383,7 +383,7 @@
                 ? 'bg-foreground text-background'
                 : 'bg-secondary text-muted-foreground'}"
             >
-              {TAB_LABELS[tab]}
+              {#if tab !== "all"}<span class="size-1.5 shrink-0 rounded-full {STATUS_COLORS[tab as LibraryStatus].dot}"></span>{/if}{TAB_LABELS[tab]}
               <span class="tabular-nums opacity-60">{count}</span>
             </button>
           {/if}
@@ -479,6 +479,7 @@
           {#each sections as section (section.status)}
             <section class="mt-6 first:mt-4">
               <div class="mb-3 flex items-baseline gap-2 px-1">
+                <span class="size-2 shrink-0 self-center rounded-full {STATUS_COLORS[section.status].dot}"></span>
                 <h2 class="text-base font-semibold">{section.label}</h2>
                 <span class="text-sm text-muted-foreground tabular-nums">
                   {section.entries.length}

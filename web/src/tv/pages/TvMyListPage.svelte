@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
+  import { api, STATUS_LABELS, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import TvMediaCard from "../components/TvMediaCard.svelte";
@@ -310,6 +310,7 @@
           {#each sections as section (section.status)}
             <section class="mt-8 first:mt-4">
               <div class="mb-4 flex items-baseline gap-3">
+                <span class="size-3 shrink-0 self-center rounded-full {STATUS_COLORS[section.status].dot}"></span>
                 <h2 class="text-xl font-semibold">{section.label}</h2>
                 <span class="text-base text-muted-foreground tabular-nums">
                   {section.entries.length}

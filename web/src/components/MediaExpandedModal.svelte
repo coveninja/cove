@@ -277,11 +277,6 @@
   class="pointer-events-none fixed inset-0 z-40 bg-black/70 backdrop-blur-sm"
 ></div>
 
-<!-- Full-window layer hosting a shadcn ScrollArea, so the styled scrollbar sits
-     at the window edge while the card grows to its natural height. The plain
-     fixed wrapper gives the ScrollArea a definite size to bound its viewport —
-     putting `fixed` on the ScrollArea root itself doesn't work, because bits-ui
-     forces position:relative on it inline. -->
 <div class="fixed inset-0 z-50 mt-18">
   <ScrollArea class="h-full w-full">
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -309,9 +304,6 @@
           <X class="size-5" />
         </button>
 
-        <!-- ── Hero ───────────────────────────────────────────────────────────── -->
-        <!-- `isolate` traps PlayerSimple's internal stacking inside this hero so
-             it can never paint over the sibling close button above it. -->
         <div class="relative isolate w-full overflow-hidden bg-black">
           {#if videoUrl}
             <PlayerSimple
@@ -333,13 +325,11 @@
             />
           {/if}
 
-          <!-- Gradient that fades the hero into the body below -->
           <div
             class="pointer-events-none absolute inset-x-0 bottom-0 h-2/3"
             style="background: linear-gradient(to top, var(--background) 2%, rgba(0,0,0,0.35) 55%, transparent 100%)"
           ></div>
 
-          <!-- Title / logo overlaid bottom-left, Netflix-style -->
           <div
             class="pointer-events-none absolute bottom-0 left-0 flex max-w-[70%] flex-col gap-2 p-5 sm:p-7"
           >
@@ -359,11 +349,8 @@
           </div>
         </div>
 
-        <!-- ── Body ───────────────────────────────────────────────────────────── -->
         <div class="flex flex-col gap-4 p-5 sm:p-7">
-          <!-- Action row -->
           <div class="flex flex-wrap items-center gap-3">
-            <!-- Title + rating + metadata -->
             <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
               <span class="text-2xl font-bold">{title}</span>
               {#if year}<Badge variant="outline">{year}</Badge>{/if}

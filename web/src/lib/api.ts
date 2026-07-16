@@ -206,6 +206,14 @@ export const STATUS_LABELS: Record<LibraryStatus, string> = {
   dropped: "Dropped",
 };
 
+/** Accent color per library status, for at-a-glance color coding across the UI. */
+export const STATUS_COLORS: Record<LibraryStatus, { dot: string; text: string }> = {
+  watch_later: { dot: "bg-amber-400", text: "text-amber-400" },
+  watching: { dot: "bg-sky-400", text: "text-sky-400" },
+  finished: { dot: "bg-emerald-400", text: "text-emerald-400" },
+  dropped: { dot: "bg-rose-400", text: "text-rose-400" },
+};
+
 /** "1h 23m" / "4m 12s" / "8s" */
 export function formatPosition(seconds: number): string {
   const h = Math.floor(seconds / 3600);
