@@ -99,12 +99,15 @@ export interface Subtitle {
  * StreamBehaviorHints is the subset of Stremio's behaviorHints object we
  * retain. VideoSize, when present, is a structured byte size — more reliable
  * than parsing the free-text title — and is promoted into Stream.SizeBytes
- * by classifyStream when SizeBytes is unset.
+ * by classifyStream when SizeBytes is unset. Filename is the addon-suggested
+ * file name (e.g. "Show.S01E02.mkv") — captured for future use; not yet
+ * wired into file selection.
  */
 export interface StreamBehaviorHints {
   notWebReady?: boolean;
   bingeGroup?: string;
   videoSize?: number /* int64 */;
+  filename?: string;
 }
 export interface Stream {
   name: string;
@@ -134,6 +137,13 @@ export interface Stream {
    * SizeBytes when the latter is unset.
    */
   behaviorHints?: StreamBehaviorHints;
+  /**
+   * FileIdx is the 0-based index into the torrent's raw file list (t.Files()
+   * order, not the filtered video subset) identifying the exact file to play.
+   * Populated by Stremio addons like Torrentio for season-pack torrents.
+   * Pointer so that absent and 0 are distinguishable.
+   */
+  fileIdx?: number /* int */;
   /**
    * Cached is true when confirmed debrid-cached (instant retrieval).
    * Classifier is conservative, prefers false-negatives.

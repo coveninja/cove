@@ -39,6 +39,7 @@
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
+    fileIdx = undefined,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream: _onPlayStream = undefined,
@@ -50,6 +51,10 @@
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
+    /** Addon-supplied 0-based raw file index for season-pack torrents (Stremio
+     * fileIdx). When present, the backend skips regex matching and plays this
+     * exact file — more reliable than pattern matching for Torrentio packs. */
+    fileIdx?: number;
     onPlaybackFailed?: () => void;
     onPlayNext?: (season: number, episode: number) => void;
     onPlayStream?: (
@@ -121,7 +126,7 @@
         Player.setVolume(Math.round($settings.defaultVolume * 100));
       }
     });
-    Player.play(api.playUrl(src, { season, episode }));
+    Player.play(api.playUrl(src, { season, episode, fileIdx }));
   });
 
   // Resolve original_language for "original" audio preference.
@@ -267,7 +272,7 @@
 
   $effect(() => {
     if (!isHash) return;
-    return torrent.start(src, { season, episode });
+    return torrent.start(src, { season, episode, fileIdx });
   });
 
   // ── Background next-episode prefetch ─────────────────────────────────────────
@@ -315,6 +320,7 @@
             .prefetchDownload(best.infoHash, {
               season: next.season,
               episode: next.episode.episode_number,
+              fileIdx: best.fileIdx,
             })
             .catch(() => {});
         }

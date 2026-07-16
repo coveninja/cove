@@ -126,3 +126,125 @@ func TestSelectFileIndex_EpisodeWord(t *testing.T) {
 	idx, _ := selectFileIndex(files, intp(1), intp(5))
 	assert.Equal(t, 1, idx)
 }
+
+func TestSelectFileIndex_AnimeBareEpisode(t *testing.T) {
+	files := []fileCandidate{
+		{path: "[Flugel] Kaguya-sama - 04 [BD 1080p][80AC7B2E].mkv", length: 1_000},
+		{path: "[Flugel] Kaguya-sama - 05 [BD 1080p][80AC7B2E].mkv", length: 1_200},
+		{path: "[Flugel] Kaguya-sama - 06 [BD 1080p][80AC7B2E].mkv", length: 1_100},
+	}
+	idx, reason := selectFileIndex(files, intp(1), intp(5))
+	assert.Equal(t, 1, idx)
+	assert.Contains(t, reason, "anime-style E05")
+}
+
+func TestSelectFileIndex_AnimeBareEpisodeVersionSuffix(t *testing.T) {
+	// " - 05v2 " version suffix must still match episode 5.
+	files := []fileCandidate{
+		{path: "[Group] Show - 04 [1080p].mkv", length: 1_000},
+		{path: "[Group] Show - 05v2 [1080p].mkv", length: 1_200},
+	}
+	idx, reason := selectFileIndex(files, intp(1), intp(5))
+	assert.Equal(t, 1, idx)
+	assert.Contains(t, reason, "anime-style E05")
+}
+
+func TestSelectFileIndex_AnimeBareEpisodeUnpadded(t *testing.T) {
+	// Unpadded " - 5 " (no leading zero) must also match.
+	files := []fileCandidate{
+		{path: "[Group] Show - 4 [1080p].mkv", length: 1_000},
+		{path: "[Group] Show - 5 [1080p].mkv", length: 1_200},
+	}
+	idx, reason := selectFileIndex(files, intp(1), intp(5))
+	assert.Equal(t, 1, idx)
+	assert.Contains(t, reason, "anime-style E05")
+}
+
+func TestSelectFileIndex_AnimeAmbiguousFallsBackToLargest(t *testing.T) {
+	// Two files both contain " - 05 " — ambiguous, must fall back to largest.
+	files := []fileCandidate{
+		{path: "[Group] Show - 05 [720p].mkv", length: 1_000},
+		{path: "[Group] Show - 05 [1080p].mkv", length: 2_000},
+	}
+	idx, reason := selectFileIndex(files, intp(1), intp(5))
+	assert.Equal(t, 1, idx)
+	assert.Contains(t, reason, "no episode match")
+}
+
+func TestSelectFileIndex_AnimeDoesNotMatchEpisode5InEpisode105(t *testing.T) {
+	// " - 105 " must NOT match episode 5 (0*5 would need to match starting
+	// after the " - " boundary, but "105" starts with 1 — the regex correctly
+	// requires the digits immediately after " - " to be 0*5).
+	files := []fileCandidate{
+		{path: "[Group] Show - 105 [1080p].mkv", length: 2_000},
+		{path: "[Group] Show - 205 [1080p].mkv", length: 1_500},
+	}
+	idx, reason := selectFileIndex(files, intp(1), intp(5))
+	// Neither matches — falls back to largest.
+	assert.Equal(t, 0, idx)
+	assert.Contains(t, reason, "no episode match")
+}
+
+func TestSelectFileIndex_AnimeCRCHashDoesNotMatchEpisode80(t *testing.T) {
+	// CRC hash like [80AC7B2E] must not be mistaken for episode 80: the hash
+	// is inside brackets with no preceding " - " boundary.
+	files := []fileCandidate{
+		{path: "[Flugel] Kaguya-sama - 05 [BD 1080p][80AC7B2E].mkv", length: 1_000},
+		{path: "[Flugel] Kaguya-sama - 06 [BD 1080p][DEADBEEF].mkv", length: 2_000},
+	}
+	idx, reason := selectFileIndex(files, intp(1), intp(80))
+	// Nothing should match episode 80; falls back to largest.
+	assert.Equal(t, 1, idx)
+	assert.Contains(t, reason, "no episode match")
+}
+
+func TestSelectFileIndex_AnimeNotUsedForSeason2(t *testing.T) {
+	// Bare " - 05 " with no season marker in the path is not trusted for
+	// season 2 — unmarked paths are season-1 only. Falls back to largest.
+	files := []fileCandidate{
+		{path: "[Group] Show - 04 [1080p].mkv", length: 1_000},
+		{path: "[Group] Show - 05 [1080p].mkv", length: 1_200},
+	}
+	idx, reason := selectFileIndex(files, intp(2), intp(5))
+	assert.Equal(t, 1, idx)
+	assert.Contains(t, reason, "no episode match")
+}
+
+func TestSelectFileIndex_AnimeTimeMultiSeasonBatch(t *testing.T) {
+	files := []fileCandidate{
+		// idx 0 — S1E5 (no season marker)
+		{path: "[Anime Time] Kaguya Sama - Love Is War/[Anime Time] Kaguya Sama - Love Is War - 05.mkv", length: 500_000},
+		// idx 1 — S2E5 (Season 02 / Season 2 markers); larger so wrong picks are detectable
+		{path: "[Anime Time] Kaguya Sama - Love Is War Season 02/[Anime Time] Kaguya Sama - Love Is War Season 2 - 05.mkv", length: 600_000},
+		// idx 2 — S3E5
+		{path: "[Anime Time] Kaguya Sama - Love Is War Season 03/[Anime Time] Kaguya Sama - Love Is War Season 3 - 05.mkv", length: 400_000},
+		// idx 3 — S1E4 (filler, ensures episode matching is specific)
+		{path: "[Anime Time] Kaguya Sama - Love Is War/[Anime Time] Kaguya Sama - Love Is War - 04.mkv", length: 500_000},
+	}
+	idxS1, reasonS1 := selectFileIndex(files, intp(1), intp(5))
+	assert.Equal(t, 0, idxS1, "S1E5 must pick the unmarked season-1 file, not the larger Season-2 file")
+	assert.Contains(t, reasonS1, "anime-style")
+
+	idxS2, reasonS2 := selectFileIndex(files, intp(2), intp(5))
+	assert.Equal(t, 1, idxS2, "S2E5 must pick the Season-2-marked file")
+	assert.Contains(t, reasonS2, "anime-style")
+}
+
+func TestSelectFileIndex_AnimeRootFolderMarkerTrap(t *testing.T) {
+	// A root folder like "Show (Season 1+2)" contains "Season 1" in its name,
+	// which would taint every file under it if we used the *first* marker.
+	// The *last* (deepest) marker is what identifies the actual season.
+	files := []fileCandidate{
+		// idx 0 — S1E5: last marker = "Season 1" (the mid-path folder)
+		{path: "Show (Season 1+2)/Season 1/Show - 05.mkv", length: 1_000},
+		// idx 1 — S2E5: last marker = "Season 2"; larger so wrong picks are detectable
+		{path: "Show (Season 1+2)/Season 2/Show - 05.mkv", length: 2_000},
+	}
+	idxS2, reasonS2 := selectFileIndex(files, intp(2), intp(5))
+	assert.Equal(t, 1, idxS2, "S2E5 must pick the file whose last marker is Season 2")
+	assert.Contains(t, reasonS2, "anime-style")
+
+	idxS1, reasonS1 := selectFileIndex(files, intp(1), intp(5))
+	assert.Equal(t, 0, idxS1, "S1E5 must pick the file whose last marker is Season 1")
+	assert.Contains(t, reasonS1, "anime-style")
+}

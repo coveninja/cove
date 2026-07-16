@@ -47,7 +47,7 @@ export class TorrentProgress {
    * opts.season/episode (mirrors Player's playUrl call) scope progress to a
    * season pack's selected episode file instead of the whole torrent.
    */
-  start(src: string, opts?: { season?: number; episode?: number }): () => void {
+  start(src: string, opts?: { season?: number; episode?: number; fileIdx?: number }): () => void {
     const es = new EventSource(api.progressStreamUrl(src, opts));
     let consecutiveErrors = 0;
 

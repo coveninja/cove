@@ -560,6 +560,7 @@
             externalSubtitles={playback.playerSession.subtitles}
             season={playback.playerSession.season}
             episode={playback.playerSession.episode}
+            fileIdx={playback.playerSession.stream.fileIdx}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;

@@ -514,12 +514,13 @@ export const api = {
    */
   playUrl: (
     src: string,
-    opts?: { season?: number; episode?: number },
+    opts?: { season?: number; episode?: number; fileIdx?: number },
   ): string => {
     if (!isHashSrc(src)) return src;
     const p = new URLSearchParams({ hash: src });
     if (opts?.season != null) p.set("season", String(opts.season));
     if (opts?.episode != null) p.set("episode", String(opts.episode));
+    if (opts?.fileIdx != null) p.set("fileIdx", String(opts.fileIdx));
     return `${BASE}/play?${p}`;
   },
 
@@ -543,11 +544,12 @@ export const api = {
    */
   progressStreamUrl: (
     src: string,
-    opts?: { season?: number; episode?: number },
+    opts?: { season?: number; episode?: number; fileIdx?: number },
   ): string => {
     const p = new URLSearchParams({ hash: src });
     if (opts?.season != null) p.set("season", String(opts.season));
     if (opts?.episode != null) p.set("episode", String(opts.episode));
+    if (opts?.fileIdx != null) p.set("fileIdx", String(opts.fileIdx));
     return `${BASE}/progress/stream?${p}`;
   },
 
@@ -573,11 +575,12 @@ export const api = {
    */
   prefetchDownload: (
     hash: string,
-    opts?: { season?: number; episode?: number },
+    opts?: { season?: number; episode?: number; fileIdx?: number },
   ): Promise<{ started: boolean }> => {
     const p = new URLSearchParams({ hash });
     if (opts?.season != null) p.set("season", String(opts.season));
     if (opts?.episode != null) p.set("episode", String(opts.episode));
+    if (opts?.fileIdx != null) p.set("fileIdx", String(opts.fileIdx));
     return request(`/prefetch-download?${p}`, { method: "POST" });
   },
 

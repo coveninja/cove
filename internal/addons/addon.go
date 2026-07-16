@@ -172,11 +172,14 @@ type Subtitle struct {
 // StreamBehaviorHints is the subset of Stremio's behaviorHints object we
 // retain. VideoSize, when present, is a structured byte size — more reliable
 // than parsing the free-text title — and is promoted into Stream.SizeBytes
-// by classifyStream when SizeBytes is unset.
+// by classifyStream when SizeBytes is unset. Filename is the addon-suggested
+// file name (e.g. "Show.S01E02.mkv") — captured for future use; not yet
+// wired into file selection.
 type StreamBehaviorHints struct {
 	NotWebReady bool   `json:"notWebReady,omitempty"`
 	BingeGroup  string `json:"bingeGroup,omitempty"`
 	VideoSize   int64  `json:"videoSize,omitempty"`
+	Filename    string `json:"filename,omitempty"`
 }
 
 type Stream struct {
@@ -201,6 +204,11 @@ type Stream struct {
 	// lets encoding/json pick them up. classifyStream promotes VideoSize into
 	// SizeBytes when the latter is unset.
 	BehaviorHints *StreamBehaviorHints `json:"behaviorHints,omitempty"`
+	// FileIdx is the 0-based index into the torrent's raw file list (t.Files()
+	// order, not the filtered video subset) identifying the exact file to play.
+	// Populated by Stremio addons like Torrentio for season-pack torrents.
+	// Pointer so that absent and 0 are distinguishable.
+	FileIdx *int `json:"fileIdx,omitempty"`
 	// Cached is true when confirmed debrid-cached (instant retrieval).
 	// Classifier is conservative, prefers false-negatives.
 	Cached bool `json:"cached,omitempty"`

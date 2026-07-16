@@ -45,6 +45,7 @@
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
+    fileIdx = undefined,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream = undefined,
@@ -54,6 +55,10 @@
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
+    /** Addon-supplied 0-based raw file index for season-pack torrents (Stremio
+     * fileIdx). When present, the backend skips regex matching and plays this
+     * exact file — more reliable than pattern matching for Torrentio packs. */
+    fileIdx?: number;
     /** Fired once (per src) when playback never starts — a startup timeout
      * or a stalled torrent that never got peers. The caller (App.svelte)
      * decides what to do: try the next candidate stream, or give up. */
@@ -140,7 +145,7 @@
         Player.setVolume(Math.round($settings.defaultVolume * 100));
       }
     });
-    Player.play(api.playUrl(src, { season, episode }));
+    Player.play(api.playUrl(src, { season, episode, fileIdx }));
   });
 
   // Resolve original_language for "original" audio preference. media is
@@ -329,7 +334,7 @@
 
   $effect(() => {
     if (!isHash) return;
-    return torrent.start(src, { season, episode });
+    return torrent.start(src, { season, episode, fileIdx });
   });
 
   // ─── Background next-episode prefetch trigger (F7) ──────────────────────────
@@ -395,6 +400,7 @@
             .prefetchDownload(best.infoHash, {
               season: next.season,
               episode: next.episode.episode_number,
+              fileIdx: best.fileIdx,
             })
             .catch(() => {});
         }
