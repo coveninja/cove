@@ -24,7 +24,7 @@
   import { cubicOut } from "svelte/easing";
   import { api, setTokenSource } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
-  import { libraryChanged } from "$lib/stores/library";
+  import { startAutoSync } from "$lib/sync";
   import { Spinner } from "$lib/components/ui/spinner";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
@@ -313,10 +313,6 @@
   }
 
   // ── Bootstrap: settings + auth, then reveal app ───────────────────────────────
-  // Focus-sync bookkeeping (not $state — plain instance vars, same as MobileApp).
-  let lastAuthSyncMs = 0;
-  let lastLibraryGeneration: number | null = null;
-  let lastShownPushErr = "";
   let syncErrorToast = $state<string | null>(null);
   let syncErrorTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -329,12 +325,14 @@
   onMount(() => {
     setMode("dark");
 
+    let stopAutoSync: (() => void) | null = null;
     Promise.all([settings.load(), auth.init().catch(console.error)]).then(
       async () => {
         splashVisible = false;
         if (!$settings.onboardingDone) {
           showOnboarding = true;
         }
+        stopAutoSync = startAutoSync(showSyncError);
         // Focus the first navigable element after the shell is ready so the
         // remote's D-pad is immediately active.
         // Skip when onboarding is shown — TvOnboardingPage manages its own
@@ -376,39 +374,11 @@
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", onContextMenu);
 
-    // TV's onResume → window focus event; same guard as mobile / desktop.
-    const onFocus = () => {
-      if (auth.isGuest) return;
-      const now = Date.now();
-      if (now - lastAuthSyncMs < 60_000) return;
-      lastAuthSyncMs = now;
-      api
-        .authSync()
-        .then((res) => {
-          if (typeof res.library_generation === "number") {
-            if (res.library_generation !== lastLibraryGeneration) {
-              lastLibraryGeneration = res.library_generation;
-              libraryChanged.update((n) => n + 1);
-            }
-          } else {
-            libraryChanged.update((n) => n + 1);
-          }
-          settings.load().catch(() => {});
-          if (res.push_error && res.push_error !== lastShownPushErr) {
-            lastShownPushErr = res.push_error;
-            console.warn("Sync push error:", res.push_error);
-            showSyncError("Sync issue: some data failed to upload");
-          }
-        })
-        .catch(() => {});
-    };
-    window.addEventListener("focus", onFocus);
-
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
       document.removeEventListener("contextmenu", onContextMenu);
-      window.removeEventListener("focus", onFocus);
+      stopAutoSync?.();
     };
   });
 

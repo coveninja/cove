@@ -28,7 +28,7 @@
   import OnboardingPage from "./components/OnboardingPage.svelte";
   import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
-  import { libraryChanged } from "$lib/stores/library";
+  import { startAutoSync } from "$lib/sync";
   import { Spinner } from "$lib/components/ui/spinner";
   import { X } from "lucide-svelte";
 
@@ -109,16 +109,10 @@
       : null,
   );
 
-  // Focus-triggered auth sync bookkeeping (not $state — plain instance vars
-  // read/written only from the onFocus handler below).
-  let lastAuthSyncMs = 0;
-  let lastLibraryGeneration: number | null = null;
-  // Track the last push error surfaced this session to avoid spamming the user.
-  let lastShownPushErr = "";
-
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
     setMode("dark");
+    let stopAutoSync: (() => void) | null = null;
     // Wait for both settings and auth to resolve before revealing the app.
     Promise.all([settings.load(), auth.init().catch(console.error)]).then(
       () => {
@@ -126,6 +120,7 @@
         if (!$settings.onboardingDone) {
           showOnboarding = true;
         }
+        stopAutoSync = startAutoSync(showSyncError);
       },
     );
 
@@ -172,48 +167,11 @@
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", onContextMenu);
 
-    // Pull remote changes on window focus when signed in. Guarded so rapid
-    // focus/blur cycling (alt-tabbing) doesn't trigger a sync — and downstream
-    // refetch storm across every MediaCard + ContinueWatching — on every
-    // single focus.
-    const onFocus = () => {
-      if (auth.isGuest) return;
-      const now = Date.now();
-      if (now - lastAuthSyncMs < 60_000) return;
-      lastAuthSyncMs = now;
-      api
-        .authSync()
-        .then((res) => {
-          // Only bump when the library actually changed remotely. Older
-          // backends / a noop build (503) omit library_generation entirely —
-          // fall back to the old always-bump behavior for those.
-          if (typeof res.library_generation === "number") {
-            if (res.library_generation !== lastLibraryGeneration) {
-              lastLibraryGeneration = res.library_generation;
-              libraryChanged.update((n) => n + 1);
-            }
-          } else {
-            libraryChanged.update((n) => n + 1);
-          }
-          // Pull merged settings (including onboardingDone) into the frontend store.
-          settings.load().catch(() => {});
-          // Surface push errors — only when the message is non-empty and
-          // differs from what we already told the user this session (no spam).
-          if (res.push_error && res.push_error !== lastShownPushErr) {
-            lastShownPushErr = res.push_error;
-            console.warn("Sync push error:", res.push_error);
-            showSyncError("Sync issue: some data failed to upload");
-          }
-        })
-        .catch(() => {});
-    };
-    window.addEventListener("focus", onFocus);
-
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
       document.removeEventListener("contextmenu", onContextMenu);
-      window.removeEventListener("focus", onFocus);
+      stopAutoSync?.();
     };
   });
 

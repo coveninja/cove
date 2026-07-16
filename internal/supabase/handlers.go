@@ -47,6 +47,16 @@ type Server struct {
 	pushErrMu   sync.Mutex
 	lastPushErr string
 	lastPushAt  time.Time
+
+	// The following fields are guarded by pushMu (the push goroutine is the
+	// only writer; they are read only while holding pushMu as well).
+	// lastPushedGen / lastPushedGenOK / lastPushedProfile track the library
+	// generation and profile that were successfully uploaded on the last push,
+	// so that redundant full-library upserts can be skipped when nothing
+	// changed — important now that the frontend polls every 60 s.
+	lastPushedGen     uint64
+	lastPushedGenOK   bool
+	lastPushedProfile string
 }
 
 // pushAsync uploads the profile's library/settings/addons/nuvio/activity in
@@ -65,9 +75,22 @@ func (s *Server) pushAsync(userJWT, profileID, context string) {
 
 		var pushErrs []string
 
-		if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
+		// Read the library generation before PushLibrary reads entries: if a
+		// mutation lands mid-push the counter will be bumped again, ensuring
+		// the next cycle re-pushes — the safe direction.
+		// Skip the full-library upsert when nothing has changed since the last
+		// successful push. With 60 s frontend polling this avoids an otherwise
+		// constant stream of full-library upserts on an idle desktop.
+		gen := s.lib.Generation()
+		if s.lastPushedGenOK && gen == s.lastPushedGen && profileID == s.lastPushedProfile {
+			// library unchanged; skip PushLibrary this cycle
+		} else if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
 			log.Println(context+": push library:", err)
 			pushErrs = append(pushErrs, "library: "+err.Error())
+		} else {
+			s.lastPushedGen = gen
+			s.lastPushedGenOK = true
+			s.lastPushedProfile = profileID
 		}
 		if err := s.cfg.PushSettings(userJWT, profileID, s.st); err != nil {
 			log.Println(context+": push settings:", err)

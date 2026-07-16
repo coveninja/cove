@@ -232,10 +232,13 @@
     };
   }
 
+  // rememberPosition is read untracked: a settings store refresh mid-playback
+  // (periodic auth sync) must not reset/re-load progress — that would seek
+  // back to the last saved position (up to 10s stale). Same as Player.svelte.
   $effect(() => {
     if (!media || !src) return;
     progress.reset();
-    if ($settings?.rememberPosition === false) return;
+    if (untrack(() => $settings?.rememberPosition) === false) return;
     progress.load(media.id, media.media_type, season ?? null, episode ?? null);
   });
 

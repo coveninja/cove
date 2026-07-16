@@ -46,22 +46,29 @@ function createSettingsStore(): {
   load: () => Promise<void>;
   save: (patch: Partial<Settings>) => Promise<void>;
 } {
-  const { subscribe, set, update } = writable<Settings>(DEFAULTS);
+  const { subscribe, set } = writable<Settings>(DEFAULTS);
+  // Mirror of the store's current value, kept for load()'s no-change check —
+  // svelte stores have no synchronous read without a subscribe round-trip.
+  let current: Settings = DEFAULTS;
 
   async function load(): Promise<void> {
     try {
-      set(await api.getSettings());
+      const next = await api.getSettings();
+      // Skip the store update when nothing changed. load() runs after every
+      // auth sync (periodic while signed in), and an unconditional set()
+      // wakes every $settings subscriber even for identical content.
+      if (JSON.stringify(next) === JSON.stringify(current)) return;
+      current = next;
+      set(next);
     } catch (e) {
       console.error("Failed to load settings:", e);
     }
   }
 
   function save(patch: Partial<Settings>): Promise<void> {
-    let next!: Settings;
-    update((current) => {
-      next = { ...current, ...patch };
-      return next;
-    });
+    const next: Settings = { ...current, ...patch };
+    current = next;
+    set(next);
     // Optimistic update is already applied above; persist in the background.
     // The .catch ensures non-awaiting callers never produce unhandled rejections.
     return api

@@ -28,7 +28,7 @@
   import { cubicOut } from "svelte/easing";
   import { api, setTokenSource } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
-  import { libraryChanged } from "$lib/stores/library";
+  import { startAutoSync } from "$lib/sync";
   import { Spinner } from "$lib/components/ui/spinner";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
@@ -218,11 +218,6 @@
   }
 
   // ── Bootstrap: settings + auth, then reveal app ───────────────────────────────
-  // Focus sync bookkeeping (not $state — plain instance vars, same as App.svelte).
-  let lastAuthSyncMs = 0;
-  let lastLibraryGeneration: number | null = null;
-  // Track the last push error surfaced this session to avoid spamming the user.
-  let lastShownPushErr = "";
   // Displayed when a push sync error is detected; auto-clears after 5 s.
   let syncErrorToast = $state<string | null>(null);
   let syncErrorTimer: ReturnType<typeof setTimeout> | undefined;
@@ -235,11 +230,13 @@
   onMount(() => {
     setMode("dark");
 
+    let stopAutoSync: (() => void) | null = null;
     Promise.all([settings.load(), auth.init().catch(console.error)]).then(() => {
       splashVisible = false;
       if (!$settings.onboardingDone) {
         showOnboarding = true;
       }
+      stopAutoSync = startAutoSync(showSyncError);
     });
 
     // Suppress AbortErrors from the media player (vidstack / maverick).
@@ -272,43 +269,11 @@
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", onContextMenu);
 
-    // Android's onResume dispatches a window focus event, so the same
-    // focus-sync guard that works on desktop works here too.
-    const onFocus = () => {
-      if (auth.isGuest) return;
-      const now = Date.now();
-      if (now - lastAuthSyncMs < 60_000) return;
-      lastAuthSyncMs = now;
-      api
-        .authSync()
-        .then((res) => {
-          if (typeof res.library_generation === "number") {
-            if (res.library_generation !== lastLibraryGeneration) {
-              lastLibraryGeneration = res.library_generation;
-              libraryChanged.update((n) => n + 1);
-            }
-          } else {
-            libraryChanged.update((n) => n + 1);
-          }
-          // Pull merged settings (including onboardingDone) into the frontend store.
-          settings.load().catch(() => {});
-          // Surface push errors — only when the message is non-empty and
-          // differs from what we already told the user this session (no spam).
-          if (res.push_error && res.push_error !== lastShownPushErr) {
-            lastShownPushErr = res.push_error;
-            console.warn("Sync push error:", res.push_error);
-            showSyncError("Sync issue: some data failed to upload");
-          }
-        })
-        .catch(() => {});
-    };
-    window.addEventListener("focus", onFocus);
-
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
       document.removeEventListener("contextmenu", onContextMenu);
-      window.removeEventListener("focus", onFocus);
+      stopAutoSync?.();
     };
   });
 

@@ -284,11 +284,15 @@
     };
   }
 
-  // Load any saved position when the source changes.
+  // Load any saved position when the source changes. rememberPosition is read
+  // untracked: a settings store refresh mid-playback (the periodic auth sync
+  // pulls merged settings) must not re-run this effect — resetting and
+  // re-loading here would make the resume effect below seek back to the last
+  // saved position, which trails live playback by up to 10s.
   $effect(() => {
     if (!media || !src) return;
     progress.reset();
-    if ($settings?.rememberPosition === false) return;
+    if (untrack(() => $settings?.rememberPosition) === false) return;
     progress.load(media.id, media.media_type, season ?? null, episode ?? null);
   });
 
