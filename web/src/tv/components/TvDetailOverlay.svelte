@@ -385,6 +385,7 @@
         {media}
         {lastAiredSeason}
         {lastAiredEpisode}
+        variant="inline"
       />
     </div>
 
