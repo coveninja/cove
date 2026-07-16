@@ -341,3 +341,97 @@ func TestRegenerateIDsNotIn_MixedOwnership(t *testing.T) {
 	assert.True(t, ids["owned-e"], "owned-e must survive regeneration")
 	assert.False(t, ids["foreign-e"], "foreign-e must have been replaced with a new UUID")
 }
+
+// ── AdoptRemoteIDs tests ──────────────────────────────────────────────────────
+
+func intPtr(v int) *int { return &v }
+
+// TestAdoptRemoteIDs_EntryIDAdopted verifies that a local entry whose natural
+// key (tmdb_id, media_type) matches a remote row but whose UUID differs has its
+// ID replaced with the remote UUID.
+func TestAdoptRemoteIDs_EntryIDAdopted(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	e := &LibraryEntry{ID: "local-entry-uuid", TmdbID: 10, MediaType: "movie", Title: "T",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
+	l.MergeFrom([]*LibraryEntry{e}, nil, nil)
+
+	gen0 := l.Generation()
+
+	l.AdoptRemoteIDs([]RemoteRowID{
+		{ID: "remote-entry-uuid", TmdbID: 10, MediaType: "movie"},
+	}, nil)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "remote-entry-uuid", entries[0].ID, "entry ID must be adopted from remote")
+	assert.Greater(t, l.Generation(), gen0, "generation must bump after adoption")
+}
+
+// TestAdoptRemoteIDs_EntryNotInRemote verifies that a local entry with no
+// matching natural key in the remote list is left completely untouched.
+func TestAdoptRemoteIDs_EntryNotInRemote(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	e := &LibraryEntry{ID: "local-only-uuid", TmdbID: 20, MediaType: "tv", Title: "T",
+		Status: StatusWatching, AddedAt: now, UpdatedAt: now}
+	l.MergeFrom([]*LibraryEntry{e}, nil, nil)
+
+	// Remote list contains a different title — local entry must not change.
+	l.AdoptRemoteIDs([]RemoteRowID{
+		{ID: "remote-uuid", TmdbID: 99, MediaType: "movie"},
+	}, nil)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "local-only-uuid", entries[0].ID, "entry not in remote must keep its local ID")
+}
+
+// TestAdoptRemoteIDs_ProgressIDAdopted verifies that a watch_progress row
+// matched by (tmdb_id, media_type, season, episode) has its UUID adopted.
+func TestAdoptRemoteIDs_ProgressIDAdopted(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	e := &LibraryEntry{ID: "entry-uuid", TmdbID: 30, MediaType: "tv", Title: "S",
+		Status: StatusWatching, AddedAt: now, UpdatedAt: now}
+	p := &WatchProgress{ID: "local-prog-uuid", TmdbID: 30, MediaType: "tv",
+		LibraryEntryID: "entry-uuid", Season: intPtr(1), Episode: intPtr(2), WatchedAt: now}
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+
+	l.AdoptRemoteIDs(nil, []RemoteRowID{
+		{ID: "remote-prog-uuid", TmdbID: 30, MediaType: "tv", Season: intPtr(1), Episode: intPtr(2)},
+	})
+
+	progress := l.AllProgress()
+	require.Len(t, progress, 1)
+	assert.Equal(t, "remote-prog-uuid", progress[0].ID, "progress ID must be adopted from remote")
+}
+
+// TestAdoptRemoteIDs_LibraryEntryIDRemapped verifies that when a parent entry's
+// ID is adopted, the LibraryEntryID on its progress rows is updated to match.
+func TestAdoptRemoteIDs_LibraryEntryIDRemapped(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+
+	e := &LibraryEntry{ID: "old-entry-uuid", TmdbID: 40, MediaType: "movie", Title: "M",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
+	p := &WatchProgress{ID: "prog-uuid", TmdbID: 40, MediaType: "movie",
+		LibraryEntryID: "old-entry-uuid", WatchedAt: now}
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+
+	l.AdoptRemoteIDs([]RemoteRowID{
+		{ID: "new-entry-uuid", TmdbID: 40, MediaType: "movie"},
+	}, nil)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "new-entry-uuid", entries[0].ID, "entry ID must be adopted")
+
+	progress := l.AllProgress()
+	require.Len(t, progress, 1)
+	assert.Equal(t, "new-entry-uuid", progress[0].LibraryEntryID,
+		"LibraryEntryID must follow the adopted entry ID")
+}

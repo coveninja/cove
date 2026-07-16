@@ -67,6 +67,49 @@ func isRLSError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "42501")
 }
 
+// isUniqueViolation reports whether an error from a PostgREST call is a unique
+// constraint violation (PostgreSQL error code 23505 — "unique_violation").
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "23505")
+}
+
+// fetchRemoteRowIDs returns the remote row IDs for all rows belonging to
+// profileID in table, decoded into RemoteRowID values. When withSeasonEpisode
+// is true, season and episode columns are included in the select (needed for
+// watch_progress rows).
+func (c *Config) fetchRemoteRowIDs(userJWT, table, profileID string, withSeasonEpisode bool) ([]library.RemoteRowID, error) {
+	sel := "id,tmdb_id,media_type"
+	if withSeasonEpisode {
+		sel += ",season,episode"
+	}
+	q := "profile_id=eq." + url.QueryEscape(profileID) + "&select=" + sel
+	rows, err := c.Select(userJWT, table, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]library.RemoteRowID, 0, len(rows))
+	for _, r := range rows {
+		var row struct {
+			ID        string `json:"id"`
+			TmdbID    int    `json:"tmdb_id"`
+			MediaType string `json:"media_type"`
+			Season    *int   `json:"season"`
+			Episode   *int   `json:"episode"`
+		}
+		if err := json.Unmarshal(r, &row); err != nil {
+			continue
+		}
+		out = append(out, library.RemoteRowID{
+			ID:        row.ID,
+			TmdbID:    row.TmdbID,
+			MediaType: row.MediaType,
+			Season:    row.Season,
+			Episode:   row.Episode,
+		})
+	}
+	return out, nil
+}
+
 // fetchOwnedIDs returns the set of row IDs owned by profileID in table.
 // Uses &select=id to minimise the payload.
 func (c *Config) fetchOwnedIDs(userJWT, table, profileID string) (map[string]bool, error) {
@@ -93,8 +136,14 @@ func (c *Config) fetchOwnedIDs(userJWT, table, profileID string) (map[string]boo
 // On an RLS 42501 rejection from entries or progress (cross-user row-ID
 // contamination from the pre-RLS era): fetches the profile's owned remote IDs,
 // calls lib.RegenerateIDsNotIn to assign fresh UUIDs to the conflicting rows,
-// then retries the upsert once. Errors are collected across all three tables so
-// a progress failure does not prevent dismissals from being pushed.
+// then retries the upsert once.
+//
+// On a unique-violation 23505 (same media title on two devices under different
+// UUIDs): fetches remote natural-key → UUID mappings, calls lib.AdoptRemoteIDs
+// to align local IDs with the remote ones, then retries the upsert once.
+//
+// Errors are collected across all three tables so a progress failure does not
+// prevent dismissals from being pushed.
 func (c *Config) PushLibrary(userJWT, profileID string, lib *library.Library) error {
 	var errs []error
 
@@ -123,7 +172,8 @@ func (c *Config) PushLibrary(userJWT, profileID string, lib *library.Library) er
 	return errors.Join(errs...)
 }
 
-// pushEntries upserts library_entries; on RLS 42501 regenerates IDs and retries once.
+// pushEntries upserts library_entries; on RLS 42501 regenerates IDs and retries
+// once; on unique-violation 23505 adopts remote IDs and retries once.
 func (c *Config) pushEntries(userJWT, profileID string, lib *library.Library) error {
 	entries := lib.AllEntries()
 	if len(entries) == 0 {
@@ -134,28 +184,47 @@ func (c *Config) pushEntries(userJWT, profileID string, lib *library.Library) er
 	if err == nil {
 		return nil
 	}
-	if !isRLSError(err) {
-		return err
+	if isRLSError(err) {
+		// RLS rejection: repair cross-user ID contamination and retry once.
+		log.Printf("supabase: RLS error pushing library_entries for profile %s — regenerating IDs", profileID)
+		ownedEntry, errFetch := c.fetchOwnedIDs(userJWT, "library_entries", profileID)
+		if errFetch != nil {
+			return fmt.Errorf("fetch owned entry IDs: %w; original: %w", errFetch, err)
+		}
+		ownedProgress, errFetch := c.fetchOwnedIDs(userJWT, "watch_progress", profileID)
+		if errFetch != nil {
+			return fmt.Errorf("fetch owned progress IDs: %w; original: %w", errFetch, err)
+		}
+		lib.RegenerateIDsNotIn(ownedEntry, ownedProgress)
+		rows = buildEntryRows(lib.AllEntries(), profileID)
+		if retryErr := c.Upsert(userJWT, "library_entries", rows); retryErr != nil {
+			return fmt.Errorf("retry after ID regen: %w", retryErr)
+		}
+		return nil
+	} else if isUniqueViolation(err) {
+		// Unique-violation: same title exists locally and remotely under different
+		// UUIDs — adopt the remote UUIDs so the PK-resolved upsert updates in place.
+		log.Printf("supabase: unique-violation pushing library_entries for profile %s — adopting remote row IDs", profileID)
+		remoteEntries, errFetch := c.fetchRemoteRowIDs(userJWT, "library_entries", profileID, false)
+		if errFetch != nil {
+			return fmt.Errorf("fetch remote entry IDs: %w; original: %w", errFetch, err)
+		}
+		remoteProgress, errFetch := c.fetchRemoteRowIDs(userJWT, "watch_progress", profileID, true)
+		if errFetch != nil {
+			return fmt.Errorf("fetch remote progress IDs: %w; original: %w", errFetch, err)
+		}
+		lib.AdoptRemoteIDs(remoteEntries, remoteProgress)
+		rows = buildEntryRows(lib.AllEntries(), profileID)
+		if retryErr := c.Upsert(userJWT, "library_entries", rows); retryErr != nil {
+			return fmt.Errorf("retry after ID adoption: %w", retryErr)
+		}
+		return nil
 	}
-	// RLS rejection: repair cross-user ID contamination and retry once.
-	log.Printf("supabase: RLS error pushing library_entries for profile %s — regenerating IDs", profileID)
-	ownedEntry, errFetch := c.fetchOwnedIDs(userJWT, "library_entries", profileID)
-	if errFetch != nil {
-		return fmt.Errorf("fetch owned entry IDs: %w; original: %w", errFetch, err)
-	}
-	ownedProgress, errFetch := c.fetchOwnedIDs(userJWT, "watch_progress", profileID)
-	if errFetch != nil {
-		return fmt.Errorf("fetch owned progress IDs: %w; original: %w", errFetch, err)
-	}
-	lib.RegenerateIDsNotIn(ownedEntry, ownedProgress)
-	rows = buildEntryRows(lib.AllEntries(), profileID)
-	if retryErr := c.Upsert(userJWT, "library_entries", rows); retryErr != nil {
-		return fmt.Errorf("retry after ID regen: %w", retryErr)
-	}
-	return nil
+	return err
 }
 
-// pushProgress upserts watch_progress; on RLS 42501 regenerates IDs and retries once.
+// pushProgress upserts watch_progress; on RLS 42501 regenerates IDs and retries
+// once; on unique-violation 23505 adopts remote IDs and retries once.
 func (c *Config) pushProgress(userJWT, profileID string, lib *library.Library) error {
 	progress := lib.AllProgress()
 	if len(progress) == 0 {
@@ -166,24 +235,42 @@ func (c *Config) pushProgress(userJWT, profileID string, lib *library.Library) e
 	if err == nil {
 		return nil
 	}
-	if !isRLSError(err) {
-		return err
+	if isRLSError(err) {
+		log.Printf("supabase: RLS error pushing watch_progress for profile %s — regenerating IDs", profileID)
+		ownedEntry, errFetch := c.fetchOwnedIDs(userJWT, "library_entries", profileID)
+		if errFetch != nil {
+			return fmt.Errorf("fetch owned entry IDs: %w; original: %w", errFetch, err)
+		}
+		ownedProgress, errFetch := c.fetchOwnedIDs(userJWT, "watch_progress", profileID)
+		if errFetch != nil {
+			return fmt.Errorf("fetch owned progress IDs: %w; original: %w", errFetch, err)
+		}
+		lib.RegenerateIDsNotIn(ownedEntry, ownedProgress)
+		rows = buildProgressRows(lib.AllProgress(), profileID)
+		if retryErr := c.Upsert(userJWT, "watch_progress", rows); retryErr != nil {
+			return fmt.Errorf("retry after ID regen: %w", retryErr)
+		}
+		return nil
+	} else if isUniqueViolation(err) {
+		// Unique-violation: same progress row exists remotely under a different
+		// UUID — adopt the remote UUIDs so the PK-resolved upsert updates in place.
+		log.Printf("supabase: unique-violation pushing watch_progress for profile %s — adopting remote row IDs", profileID)
+		remoteEntries, errFetch := c.fetchRemoteRowIDs(userJWT, "library_entries", profileID, false)
+		if errFetch != nil {
+			return fmt.Errorf("fetch remote entry IDs: %w; original: %w", errFetch, err)
+		}
+		remoteProgress, errFetch := c.fetchRemoteRowIDs(userJWT, "watch_progress", profileID, true)
+		if errFetch != nil {
+			return fmt.Errorf("fetch remote progress IDs: %w; original: %w", errFetch, err)
+		}
+		lib.AdoptRemoteIDs(remoteEntries, remoteProgress)
+		rows = buildProgressRows(lib.AllProgress(), profileID)
+		if retryErr := c.Upsert(userJWT, "watch_progress", rows); retryErr != nil {
+			return fmt.Errorf("retry after ID adoption: %w", retryErr)
+		}
+		return nil
 	}
-	log.Printf("supabase: RLS error pushing watch_progress for profile %s — regenerating IDs", profileID)
-	ownedEntry, errFetch := c.fetchOwnedIDs(userJWT, "library_entries", profileID)
-	if errFetch != nil {
-		return fmt.Errorf("fetch owned entry IDs: %w; original: %w", errFetch, err)
-	}
-	ownedProgress, errFetch := c.fetchOwnedIDs(userJWT, "watch_progress", profileID)
-	if errFetch != nil {
-		return fmt.Errorf("fetch owned progress IDs: %w; original: %w", errFetch, err)
-	}
-	lib.RegenerateIDsNotIn(ownedEntry, ownedProgress)
-	rows = buildProgressRows(lib.AllProgress(), profileID)
-	if retryErr := c.Upsert(userJWT, "watch_progress", rows); retryErr != nil {
-		return fmt.Errorf("retry after ID regen: %w", retryErr)
-	}
-	return nil
+	return err
 }
 
 func buildEntryRows(entries []*library.LibraryEntry, profileID string) []map[string]any {

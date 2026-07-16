@@ -213,6 +213,71 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	l.tasteGen.Add(1)
 }
 
+// RemoteRowID identifies a remote Supabase row by its natural key and UUID,
+// used by AdoptRemoteIDs. Season and Episode are only meaningful for progress
+// rows; nil means the column is NULL in Supabase (movies have no season/episode).
+type RemoteRowID struct {
+	ID        string
+	TmdbID    int
+	MediaType string
+	Season    *int
+	Episode   *int
+}
+
+// AdoptRemoteIDs replaces local UUIDs with the corresponding remote UUIDs for
+// every row that matches on natural key but carries a divergent local ID. This
+// resolves Supabase 23505 unique-violation errors that occur when the same
+// media title exists locally and remotely under different UUIDs — for example,
+// after adding a title independently on two devices or re-adding it after a
+// local reset. Once the local IDs match the remote ones, the next PK-resolved
+// upsert updates in place rather than attempting a duplicate insert.
+//
+// When an entry ID is adopted, progress rows whose LibraryEntryID referenced
+// the old local ID are patched to the adopted remote ID. Persists synchronously
+// and bumps the library generation.
+func (l *Library) AdoptRemoteIDs(remoteEntries, remoteProgress []RemoteRowID) {
+	l.mu.Lock()
+	// remap: old local entry ID → adopted remote entry ID, for patching progress.
+	remap := make(map[string]string)
+	for _, r := range remoteEntries {
+		key := entryKey(r.TmdbID, r.MediaType)
+		e, ok := l.db.Entries[key]
+		if !ok || e.ID == r.ID {
+			continue
+		}
+		oldID := e.ID
+		e.ID = r.ID
+		l.db.Entries[key] = e
+		remap[oldID] = r.ID
+	}
+	// Index remote progress by natural key for O(1) lookup below.
+	remoteByKey := make(map[string]string, len(remoteProgress))
+	for _, r := range remoteProgress {
+		remoteByKey[progressKey(r.TmdbID, r.MediaType, r.Season, r.Episode)] = r.ID
+	}
+	for key, p := range l.db.Progress {
+		changed := false
+		// Patch LibraryEntryID if the parent entry was adopted.
+		if newID, ok := remap[p.LibraryEntryID]; ok {
+			p.LibraryEntryID = newID
+			changed = true
+		}
+		// Adopt remote progress ID if natural key matches and ID differs.
+		if remoteID, ok := remoteByKey[key]; ok && p.ID != remoteID {
+			p.ID = remoteID
+			changed = true
+		}
+		if changed {
+			l.db.Progress[key] = p
+		}
+	}
+	if err := l.writeNow(); err != nil {
+		log.Println("library: AdoptRemoteIDs persist:", err)
+	}
+	l.gen.Add(1)
+	l.mu.Unlock()
+}
+
 // RegenerateIDsNotIn reassigns new UUIDs to every entry and progress row whose
 // ID is non-empty and NOT present in the corresponding owned set. This is called
 // after a Supabase RLS 42501 rejection to repair cross-user row-ID contamination
