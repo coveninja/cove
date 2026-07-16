@@ -794,6 +794,11 @@
       controlBarEl != null && controlBarEl.contains(document.activeElement);
 
     if (e.key === "Escape") {
+      if (!canPlay) {
+        // Loading screen is visible — let Escape propagate so TvApp's handler
+        // closes the player instead of invisibly toggling the controls layer.
+        return;
+      }
       if (controlsActive && !focusInBar) {
         // Controls visible but focus not in bar — hide controls and consume.
         controlsVisible = false;
@@ -1229,6 +1234,7 @@
         {/if}
         <Spinner class="relative z-10 mt-8 size-14 text-white" />
         <p class="relative z-10 mt-4 text-base text-white/50">{loadingMessage}</p>
+        <p class="relative z-10 mt-2 text-sm text-white/40">Press Back to cancel</p>
         {#if takingAWhile}
           <p
             class="relative z-10 mt-2 text-sm text-white/40"

@@ -1204,6 +1204,16 @@
     <!-- ── Loading / buffering screen (initial load or startup) ─────────────────── -->
     {#if Player.available}
       <div class="absolute inset-0 z-20 flex flex-col items-center justify-center">
+        <!-- Close button — top-left, matching the controls-bar X position -->
+        <button
+          type="button"
+          class="absolute left-4 z-10 flex size-11 items-center justify-center rounded-full text-white active:bg-white/20"
+          style="top: max(1rem, var(--safe-top));"
+          onclick={() => onclose?.()}
+          aria-label="Close player"
+        >
+          <X class="size-6" />
+        </button>
         {#if media?.poster_path}
           <div
             class="absolute inset-0 scale-110 bg-cover bg-center"

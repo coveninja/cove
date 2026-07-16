@@ -73,7 +73,16 @@
       episodeName?: string,
       candidates?: Stream[],
     ) => void;
+    /** Fired when the user closes the player (X button). The caller
+     * (App.svelte) tears down the player session. */
+    onclose?: () => void;
   } = $props();
+
+  // Internal alias that avoids the Window.onclose type conflict introduced by
+  // <svelte:window> — Svelte 5 merges Window event-handler types into scope
+  // when a component uses <svelte:window>, causing bare `onclose?.()` to be
+  // inferred as `(ev: Event) => void` instead of `() => void`.
+  const _onclose = $derived(onclose as (() => void) | undefined);
 
   // ─── Playback lifecycle ─────────────────────────────────────────────────────
 
@@ -848,6 +857,14 @@
   }
 
   function onKey(e: KeyboardEvent): void {
+    // Escape cancels out of the loading/buffering screen entirely — the
+    // overlay covers every other close affordance, and the shortcuts below
+    // are unreachable until Player.ready anyway.
+    if (e.key === "Escape" && !canPlay && !menuOpen && _onclose) {
+      e.preventDefault();
+      _onclose();
+      return;
+    }
     if (!Player.available || !Player.ready) return;
     // Don't steal keys from a focused field or an open picker menu.
     if (menuOpen || isTypingTarget(e.target)) return;
@@ -1551,6 +1568,16 @@
   <!-- ── Loading screen ─────────────────────────────────────────────────────── -->
   {#if Player.available && !canPlay}
     <div class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black">
+      {#if _onclose}
+        <button
+          type="button"
+          class="absolute right-4 top-4 z-10 flex size-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white"
+          onclick={() => _onclose?.()}
+          aria-label="Close player"
+        >
+          <X class="size-5" />
+        </button>
+      {/if}
       {#if media?.poster_path}
         <div
                 class="absolute inset-0 scale-110 bg-cover bg-center"

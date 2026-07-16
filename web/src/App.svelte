@@ -591,6 +591,7 @@
               const m = playback.playerSession?.media;
               if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
             }}
+            onclose={() => playback.closePlayer()}
           />
         </div>
       {/if}
