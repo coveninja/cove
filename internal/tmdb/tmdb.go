@@ -2046,10 +2046,24 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			limit = maxLimit
 		}
 
-		addonURL, ok := addonMgr.FindAddonURL(addonID)
-		if !ok {
-			http.Error(w, "addon not found", http.StatusNotFound)
-			return
+		// When the caller supplies ?addonUrl=, validate it against the
+		// configured registry (SSRF guard) and use it directly. This is
+		// required when two addons share a manifest ID but have different
+		// config URLs — FindAddonURL would always return the first match.
+		var addonURL string
+		if rawURL := r.URL.Query().Get("addonUrl"); rawURL != "" {
+			if !addonMgr.HasAddonURL(rawURL) {
+				http.Error(w, "addon not found", http.StatusNotFound)
+				return
+			}
+			addonURL = rawURL
+		} else {
+			var ok bool
+			addonURL, ok = addonMgr.FindAddonURL(addonID)
+			if !ok {
+				http.Error(w, "addon not found", http.StatusNotFound)
+				return
+			}
 		}
 
 		cacheKey := addonURL + "|" + catalogType + "|" + catalogID + "|" + strconv.Itoa(skip) + "|" + strconv.Itoa(limit)

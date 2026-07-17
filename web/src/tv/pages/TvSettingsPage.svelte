@@ -142,9 +142,9 @@
     enabled: boolean,
   ) {
     try {
-      await api.toggleCatalog(addon.id, key, enabled);
+      await api.toggleCatalog(addon.id, key, enabled, addon.url);
       addons = addons.map((a) =>
-        a.id === addon.id
+        (addon.url ? a.url === addon.url : a.id === addon.id)
           ? {
               ...a,
               disabledCatalogs: {
@@ -869,7 +869,7 @@
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               <option value="">No preference</option>
-              {#each providerAddons as a (a.id)}
+              {#each providerAddons as a (a.url || a.id)}
                 <option value={a.manifest.name}>{a.manifest.name}</option>
               {/each}
               {#each nuvioProviderOptions as name (name)}
@@ -1135,7 +1135,7 @@
 
           <!-- Addon list -->
           <div class="space-y-3">
-            {#each addons as addon (addon.id)}
+            {#each addons as addon (addon.url || addon.id)}
               <div class="rounded-2xl border border-border/50 bg-secondary/20 p-4">
                 <!-- Addon header row: name + badges + toggle + remove -->
                 <div class="flex items-center gap-4">

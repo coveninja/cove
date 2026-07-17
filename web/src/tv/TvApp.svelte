@@ -486,6 +486,7 @@
               : ""}
             catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
             name={currentPage.type === "catalog" ? currentPage.name : ""}
+            addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
             onSelectMedia={selectMedia}
             onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
           />

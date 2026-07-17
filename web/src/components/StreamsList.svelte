@@ -770,19 +770,21 @@
                   <span
                     class="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"
                   >
-                    {#if isTorrentStream(stream)}
+                    {#if $settings?.showStreamDetails ?? true}
+                      {#if isTorrentStream(stream)}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          👤 {item.seeders}
+                        </span>
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          💾 {item.sizeBytes / 1024 ** 3 >= 1
+                            ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
+                            : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
+                        </span>
+                      {/if}
                       <span class="rounded bg-background/70 px-1.5 py-0.5">
-                        👤 {item.seeders}
-                      </span>
-                      <span class="rounded bg-background/70 px-1.5 py-0.5">
-                        💾 {item.sizeBytes / 1024 ** 3 >= 1
-                          ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
-                          : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
+                        {item.quality}
                       </span>
                     {/if}
-                    <span class="rounded bg-background/70 px-1.5 py-0.5">
-                      {item.quality}
-                    </span>
                     {#if stream.addonName}
                       <span
                         class="rounded px-1.5 py-0.5 {stream.addonName ===

@@ -163,9 +163,11 @@ func (m *Manager) GetEntries() []AddonEntry {
 }
 
 // AddStremioAddon fetches the manifest at url, classifies it as provider or
-// subtitle addon, persists it, and returns the new entry. If an addon with the
-// same ID already exists it is updated in place. The URL is normalized so users
-// can paste either the base URL or the full manifest URL.
+// subtitle addon, persists it, and returns the new entry. If an addon at the
+// same normalized URL already exists it is updated in place; a same-ID/
+// different-URL install (e.g. the same addon configured with two different
+// debrid API keys) is appended as a separate entry. The URL is normalized so
+// users can paste either the base URL or the full manifest URL.
 func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, error) {
 	url = normalizeAddonURL(url)
 	manifest, err := m.FetchManifest(ctx, url)
@@ -186,7 +188,7 @@ func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, 
 	defer m.mu.Unlock()
 
 	for i, a := range m.stremioAddons {
-		if a.ID == entry.ID {
+		if a.URL == entry.URL {
 			m.stremioAddons[i] = entry
 			return entry, m.saveL()
 		}
@@ -195,9 +197,11 @@ func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, 
 	return entry, m.saveL()
 }
 
-// RemoveAddon removes a user-added (stremio) addon by ID or URL. Matching by
-// URL lets callers clean up entries that were stored with an empty ID due to a
-// bad manifest fetch. Returns an error for official addons or if nothing matches.
+// RemoveAddon removes a user-added (stremio) addon by ID or URL. When addonURL
+// is non-empty, matching is by URL only — this is required when duplicate
+// manifest IDs exist (same addon, different config URLs) so the correct entry
+// is removed rather than the first ID match. When addonURL is empty, matching
+// falls back to ID. Returns an error for official addons or if nothing matches.
 func (m *Manager) RemoveAddon(id, addonURL string) error {
 	for _, a := range officialAddons {
 		if a.ID == id {
@@ -207,7 +211,7 @@ func (m *Manager) RemoveAddon(id, addonURL string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, a := range m.stremioAddons {
-		if (id != "" && a.ID == id) || (addonURL != "" && a.URL == addonURL) {
+		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
 			m.stremioAddons = append(m.stremioAddons[:i], m.stremioAddons[i+1:]...)
 			return m.saveL()
 		}
@@ -215,8 +219,10 @@ func (m *Manager) RemoveAddon(id, addonURL string) error {
 	return fmt.Errorf("addon not found")
 }
 
-// SetEnabled toggles an addon on or off. Matches by id or url (url fallback
-// handles entries that were stored with an empty id).
+// SetEnabled toggles an addon on or off. Official addons are always matched by
+// id. For stremio addons: when addonURL is non-empty, matching is by URL only
+// (required when duplicate manifest IDs exist); when addonURL is empty,
+// matching falls back to ID.
 func (m *Manager) SetEnabled(id, addonURL string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -228,7 +234,7 @@ func (m *Manager) SetEnabled(id, addonURL string, enabled bool) error {
 		}
 	}
 	for i, a := range m.stremioAddons {
-		if (id != "" && a.ID == id) || (addonURL != "" && a.URL == addonURL) {
+		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
 			m.stremioAddons[i].Enabled = enabled
 			return m.saveL()
 		}
@@ -490,6 +496,7 @@ func (m *Manager) GetEnabledCatalogs() []CatalogRef {
 			refs = append(refs, CatalogRef{
 				AddonID:     addon.ID,
 				AddonName:   addon.Manifest.Name,
+				AddonURL:    addon.URL,
 				CatalogType: cat.Type,
 				CatalogID:   cat.ID,
 				Name:        cat.Name,
@@ -501,13 +508,19 @@ func (m *Manager) GetEnabledCatalogs() []CatalogRef {
 
 // SetCatalogEnabled enables or disables a specific catalog for an addon.
 // An absent DisabledCatalogs entry means enabled (default-on); disabling
-// stores true, re-enabling removes the entry.
-func (m *Manager) SetCatalogEnabled(addonID, catalogKey string, enabled bool) error {
+// stores true, re-enabling removes the entry. When addonURL is non-empty,
+// matching is by URL only (required when duplicate manifest IDs exist);
+// when addonURL is empty, matching falls back to ID.
+func (m *Manager) SetCatalogEnabled(addonID, addonURL, catalogKey string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for i, a := range m.stremioAddons {
-		if a.ID != addonID {
+		if addonURL != "" {
+			if a.URL != addonURL {
+				continue
+			}
+		} else if a.ID != addonID {
 			continue
 		}
 		if !enabled {
@@ -534,6 +547,20 @@ func (m *Manager) FindAddonURL(addonID string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// HasAddonURL reports whether a stremio addon at the given URL is currently
+// configured. Used by /api/catalog to validate a caller-supplied addonUrl
+// before using it directly, guarding against SSRF via caller-controlled URLs.
+func (m *Manager) HasAddonURL(url string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.stremioAddons {
+		if a.URL == url {
+			return true
+		}
+	}
+	return false
 }
 
 // saveL persists the current state and stamps updatedAt to now. Must be

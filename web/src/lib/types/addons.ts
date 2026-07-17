@@ -86,6 +86,7 @@ export interface StremioMeta {
 export interface CatalogRef {
   addonId: string;
   addonName: string;
+  addonUrl: string;
   catalogType: string;
   catalogId: string;
   name: string;

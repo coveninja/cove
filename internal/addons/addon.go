@@ -158,6 +158,7 @@ type StremioMeta struct {
 type CatalogRef struct {
 	AddonID     string `json:"addonId"`
 	AddonName   string `json:"addonName"`
+	AddonURL    string `json:"addonUrl"`
 	CatalogType string `json:"catalogType"`
 	CatalogID   string `json:"catalogId"`
 	Name        string `json:"name"`
@@ -502,17 +503,21 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		}
 	}))
 
-	// PATCH /api/addons/catalog?id=<addonID>&catalog=<type/id>
+	// PATCH /api/addons/catalog?id=<addonID>&catalog=<type/id>[&url=<addonURL>]
 	// body: {"enabled":bool} — toggle a specific catalog on or off (204 on success).
+	// When ?url= is supplied, matching is by URL only (required for addons with
+	// duplicate manifest IDs); otherwise matching falls back to ?id=.
+	// Either ?id= or ?url= must be present; ?catalog= is always required.
 	mux.HandleFunc("/api/addons/catalog", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		addonID := r.URL.Query().Get("id")
+		addonURL := r.URL.Query().Get("url")
 		catalogKey := r.URL.Query().Get("catalog")
-		if addonID == "" || catalogKey == "" {
-			http.Error(w, "missing ?id= or ?catalog=", http.StatusBadRequest)
+		if (addonID == "" && addonURL == "") || catalogKey == "" {
+			http.Error(w, "missing ?id= or ?url=, and ?catalog=", http.StatusBadRequest)
 			return
 		}
 		var body struct {
@@ -522,7 +527,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		if err := m.SetCatalogEnabled(addonID, catalogKey, body.Enabled); err != nil {
+		if err := m.SetCatalogEnabled(addonID, addonURL, catalogKey, body.Enabled); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}

@@ -30,7 +30,7 @@ export type Page =
   | { type: "account" }
   | { type: "query"; query: string }
   | { type: "mediaView"; media: Media }
-  | { type: "catalog"; addonId: string; catalogType: string; catalogId: string; name: string };
+  | { type: "catalog"; addonId: string; catalogType: string; catalogId: string; name: string; addonUrl?: string };
 
 export interface UpcomingItem {
   tmdbId: number;

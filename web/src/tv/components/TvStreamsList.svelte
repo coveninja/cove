@@ -710,19 +710,21 @@
 
                   <!-- Badges: seeders, size, quality, provider -->
                   <span class="flex flex-wrap gap-2 text-sm text-muted-foreground">
-                    {#if isTorrentStream(stream)}
+                    {#if $settings?.showStreamDetails ?? true}
+                      {#if isTorrentStream(stream)}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          👤 {item.seeders}
+                        </span>
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          💾 {item.sizeBytes / 1024 ** 3 >= 1
+                            ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
+                            : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
+                        </span>
+                      {/if}
                       <span class="rounded-lg bg-background/70 px-2 py-1">
-                        👤 {item.seeders}
-                      </span>
-                      <span class="rounded-lg bg-background/70 px-2 py-1">
-                        💾 {item.sizeBytes / 1024 ** 3 >= 1
-                          ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
-                          : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
+                        {item.quality}
                       </span>
                     {/if}
-                    <span class="rounded-lg bg-background/70 px-2 py-1">
-                      {item.quality}
-                    </span>
                     {#if stream.addonName}
                       <span
                         class="rounded-lg px-2 py-1 {stream.addonName ===

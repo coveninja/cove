@@ -133,7 +133,7 @@
             header: ref.name,
             load: () =>
               api
-                .catalogPage(ref.addonId, ref.catalogType, ref.catalogId, 0, 20)
+                .catalogPage(ref.addonId, ref.catalogType, ref.catalogId, 0, 20, ref.addonUrl)
                 .then((r) => r.medias),
           });
         }
@@ -171,6 +171,7 @@
                   catalogType: ref.catalogType,
                   catalogId: ref.catalogId,
                   name: ref.name,
+                  addonUrl: ref.addonUrl,
                 })
             : undefined}
         />

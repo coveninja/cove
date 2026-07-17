@@ -129,9 +129,9 @@
 
   async function handleToggleCatalog(addon: AddonEntry, key: string, enabled: boolean) {
     try {
-      await api.toggleCatalog(addon.id, key, enabled);
+      await api.toggleCatalog(addon.id, key, enabled, addon.url);
       addons = addons.map((a) =>
-        a.id === addon.id
+        (addon.url ? a.url === addon.url : a.id === addon.id)
           ? { ...a, disabledCatalogs: { ...(a.disabledCatalogs ?? {}), [key]: !enabled } }
           : a,
       );
@@ -885,7 +885,7 @@
               </Select.Trigger>
               <Select.Content>
                 <Select.Item value="">No preference</Select.Item>
-                {#each providerAddons as a (a.id)}
+                {#each providerAddons as a (a.url || a.id)}
                   <Select.Item value={a.manifest.name}
                     >{a.manifest.name}</Select.Item
                   >
@@ -1146,7 +1146,7 @@
 
           <!-- Addon list -->
           <div class="space-y-2">
-            {#each addons as addon (addon.id)}
+            {#each addons as addon (addon.url || addon.id)}
               <div class="rounded-lg border border-border bg-secondary/30 p-3">
                 <div class="flex items-center gap-3">
                   <div class="min-w-0 flex-1">

@@ -623,14 +623,14 @@ export const api = {
   removeAddon: (id: string, url?: string): Promise<void> => {
     const p = new URLSearchParams();
     if (id) p.set("id", id);
-    else if (url) p.set("url", url);
+    if (url) p.set("url", url);
     return request(`/addons?${p}`, { method: "DELETE" });
   },
 
   toggleAddon: (id: string, enabled: boolean, url?: string): Promise<void> => {
     const p = new URLSearchParams();
     if (id) p.set("id", id);
-    else if (url) p.set("url", url);
+    if (url) p.set("url", url);
     return request(`/addons?${p}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -646,6 +646,7 @@ export const api = {
     catalogId: string,
     skip: number,
     limit?: number,
+    addonUrl?: string,
   ): Promise<{ medias: Media[]; nextSkip: number }> => {
     const p = new URLSearchParams({
       addonId,
@@ -654,6 +655,7 @@ export const api = {
       skip: String(skip),
     });
     if (limit != null) p.set("limit", String(limit));
+    if (addonUrl) p.set("addonUrl", addonUrl);
     return request(`/catalog?${p}`);
   },
 
@@ -661,8 +663,10 @@ export const api = {
     addonId: string,
     catalogKey: string,
     enabled: boolean,
+    addonUrl?: string,
   ): Promise<void> => {
     const p = new URLSearchParams({ id: addonId, catalog: catalogKey });
+    if (addonUrl) p.set("url", addonUrl);
     return request(`/addons/catalog?${p}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

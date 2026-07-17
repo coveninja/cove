@@ -9,6 +9,7 @@
     catalogType,
     catalogId,
     name,
+    addonUrl,
     onSelectMedia,
     onWatch: _onWatch,
   }: {
@@ -16,6 +17,7 @@
     catalogType: string;
     catalogId: string;
     name: string;
+    addonUrl?: string;
     onSelectMedia: (m: Media) => void;
     onWatch?: (m: Media, season?: number, episode?: number) => void;
   } = $props();
@@ -41,7 +43,7 @@
     loading = true;
     const gen = generation;
     try {
-      const res = await api.catalogPage(addonId, catalogType, catalogId, skip, 40);
+      const res = await api.catalogPage(addonId, catalogType, catalogId, skip, 40, addonUrl);
       if (gen !== generation) return;
       const fresh: Media[] = [];
       for (const m of res.medias) {
@@ -66,10 +68,12 @@
     const id = addonId;
     const type = catalogType;
     const catId = catalogId;
+    const url = addonUrl;
     if (!id) return;
-    // Suppress unused-variable lint: type/catId are read to register as deps.
+    // Suppress unused-variable lint: type/catId/url are read to register as deps.
     void type;
     void catId;
+    void url;
     generation++;
     medias = [];
     nextSkip = 0;
