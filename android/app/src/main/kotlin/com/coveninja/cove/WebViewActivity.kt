@@ -27,6 +27,7 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -440,9 +441,26 @@ class WebViewActivity : ComponentActivity() {
                     view.evaluateJavascript(js, null)
                 }
             }
+
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: RenderProcessGoneDetail,
+            ): Boolean {
+                // Android reclaimed the renderer while backgrounded (or it
+                // crashed) — the WebView surface is dead and must not be
+                // reused. recreate() rebuilds mpv + bridge + WebView from
+                // scratch. Returning false would kill the whole app process.
+                android.util.Log.w(TAG,
+                    "WebView renderer gone (crashed=${detail.didCrash()}); recreating activity")
+                mainHandler.post { recreate() }
+                return true
+            }
         }
 
         setContentView(FrameLayout(this).apply {
+            // Dark backdrop so surface gaps (renderer death, resume repaint)
+            // never flash white through the transparent WebView.
+            setBackgroundColor(Color.parseColor("#0A0A0A"))
             // ── M3: mpv surface renders behind the transparent web layer ──
             addView(mpv,        FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(wv,         FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -591,8 +609,19 @@ class WebViewActivity : ComponentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Pause WebView JS timers while backgrounded — but only when nothing
+        // is playing: mpv keeps running natively with the MediaSession active
+        // (lock-screen/remote controls), and the player UI + progress-save
+        // logic live in WebView JS and must stay alive alongside it.
+        if (mediaSession?.isActive != true) webView?.onPause()
+    }
+
     override fun onResume() {
         super.onResume()
+        // Counterpart to onPause() — safe to call even when never paused.
+        webView?.onResume()
         // Notify the Svelte UI that the app has come to the foreground — mirrors
         // the desktop Qt shell's window-focus event so store-refresh logic fires.
         webView?.evaluateJavascript("window.dispatchEvent(new Event('focus'))", null)

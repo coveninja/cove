@@ -105,6 +105,44 @@ function isVisible(el: HTMLElement): boolean {
   return true;
 }
 
+/**
+ * Returns true when `el`'s horizontal centre lies within the visible span of
+ * every `overflow-x: hidden/clip` scroll container in its ancestor chain.
+ *
+ * Carousel rows use `overflow-x: hidden` and advance via `scrollIntoView`; a
+ * card scrolled out of the row's visible area still passes `isVisible()` (it
+ * has a client rect and no `aria-hidden`) but its centre-X falls outside the
+ * row's bounding rect.  This helper catches that case so `rememberFocus`
+ * restore does not snap focus back to a card the user has already scrolled
+ * past.
+ *
+ * The `scrollWidth > clientWidth` guard avoids treating ordinary layout
+ * containers (e.g. a wrapper `div` that uses `overflow-x: hidden` purely to
+ * contain floats) as clippers — only ancestors that actually have scrollable
+ * horizontal overflow are considered.
+ *
+ * Only the horizontal axis is checked: vertical scrolling is handled by
+ * `focusEl`'s `scrollIntoView` call, so vertical position never needs gating.
+ */
+function isWithinScrollClip(el: HTMLElement): boolean {
+  const rect = el.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  let ancestor = el.parentElement;
+  while (ancestor && ancestor !== document.documentElement) {
+    const style = getComputedStyle(ancestor);
+    const ox = style.overflowX;
+    if (
+      (ox === "hidden" || ox === "clip") &&
+      ancestor.scrollWidth > ancestor.clientWidth
+    ) {
+      const ar = ancestor.getBoundingClientRect();
+      if (cx < ar.left || cx > ar.right) return false;
+    }
+    ancestor = ancestor.parentElement;
+  }
+  return true;
+}
+
 /** Sorts two elements in DOM (document) order. */
 function domOrder(a: HTMLElement, b: HTMLElement): number {
   const pos = a.compareDocumentPosition(b);
@@ -244,7 +282,7 @@ function policyNavigate(
 const GROUP_EDGE_TOLERANCE = 10;
 
 /**
- * Attempts to navigate from a source rect into the nearest group in `dir`.
+ * Attempts to navigate from a source element into the nearest group in `dir`.
  *
  * Candidates must be visible, have ≥1 visible member, and their container
  * must lie strictly beyond `sourceRect` in `dir` (with a small overlap
@@ -256,9 +294,13 @@ const GROUP_EDGE_TOLERANCE = 10;
  *
  * Entry:
  *  - If `rememberFocus` (default true) and the group's `last` deref is
- *    alive+visible → restore that element.
- *  - Otherwise → focus the member whose centre-X is closest to the source
- *    element's centre-X, preserving the user's horizontal "lane".
+ *    alive, visible, AND within its scroll container's visible span
+ *    (`isWithinScrollClip`) → restore that element.  The scroll-clip guard
+ *    prevents restoring a carousel card that has already scrolled off-screen.
+ *  - Otherwise → focus the member whose centre-X is closest to `sourceEl`'s
+ *    centre-X, preserving the user's horizontal "lane".  `sourceEl` (the
+ *    focused card) is used rather than `sourceRect` (the full group container)
+ *    so the lane aligns with the card's actual position, not the row midpoint.
  *
  * @returns true if focus moved; false if no qualifying group was found.
  */
@@ -314,17 +356,22 @@ function navigateBetweenGroups(
 
   const { entry, members } = candidates[0];
 
-  // Restore last-focused member if rememberFocus and still alive+visible.
+  // Restore last-focused member if rememberFocus and still alive+visible —
+  // but not when it has scrolled out of its row's visible span, which would
+  // snap the user sideways to a stale position.
   if (entry.opts.rememberFocus !== false) {
     const lastEl = entry.last?.deref();
-    if (lastEl && isVisible(lastEl)) {
+    if (lastEl && isVisible(lastEl) && isWithinScrollClip(lastEl)) {
       focusEl(lastEl);
       return true;
     }
   }
 
-  // Otherwise pick member whose centre-X is closest to the source element's lane.
-  const srcCx = sourceRect.left + sourceRect.width / 2;
+  // Otherwise pick member whose centre-X is closest to the focused element's
+  // lane (sourceRect is the whole group container, so its centre would always
+  // be the row midpoint regardless of which card is focused).
+  const srcRect = sourceEl.getBoundingClientRect();
+  const srcCx = srcRect.left + srcRect.width / 2;
   let best: HTMLElement | null = null;
   let bestDist = Infinity;
   for (const member of members) {

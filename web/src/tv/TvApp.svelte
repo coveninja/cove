@@ -13,8 +13,8 @@
   import TvSideNav from "./components/TvSideNav.svelte";
   import TvDetailOverlay from "./components/TvDetailOverlay.svelte";
   import TvPlayer from "./components/TvPlayer.svelte";
-  import SettingsPage from "../components/SettingsPage.svelte";
-  import MyAccountPage from "../components/MyAccountPage.svelte";
+  import TvSettingsPage from "./pages/TvSettingsPage.svelte";
+  import TvAccountPage from "./pages/TvAccountPage.svelte";
   import TvOnboardingPage from "./pages/TvOnboardingPage.svelte";
   import SplashScreen from "../components/SplashScreen.svelte";
 
@@ -464,15 +464,14 @@
           <TvSearchPage />
         </div>
 
-        <!-- Settings (reused desktop page — geometric fallback makes it
-             D-pad-navigable with zero edits to the component) -->
+        <!-- Settings -->
         <div class="h-full" class:hidden={currentPage.type !== "settings"}>
-          <SettingsPage />
+          <TvSettingsPage />
         </div>
 
-        <!-- Account (reused desktop page) -->
+        <!-- Account -->
         <div class="h-full" class:hidden={currentPage.type !== "account"}>
-          <MyAccountPage
+          <TvAccountPage
             visible={currentPage.type === "account"}
             onSelectPerson={() => {}}
           />

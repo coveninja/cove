@@ -2,4 +2,6 @@
 <resources>
     <!-- Adaptive launcher icon background — matches the app's dark theme background. -->
     <color name="ic_launcher_background">#0A0A0A</color>
+    <!-- Window/backdrop color behind the transparent WebView — matches the web UI. -->
+    <color name="window_background">#FF0A0A0A</color>
 </resources>

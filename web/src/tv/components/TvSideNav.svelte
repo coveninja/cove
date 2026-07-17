@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { House, Bookmark, Flame, Search, CircleUser } from "lucide-svelte";
+  import { House, Bookmark, Flame, Search, CircleUser, Settings } from "lucide-svelte";
   import type { ComponentType } from "svelte";
   import type { Page } from "$lib/types/types";
   import { focusable, focusGroup } from "../focus/actions";
@@ -46,10 +46,15 @@
       Icon: Search,
     },
     {
+      label: "Settings",
+      makePage: () => ({ type: "settings" }),
+      activeFor: ["settings"],
+      Icon: Settings,
+    },
+    {
       label: "Account",
       makePage: () => ({ type: "account" }),
-      // Settings highlights the Account tab (mirrors BottomNav convention).
-      activeFor: ["account", "settings"],
+      activeFor: ["account"],
       Icon: CircleUser,
     },
   ];
