@@ -34,7 +34,8 @@ const DEFAULTS: Settings = {
   probeStreams: true,
   updatedAt: "",
   remoteAccessEnabled: false,
-  remoteAccessToken: ""
+  remoteAccessToken: "",
+  allowLanStreamSources: false
 };
 
 function createSettingsStore(): {
@@ -65,15 +66,27 @@ function createSettingsStore(): {
     }
   }
 
+  // Guards the PUT response against overwriting a newer optimistic save.
+  let saveSeq = 0;
+
   function save(patch: Partial<Settings>): Promise<void> {
     const next: Settings = { ...current, ...patch };
     current = next;
     set(next);
+    const seq = ++saveSeq;
     // Optimistic update is already applied above; persist in the background.
+    // The server response is authoritative — it carries fields the client
+    // can't produce (a freshly generated remoteAccessToken, returned masked
+    // as "***", and the server-stamped updatedAt), so apply it unless a newer
+    // save has started since.
     // The .catch ensures non-awaiting callers never produce unhandled rejections.
     return api
       .updateSettings(next)
-      .then(() => undefined)
+      .then((server) => {
+        if (seq !== saveSeq) return;
+        current = server;
+        set(server);
+      })
       .catch((e) => { console.error("Failed to save settings:", e); });
   }
 

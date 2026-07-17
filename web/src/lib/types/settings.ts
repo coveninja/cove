@@ -111,6 +111,13 @@ export interface Settings {
   remoteAccessEnabled: boolean;
   remoteAccessToken: string;
   /**
+   * AllowLanStreamSources permits /api/play to proxy stream URLs that resolve
+   * to LAN or loopback addresses. Off by default (SSRF hardening); enable only
+   * when streaming from a local media server on the same network (e.g. Jellyfin,
+   * Plex). Per-device config — not synced via Supabase.
+   */
+  allowLanStreamSources: boolean;
+  /**
    * Sync bookkeeping — stamped server-side on every local write, used to resolve
    * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
    */

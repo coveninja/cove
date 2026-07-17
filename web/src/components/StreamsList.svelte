@@ -55,6 +55,23 @@
   let episodes = $state<TVEpisode[]>([]);
   let selectedSeason = $state<number | null>(null);
   let selectedEpisode = $state<TVEpisode | null>(null);
+
+  // Reset TV browsing state when the media prop changes identity (e.g. the
+  // in-player episodes sidebar switches to a different title without unmounting
+  // this component). Without this, selectedSeason from the previous title leaks
+  // into the new title's season fetch, causing it to skip the default-season
+  // logic and sometimes show episodes from the wrong season.
+  let _prevMediaId: number | null = null;
+  $effect(() => {
+    const id = media.id;
+    if (_prevMediaId !== null && id !== _prevMediaId) {
+      selectedSeason = null;
+      selectedEpisode = null;
+      seasons = [];
+      episodes = [];
+    }
+    _prevMediaId = id;
+  });
   let loadingSeasons = $state(false);
   let loadingEpisodes = $state(false);
 

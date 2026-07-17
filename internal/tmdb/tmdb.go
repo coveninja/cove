@@ -453,7 +453,7 @@ func imgURL(size, path string) string {
 	if path == "" {
 		return ""
 	}
-	return "http://127.0.0.1:6969/api/img/" + size + path
+	return "http://" + utils.LocalAddr() + "/api/img/" + size + path
 }
 
 func (c *Client) SearchByKeywords(query string) ([]Media, error) {
@@ -492,30 +492,33 @@ func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 	for _, mediaType := range []string{"movie", "tv"} {
 		discURL := fmt.Sprintf("%s/discover/%s?api_key=%s&with_keywords=%s&sort_by=popularity.desc",
 			baseURL, mediaType, c.apiKey, kwParam)
-		r, err := c.client.Get(discURL)
-		if err != nil {
-			continue
-		}
-		var data searchResponse
-		err = json.NewDecoder(r.Body).Decode(&data)
-		if err != nil {
-			log.Println(err)
-			return nil, err
-		}
-		err = r.Body.Close()
-		if err != nil {
-			log.Println(err)
-			return nil, err
-		}
-
-		for i := range data.Results {
-			data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
-			data.Results[i].MediaType = mediaType
-		}
-		for _, m := range data.Results {
-			if m.PosterURL != "" {
-				results = append(results, m)
+		// Inline closure so defer res.Body.Close() covers the decode error path.
+		if err := func() error {
+			r, err := c.client.Get(discURL)
+			if err != nil {
+				return nil // treat as a soft miss; continue to next media type
 			}
+			defer r.Body.Close()
+			if r.StatusCode != http.StatusOK {
+				return nil
+			}
+			var data searchResponse
+			if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+				log.Println(err)
+				return err
+			}
+			for i := range data.Results {
+				data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
+				data.Results[i].MediaType = mediaType
+			}
+			for _, m := range data.Results {
+				if m.PosterURL != "" {
+					results = append(results, m)
+				}
+			}
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return results, nil
@@ -570,35 +573,38 @@ func (c *Client) Search(query string) ([]Media, error) {
 
 		for _, mediaType := range []string{"movie", "tv"} {
 			url := fmt.Sprintf("%s/search/%s?api_key=%s&query=%s", baseURL, mediaType, c.apiKey, encoded)
-			res, err := c.client.Get(url)
-			if err != nil {
-				continue
-			}
-			var data searchResponse
-			err = json.NewDecoder(res.Body).Decode(&data)
-			if err != nil {
-				log.Println(err)
-				return nil, err
-			}
-			err = res.Body.Close()
-			if err != nil {
-				log.Println(err)
-				return nil, err
-			}
-
-			for i := range data.Results {
-				data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
-				data.Results[i].MediaType = mediaType
-			}
-			for _, m := range data.Results {
-				if m.PosterURL == "" || seen[m.ID] {
-					continue
+			// Inline closure so defer res.Body.Close() covers the decode error path.
+			if err := func() error {
+				res, err := c.client.Get(url)
+				if err != nil {
+					return nil // soft miss; continue to next variant/type
 				}
-				seen[m.ID] = true
-				scored = append(scored, scoredMedia{
-					media: m,
-					score: m.Popularity * boost,
-				})
+				defer res.Body.Close()
+				if res.StatusCode != http.StatusOK {
+					return nil
+				}
+				var data searchResponse
+				if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+					log.Println(err)
+					return err
+				}
+				for i := range data.Results {
+					data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
+					data.Results[i].MediaType = mediaType
+				}
+				for _, m := range data.Results {
+					if m.PosterURL == "" || seen[m.ID] {
+						continue
+					}
+					seen[m.ID] = true
+					scored = append(scored, scoredMedia{
+						media: m,
+						score: m.Popularity * boost,
+					})
+				}
+				return nil
+			}(); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -667,28 +673,33 @@ func (c *Client) SearchProviders(query string) ([]Provider, error) {
 	for _, mediaType := range []string{"movie", "tv"} {
 		url := fmt.Sprintf("%s/watch/providers/%s?api_key=%s&language=en-US&watch_region=US",
 			baseURL, mediaType, c.apiKey)
-		res, err := c.client.Get(url)
-		if err != nil {
-			continue
-		}
-		var data struct {
-			Results []Provider `json:"results"`
-		}
-		err = json.NewDecoder(res.Body).Decode(&data)
-		_ = res.Body.Close()
-		if err != nil {
-			continue
-		}
-		for _, p := range data.Results {
-			if seen[p.ID] || !strings.Contains(strings.ToLower(p.Name), q) {
-				continue
+		// Inline closure so defer res.Body.Close() always runs and we can check status.
+		func() {
+			res, err := c.client.Get(url)
+			if err != nil {
+				return
 			}
-			seen[p.ID] = true
-			if p.LogoURL != "" {
-				p.LogoURL = imgURL("w500", p.LogoURL)
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				return
 			}
-			out = append(out, p)
-		}
+			var data struct {
+				Results []Provider `json:"results"`
+			}
+			if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+				return
+			}
+			for _, p := range data.Results {
+				if seen[p.ID] || !strings.Contains(strings.ToLower(p.Name), q) {
+					continue
+				}
+				seen[p.ID] = true
+				if p.LogoURL != "" {
+					p.LogoURL = imgURL("w500", p.LogoURL)
+				}
+				out = append(out, p)
+			}
+		}()
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Priority < out[j].Priority })

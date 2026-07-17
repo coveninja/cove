@@ -107,6 +107,12 @@ type Settings struct {
 	RemoteAccessEnabled bool   `json:"remoteAccessEnabled"`
 	RemoteAccessToken   string `json:"remoteAccessToken"`
 
+	// AllowLanStreamSources permits /api/play to proxy stream URLs that resolve
+	// to LAN or loopback addresses. Off by default (SSRF hardening); enable only
+	// when streaming from a local media server on the same network (e.g. Jellyfin,
+	// Plex). Per-device config — not synced via Supabase.
+	AllowLanStreamSources bool `json:"allowLanStreamSources"`
+
 	// Sync bookkeeping — stamped server-side on every local write, used to resolve
 	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -141,6 +147,7 @@ var defaultSettings = Settings{
 	ProbeStreams:          true,
 	RemoteAccessEnabled:   false,
 	RemoteAccessToken:     "",
+	AllowLanStreamSources: false,
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits
@@ -249,11 +256,19 @@ func (s *Store) Set(incoming Settings) error {
 //   - If remote access is disabled, leave the token untouched (so it's still
 //     there when the user re-enables it without needing to re-pair).
 func (s *Store) applyTokenPolicy(incoming Settings) Settings {
+	// GET /api/settings masks the real token as "***". A subsequent PUT that
+	// round-trips the blob would overwrite the stored token with that sentinel
+	// unless we map it back to the stored value — and this must happen before
+	// the disabled early-return below, or disabling remote access would store
+	// the literal "***" as the token.
+	if incoming.RemoteAccessToken == "***" {
+		incoming.RemoteAccessToken = s.cached.RemoteAccessToken
+	}
 	if !incoming.RemoteAccessEnabled {
 		return incoming
 	}
 	if incoming.RemoteAccessToken != "" {
-		// Client supplied a token explicitly — respect it.
+		// Client supplied a real token explicitly — respect it.
 		return incoming
 	}
 	if s.cached.RemoteAccessToken != "" {
@@ -328,17 +343,23 @@ func (s *Store) SetProfile(profileID string) error {
 	return nil
 }
 
-// SetupHandlers registers GET/PUT /api/settings on mux.
+// SetupHandlers registers GET/PUT /api/settings and POST /api/settings/reveal-token on mux.
 func (s *Store) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		// GET /api/settings — return current settings
+		// GET /api/settings — return current settings with token masked
 		if r.Method == http.MethodGet {
 			s.mu.RLock()
-			current := s.cached
+			out := s.cached
 			s.mu.RUnlock()
 
+			// Never send the real token over the wire on a GET. Callers that
+			// need the token (e.g. to display it for manual pairing) must POST
+			// /api/settings/reveal-token instead.
+			if out.RemoteAccessToken != "" {
+				out.RemoteAccessToken = "***"
+			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(current); err != nil {
+			if err := json.NewEncoder(w).Encode(out); err != nil {
 				log.Println("settings encode:", err)
 			}
 			return
@@ -347,6 +368,7 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 		// PUT /api/settings — validate, apply token policy, persist
 		if r.Method == http.MethodPut {
 			var incoming Settings
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 				http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 				return
@@ -370,13 +392,35 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
+			// Return the masked form so the response matches GET.
 			s.mu.RLock()
-			_ = json.NewEncoder(w).Encode(s.cached)
+			out := s.cached
 			s.mu.RUnlock()
+			if out.RemoteAccessToken != "" {
+				out.RemoteAccessToken = "***"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(out)
 			return
 		}
 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}))
+
+	// POST /api/settings/reveal-token — returns the real RemoteAccessToken.
+	// Kept behind a separate intentional endpoint so the token isn't leaked by
+	// a routine GET /api/settings (e.g. a log scraper or devtools screenshot).
+	mux.HandleFunc("/api/settings/reveal-token", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.mu.RLock()
+		token := s.cached.RemoteAccessToken
+		s.mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"token": token}); err != nil {
+			log.Println("settings reveal-token:", err)
+		}
 	}))
 }

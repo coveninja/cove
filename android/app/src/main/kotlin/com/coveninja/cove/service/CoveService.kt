@@ -73,12 +73,22 @@ class CoveService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            mobile.Mobile.stop()
-            Log.i(TAG, "Go backend stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Go backend stop error: ${e.message}", e)
-        }
+        // mobile.Mobile.stop() flushes stores and waits up to ~3 s for the HTTP
+        // server to drain — running it on the main thread risks an ANR (5 s budget).
+        // Use a CountDownLatch so onDestroy blocks at most 4 s while the background
+        // thread does the work, staying inside Android's ANR window.
+        val latch = java.util.concurrent.CountDownLatch(1)
+        Thread {
+            try {
+                mobile.Mobile.stop()
+                Log.i(TAG, "Go backend stopped")
+            } catch (e: Exception) {
+                Log.e(TAG, "Go backend stop error: ${e.message}", e)
+            } finally {
+                latch.countDown()
+            }
+        }.start()
+        latch.await(4, java.util.concurrent.TimeUnit.SECONDS)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

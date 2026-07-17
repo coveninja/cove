@@ -1,9 +1,4 @@
-export interface Profile {
-  id: string;
-  name: string;
-  is_primary: boolean;
-  supabase_uid: string | null;
-}
+export type { Profile } from "$lib/types/profiles"; // tygo-generated
 
 export interface AuthSession {
   accessToken: string;

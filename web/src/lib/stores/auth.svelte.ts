@@ -21,6 +21,10 @@ class AuthStore {
   // that handler would needlessly re-save the identical token.
   #lastSavedToken: string | null = null;
 
+  // Handle for the onAuthStateChange subscription so we can unsubscribe
+  // before re-registering if init() is somehow called more than once.
+  #authSubscription: { unsubscribe: () => void } | null = null;
+
   get isGuest(): boolean {
     return this.session === null;
   }
@@ -65,13 +69,20 @@ class AuthStore {
 
     if (!supabase) return;
 
+    // Unsubscribe any existing listener before registering a new one — prevents
+    // duplicate handlers if init() is somehow re-entered.
+    this.#authSubscription?.unsubscribe();
+
     // Keep the backend file in sync when Supabase refreshes the access token.
     // Only clear on explicit SIGNED_OUT.
-    supabase.auth.onAuthStateChange((event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       console.log(`[auth] onAuthStateChange: event=${event}, session=${s ? s.user.email : "null"}`);
       if (s) {
         this.#token = s.access_token;
         this.session = { accessToken: s.access_token, email: s.user.email ?? "" };
+        // Clear coalesced GET responses so the new token's identity can't
+        // receive a response that was in-flight for the previous one.
+        api.clearInflight();
         // The setSession() call above (restoring a persisted session) fires
         // this handler immediately with the identical token — skip the
         // redundant re-save; only a genuine refresh should write again.
@@ -86,9 +97,11 @@ class AuthStore {
         this.#token = null;
         this.session = null;
         this.#lastSavedToken = null;
+        api.clearInflight();
         api.clientSessionDelete().catch(console.error);
       }
     });
+    this.#authSubscription = subscription;
   }
 
   async setSession(
@@ -102,6 +115,9 @@ class AuthStore {
     this.session = { accessToken, email };
     this.profiles = profs;
     this.activeProfile = active;
+    // Clear coalesced GET responses so in-flight fetches from the previous
+    // session can't land under the new identity.
+    api.clearInflight();
     if (refreshToken) {
       console.log("[auth] setSession: saving session for", email);
       await api.clientSessionSave({ accessToken, refreshToken, email });
@@ -123,12 +139,16 @@ class AuthStore {
   setProfiles(profs: Profile[], active: Profile): void {
     this.profiles = profs;
     this.activeProfile = active;
+    // A profile switch changes which dataset the backend serves — clear
+    // coalesced responses so the new profile's requests hit the network fresh.
+    api.clearInflight();
   }
 
   async logout(): Promise<void> {
     this.#token = null;
     this.session = null;
     this.#lastSavedToken = null;
+    api.clearInflight();
     await api.clientSessionDelete().catch(console.error);
     if (supabase) await supabase.auth.signOut();
   }

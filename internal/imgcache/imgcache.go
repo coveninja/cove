@@ -292,12 +292,16 @@ func (c *Cache) recordWrite(n int64) {
 // size from a fresh scan rather than trusting the running estimate, since
 // that estimate only ever accounts for writes this process made — a
 // difference that matters if the process restarted without evicting first.
+//
+// The lock is held for the scan + victim selection, released during the
+// os.Remove loop (I/O must not block concurrent recordWrite callers), then
+// re-acquired to update totalBytes.
 func (c *Cache) evict() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
+		c.mu.Unlock()
 		log.Println("imgcache: evict scan:", err)
 		return
 	}
@@ -323,21 +327,35 @@ func (c *Cache) evict() {
 
 	if total <= maxCacheBytes {
 		c.totalBytes = total
+		c.mu.Unlock()
 		return
 	}
 
 	sort.Slice(files, func(i, j int) bool { return files[i].mtime.Before(files[j].mtime) })
 
 	target := int64(float64(maxCacheBytes) * evictToFraction)
+	var victims []fileInfo
+	running := total
 	for _, f := range files {
-		if total <= target {
+		if running <= target {
 			break
 		}
+		victims = append(victims, f)
+		running -= f.size
+	}
+
+	c.mu.Unlock() // release before I/O so recordWrite isn't blocked during removes
+
+	var removed int64
+	for _, f := range victims {
 		if err := os.Remove(f.path); err != nil {
 			log.Println("imgcache: evict remove:", err)
 			continue
 		}
-		total -= f.size
+		removed += f.size
 	}
-	c.totalBytes = total
+
+	c.mu.Lock()
+	c.totalBytes = total - removed
+	c.mu.Unlock()
 }

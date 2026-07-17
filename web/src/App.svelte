@@ -172,6 +172,7 @@
       window.removeEventListener("error", onError);
       document.removeEventListener("contextmenu", onContextMenu);
       stopAutoSync?.();
+      clearTimeout(syncErrorTimer);
     };
   });
 

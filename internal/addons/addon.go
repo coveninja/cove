@@ -390,6 +390,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				URL string `json:"url"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
 				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
 				return
@@ -414,6 +415,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				Enabled bool `json:"enabled"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return

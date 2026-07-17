@@ -174,6 +174,9 @@ func (h *Handle) startLAN(addr string, handler http.Handler) {
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds request reads only; long-lived streaming responses
+		// (SSE, /api/play) are unaffected.
+		ReadTimeout: 30 * time.Second,
 		// Don't set WriteTimeout — torrent streaming is long-lived.
 	}
 	h.lanSrv = srv
@@ -247,6 +250,10 @@ func Start(cfg Config) (*Handle, error) {
 	if cfg.BindAddr == "" {
 		cfg.BindAddr = "127.0.0.1:6969"
 	}
+	// Record the bind address so image-proxy URL builders (tmdb.imgURL,
+	// library.rewritePosterURL) produce correct absolute URLs even when
+	// COVE_BIND_ADDR differs from the default.
+	utils.SetLocalAddr(cfg.BindAddr)
 
 	if cfg.TMDBAPIKey == "" {
 		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
@@ -417,6 +424,9 @@ func Start(cfg Config) (*Handle, error) {
 		Addr:              cfg.BindAddr,
 		Handler:           mux, // no gate — loopback is trusted
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds request reads only; long-lived streaming responses
+		// (SSE /api/progress/stream, video via /api/play) are unaffected.
+		ReadTimeout: 30 * time.Second,
 		// Don't set WriteTimeout — torrent streaming is long-lived.
 	}
 

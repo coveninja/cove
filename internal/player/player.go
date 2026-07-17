@@ -76,11 +76,14 @@ type Player struct {
 	// once in New and shared by CleanupTorrents for removal of stale data.
 	dataDir string
 
-	// proxyTransport is the shared HTTP transport for proxyStream. mpv issues
-	// many Range requests while seeking; reusing a single transport (and its
-	// connection pool) instead of allocating one per request avoids leaking
-	// idle connections and keeps TLS handshake overhead to a single session.
-	proxyTransport *http.Transport
+	// proxyTransport is the SSRF-safe shared HTTP transport for proxyStream —
+	// uses utils.SafeTransport as its base so stream URLs can't reach LAN/loopback
+	// addresses. proxyTransportLAN is the permissive fallback used when the user
+	// has enabled AllowLanStreamSources (local media servers, e.g. Jellyfin). mpv
+	// issues many Range requests while seeking; reusing a single transport keeps
+	// TLS handshake overhead to a single session across all of them.
+	proxyTransport    *http.Transport
+	proxyTransportLAN *http.Transport
 
 	// probeClient HEAD-checks direct stream URLs for /api/streams/probe. Built
 	// on SafeTransport (public-address-only) with a short header timeout —
@@ -166,7 +169,18 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 	if err != nil {
 		return nil, err
 	}
-	// Shared transport for proxyStream — see field comment on Player.
+	// Safe proxy transport: built on SafeTransport's SSRF-checking dialer with
+	// streaming-specific knobs layered on top. Used by default for proxyStream.
+	safeTransport := utils.SafeTransport()
+	safeTransport.MaxIdleConnsPerHost = 16               // Go default 2; mpv seek bursts otherwise redo TCP+TLS per request
+	safeTransport.ForceAttemptHTTP2 = true               // custom DialContext disables h2 by default; enables multiplexed Range requests
+	safeTransport.IdleConnTimeout = 90 * time.Second     // keep conns warm across pause/seek gaps
+	safeTransport.TLSHandshakeTimeout = 15 * time.Second // match permissive transport below
+	safeTransport.ResponseHeaderTimeout = 30 * time.Second
+
+	// Permissive proxy transport: same tuning but plain DialContext (no SSRF
+	// check). Only used when AllowLanStreamSources is enabled — needed for local
+	// media servers (Jellyfin, Plex) that resolve to LAN/loopback addresses.
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -191,16 +205,17 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		},
 	}
 	return &Player{
-		client:         client,
-		activeTorrents: map[string]*torrentState{},
-		tmdbClient:     tmdbClient,
-		addonMgr:       addonMgr,
-		nuvioMgr:       nuvioMgr,
-		streamHeaders:  map[string]streamHeaderEntry{},
-		dataDir:        dataDir,
-		proxyTransport: transport,
-		probeClient:    probeClient,
-		settings:       st,
+		client:            client,
+		activeTorrents:    map[string]*torrentState{},
+		tmdbClient:        tmdbClient,
+		addonMgr:          addonMgr,
+		nuvioMgr:          nuvioMgr,
+		streamHeaders:     map[string]streamHeaderEntry{},
+		dataDir:           dataDir,
+		proxyTransport:    safeTransport,
+		proxyTransportLAN: transport,
+		probeClient:       probeClient,
+		settings:          st,
 	}, nil
 }
 
@@ -250,6 +265,12 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		http.Error(w, "invalid stream url", http.StatusBadGateway)
 		return
 	}
+	// Select transport per-request: permissive (LAN-capable) only when the user
+	// has explicitly enabled AllowLanStreamSources; safe (SSRF-checked) otherwise.
+	transport := p.proxyTransport
+	if p.settings != nil && p.settings.Get().AllowLanStreamSources {
+		transport = p.proxyTransportLAN
+	}
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
@@ -264,9 +285,8 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		// Bound connection setup but never the transfer itself — a stream
 		// runs for the length of the film. FlushInterval -1 disables output
 		// buffering so playback data reaches mpv as it arrives.
-		// Transport is shared across calls (see Player.proxyTransport) so
-		// mpv's per-seek Range requests reuse existing TLS connections.
-		Transport:     p.proxyTransport,
+		// Transport is selected above (see Player.proxyTransport / proxyTransportLAN).
+		Transport:     transport,
 		FlushInterval: -1,
 		// Origin rejections (403 expired signature, 404 pulled file) reach mpv
 		// but were otherwise invisible in the backend log, making dead direct
@@ -636,6 +656,9 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *
 	case <-t.GotInfo():
 	case <-ctx.Done():
 		t.Drop()
+		// Attempt best-effort cleanup of any partial data left under the infohash
+		// directory (anacrolix may create a dir by infohash before metadata arrives).
+		_ = os.RemoveAll(filepath.Join(p.dataDir, infoHash))
 		return nil, fmt.Errorf("timed out fetching metadata for %s", infoHash)
 	}
 
@@ -756,6 +779,34 @@ func (p *Player) CleanupTorrents() {
 			}
 		}
 		log.Printf("torrent %s dropped (idle)", d.hash)
+	}
+
+	// Orphan sweep: remove dataDir entries whose name matches neither an active
+	// torrent's Name() nor its infohash. Catches partial data left by timed-out
+	// metadata fetches (which can't be removed by hash until the data dir exists).
+	// Conservative: any name present in the active set is left untouched.
+	activeNames := make(map[string]bool)
+	p.activeTorrentsMu.RLock()
+	for hash, st := range p.activeTorrents {
+		activeNames[hash] = true // infohash as possible dir name
+		if n := st.torrent.Name(); n != "" {
+			activeNames[n] = true
+		}
+	}
+	p.activeTorrentsMu.RUnlock()
+
+	if entries, err := os.ReadDir(p.dataDir); err == nil {
+		for _, e := range entries {
+			if activeNames[e.Name()] {
+				continue
+			}
+			orphan := filepath.Join(p.dataDir, e.Name())
+			if err := os.RemoveAll(orphan); err != nil {
+				log.Printf("torrent orphan sweep: could not remove %s: %v", e.Name(), err)
+			} else {
+				log.Printf("torrent orphan sweep: removed %s", e.Name())
+			}
+		}
 	}
 }
 

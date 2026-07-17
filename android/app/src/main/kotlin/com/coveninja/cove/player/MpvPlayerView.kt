@@ -177,9 +177,15 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
     override fun surfaceCreated(holder: SurfaceHolder) {
         Log.d(TAG, "surfaceCreated — attaching surface")
         MPVLib.attachSurface(holder.surface)
-        // Tell mpv to start rendering if it was waiting for a surface
         MPVLib.setPropertyString("android-surface-size",
             "${holder.surfaceFrame.width()}x${holder.surfaceFrame.height()}")
+        // With hwdec=mediacodec (direct), the MediaCodec decoder is bound to the
+        // Surface. After a background/resume cycle a new Surface arrives here; we
+        // must re-assert the window and vo so mpv binds the decoder to the new one
+        // rather than continuing to write into the previous (now-dead) surface,
+        // which would cause black video with continuing audio until the next loadfile.
+        try { MPVLib.setPropertyString("force-window", "yes") } catch (_: Exception) {}
+        try { MPVLib.setPropertyString("vo", "gpu") } catch (_: Exception) {}
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -189,6 +195,12 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         Log.d(TAG, "surfaceDestroyed — detaching surface")
+        // With hwdec=mediacodec (direct), the decoder output is bound to this Surface.
+        // Setting vo=null tears down the vo_gpu path and releases the MediaCodec bound
+        // to the dying surface *before* detachSurface() removes it from mpv's view.
+        // Without this, mpv holds a reference to the dead surface and black video
+        // results on resume until the next loadfile forces a decoder re-init.
+        try { MPVLib.setPropertyString("vo", "null") } catch (_: Exception) {}
         try { MPVLib.detachSurface() } catch (_: Exception) {}
     }
 

@@ -31,8 +31,8 @@ export class TorrentProgress {
   downloadedBytes = $state(0);
   totalBytes = $state(0);
   // True once the stream has been given up on after repeated errors.
-  // Consumers may read this to adjust their loading message; no UI does
-  // today, so it's kept simple.
+  // Both Player.svelte and TvPlayer.svelte treat stalled && !canPlay as
+  // playback-failed and cascade to the next fallback stream.
   stalled = $state(false);
 
   /**
@@ -48,6 +48,18 @@ export class TorrentProgress {
    * season pack's selected episode file instead of the whole torrent.
    */
   start(src: string, opts?: { season?: number; episode?: number; fileIdx?: number }): () => void {
+    // Reset state from any previous stream so stalled and stats don't carry
+    // over when the same TorrentProgress instance is reused for a new src.
+    this.stalled = false;
+    this.progress = 0;
+    this.peers = 0;
+    this.speed = "0 B/s";
+    this.seeders = 0;
+    this.totalPeers = 0;
+    this.speedBps = 0;
+    this.downloadedBytes = 0;
+    this.totalBytes = 0;
+
     const es = new EventSource(api.progressStreamUrl(src, opts));
     let consecutiveErrors = 0;
 

@@ -22,7 +22,7 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-  import { Trash2, Plus, RefreshCw, TriangleAlert } from "lucide-svelte";
+  import { Trash2, Plus, RefreshCw, TriangleAlert, Eye, EyeOff, Copy, Check as CheckIcon } from "lucide-svelte";
   import type {
     Repo as NuvioRepo,
     Scraper as NuvioScraper,
@@ -55,12 +55,22 @@
     draft = { ...draft, [key]: value };
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!draft) return;
-    settings.save(draft);
     saved = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => (saved = false), 2000);
+    await settings.save(draft);
+    // Pull server-generated fields back into the draft — enabling remote
+    // access makes the backend mint a token that only exists in the PUT
+    // response (masked as "***"); without this the draft keeps its stale ""
+    // and the token row never appears until a reload.
+    const unsub = settings.subscribe((v) => {
+      if (draft) {
+        draft = { ...draft, remoteAccessToken: v.remoteAccessToken, updatedAt: v.updatedAt };
+      }
+    });
+    unsub();
   }
 
   function handleReset() {
@@ -285,6 +295,62 @@
 
   let testingSpeed = $state(false);
   let speedTestError = $state<string | null>(null);
+
+  // ── Remote access token reveal ────────────────────────────────────────────────
+  // The backend returns "***" for the token when set; we only fetch the real
+  // value when the user explicitly clicks Show or Copy.
+  let revealedToken = $state<string | null>(null);
+  let tokenVisible = $state(false);
+  let revealingToken = $state(false);
+  let tokenCopied = $state(false);
+  let tokenCopyTimer: ReturnType<typeof setTimeout>;
+
+  async function handleRevealToken(): Promise<void> {
+    if (revealedToken !== null) {
+      tokenVisible = !tokenVisible;
+      return;
+    }
+    revealingToken = true;
+    try {
+      revealedToken = await api.revealRemoteAccessToken();
+      tokenVisible = true;
+    } catch (e) {
+      console.error("revealRemoteAccessToken:", e);
+    } finally {
+      revealingToken = false;
+    }
+  }
+
+  async function handleCopyToken(): Promise<void> {
+    let token = revealedToken;
+    if (!token) {
+      revealingToken = true;
+      try {
+        token = await api.revealRemoteAccessToken();
+        revealedToken = token;
+        tokenVisible = true;
+      } catch (e) {
+        console.error("revealRemoteAccessToken:", e);
+        return;
+      } finally {
+        revealingToken = false;
+      }
+    }
+    await navigator.clipboard.writeText(token);
+    tokenCopied = true;
+    clearTimeout(tokenCopyTimer);
+    tokenCopyTimer = setTimeout(() => (tokenCopied = false), 2000);
+  }
+
+  // Clear the revealed token whenever settings are reloaded (e.g. the "***"
+  // sentinel from a fresh getSettings() should not clobber a local reveal).
+  $effect(() => {
+    if (draft?.remoteAccessToken === "") {
+      // Token was cleared server-side (regenerated or disabled); forget local reveal.
+      revealedToken = null;
+      tokenVisible = false;
+    }
+  });
 
   async function runSpeedTest() {
     if (!draft) return;
@@ -544,6 +610,94 @@
               checked={draft.probeStreams}
               onCheckedChange={(v) => patch("probeStreams", v)}
             />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="allow-lan-sources" class="text-sm font-medium"
+                >Allow LAN stream sources</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Lets streams play from private/LAN addresses. Only enable
+                if you run a stream source on your own network — this
+                weakens protection against malicious addons probing your
+                network.
+              </p>
+            </div>
+            <Switch
+              id="allow-lan-sources"
+              checked={draft.allowLanStreamSources}
+              onCheckedChange={(v) => patch("allowLanStreamSources", v)}
+            />
+          </div>
+          <Separator />
+
+          <!-- Remote access -->
+          <div class="py-3 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <Label for="remote-access" class="text-sm font-medium"
+                  >Remote access</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Opens a LAN port (6970) so the mobile app or other
+                  devices on your network can connect to this backend.
+                </p>
+              </div>
+              <Switch
+                id="remote-access"
+                checked={draft.remoteAccessEnabled}
+                onCheckedChange={(v) => patch("remoteAccessEnabled", v)}
+              />
+            </div>
+
+            {#if draft.remoteAccessEnabled}
+              <div class="rounded-lg border border-border p-3 space-y-2">
+                <Label class="text-xs font-medium text-muted-foreground"
+                  >Access token</Label
+                >
+                {#if draft.remoteAccessToken === ""}
+                  <p class="text-xs text-muted-foreground">
+                    No token set — save settings to generate one.
+                  </p>
+                {:else}
+                  <div class="flex items-center gap-2">
+                    <code class="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
+                      {tokenVisible && revealedToken ? revealedToken : "•".repeat(32)}
+                    </code>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      class="shrink-0"
+                      onclick={handleRevealToken}
+                      disabled={revealingToken}
+                      title={tokenVisible ? "Hide token" : "Show token"}
+                    >
+                      {#if tokenVisible}
+                        <EyeOff class="size-4" />
+                      {:else}
+                        <Eye class="size-4" />
+                      {/if}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      class="shrink-0"
+                      onclick={handleCopyToken}
+                      disabled={revealingToken}
+                      title="Copy token"
+                    >
+                      {#if tokenCopied}
+                        <CheckIcon class="size-4 text-green-500" />
+                      {:else}
+                        <Copy class="size-4" />
+                      {/if}
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+            {/if}
           </div>
           <Separator />
 

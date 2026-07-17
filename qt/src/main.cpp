@@ -27,6 +27,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTextStream>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QUrl>
 #include <QtWebEngineQuick/QtWebEngineQuick>
@@ -424,13 +425,15 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
   html += "<script>" + bootstrap + "</script>";
   html += "</body></html>";
 
-  const QString path = QDir::temp().filePath("cove_overlay.html");
-  QFile f(path);
-  if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    f.write(html.toUtf8());
-    f.close();
+  // QTemporaryFile uses O_EXCL, preventing a symlink-substitution attack on
+  // the predictable path a fixed /tmp name would create.
+  QTemporaryFile overlayFile(QDir::temp().filePath("cove_overlay_XXXXXX.html"));
+  overlayFile.setAutoRemove(false); // must outlive this function; OS tmp cleanup handles removal
+  if (overlayFile.open()) {
+    overlayFile.write(html.toUtf8());
+    overlayFile.close();
   }
-  return QUrl::fromLocalFile(path).toString();
+  return QUrl::fromLocalFile(overlayFile.fileName()).toString();
 }
 
 int main(int argc, char *argv[]) {
@@ -499,7 +502,14 @@ int main(int argc, char *argv[]) {
   // Single-instance guard. QLockFile detects stale locks from crashed
   // processes (it records the holder's PID), so a crash never wedges future
   // launches the way the old "did port 5174 bind?" heuristic could.
-  QLockFile instanceLock(QDir::temp().filePath("cove_shell.lock"));
+  // RuntimeLocation (/run/user/<uid>) is per-user, avoiding collisions on
+  // shared machines; fall back to /tmp when the platform doesn't provide it.
+  const QString runtimeDir =
+      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+  const QString lockDir = runtimeDir.isEmpty() ? QDir::temp().absolutePath() : runtimeDir;
+  if (!runtimeDir.isEmpty())
+    QDir().mkpath(lockDir);
+  QLockFile instanceLock(QDir(lockDir).filePath("cove_shell.lock"));
   if (!instanceLock.tryLock(0)) {
     reportStartupFailure(
         QStringLiteral("Cove is already running (another instance holds the "

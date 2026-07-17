@@ -192,11 +192,15 @@
     if (!Player.available) return;
     try {
       if (media && Player.duration > 0) {
+        // Pass the actual ended state so the "ended" effect and onDestroy firing
+        // in the same tick don't race: if ended=true the #completedSaved guard
+        // in ProgressSaver prevents any downgrade; if false the record is left
+        // as-is (not marked complete when it wasn't).
         progress.saveNow(
                 Player.position,
                 Player.duration,
                 progressCtx,
-                false,
+                Player.ended,
         );
         // One bump per session teardown — never on the ~10s maybeSave ticks,
         // which would make every libraryChanged subscriber refetch during
@@ -422,7 +426,9 @@
     const m = media;
     if (!m) { logoUrl = null; return; }
     logoUrl = null;
+    const requestedId = m.id; // guard against stale response after media changes
     api.getLogos(m.id, m.media_type).then((logos) => {
+      if (media?.id !== requestedId) return;
       logoUrl = logos[0] ?? null;
     }).catch(() => {});
   });
@@ -436,7 +442,9 @@
     const m = media;
     if (!m) { timestamps = null; return; }
     timestamps = null;
+    const requestedSrc = src; // guard against stale response after switching src
     api.getTimestamps(m.id, { season, episode }).then((data) => {
+      if (src !== requestedSrc) return;
       timestamps = data;
     }).catch((e) => {
       console.warn("[introdb] fetch failed:", e);
@@ -472,12 +480,14 @@
 
   // Auto-skip segments when the matching setting is enabled.
   // Uses autoSkippedSegments to avoid re-skipping if the user seeks back.
+  // autoSkippedSegments.has() is wrapped in untrack() so mutating the set
+  // (autoSkippedSegments.add() below) doesn't spuriously re-run this effect.
   $effect(() => {
     const seg = activeSegment;
     if (!seg || !$settings) return;
 
     const segKey = `${seg.type}-${seg.seg.start_ms ?? 0}`;
-    if (autoSkippedSegments.has(segKey)) return;
+    if (untrack(() => autoSkippedSegments.has(segKey))) return;
 
     const shouldSkip =
       (seg.type === "intro" && $settings.autoSkipIntro) ||

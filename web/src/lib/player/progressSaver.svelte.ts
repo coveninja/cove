@@ -35,6 +35,11 @@ export class ProgressSaver {
   // firing right after the "ended" effect already marked it done) flipping
   // the record back to not-completed.
   #completedSaved = false;
+  // Monotonically increasing sequence number for load() calls. reset()
+  // increments it to invalidate any in-flight progressGet response, preventing
+  // a stale episode's response from setting savedPosition after the new
+  // episode has already called reset().
+  #loadSeq = 0;
 
   /** Clear state — call when the source changes. */
   reset(): void {
@@ -42,6 +47,7 @@ export class ProgressSaver {
     this.hasSeekedToSaved = false;
     this.#lastSaveMs = 0;
     this.#completedSaved = false;
+    this.#loadSeq++; // invalidate any in-flight load()
   }
 
   /** Fetch the saved position; only restores a meaningful, not-yet-finished one. */
@@ -51,8 +57,10 @@ export class ProgressSaver {
     season: number | null,
     episode: number | null,
   ): Promise<void> {
+    const seq = ++this.#loadSeq;
     try {
       const prog = await api.progressGet(tmdbId, mediaType, season, episode);
+      if (seq !== this.#loadSeq) return; // superseded by a later reset() or load()
       if (prog && !prog.completed && prog.position_seconds > 10) {
         this.savedPosition = prog.position_seconds;
       }

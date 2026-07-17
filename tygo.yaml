@@ -17,3 +17,13 @@ packages:
     output_path: "web/src/lib/types/nuvio.ts"
     type_mappings:
       time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity
+  - path: "github.com/coveninja/cove/internal/activity"
+    output_path: "web/src/lib/types/activity.ts"
+    # LibraryLookup (an internal test-injection interface) generates as `any`.
+    frontmatter: "/* eslint-disable @typescript-eslint/no-explicit-any */"
+    type_mappings:
+      time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity
+  - path: "github.com/coveninja/cove/internal/profiles"
+    output_path: "web/src/lib/types/profiles.ts"
+  - path: "github.com/coveninja/cove/internal/updater"
+    output_path: "web/src/lib/types/updater.ts"

@@ -163,7 +163,6 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   mpv_observe_property(m_mpv, 0, "duration", MPV_FORMAT_DOUBLE);
   mpv_observe_property(m_mpv, 0, "pause", MPV_FORMAT_FLAG);
   mpv_observe_property(m_mpv, 0, "volume", MPV_FORMAT_DOUBLE);
-  mpv_observe_property(m_mpv, 0, "eof-reached", MPV_FORMAT_FLAG);
   // NONE = notify on change without delivering the (complex) node; we re-query.
   mpv_observe_property(m_mpv, 0, "track-list", MPV_FORMAT_NONE);
   mpv_set_wakeup_callback(m_mpv, on_events, this);
@@ -373,10 +372,7 @@ void MpvObject::handlePropertyChange(mpv_event_property *prop) {
     emit volumeChanged(*static_cast<double *>(prop->data));
   else if (name == "pause" && prop->format == MPV_FORMAT_FLAG)
     emit pausedChanged(*static_cast<int *>(prop->data) != 0);
-  else if (name == "eof-reached" && prop->format == MPV_FORMAT_FLAG) {
-    if (*static_cast<int *>(prop->data))
-      emit endReached();
-  } else if (name == "track-list")
+  else if (name == "track-list")
     emit tracksChanged(readTrackList());
 }
 

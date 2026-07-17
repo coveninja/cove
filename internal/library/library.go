@@ -747,6 +747,7 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 			LastAiredSeason  *int    `json:"last_aired_season"`
 			LastAiredEpisode *int    `json:"last_aired_episode"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -836,9 +837,16 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		pKey := progressKey(tmdbID, mediaType, season, episode)
 		l.mu.RLock()
 		p := l.db.Progress[pKey]
+		// Copy under the lock before unlocking — concurrent POSTs can mutate the
+		// pointed-to struct while json.Encode runs, causing a data race.
+		var pOut *WatchProgress
+		if p != nil {
+			cp := *p
+			pOut = &cp
+		}
 		l.mu.RUnlock()
 		// Return null JSON if not found (not a 404 — absence is normal)
-		jsonOK(w, p)
+		jsonOK(w, pOut)
 
 	case http.MethodPost:
 		var body struct {
@@ -856,6 +864,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			DurationSeconds  float64 `json:"duration_seconds"`
 			Completed        bool    `json:"completed"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -1008,7 +1017,10 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var progList []*WatchProgress
 		for _, p := range l.db.Progress {
 			if p.TmdbID == tmdbID && p.MediaType == mediaType {
-				progList = append(progList, p)
+				// Copy under the lock — concurrent POSTs can mutate shared structs
+				// while json.Encode runs outside the lock (same pattern as AllProgress).
+				cp := *p
+				progList = append(progList, &cp)
 			}
 		}
 		l.mu.RUnlock()
@@ -1050,6 +1062,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Status Status `json:"status"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -1076,6 +1089,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Rating *float64 `json:"rating"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -1118,6 +1132,7 @@ func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
 			TmdbID    int    `json:"tmdb_id"`
 			MediaType string `json:"media_type"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -1180,7 +1195,7 @@ func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
 // rewrite that only makes sense pointed at this machine's own backend.
 func rewritePosterURL(s string) string {
 	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
-		return "http://127.0.0.1:6969/api/img/" + rest
+		return "http://" + utils.LocalAddr() + "/api/img/" + rest
 	}
 	return s
 }

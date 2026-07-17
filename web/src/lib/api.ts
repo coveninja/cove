@@ -15,7 +15,10 @@ import type {
 import type { Repo as NuvioRepo } from "$lib/types/nuvio";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
-import type { Profile } from "$lib/types/auth";
+import type { Profile } from "$lib/types/profiles"; // tygo-generated
+import type { Stats as ActivityStats, TitleSeconds } from "$lib/types/activity"; // tygo-generated
+import type { CheckResult as UpdateCheckResult } from "$lib/types/updater"; // tygo-generated
+export type { ActivityStats, TitleSeconds, UpdateCheckResult };
 
 // Single source of truth for the backend origin. Override per-environment with
 // VITE_API_BASE (e.g. in .env.production); falls back to 127.0.0.1 (the same
@@ -274,31 +277,6 @@ export interface DiscoverInsights {
   negative_contributors: ContributingTitle[];
 }
 
-export interface TitleSeconds {
-  tmdb_id: number;
-  media_type: string;
-  title: string;
-  poster_path: string;
-  seconds: number;
-}
-
-export interface ActivityStats {
-  total_seconds: number;
-  total_titles: number;
-  current_streak: number;
-  longest_streak: number;
-  avg_seconds_per_active_day: number;
-  titles_this_year: number;
-  this_year_seconds: number;
-  last_year_seconds: number;
-  by_year: Record<string, number>;
-  by_month_this_year: number[];
-  by_month_last_year: number[];
-  by_day_of_week: number[];
-  by_hour_of_day: number[];
-  calendar: Record<string, number>;
-  titles_watched_this_year: TitleSeconds[];
-}
 
 export interface StudioEntry {
   id: number;
@@ -351,16 +329,6 @@ export interface PersonDetails {
   birthday: string;
   place_of_birth: string;
   credits: Media[];
-}
-
-// ── Update ────────────────────────────────────────────────────────────────────
-
-// Mirrors internal/updater/updater.go CheckResult.
-export interface UpdateCheckResult {
-  available: boolean;
-  current_version: string;
-  latest_version: string;
-  release_name: string;
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
@@ -454,13 +422,14 @@ export const api = {
     signal?: AbortSignal,
   ): Promise<void> => {
     if (ids.length === 0) return;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
       const res = await fetch(
         `${BASE}/quality/batch?ids=${ids.map(encodeURIComponent).join(",")}`,
         withAuth({ signal }),
       );
       if (!res.ok || !res.body) return;
-      const reader = res.body.getReader();
+      reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       while (true) {
@@ -480,6 +449,9 @@ export const api = {
         }
       }
     } catch (e) {
+      // Cancel the reader on any error/abort so the locked ReadableStream is
+      // released promptly instead of being held until GC collects it.
+      reader?.cancel().catch(() => {});
       if ((e as { name?: string } | null)?.name === "AbortError") return;
       throw e;
     }
@@ -593,6 +565,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
     }),
+
+  // GET /api/settings returns remoteAccessToken as "***" when set (empty when
+  // unset). Call this to fetch the real value — only when the user explicitly
+  // clicks show/copy, not on every settings load.
+  revealRemoteAccessToken: (): Promise<string> =>
+    request<{ token: string }>(`/settings/reveal-token`, { method: "POST" }).then(
+      (r) => r.token,
+    ),
 
   testDiscoveryAlgorithm: (
     url: string,
@@ -1036,4 +1016,12 @@ export const api = {
     request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
   clientSessionDelete: (): Promise<void> =>
     request(`/client-session`, { method: "DELETE" }),
+
+  // Clears the in-flight GET-coalescing map. Call whenever the auth token or
+  // active profile changes so a pending response from the old identity can't
+  // be handed to the new one. Does NOT key by token — just empties the map
+  // so the next caller hits the network fresh under the new identity.
+  clearInflight: (): void => {
+    inflight.clear();
+  },
 };

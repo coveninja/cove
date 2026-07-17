@@ -110,6 +110,18 @@ export interface ProgressSaveEvent {
   Completed: boolean;
   At: string;
 }
+/**
+ * RemoteRowID identifies a remote Supabase row by its natural key and UUID,
+ * used by AdoptRemoteIDs. Season and Episode are only meaningful for progress
+ * rows; nil means the column is NULL in Supabase (movies have no season/episode).
+ */
+export interface RemoteRowID {
+  ID: string;
+  TmdbID: number /* int */;
+  MediaType: string;
+  Season?: number /* int */;
+  Episode?: number /* int */;
+}
 export interface Stats {
   total: number /* int */; // library entries (dismissals excluded)
   by_type: { [key: string]: number /* int */}; // entries per media type

@@ -53,6 +53,7 @@ build: go web qt
 ## Private build tags (supabase, discover) are added automatically when the
 ## corresponding implementation files are present (run `make inject-private` first).
 go:
+	$(if $(TMDB_API_KEY),,$(warning TMDB_API_KEY not set — TMDB calls will fail at runtime unless a .env file is present next to the binary))
 	CGO_ENABLED=0 go build $(_TAG_FLAGS) -ldflags "-X main.Version=$(VERSION)" -o $(GO_BIN) .
 
 ## Frontend → web/dist (Vite).
