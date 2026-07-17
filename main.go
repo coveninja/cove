@@ -27,6 +27,15 @@ var TmdbApiKey = ""
 var SupabaseURL = ""
 var SupabaseAnonKey = ""
 
+// TraktClientID and TraktClientSecret are injected at build time via -ldflags.
+// They correspond to a Trakt API application registered at
+// https://trakt.tv/oauth/applications (redirect_uri "urn:ietf:wg:oauth:2.0:oob").
+// During development, set TRAKT_CLIENT_ID / TRAKT_CLIENT_SECRET in .env instead.
+// Embedding the secret in installed-app binaries is normal practice for device-
+// code / out-of-band flows — the secret does not grant elevated privileges.
+var TraktClientID = ""
+var TraktClientSecret = ""
+
 func main() {
 	// Load .env if present — for local development only.
 	if ex, err := os.Executable(); err == nil {
@@ -46,16 +55,27 @@ func main() {
 		apiKey = TmdbApiKey
 	}
 
+	traktClientID := os.Getenv("TRAKT_CLIENT_ID")
+	if traktClientID == "" {
+		traktClientID = TraktClientID
+	}
+	traktClientSecret := os.Getenv("TRAKT_CLIENT_SECRET")
+	if traktClientSecret == "" {
+		traktClientSecret = TraktClientSecret
+	}
+
 	cfg := server.Config{
-		BindAddr:        os.Getenv("COVE_BIND_ADDR"),
-		RemoteBindAddr:  os.Getenv("COVE_REMOTE_ADDR"),
-		DataDir:         os.Getenv("COVE_DATA_DIR"),
-		CacheDir:        os.Getenv("COVE_CACHE_DIR"),
-		TorrentDir:      os.Getenv("COVE_TORRENT_DIR"),
-		TMDBAPIKey:      apiKey,
-		SupabaseURL:     SupabaseURL,
-		SupabaseAnonKey: SupabaseAnonKey,
-		Version:         Version,
+		BindAddr:          os.Getenv("COVE_BIND_ADDR"),
+		RemoteBindAddr:    os.Getenv("COVE_REMOTE_ADDR"),
+		DataDir:           os.Getenv("COVE_DATA_DIR"),
+		CacheDir:          os.Getenv("COVE_CACHE_DIR"),
+		TorrentDir:        os.Getenv("COVE_TORRENT_DIR"),
+		TMDBAPIKey:        apiKey,
+		SupabaseURL:       SupabaseURL,
+		SupabaseAnonKey:   SupabaseAnonKey,
+		TraktClientID:     traktClientID,
+		TraktClientSecret: traktClientSecret,
+		Version:           Version,
 	}
 
 	handle, err := server.Start(cfg)

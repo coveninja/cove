@@ -30,6 +30,7 @@ import (
 	"github.com/coveninja/cove/internal/settings"
 	supapkg "github.com/coveninja/cove/internal/supabase"
 	"github.com/coveninja/cove/internal/tmdb"
+	traktpkg "github.com/coveninja/cove/internal/trakt"
 	"github.com/coveninja/cove/internal/updater"
 	"github.com/coveninja/cove/internal/utils"
 	"github.com/coveninja/cove/internal/webstatic"
@@ -77,6 +78,11 @@ type Config struct {
 	// SupabaseAnonKey is the publishable Supabase anon key. Empty disables
 	// Supabase auth/sync.
 	SupabaseAnonKey string
+
+	// TraktClientID and TraktClientSecret are the Trakt API application
+	// credentials. When either is empty all /api/trakt/* endpoints return 503.
+	TraktClientID     string
+	TraktClientSecret string
 
 	// Version is the current build version string (injected via ldflags).
 	// Used by the updater to decide whether a newer release is available.
@@ -265,6 +271,7 @@ func Start(cfg Config) (*Handle, error) {
 	var st *settings.Store
 	var lib *library.Library
 	var act *activity.Store
+	var traktSrv *traktpkg.Server
 
 	profileStore, err := profiles.New(func(profileID string) {
 		// Reload all data stores when the active profile switches.
@@ -282,6 +289,11 @@ func Start(cfg Config) (*Handle, error) {
 		}
 		if err := act.SetProfile(profileID); err != nil {
 			log.Println("profile switch: reload activity:", err)
+		}
+		if traktSrv != nil {
+			if err := traktSrv.SetProfile(profileID); err != nil {
+				log.Println("profile switch: reload trakt:", err)
+			}
 		}
 	})
 	if err != nil {
@@ -365,6 +377,16 @@ func Start(cfg Config) (*Handle, error) {
 		}
 	})
 
+	// Trakt.tv integration (no build tag — always compiled). Endpoints return
+	// 503 when TraktClientID is not set, mirroring the Supabase noop pattern.
+	// RunSync is launched below after ctx is created.
+	traktCfg := traktpkg.Config{
+		ClientID:     cfg.TraktClientID,
+		ClientSecret: cfg.TraktClientSecret,
+	}
+	traktSrv = traktpkg.New(traktCfg, activeID, lib, st, tmdbClient)
+	traktSrv.SetupHandlers(mux)
+
 	disc := discover.New(tmdbClient, lib, st)
 	disc.SetupHandlers(mux)
 
@@ -387,6 +409,10 @@ func Start(cfg Config) (*Handle, error) {
 	lib.SetOnNearComplete(prefetchWorker.Notify)
 	lib.SetOnProgressSave(act.OnProgressSave)
 	go prefetchWorker.Run(ctx)
+
+	// Trakt background sync — runs after ctx exists so RunSync can select on
+	// ctx.Done(). The worker respects TraktSyncEnabled each cycle.
+	go traktSrv.RunSync(ctx)
 
 	// Reap idle torrents every 5 minutes. The ticker is context-aware so
 	// Stop() cancels the loop immediately rather than waiting up to 5 minutes

@@ -35,7 +35,9 @@ const DEFAULTS: Settings = {
   updatedAt: "",
   remoteAccessEnabled: false,
   remoteAccessToken: "",
-  allowLanStreamSources: false
+  allowLanStreamSources: false,
+  traktScrobbleEnabled: true,
+  traktSyncEnabled: false,
 };
 
 function createSettingsStore(): {

@@ -675,6 +675,110 @@ func (l *Library) SetProfile(profileID string) error {
 	return nil
 }
 
+// ── External sync helpers ─────────────────────────────────────────────────────
+
+// MarkExternallyWatched creates or updates a WatchProgress record as Completed
+// for the given item, sourced from an external service (Trakt). If no library
+// entry exists yet it is auto-created as StatusWatching (user controls status
+// changes; Cove never auto-flips to Finished on external completion).
+//
+// title and posterPath are used only when creating a brand-new library entry;
+// they may be empty when the entry already exists. watchedAt is set as the
+// WatchedAt timestamp on the progress record. Additive only — an already-
+// completed record is not overwritten unless the new watchedAt is more recent.
+func (l *Library) MarkExternallyWatched(
+	tmdbID int,
+	mediaType string,
+	season, episode *int,
+	title, posterPath string,
+	watchedAt time.Time,
+) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	eKey := entryKey(tmdbID, mediaType)
+	entry, exists := l.db.Entries[eKey]
+	if !exists {
+		entry = &LibraryEntry{
+			ID:         newUUID(),
+			TmdbID:     tmdbID,
+			MediaType:  mediaType,
+			Title:      title,
+			PosterPath: posterPath,
+			Status:     StatusWatching,
+			AddedAt:    now,
+			UpdatedAt:  now,
+		}
+		l.db.Entries[eKey] = entry
+	}
+
+	pKey := progressKey(tmdbID, mediaType, season, episode)
+	prog, progExists := l.db.Progress[pKey]
+	if progExists && prog.Completed && !watchedAt.After(prog.WatchedAt) {
+		// Already completed at the same or later time — nothing to do.
+		return
+	}
+	if !progExists {
+		prog = &WatchProgress{
+			ID:             newUUID(),
+			LibraryEntryID: entry.ID,
+			TmdbID:         tmdbID,
+			MediaType:      mediaType,
+			Season:         season,
+			Episode:        episode,
+		}
+		l.db.Progress[pKey] = prog
+	}
+	prog.Completed = true
+	prog.WatchedAt = watchedAt
+
+	entry.LastWatchedAt = &watchedAt
+	if season != nil {
+		entry.LastWatchedSeason = season
+	}
+	if episode != nil {
+		entry.LastWatchedEpisode = episode
+	}
+
+	l.gen.Add(1)
+	l.markDirty()
+}
+
+// AddWatchLater adds a new library entry with StatusWatchLater if and only if
+// the (tmdbID, mediaType) pair does not already exist in the library under any
+// status. If an entry already exists, this is a no-op (additive, never
+// overwrites). Designed for Trakt watchlist pull.
+func (l *Library) AddWatchLater(
+	tmdbID int,
+	mediaType string,
+	title, posterPath string,
+	addedAt time.Time,
+) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	eKey := entryKey(tmdbID, mediaType)
+	if _, exists := l.db.Entries[eKey]; exists {
+		return // already present under some status — additive only, never overwrite
+	}
+
+	now := time.Now()
+	entry := &LibraryEntry{
+		ID:         newUUID(),
+		TmdbID:     tmdbID,
+		MediaType:  mediaType,
+		Title:      title,
+		PosterPath: posterPath,
+		Status:     StatusWatchLater,
+		AddedAt:    addedAt,
+		UpdatedAt:  now,
+	}
+	l.db.Entries[eKey] = entry
+	l.gen.Add(1)
+	l.markDirty()
+}
+
 // ── Key helpers ───────────────────────────────────────────────────────────────
 
 func entryKey(tmdbID int, mediaType string) string {

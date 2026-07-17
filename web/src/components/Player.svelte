@@ -135,6 +135,18 @@
     autoSkippedSegments.clear();
     subSelection = { kind: "off" };
     episodesOpen = false;
+    // Trakt: stop any active scrobble for the outgoing stream before the new
+    // one starts. Use traktSavedCtx (captured at 'start' time) because by the
+    // time this effect re-runs the season/episode props may already reflect
+    // the new episode, making progressCtx() return the wrong context.
+    untrack(() => {
+      if (traktState === "started" || traktState === "paused") {
+        const stopCtx = traktSavedCtx;
+        if (stopCtx) sendTraktScrobble("stop", stopCtx);
+      }
+      traktState = "idle";
+      traktSavedCtx = null;
+    });
     // Apply volume settings at stream start. Read inside untrack so that a
     // settings change while watching doesn't re-run this effect and restart
     // the stream.
@@ -191,6 +203,12 @@
   onDestroy(() => {
     if (!Player.available) return;
     try {
+      // Trakt: fire a stop scrobble if still active so the server records the
+      // resume point. At destroy time props haven't changed yet, so
+      // progressCtx() still reflects the correct episode.
+      if (traktState === "started" || traktState === "paused") {
+        sendTraktScrobble("stop");
+      }
       if (media && Player.duration > 0) {
         // Pass the actual ended state so the "ended" effect and onDestroy firing
         // in the same tick don't race: if ended=true the #completedSaved guard
@@ -328,6 +346,58 @@
               true,
       );
       libraryChanged.update((n) => n + 1);
+      // Trakt: stop at 100% — registers as watched on Trakt's side (≥80%).
+      if (traktState !== "stopped") {
+        traktState = "stopped";
+        untrack(() => sendTraktScrobble("stop"));
+      }
+    }
+  });
+
+  // ─── Trakt scrobbling ────────────────────────────────────────────────────────
+  // Plain lets — not $state, so writes from within effects don't trigger
+  // re-runs of the effects that read Player.paused / Player.ended.
+
+  let traktState: "idle" | "started" | "paused" | "stopped" = "idle";
+  // Context snapshot taken at 'start' time. The src-change effect needs the
+  // OLD episode's context because by the time it fires the season/episode
+  // props have already updated to the new episode.
+  let traktSavedCtx: ProgressContext | null = null;
+
+  function sendTraktScrobble(
+    action: "start" | "pause" | "stop",
+    ctx?: ProgressContext,
+  ): void {
+    if (!media || !$settings?.traktScrobbleEnabled) return;
+    const c = ctx ?? progressCtx();
+    const dur = Player.duration;
+    const progress = dur > 0 ? Math.min(100, (Player.position / dur) * 100) : 0;
+    api
+      .traktScrobble({
+        action,
+        tmdb_id: c.tmdbId,
+        media_type: c.mediaType,
+        season: c.season,
+        episode: c.episode,
+        progress,
+      })
+      .catch(() => {});
+  }
+
+  // Send start / pause events on play-state transitions. Only canPlay and
+  // Player.paused are tracked deps — progressCtx() / settings / position are
+  // read inside untrack() so position ticks and settings syncs don't loop.
+  $effect(() => {
+    if (!canPlay) return;
+    if (!Player.paused && traktState !== "started") {
+      traktState = "started";
+      untrack(() => {
+        traktSavedCtx = progressCtx();
+        sendTraktScrobble("start", traktSavedCtx);
+      });
+    } else if (Player.paused && traktState === "started") {
+      traktState = "paused";
+      untrack(() => sendTraktScrobble("pause"));
     }
   });
 

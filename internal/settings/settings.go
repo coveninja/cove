@@ -113,6 +113,18 @@ type Settings struct {
 	// Plex). Per-device config — not synced via Supabase.
 	AllowLanStreamSources bool `json:"allowLanStreamSources"`
 
+	// Trakt.tv integration — both fields are roaming (synced via Supabase
+	// MergeFrom like all other preference fields; no exclusion needed).
+	//
+	// TraktScrobbleEnabled sends start/pause/stop events to Trakt as the user
+	// watches. Default true so scrobbling is active immediately after linking;
+	// the handler is a no-op when the account isn't connected.
+	TraktScrobbleEnabled bool `json:"traktScrobbleEnabled"`
+
+	// TraktSyncEnabled enables the background two-way history and watchlist
+	// sync (Phase 2). Default false — opt-in because it modifies the library.
+	TraktSyncEnabled bool `json:"traktSyncEnabled"`
+
 	// Sync bookkeeping — stamped server-side on every local write, used to resolve
 	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -148,6 +160,8 @@ var defaultSettings = Settings{
 	RemoteAccessEnabled:   false,
 	RemoteAccessToken:     "",
 	AllowLanStreamSources: false,
+	TraktScrobbleEnabled:  true,
+	TraktSyncEnabled:      false,
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits

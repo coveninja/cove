@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { settings } from "$lib/stores/settings";
   import type { Settings } from "$lib/types/settings";
   import { Button } from "$lib/components/ui/button";
@@ -12,7 +12,7 @@
   import { isAndroid, isAndroidTV } from "$lib/platform";
   import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
-  import { api } from "$lib/api";
+  import { api, type TraktStatus, type TraktDeviceCode } from "$lib/api";
   import type { AddonEntry } from "$lib/types/addons";
   import {
     KindProvider,
@@ -44,6 +44,7 @@
     unsub();
     loadAddons();
     loadNuvioRepos();
+    loadTraktStatus();
     // Read the native auto-update preference. The method is optional — absent
     // on desktop where __coveApp is undefined.
     const nativeVal = window.__coveApp?.getAutoUpdateEnabled?.();
@@ -352,6 +353,118 @@
     }
   });
 
+  // ── Trakt.tv ─────────────────────────────────────────────────────────────────
+  // undefined = still loading, null = not configured (503), object = loaded.
+  let traktStatus = $state<TraktStatus | null | undefined>(undefined);
+  let traktFlow = $state<TraktDeviceCode | null>(null);
+  // 'idle': show connect button; 'polling': device flow in progress;
+  // 'expired'/'denied': flow ended without auth.
+  let traktFlowState = $state<"idle" | "polling" | "expired" | "denied">("idle");
+  let traktConnectError = $state<string | null>(null);
+  let traktSyncLoading = $state(false);
+  let traktUnlinkLoading = $state(false);
+  let traktPollInterval: ReturnType<typeof setInterval> | null = null;
+  let traktFlowTimeout: ReturnType<typeof setTimeout> | null = null;
+  let traktPollIntervalMs = 0;
+
+  async function loadTraktStatus() {
+    traktStatus = await api.traktStatus(); // null on 503 (not configured)
+  }
+
+  function clearTraktPoll() {
+    if (traktPollInterval) {
+      clearInterval(traktPollInterval);
+      traktPollInterval = null;
+    }
+    if (traktFlowTimeout) {
+      clearTimeout(traktFlowTimeout);
+      traktFlowTimeout = null;
+    }
+  }
+
+  async function pollTraktOnce() {
+    if (!traktFlow) return;
+    let result: Awaited<ReturnType<typeof api.traktPoll>>;
+    try {
+      result = await api.traktPoll(traktFlow.device_code);
+    } catch {
+      return; // transient error — keep polling
+    }
+    switch (result.status) {
+      case "authorized":
+        clearTraktPoll();
+        traktFlow = null;
+        traktFlowState = "idle";
+        await loadTraktStatus();
+        break;
+      case "slow_down":
+        // Widen the interval as Trakt requests, then restart the timer.
+        traktPollIntervalMs = Math.min(traktPollIntervalMs + 5000, 30_000);
+        startTraktPoll();
+        break;
+      case "expired":
+        clearTraktPoll();
+        traktFlow = null;
+        traktFlowState = "expired";
+        break;
+      case "denied":
+      case "invalid":
+        clearTraktPoll();
+        traktFlow = null;
+        traktFlowState = "denied";
+        break;
+      // 'pending': do nothing, keep polling on the existing interval
+    }
+  }
+
+  function startTraktPoll() {
+    if (traktPollInterval) clearInterval(traktPollInterval);
+    traktPollInterval = setInterval(pollTraktOnce, traktPollIntervalMs);
+  }
+
+  async function handleTraktConnect() {
+    clearTraktPoll();
+    traktFlow = null;
+    traktFlowState = "idle";
+    traktConnectError = null;
+    try {
+      const flow = await api.traktStartDeviceFlow();
+      traktFlow = flow;
+      traktFlowState = "polling";
+      traktPollIntervalMs = (flow.interval + 1) * 1000;
+      // Expire the UI after the flow's lifetime so the user knows to retry.
+      traktFlowTimeout = setTimeout(() => {
+        clearTraktPoll();
+        traktFlowState = "expired";
+      }, flow.expires_in * 1000);
+      startTraktPoll();
+    } catch (e) {
+      traktConnectError =
+        e instanceof Error ? e.message : "Failed to start authorization";
+    }
+  }
+
+  async function handleTraktDisconnect() {
+    traktUnlinkLoading = true;
+    try {
+      await api.traktUnlink();
+      await loadTraktStatus();
+    } finally {
+      traktUnlinkLoading = false;
+    }
+  }
+
+  async function handleTraktSync() {
+    traktSyncLoading = true;
+    try {
+      await api.traktSyncNow();
+    } finally {
+      traktSyncLoading = false;
+    }
+  }
+
+  onDestroy(() => clearTraktPoll());
+
   async function runSpeedTest() {
     if (!draft) return;
     testingSpeed = true;
@@ -392,6 +505,7 @@
           <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
           <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
           <Tabs.Trigger value="plugins">Plugins</Tabs.Trigger>
+          <Tabs.Trigger value="trakt">Trakt</Tabs.Trigger>
         </Tabs.List>
 
         <!-- ── Playback ── -->
@@ -1280,6 +1394,126 @@
               </p>
             {/each}
           </div>
+        </Tabs.Content>
+        <!-- ── Trakt.tv ── -->
+        <Tabs.Content value="trakt" class="mt-4 space-y-4">
+          {#if traktStatus === undefined}
+            <p class="text-sm text-muted-foreground">Loading…</p>
+          {:else if traktStatus === null}
+            <p class="text-sm text-muted-foreground">
+              Trakt is not configured in this build.
+            </p>
+          {:else if traktStatus.connected}
+            <!-- Connected state -->
+            <div class="rounded-lg border border-border bg-secondary/30 p-4 space-y-4">
+              <p class="text-sm font-medium">
+                Connected as <span class="text-primary">{traktStatus.username}</span>
+              </p>
+
+              <Separator />
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <Label for="trakt-scrobble" class="text-sm font-medium">Scrobble</Label>
+                  <p class="text-xs text-muted-foreground">
+                    Send watch events to Trakt as you watch.
+                  </p>
+                </div>
+                <Switch
+                  id="trakt-scrobble"
+                  checked={draft.traktScrobbleEnabled}
+                  onCheckedChange={(v) => patch("traktScrobbleEnabled", v)}
+                />
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <Label for="trakt-sync" class="text-sm font-medium">Two-way sync</Label>
+                  <p class="text-xs text-muted-foreground">
+                    Sync watch history and watchlist with Trakt.
+                  </p>
+                </div>
+                <Switch
+                  id="trakt-sync"
+                  checked={draft.traktSyncEnabled}
+                  onCheckedChange={(v) => patch("traktSyncEnabled", v)}
+                />
+              </div>
+
+              {#if draft.traktSyncEnabled}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={handleTraktSync}
+                  disabled={traktSyncLoading}
+                >
+                  {traktSyncLoading ? "Syncing…" : "Sync now"}
+                </Button>
+              {/if}
+
+              <Separator />
+
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={handleTraktDisconnect}
+                disabled={traktUnlinkLoading}
+              >
+                {traktUnlinkLoading ? "Disconnecting…" : "Disconnect"}
+              </Button>
+            </div>
+          {:else}
+            <!-- Not connected state -->
+            {#if traktFlowState === "idle"}
+              <div class="rounded-lg border border-border p-4 space-y-3">
+                <Label class="text-sm font-medium">Connect your Trakt account</Label>
+                <p class="text-xs text-muted-foreground">
+                  Trakt tracks your watch history and watchlist across apps and
+                  devices. Scrobbling sends watch events as you play.
+                </p>
+                {#if traktConnectError}
+                  <p class="text-xs text-red-500">{traktConnectError}</p>
+                {/if}
+                <Button size="sm" onclick={handleTraktConnect}>
+                  Connect Trakt account
+                </Button>
+              </div>
+            {:else if traktFlowState === "polling"}
+              <!-- Device flow: show code + URL while polling -->
+              <div class="rounded-lg border border-border p-4 space-y-4">
+                <Label class="text-sm font-medium">Authorize Cove on Trakt</Label>
+                <div class="space-y-2">
+                  <p class="text-xs text-muted-foreground">1. Open this URL in a browser:</p>
+                  <a
+                    href={traktFlow?.verification_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-sm font-medium text-primary hover:underline break-all"
+                  >{traktFlow?.verification_url}</a>
+                  <p class="text-xs text-muted-foreground">2. Enter this code:</p>
+                  <code
+                    class="block rounded bg-muted px-4 py-3 text-center text-2xl font-mono tracking-widest font-semibold"
+                  >{traktFlow?.user_code}</code>
+                </div>
+                <p class="text-xs text-muted-foreground">Waiting for authorization…</p>
+              </div>
+            {:else if traktFlowState === "expired"}
+              <div class="rounded-lg border border-border p-4 space-y-3">
+                <p class="text-sm text-muted-foreground">
+                  The authorization request expired. Start a new one to try again.
+                </p>
+                <Button size="sm" onclick={handleTraktConnect}>Try again</Button>
+              </div>
+            {:else if traktFlowState === "denied"}
+              <div class="rounded-lg border border-border p-4 space-y-3">
+                <p class="text-sm text-muted-foreground">
+                  Authorization was denied or is invalid. Start a new request to
+                  try again.
+                </p>
+                <Button size="sm" onclick={handleTraktConnect}>Try again</Button>
+              </div>
+            {/if}
+          {/if}
         </Tabs.Content>
       </Tabs.Root>
     {:else}

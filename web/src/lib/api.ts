@@ -331,6 +331,33 @@ export interface PersonDetails {
   credits: Media[];
 }
 
+// ── Trakt.tv types ───────────────────────────────────────────────────────────
+
+export interface TraktStatus {
+  connected: boolean;
+  username: string;
+  expires_at: string;
+}
+
+export interface TraktDeviceCode {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface TraktPollResult {
+  status:
+    | "pending"
+    | "authorized"
+    | "expired"
+    | "denied"
+    | "slow_down"
+    | "invalid";
+  username?: string;
+}
+
 // ── API ────────────────────────────────────────────────────────────────────────
 
 export const api = {
@@ -1024,4 +1051,48 @@ export const api = {
   clearInflight: (): void => {
     inflight.clear();
   },
+
+  // ── Trakt.tv ─────────────────────────────────────────────────────────────────
+  // All trakt endpoints return 503 when credentials aren't compiled in.
+  // traktStatus absorbs 503 and returns null so callers can gate the UI
+  // without catching raw errors; all other methods throw on error as usual.
+
+  traktStatus: async (): Promise<TraktStatus | null> => {
+    try {
+      return await request<TraktStatus>(`/trakt/status`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 503) return null;
+      throw e;
+    }
+  },
+
+  traktStartDeviceFlow: (): Promise<TraktDeviceCode> =>
+    request(`/trakt/device-code`, { method: "POST" }),
+
+  traktPoll: (device_code: string): Promise<TraktPollResult> =>
+    request(`/trakt/poll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_code }),
+    }),
+
+  traktUnlink: (): Promise<void> =>
+    request(`/trakt/unlink`, { method: "POST" }),
+
+  traktScrobble: (p: {
+    action: "start" | "pause" | "stop";
+    tmdb_id: number;
+    media_type: string;
+    season?: number | null;
+    episode?: number | null;
+    progress: number;
+  }): Promise<void> =>
+    request(`/trakt/scrobble`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    }),
+
+  traktSyncNow: (): Promise<void> =>
+    request(`/trakt/sync`, { method: "POST" }),
 };
