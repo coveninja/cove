@@ -37,7 +37,8 @@ var (
 //     filesDir (not cacheDir) for torrent pieces — OS cache eviction of a
 //     partially-downloaded piece mid-stream would break seeking.
 //   - Empty supabaseURL / supabaseAnonKey disables Supabase auth/sync.
-func Start(bindAddr, dataDir, cacheDir, torrentDir, tmdbAPIKey, supabaseURL, supabaseAnonKey, version string) error {
+//   - Empty traktClientID / traktClientSecret disables Trakt watch-history sync.
+func Start(bindAddr, dataDir, cacheDir, torrentDir, tmdbAPIKey, supabaseURL, supabaseAnonKey, traktClientID, traktClientSecret, version string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -46,14 +47,16 @@ func Start(bindAddr, dataDir, cacheDir, torrentDir, tmdbAPIKey, supabaseURL, sup
 	}
 
 	h, err := server.Start(server.Config{
-		BindAddr:        bindAddr,
-		DataDir:         dataDir,
-		CacheDir:        cacheDir,
-		TorrentDir:      torrentDir,
-		TMDBAPIKey:      tmdbAPIKey,
-		SupabaseURL:     supabaseURL,
-		SupabaseAnonKey: supabaseAnonKey,
-		Version:         version,
+		BindAddr:          bindAddr,
+		DataDir:           dataDir,
+		CacheDir:          cacheDir,
+		TorrentDir:        torrentDir,
+		TMDBAPIKey:        tmdbAPIKey,
+		SupabaseURL:       supabaseURL,
+		SupabaseAnonKey:   supabaseAnonKey,
+		TraktClientID:     traktClientID,
+		TraktClientSecret: traktClientSecret,
+		Version:           version,
 	})
 	if err != nil {
 		return fmt.Errorf("mobile: %w", err)

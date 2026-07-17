@@ -50,14 +50,16 @@ class CoveService : Service() {
                     // purge a partially-downloaded torrent piece mid-stream.
                     val torrentDir = File(filesDir, "torrents").absolutePath
                     mobile.Mobile.start(
-                        /* bindAddr        */ "127.0.0.1:6969",
-                        /* dataDir         */ filesDir.absolutePath,
-                        /* cacheDir        */ cacheDir.absolutePath,
-                        /* torrentDir      */ torrentDir,
-                        /* tmdbAPIKey      */ BuildConfig.TMDB_API_KEY,
-                        /* supabaseURL     */ BuildConfig.SUPABASE_URL,
-                        /* supabaseAnonKey */ BuildConfig.SUPABASE_ANON_KEY,
-                        /* version         */ BuildConfig.VERSION_NAME,
+                        /* bindAddr          */ "127.0.0.1:6969",
+                        /* dataDir           */ filesDir.absolutePath,
+                        /* cacheDir          */ cacheDir.absolutePath,
+                        /* torrentDir        */ torrentDir,
+                        /* tmdbAPIKey        */ BuildConfig.TMDB_API_KEY,
+                        /* supabaseURL       */ BuildConfig.SUPABASE_URL,
+                        /* supabaseAnonKey   */ BuildConfig.SUPABASE_ANON_KEY,
+                        /* traktClientID     */ BuildConfig.TRAKT_CLIENT_ID,
+                        /* traktClientSecret */ BuildConfig.TRAKT_CLIENT_SECRET,
+                        /* version           */ BuildConfig.VERSION_NAME,
                     )
                     Log.i(TAG, "Go backend started on 127.0.0.1:6969")
                 } catch (e: Exception) {

@@ -51,6 +51,12 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY", "")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        // Trakt API credentials — used by the Go backend for watch-history sync.
+        // Defaults to empty string so builds without local.properties still compile.
+        val traktClientID = localProps.getProperty("TRAKT_CLIENT_ID", "")
+        buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientID\"")
+        val traktClientSecret = localProps.getProperty("TRAKT_CLIENT_SECRET", "")
+        buildConfigField("String", "TRAKT_CLIENT_SECRET", "\"$traktClientSecret\"")
         // UPDATE_BASE_URL overrides the GitHub API endpoint for local end-to-end
         // update testing (e.g. "http://10.0.2.2:8000" pointing at python -m http.server).
         // Empty string (the default) means use the real api.github.com endpoint.
