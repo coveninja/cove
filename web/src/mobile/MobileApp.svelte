@@ -627,4 +627,23 @@
   :global(.mobile-shell .mt-24) {
     margin-top: calc(var(--safe-top) + 0.75rem) !important;
   }
+
+  /*
+   * Settings tab bar: 6 whitespace-nowrap triggers can't fit portrait width
+   * (~360 dp). Make the list itself scroll horizontally and let each trigger
+   * size to its natural label width instead of flex-stretching.
+   *
+   * ScrollArea won't clip this because overflow-x: auto is on the list's own
+   * box (w-full), so the inner scroll container stays within the layout width.
+   */
+  :global(.mobile-shell [data-slot="tabs-list"]) {
+    overflow-x: auto;
+    scrollbar-width: none; /* Firefox */
+  }
+  :global(.mobile-shell [data-slot="tabs-list"]::-webkit-scrollbar) {
+    display: none; /* WebKit / Blink */
+  }
+  :global(.mobile-shell [data-slot="tabs-trigger"]) {
+    flex: 0 0 auto; /* size to natural label width; don't compress or stretch */
+  }
 </style>
