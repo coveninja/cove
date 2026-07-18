@@ -4,8 +4,11 @@
   import { api } from "$lib/api";
   import { getContext, onMount } from "svelte";
   import { Spinner } from "$lib/components/ui/spinner";
+  import { CircleCheckBig, HeartOff } from "lucide-svelte";
   import { libraryChanged } from "$lib/stores/library";
   import type { LibraryEntry } from "$lib/types/library";
+  import { pressable } from "../lib/pressable";
+  import { imageFade } from "../lib/imageFade";
 
   let {
     media,
@@ -92,6 +95,7 @@
 
 <div
   bind:this={buttonEl}
+  use:pressable
   onclick={openOverlay}
   class="relative cursor-pointer"
   role="button"
@@ -101,6 +105,7 @@
   <div class="relative">
     {#if logoLoaded && images && images.posters.length > 0}
       <img
+        use:imageFade
         src={getImageOpt(images, "posters", {
           iso: "en",
           voteAverage: 5,
@@ -115,6 +120,7 @@
       />
     {:else if logoLoaded && media.poster_path}
       <img
+        use:imageFade
         src={media.poster_path}
         alt={title}
         loading="lazy"
@@ -128,6 +134,22 @@
         class="flex aspect-2/3 w-full items-center justify-center rounded-md bg-muted"
       >
         <Spinner class="size-8" />
+      </div>
+    {/if}
+    {#if isWatched}
+      <div
+        class="absolute inset-0 flex items-center justify-center rounded-md"
+        style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+      >
+        <CircleCheckBig class="size-10 text-white/80" />
+      </div>
+    {/if}
+    {#if isDropped}
+      <div
+        class="absolute inset-0 flex items-center justify-center rounded-md"
+        style="background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%)"
+      >
+        <HeartOff class="size-10 text-red-600/80" />
       </div>
     {/if}
   </div>

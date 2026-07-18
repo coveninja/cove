@@ -231,13 +231,15 @@
     setMode("dark");
 
     let stopAutoSync: (() => void) | null = null;
-    Promise.all([settings.load(), auth.init().catch(console.error)]).then(() => {
-      splashVisible = false;
-      if (!$settings.onboardingDone) {
-        showOnboarding = true;
-      }
-      stopAutoSync = startAutoSync(showSyncError);
-    });
+    Promise.all([settings.load(), auth.init().catch(console.error)]).then(
+      () => {
+        splashVisible = false;
+        if (!$settings.onboardingDone) {
+          showOnboarding = true;
+        }
+        stopAutoSync = startAutoSync(showSyncError);
+      },
+    );
 
     // Suppress AbortErrors from the media player (vidstack / maverick).
     const isAbort = (v: unknown): boolean => {
@@ -308,7 +310,15 @@
         onplaystream={(stream, season, episode, episodeName, candidates) => {
           const m = selectedMedia;
           if (m)
-            playback.startPlayback(m, stream, season, episode, episodeName, candidates, 0);
+            playback.startPlayback(
+              m,
+              stream,
+              season,
+              episode,
+              episodeName,
+              candidates,
+              0,
+            );
         }}
         onsimilar={(m) => selectMedia(m)}
         onclose={() => (selectedMedia = null)}
@@ -362,7 +372,7 @@
       >
         <!-- Home -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "home"}
         >
           <MobileHomePage
@@ -375,7 +385,7 @@
 
         <!-- My List -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "myList"}
         >
           <MobileMyListPage
@@ -386,7 +396,7 @@
 
         <!-- Explore -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "explore"}
         >
           <MobileExplorePage
@@ -397,7 +407,7 @@
 
         <!-- Search (mobile-specific wrapper around QueryPage) -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "query"}
         >
           <MobileSearchPage
@@ -408,7 +418,7 @@
 
         <!-- Settings -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "settings"}
         >
           <SettingsPage />
@@ -416,7 +426,7 @@
 
         <!-- Account -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "account"}
         >
           <MyAccountPage
@@ -427,15 +437,21 @@
 
         <!-- Catalog (opened from HomePage addon rows via onChangePage) -->
         <div
-          class="h-full pb-[calc(3.5rem+var(--safe-bottom))]"
+          class="h-full pb-[calc(3.5rem+var(--safe-bottom))] page-enter"
           class:hidden={currentPage.type !== "catalog"}
         >
           <MobileCatalogGridPage
             addonId={currentPage.type === "catalog" ? currentPage.addonId : ""}
-            catalogType={currentPage.type === "catalog" ? currentPage.catalogType : ""}
-            catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
+            catalogType={currentPage.type === "catalog"
+              ? currentPage.catalogType
+              : ""}
+            catalogId={currentPage.type === "catalog"
+              ? currentPage.catalogId
+              : ""}
             name={currentPage.type === "catalog" ? currentPage.name : ""}
-            addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
+            addonUrl={currentPage.type === "catalog"
+              ? currentPage.addonUrl
+              : undefined}
             onSelectMedia={selectMedia}
             onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
           />
@@ -465,7 +481,9 @@
             />
           {:else}
             <div class="absolute inset-0 bg-black/65"></div>
-            <span class="relative z-10 px-8 text-center text-3xl font-bold text-white">
+            <span
+              class="relative z-10 px-8 text-center text-3xl font-bold text-white"
+            >
               {playback.quickPlayPending.media.media_type === "tv"
                 ? playback.quickPlayPending.media.name
                 : playback.quickPlayPending.media.title}
@@ -514,7 +532,16 @@
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
-              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+              if (m)
+                playback.startPlayback(
+                  m,
+                  stream,
+                  s,
+                  e,
+                  name,
+                  candidates ?? [],
+                  0,
+                );
             }}
             onclose={() => playback.closePlayer()}
             onRegisterCloseSheets={(fn) => (closePlayerSheets = fn)}
@@ -646,5 +673,61 @@
   }
   :global(.mobile-shell [data-slot="tabs-trigger"]) {
     flex: 0 0 auto; /* size to natural label width; don't compress or stretch */
+  }
+
+  /*
+   * Page-enter animation
+   * CSS animations restart automatically whenever display:none is removed, so
+   * this re-triggers on every tab switch with no JS needed.
+   *
+   * @keyframes -global-mobile-page-enter: the "-global-" prefix tells the
+   * Svelte compiler to emit the keyframes without a scope hash, so the name
+   * resolves to "mobile-page-enter" in the compiled output and matches the
+   * animation reference in the :global rule below.
+   */
+  :global(.mobile-shell .page-enter) {
+    animation: mobile-page-enter 180ms ease-out;
+  }
+  @keyframes -global-mobile-page-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+  }
+
+  /*
+   * Shimmer skeleton utility
+   * Named "animate-shimmer" (starts with "animate-") so the existing
+   * app.css pause rule (.hidden [class*="animate-"]) pauses it on hidden pages.
+   * However, app.css targets the element itself — not ::after — and
+   * animation-play-state is not inherited, so we explicitly pause ::after too.
+   */
+  :global(.animate-shimmer) {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--muted);
+  }
+  :global(.animate-shimmer)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      oklch(1 0 0 / 6%),
+      transparent
+    );
+    animation: mobile-shimmer 1.4s ease-in-out infinite;
+    transform: translateX(-100%);
+  }
+  @keyframes -global-mobile-shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  /* Pause ::after shimmer animation on hidden/invisible pages (mirrors app.css). */
+  :global(.hidden .animate-shimmer)::after,
+  :global(.invisible .animate-shimmer)::after {
+    animation-play-state: paused;
   }
 </style>

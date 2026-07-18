@@ -8,6 +8,8 @@
   import { getImageOpt } from "$lib/utils";
   import { Play, Info } from "lucide-svelte";
   import type { LibraryEntry } from "$lib/types/library";
+  import { fade } from "svelte/transition";
+  import { imageFade } from "../lib/imageFade";
 
   let {
     onSelectMedia,
@@ -221,11 +223,15 @@
           {#if featuredRow.loading}
             <Skeleton class="absolute inset-0" />
           {:else if featuredBackdrop}
-            <img
-              src={featuredBackdrop}
-              alt={featuredTitle}
-              class="absolute inset-0 h-full w-full object-cover"
-            />
+            {#key featuredBackdrop}
+              <img
+                use:imageFade
+                in:fade={{ duration: 300 }}
+                src={featuredBackdrop}
+                alt={featuredTitle}
+                class="absolute inset-0 h-full w-full object-cover"
+              />
+            {/key}
           {:else}
             <div class="absolute inset-0 bg-muted"></div>
           {/if}
@@ -254,7 +260,7 @@
               <div class="flex gap-2">
                 <button
                   type="button"
-                  class="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-white text-sm font-semibold text-black"
+                  class="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-white text-sm font-semibold text-black active:scale-95 active:brightness-90 transition-[transform,filter] duration-75"
                   onclick={(e) => {
                     e.stopPropagation();
                     watchFeatured();
@@ -265,7 +271,7 @@
                 </button>
                 <button
                   type="button"
-                  class="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-white/20 text-sm font-semibold text-white backdrop-blur-sm"
+                  class="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-white/20 text-sm font-semibold text-white backdrop-blur-sm active:scale-95 active:brightness-90 transition-[transform,filter] duration-75"
                   onclick={(e) => {
                     e.stopPropagation();
                     onSelectMedia(featuredMedia!);

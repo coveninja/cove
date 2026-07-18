@@ -2,6 +2,7 @@
   import { House, Bookmark, Flame, Search, CircleUser } from "lucide-svelte";
   import type { ComponentType } from "svelte";
   import type { Page } from "$lib/types/types";
+  import { animate } from "animejs";
 
   let {
     currentPage,
@@ -54,6 +55,8 @@
     },
   ];
 
+  let iconEls: (HTMLElement | undefined)[] = $state([]);
+
   function isActive(tab: Tab): boolean {
     return tab.activeFor.includes(currentPage.type);
   }
@@ -64,20 +67,33 @@
   style="padding-bottom: var(--safe-bottom);"
 >
   <div class="flex">
-    {#each tabs as tab (tab.label)}
+    {#each tabs as tab, i (tab.label)}
       {@const active = isActive(tab)}
       {@const Icon = tab.Icon}
       <button
         type="button"
-        class="flex flex-1 flex-col items-center justify-center gap-[2px] py-3 text-[10px] transition-colors {active
+        class="flex flex-1 flex-col items-center justify-center gap-[2px] py-3 text-[10px] transition-[color,opacity] active:opacity-70 {active
           ? 'text-accent'
           : 'text-muted-foreground'}"
-        onclick={() => onSelectPage(tab.makePage())}
+        onclick={() => {
+          if (!active) {
+            const el = iconEls[i];
+            if (el) animate(el, { scale: [1, 1.35, 1], duration: 300, ease: "outBack" });
+          }
+          onSelectPage(tab.makePage());
+        }}
         aria-label={tab.label}
         aria-current={active ? 'page' : undefined}
       >
-        <Icon class="size-5" />
+        <span bind:this={iconEls[i]}>
+          <Icon class="size-5" />
+        </span>
         <span>{tab.label}</span>
+        <span
+          class="h-1 w-1 rounded-full bg-accent transition-opacity duration-150 {active
+            ? 'opacity-100'
+            : 'opacity-0'}"
+        ></span>
       </button>
     {/each}
   </div>

@@ -10,6 +10,7 @@
   import type { Media } from "$lib/types/tmdb";
   import { getContext } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { animate, stagger } from "animejs";
 
   let {
     onSelectPerson,
@@ -161,6 +162,33 @@
       qualityAbort?.abort();
     };
   });
+
+  // ── Results entrance stagger ──────────────────────────────────────────────────
+
+  let container = $state<HTMLElement | null>(null);
+  let lastSig = "";
+
+  $effect(() => {
+    const sig = `${movies.length}-${tv.length}-${people.length}`;
+    if (
+      sig === lastSig ||
+      (movies.length === 0 && tv.length === 0 && people.length === 0)
+    )
+      return;
+    lastSig = sig;
+    const c = container;
+    if (!c) return;
+    requestAnimationFrame(() => {
+      const cards = c.querySelectorAll("[data-search-card]");
+      animate(Array.from(cards).slice(0, 15), {
+        opacity: [0, 1],
+        translateY: [8, 0],
+        duration: 180,
+        delay: stagger(25),
+        ease: "outCubic",
+      });
+    });
+  });
 </script>
 
 <!--
@@ -230,8 +258,17 @@
       </div>
     {/if}
 
+    <!-- Loading skeleton: shown when fetching and no results are visible yet -->
+    {#if loading && !anyVisible}
+      <div class="grid grid-cols-3 gap-2 px-4">
+        {#each Array(12).fill(0) as _, idx (idx)}
+          <div class="aspect-2/3 w-full animate-shimmer rounded-md"></div>
+        {/each}
+      </div>
+    {/if}
+
     {#if !loading}
-      <div class="space-y-6 px-4 pb-8">
+      <div bind:this={container} class="space-y-6 px-4 pb-8">
         <!-- People: horizontal scroll row -->
         {#if showPerson && people.length > 0}
           <section class="space-y-2">
@@ -244,7 +281,7 @@
               class="flex gap-4 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
               {#each people as person (person.id)}
-                <div class="w-20 shrink-0">
+                <div class="w-20 shrink-0" data-search-card>
                   <PersonCard {person} onclick={(p) => onSelectPerson(p)} />
                 </div>
               {/each}
@@ -264,7 +301,7 @@
               class="flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
               {#each providers as provider (provider.provider_id)}
-                <div class="w-20 shrink-0">
+                <div class="w-20 shrink-0" data-search-card>
                   <ProviderCard
                     {provider}
                     onclick={(p) => onSelectProvider(p)}
@@ -285,10 +322,12 @@
             </h2>
             <div class="grid grid-cols-3 gap-2">
               {#each movies as media (media.id)}
-                <MobileMediaCard
-                  {media}
-                  onclick={() => openMediaDetail?.(media)}
-                />
+                <div data-search-card>
+                  <MobileMediaCard
+                    {media}
+                    onclick={() => openMediaDetail?.(media)}
+                  />
+                </div>
               {/each}
             </div>
           </section>
@@ -304,10 +343,12 @@
             </h2>
             <div class="grid grid-cols-3 gap-2">
               {#each tv as media (media.id)}
-                <MobileMediaCard
-                  {media}
-                  onclick={() => openMediaDetail?.(media)}
-                />
+                <div data-search-card>
+                  <MobileMediaCard
+                    {media}
+                    onclick={() => openMediaDetail?.(media)}
+                  />
+                </div>
               {/each}
             </div>
           </section>

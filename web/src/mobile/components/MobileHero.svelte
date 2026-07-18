@@ -22,6 +22,7 @@
   const mpvBusy = $derived(Player.available && Player.duration > 0);
 
   let mediaIndex = $state<number>(0);
+  let slideDir = $state(1);
   let medias = $state<Media[]>([]);
 
   const watchMedia = getContext<
@@ -36,6 +37,9 @@
   let runtimes = $state<string[]>([]);
   let tmdbRatings = $state<string[]>([]);
   let libraryEntries = $state<(LibraryEntry | null)[]>([]);
+
+  let backdropEls = $state<(HTMLImageElement | undefined)[]>([]);
+  let logoEls = $state<(HTMLImageElement | undefined)[]>([]);
 
   $effect(() => {
     api.discover("all", { limit: 10 }).then((d) => (medias = d));
@@ -92,7 +96,14 @@
 
   function next(): void {
     if (medias.length === 0) return;
+    slideDir = 1;
     mediaIndex = (mediaIndex + 1) % medias.length;
+  }
+
+  function prev(): void {
+    if (medias.length === 0) return;
+    slideDir = -1;
+    mediaIndex = (mediaIndex - 1 + medias.length) % medias.length;
   }
 
   function startTimer(): void {
@@ -119,6 +130,59 @@
   });
 
   onDestroy(() => currentAnimation?.pause());
+
+  // ── Swipe navigation ──────────────────────────────────────────────────────
+  let touchStartX = 0;
+  let touchStartY = 0;
+
+  function onTouchStart(e: TouchEvent): void {
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    // Hold auto-advance while the finger is down.
+    currentAnimation?.pause();
+  }
+
+  function onTouchEnd(e: TouchEvent): void {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    // Horizontal swipe: dominant x-axis movement past a 50px threshold.
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      if (dx < 0) next();
+      else prev();
+      // The mediaIndex $effect restarts the timer.
+    } else {
+      currentAnimation?.play();
+    }
+  }
+
+  // ── Entrance animation: slide + settle on the incoming item ────────────────
+  let backdropAnim: ReturnType<typeof animate> | null = null;
+  let logoAnim: ReturnType<typeof animate> | null = null;
+
+  $effect(() => {
+    const dir = slideDir;
+    const backdropEl = backdropEls[mediaIndex];
+    const logoEl = logoEls[mediaIndex];
+    // Kill any in-flight entrance so fast swipes don't fight over transform.
+    backdropAnim?.pause();
+    logoAnim?.pause();
+    // scale ≥ 1.08 keeps the 12px slide from exposing the backdrop's edges.
+    if (backdropEl) {
+      backdropAnim = animate(backdropEl, {
+        translateX: [12 * dir, 0],
+        scale: [1.08, 1],
+        duration: 700,
+        ease: "outCubic",
+      });
+    }
+    if (logoEl) {
+      logoAnim = animate(logoEl, {
+        translateX: [24 * dir, 0],
+        duration: 500,
+        ease: "outCubic",
+      });
+    }
+  });
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const currentMedia = $derived(medias[mediaIndex]);
@@ -177,7 +241,14 @@
   Full-bleed portrait hero: backdrop fills width at ~56vw height, gradient fades
   into background at the bottom so content rows flow directly below.
 -->
-<div class="relative w-full overflow-hidden" style="height: clamp(420px, 56vw, 480px);">
+<div
+  class="relative w-full overflow-hidden"
+  style="height: clamp(420px, 56vw, 480px); touch-action: pan-y;"
+  role="region"
+  aria-label="Featured"
+  ontouchstart={onTouchStart}
+  ontouchend={onTouchEnd}
+>
   <!-- Backdrop images: all pre-loaded, current one shown via opacity -->
   {#each backdropUrls as url, i (i)}
     {#if url}
@@ -187,6 +258,8 @@
         class:opacity-100={i === mediaIndex}
         src={url}
         alt="backdrop"
+        style="will-change: transform;"
+        bind:this={backdropEls[i]}
       />
     {/if}
   {/each}
@@ -214,6 +287,7 @@
             class:opacity-100={i === mediaIndex}
             src={url}
             alt="logo"
+            bind:this={logoEls[i]}
           />
         {/if}
       {/each}
@@ -228,7 +302,7 @@
     {#key mediaIndex}
       <div
         class="flex flex-wrap gap-1.5 text-xs font-medium text-white/70"
-        in:fly={{ x: -10, duration: 300, delay: 100 }}
+        in:fly={{ x: 24 * slideDir, duration: 300, delay: 100 }}
       >
         {#if tmdbRatings[mediaIndex]}
           <span class="rounded border border-white/20 px-1.5 py-0.5 backdrop-blur-sm">
@@ -252,7 +326,7 @@
     <div class="flex items-center gap-2">
       <button
         type="button"
-        class="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-white text-sm font-semibold text-black"
+        class="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-white text-sm font-semibold text-black active:scale-95 active:brightness-90 transition-[transform,filter] duration-75"
         onclick={watchCurrent}
       >
         <Play class="size-4 fill-current" />
@@ -260,7 +334,7 @@
       </button>
       <button
         type="button"
-        class="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-white/20 text-sm font-semibold text-white backdrop-blur-sm"
+        class="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-white/20 text-sm font-semibold text-white backdrop-blur-sm active:scale-95 active:brightness-90 transition-[transform,filter] duration-75"
         onclick={openCurrentDetail}
       >
         <Info class="size-4" />
@@ -268,7 +342,7 @@
       </button>
       <button
         type="button"
-        class="flex size-11 shrink-0 items-center justify-center rounded-lg bg-white/15 text-white backdrop-blur-sm"
+        class="flex size-11 shrink-0 items-center justify-center rounded-lg bg-white/15 text-white backdrop-blur-sm active:scale-95 active:brightness-90 transition-[transform,filter] duration-75"
         onclick={dismissCurrent}
         aria-label="Not interested"
       >

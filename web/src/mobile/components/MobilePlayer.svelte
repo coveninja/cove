@@ -15,9 +15,11 @@
     Maximize2,
     Minimize2,
     Gauge,
+    ListVideo,
   } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { fade } from "svelte/transition";
+  import { fade, scale } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
@@ -32,6 +34,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
   import TrackSheet from "./TrackSheet.svelte";
+  import EpisodeSheet from "./EpisodeSheet.svelte";
 
   // ── Props (same contract as desktop Player + mobile-specific additions) ──────
 
@@ -69,10 +72,11 @@
   // Register close-sheets with parent for Escape priority handling.
   $effect(() => {
     onRegisterCloseSheets?.(() => {
-      if (audioSheetOpen || subsSheetOpen || speedSheetOpen) {
+      if (audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen) {
         audioSheetOpen = false;
         subsSheetOpen = false;
         speedSheetOpen = false;
+        episodesSheetOpen = false;
         return true;
       }
       return false;
@@ -775,6 +779,7 @@
   let audioSheetOpen = $state(false);
   let subsSheetOpen = $state(false);
   let speedSheetOpen = $state(false);
+  let episodesSheetOpen = $state(false);
 
   // ── Controls auto-hide ────────────────────────────────────────────────────────
 
@@ -785,20 +790,20 @@
   // not yet playing. Sheet-open always keeps them active so scrims don't vanish
   // behind an open sheet.
   const controlsActive = $derived(
-    controlsVisible || Player.paused || !canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen,
+    controlsVisible || Player.paused || !canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen,
   );
 
   function showControls(): void {
     controlsVisible = true;
     clearTimeout(hideTimer);
-    if (!Player.paused && !scrubbing && !audioSheetOpen && !subsSheetOpen && !speedSheetOpen) {
+    if (!Player.paused && !scrubbing && !audioSheetOpen && !subsSheetOpen && !speedSheetOpen && !episodesSheetOpen) {
       hideTimer = setTimeout(() => (controlsVisible = false), 3000);
     }
   }
 
   // Keep controls visible while paused, buffering, or any sheet is open.
   $effect(() => {
-    if (Player.paused || !canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen) {
+    if (Player.paused || !canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen) {
       clearTimeout(hideTimer);
       controlsVisible = true;
     }
@@ -957,11 +962,15 @@
           onclick={() => { Player.togglePause(); showControls(); }}
           aria-label={Player.paused ? "Play" : "Pause"}
         >
-          {#if Player.paused}
-            <Play class="size-8 translate-x-0.5" />
-          {:else}
-            <Pause class="size-8" />
-          {/if}
+          {#key Player.paused}
+            <span class="inline-flex items-center justify-center" in:scale={{ duration: 120, start: 0.6, easing: cubicOut }}>
+              {#if Player.paused}
+                <Play class="size-8 translate-x-0.5" />
+              {:else}
+                <Pause class="size-8" />
+              {/if}
+            </span>
+          {/key}
         </button>
 
         <!-- Seek +10s (48px target) -->
@@ -1064,7 +1073,10 @@
           {/if}
           <!-- Thumb (24px) -->
           <div
-            class="pointer-events-none absolute top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/20"
+            class="pointer-events-none absolute top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/20 transition-transform duration-150"
+            class:scale-150={scrubbing}
+            class:ring-2={scrubbing}
+            class:ring-accent={scrubbing}
             style="left: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
           ></div>
         </div>
@@ -1119,6 +1131,19 @@
             <Gauge class="size-4 shrink-0" />
             <span class="text-xs">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
           </button>
+
+          <!-- Episodes (TV shows only) -->
+          {#if media?.media_type === "tv" && onPlayNext}
+            <button
+              type="button"
+              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
+              onclick={() => { episodesSheetOpen = true; showControls(); }}
+              aria-label="Episodes"
+            >
+              <ListVideo class="size-4 shrink-0" />
+              <span class="text-xs">Episodes</span>
+            </button>
+          {/if}
 
           <div class="flex-1"></div>
 
@@ -1316,5 +1341,18 @@
       Player.setPlaybackSpeed(parseFloat(id as string));
     }}
     onClose={() => (speedSheetOpen = false)}
+  />
+{/if}
+
+{#if episodesSheetOpen && media}
+  <EpisodeSheet
+    {media}
+    activeSeason={season}
+    activeEpisode={episode}
+    onclose={() => (episodesSheetOpen = false)}
+    onSelect={(s, e) => {
+      episodesSheetOpen = false;
+      onPlayNext?.(s, e);
+    }}
   />
 {/if}

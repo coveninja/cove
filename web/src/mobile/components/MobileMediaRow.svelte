@@ -30,7 +30,7 @@
         {#if onSeeAll}
           <button
             onclick={onSeeAll}
-            class="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            class="text-sm text-muted-foreground transition-colors hover:text-foreground active:scale-95 active:text-foreground transition-transform duration-100"
           >
             See all →
           </button>
@@ -45,7 +45,7 @@
       {#if loading}
         {#each { length: 8 } as _, i (i)}
           <div class="w-28 shrink-0">
-            <div class="aspect-2/3 w-full animate-pulse rounded-md bg-muted"></div>
+            <div class="aspect-2/3 w-full animate-shimmer rounded-md"></div>
           </div>
         {/each}
       {:else}

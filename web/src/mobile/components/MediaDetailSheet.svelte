@@ -13,6 +13,8 @@
   import StarRating from "../../components/StarRating.svelte";
   import StreamsList from "../../components/StreamsList.svelte";
   import { Button } from "$lib/components/ui/button";
+  import { animate } from "animejs";
+  import { pressable } from "../lib/pressable";
 
   let {
     media,
@@ -151,6 +153,19 @@
     }
   }
 
+  // ── Library panel bounce ───────────────────────────────────────────────────
+  let libraryPanelEl = $state<HTMLElement | null>(null);
+  // Plain (non-reactive) variable to track the previous value across effect runs.
+  let _prevLibraryEntry: LibraryEntry | null = null;
+
+  $effect(() => {
+    const entry = libraryEntry;
+    if (entry !== null && _prevLibraryEntry === null && libraryPanelEl) {
+      animate(libraryPanelEl, { scale: [1, 1.12, 1], duration: 250, ease: "outBack" });
+    }
+    _prevLibraryEntry = entry;
+  });
+
   // ── Trailer (muted, looping hero video) ───────────────────────────────────
   let trailerUrl = $state<string | null>(null);
   let trailerMuted = $state(true);
@@ -193,7 +208,64 @@
 
   // ── Overview collapsible ───────────────────────────────────────────────────
   let overviewExpanded = $state(false);
+  let overviewEl = $state<HTMLElement | null>(null);
+  let overviewAnimating = $state(false);
+  // Non-reactive: stores measured collapsed height for the collapse animation.
+  let collapsedHeight = 0;
   const overviewText = $derived(detailsOverview ?? media.overview ?? "");
+
+  function toggleOverview(): void {
+    if (!overviewEl) {
+      overviewExpanded = !overviewExpanded;
+      return;
+    }
+    if (overviewAnimating) return;
+    overviewAnimating = true;
+    const el = overviewEl;
+
+    if (!overviewExpanded) {
+      // Expanding: capture collapsed pixel height, pin it, remove clamp, animate to full.
+      const from = el.clientHeight;
+      collapsedHeight = from;
+      el.style.overflow = "hidden";
+      el.style.height = `${from}px`;
+      overviewExpanded = true;
+      // Wait for Svelte to flush the clamp-class removal (microtask), then measure.
+      requestAnimationFrame(() => {
+        const to = el.scrollHeight;
+        animate(el, {
+          height: `${to}px`,
+          duration: 280,
+          ease: "outCubic",
+          onComplete: () => {
+            el.style.height = "";
+            el.style.overflow = "";
+            overviewAnimating = false;
+          },
+        });
+      });
+    } else {
+      // Collapsing: pin current height, flip state, animate back to stored collapsed height.
+      const from = el.clientHeight;
+      el.style.overflow = "hidden";
+      el.style.height = `${from}px`;
+      overviewExpanded = false;
+      requestAnimationFrame(() => {
+        // collapsedHeight was saved on the most recent expand; fall back to 4 lines ~96px.
+        const to = collapsedHeight || 96;
+        animate(el, {
+          height: `${to}px`,
+          duration: 280,
+          ease: "outCubic",
+          onComplete: () => {
+            el.style.height = "";
+            el.style.overflow = "";
+            overviewAnimating = false;
+          },
+        });
+      });
+    }
+  }
 
   // ── Stream toggle ──────────────────────────────────────────────────────────
   let showStreams = $state(false);
@@ -238,23 +310,34 @@
     if (!el) return () => cancelAnimationFrame(rafId);
 
     let touchStartY = 0;
+    let lastY = 0;
+    let lastT = 0;
+    let velocity = 0;
 
     const onTouchStart = (e: TouchEvent) => {
       // Only activate drag when the scroll container is at the very top.
       if (!scrollEl || scrollEl.scrollTop > 2) return;
       touchStartY = e.touches[0].clientY;
+      lastY = touchStartY;
+      lastT = Date.now();
+      velocity = 0;
       dragOffset = 0;
     };
 
     const onTouchMove = (e: TouchEvent) => {
       if (!touchStartY) return;
-      const dy = e.touches[0].clientY - touchStartY;
+      const y = e.touches[0].clientY;
+      const dy = y - touchStartY;
       if (dy < 0) {
         // User swiped upward — cancel drag tracking, let native scroll take over.
         touchStartY = 0;
         dragging = false;
         return;
       }
+      const now = Date.now();
+      velocity = (y - lastY) / (now - lastT || 1);
+      lastY = y;
+      lastT = now;
       if (!dragging && dy > 8) dragging = true;
       if (dragging) {
         dragOffset = dy;
@@ -269,9 +352,10 @@
         return;
       }
       const offset = dragOffset;
+      const vel = velocity;
       dragging = false;
       touchStartY = 0;
-      if (offset > 80) {
+      if (offset > 80 || vel > 0.5) {
         dragOffset = 0;
         closeSheet();
       } else {
@@ -302,9 +386,12 @@
     if (!visible || closing) return "translateY(100%)";
     return "translateY(0)";
   });
-  const sheetTransition = $derived(
-    dragging ? "none" : "transform 300ms cubic-bezier(0.22, 1, 0.36, 1)",
-  );
+  // Open uses a springy overshoot curve; close/drag-back stays non-overshooting.
+  const sheetTransition = $derived.by(() => {
+    if (dragging) return "none";
+    if (closing || !visible) return "transform 300ms cubic-bezier(0.22, 1, 0.36, 1)";
+    return "transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1)";
+  });
 </script>
 
 <!-- Dark scrim behind the sheet -->
@@ -418,32 +505,38 @@
     <div class="flex flex-col gap-4 px-4 pt-3">
       <!-- Meta row: year · runtime/seasons · age rating -->
       <div class="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-        {#if year}
-          <span>{year}</span>
-        {/if}
-        {#if ageRating}
-          <span class="rounded border border-border px-1.5 py-0.5 text-xs text-foreground"
-            >{ageRating}</span
-          >
-        {/if}
-        {#if runtime}
-          <span>{runtime}</span>
-        {/if}
-        {#if media.media_type === "tv" && numberOfSeasons !== null}
-          <span
-            >{numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}</span
-          >
-        {/if}
-        {#if media.media_type === "tv" && numberOfEpisodes !== null}
-          <span
-            >{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span
-          >
-        {/if}
-        {#if genres.length}
-          <span class="text-muted-foreground/60">·</span>
-          {#each genres as genre, i (genre)}
-            <span>{genre}{i < genres.length - 1 ? "," : ""}</span>
-          {/each}
+        {#if detailsLoading}
+          <div class="h-4 w-8 animate-shimmer rounded"></div>
+          <div class="h-4 w-12 animate-shimmer rounded"></div>
+          <div class="h-4 w-16 animate-shimmer rounded"></div>
+        {:else}
+          {#if year}
+            <span>{year}</span>
+          {/if}
+          {#if ageRating}
+            <span class="rounded border border-border px-1.5 py-0.5 text-xs text-foreground"
+              >{ageRating}</span
+            >
+          {/if}
+          {#if runtime}
+            <span>{runtime}</span>
+          {/if}
+          {#if media.media_type === "tv" && numberOfSeasons !== null}
+            <span
+              >{numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}</span
+            >
+          {/if}
+          {#if media.media_type === "tv" && numberOfEpisodes !== null}
+            <span
+              >{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span
+            >
+          {/if}
+          {#if genres.length}
+            <span class="text-muted-foreground/60">·</span>
+            {#each genres as genre, i (genre)}
+              <span>{genre}{i < genres.length - 1 ? "," : ""}</span>
+            {/each}
+          {/if}
         {/if}
       </div>
 
@@ -476,15 +569,17 @@
           {watchButtonLabel}
         </Button>
 
-        <!-- Library status -->
-        <LibraryStatusPanel
-          {libraryEntry}
-          {media}
-          {lastAiredSeason}
-          {lastAiredEpisode}
-          size="icon"
-          class="size-12 shrink-0 rounded-lg"
-        />
+        <!-- Library status wrapped for bounce animation -->
+        <div bind:this={libraryPanelEl} class="shrink-0">
+          <LibraryStatusPanel
+            {libraryEntry}
+            {media}
+            {lastAiredSeason}
+            {lastAiredEpisode}
+            size="icon"
+            class="size-12 rounded-lg"
+          />
+        </div>
 
         <!-- Not interested -->
         <Button
@@ -545,15 +640,15 @@
       {#if overviewText}
         <div class="flex flex-col gap-1.5">
           <div
-            class="overflow-hidden text-sm leading-relaxed text-muted-foreground transition-all duration-200"
-            style="max-height: {overviewExpanded ? '999px' : '6.5em'};"
+            bind:this={overviewEl}
+            class="text-sm leading-relaxed text-muted-foreground {!overviewExpanded && !overviewAnimating ? 'line-clamp-4 overflow-hidden' : ''}"
           >
             {overviewText}
           </div>
           {#if overviewText.length > 200}
             <button
               class="self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
-              onclick={() => (overviewExpanded = !overviewExpanded)}
+              onclick={toggleOverview}
               type="button"
             >
               {overviewExpanded ? "Show less" : "Show more"}
@@ -561,7 +656,11 @@
           {/if}
         </div>
       {:else if detailsLoading}
-        <p class="animate-pulse text-sm text-muted-foreground">Loading details…</p>
+        <div class="flex flex-col gap-2">
+          <div class="h-3 w-full animate-shimmer rounded"></div>
+          <div class="h-3 w-5/6 animate-shimmer rounded"></div>
+          <div class="h-3 w-3/4 animate-shimmer rounded"></div>
+        </div>
       {/if}
 
       <!-- Cast row (names only — cast credits do not include profile photos) -->
@@ -593,6 +692,7 @@
           >
             {#each similar as item (item.id)}
               <button
+                use:pressable
                 class="shrink-0 overflow-hidden rounded-md"
                 style="width: 96px;"
                 type="button"

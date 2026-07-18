@@ -103,7 +103,7 @@
         <!-- Skeleton grid while initial page is loading -->
         <div class="grid grid-cols-3 gap-2">
           {#each { length: 12 } as _, i (i)}
-            <div class="aspect-2/3 w-full animate-pulse rounded-md bg-muted"></div>
+            <div class="aspect-2/3 w-full animate-shimmer rounded-md"></div>
           {/each}
         </div>
       {:else}
