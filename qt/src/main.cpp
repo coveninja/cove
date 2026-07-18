@@ -474,6 +474,14 @@ int main(int argc, char *argv[]) {
   // an explicitly-set QT_QPA_PLATFORM still wins (e.g. a user testing a patched Qt).
   if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
     qputenv("QT_QPA_PLATFORM", "xcb");
+
+  // Under XWayland, Hyprland unmaps windows on workspace switch and the
+  // threaded render loop can stall ~15 s on the unmapped surface, leaving the
+  // window black. The basic render loop is not affected; the heavy
+  // rendering (Chromium compositor, mpv) happens outside the Quick scene graph
+  // either way, so the single-threaded loop costs nothing here.
+  if (qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
+    qputenv("QSG_RENDER_LOOP", "basic");
 #endif
 
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
