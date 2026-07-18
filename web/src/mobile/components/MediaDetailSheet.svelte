@@ -8,6 +8,7 @@
   import PlayerSimple from "../../components/PlayerSimple.svelte";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
+  import { resolveTvWatchAction, type TvWatchAction } from "$lib/watchAction";
   import LibraryStatusPanel from "../../components/LibraryStatusPanel.svelte";
   import StarRating from "../../components/StarRating.svelte";
   import StreamsList from "../../components/StreamsList.svelte";
@@ -105,6 +106,7 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let dismissed = $state(false);
+  let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
     let stale = false;
@@ -116,12 +118,17 @@
           libraryEntry = null;
           movieProgress = null;
           dismissed = false;
+          tvWatchAction = null;
           return;
         }
         libraryEntry = result.entry;
         dismissed = result.dismissed;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
+        } else {
+          resolveTvWatchAction(media.id, result.progress)
+            .then((action) => { if (!stale) tvWatchAction = action; })
+            .catch((err) => { if (!stale) console.error(err); });
         }
       })
       .catch((err) => {
@@ -177,9 +184,9 @@
   );
   const watchButtonLabel = $derived.by(() => {
     if (media.media_type === "tv") {
-      const s = libraryEntry?.last_watched_season;
-      const e = libraryEntry?.last_watched_episode;
-      if (s != null && e != null) return `Continue S${s}E${e}`;
+      if (tvWatchAction) return tvWatchAction.label;
+      // Generic while the resolver's season fetch is in flight.
+      if (libraryEntry?.last_watched_season != null) return "Continue";
     }
     return hasIncompleteMovieProgress ? "Continue" : "Watch";
   });
@@ -197,10 +204,7 @@
 
   // ── Actions ────────────────────────────────────────────────────────────────
   function watchNow(): void {
-    onwatch(
-      libraryEntry?.last_watched_season ?? undefined,
-      libraryEntry?.last_watched_episode ?? undefined,
-    );
+    onwatch(tvWatchAction?.season, tvWatchAction?.episode);
     onclose();
   }
 

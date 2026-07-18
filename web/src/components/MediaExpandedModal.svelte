@@ -22,6 +22,7 @@
   import StarRating from "./StarRating.svelte";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import { resolveTvWatchAction, type TvWatchAction } from "$lib/watchAction";
 
   let {
     media,
@@ -161,6 +162,7 @@
   let movieProgress = $state<WatchProgress | null>(null);
   let tvProgressList = $state<WatchProgress[]>([]);
   let dismissed = $state(false);
+  let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
     let stale = false;
@@ -173,6 +175,7 @@
           movieProgress = null;
           tvProgressList = [];
           dismissed = false;
+          tvWatchAction = null;
           return;
         }
         libraryEntry = result.entry;
@@ -181,6 +184,9 @@
           movieProgress = result.progress[0] ?? null;
         } else {
           tvProgressList = result.progress;
+          resolveTvWatchAction(media.id, result.progress)
+            .then((action) => { if (!stale) tvWatchAction = action; })
+            .catch((err) => { if (!stale) console.error(err); });
         }
       })
       .catch((err) => { if (!stale) console.error(err); });
@@ -219,9 +225,9 @@
   );
   const watchButtonLabel = $derived.by(() => {
     if (media.media_type === "tv") {
-      const s = libraryEntry?.last_watched_season;
-      const e = libraryEntry?.last_watched_episode;
-      if (s != null && e != null) return `Continue S${s}E${e}`;
+      if (tvWatchAction) return tvWatchAction.label;
+      // Generic while the resolver's season fetch is in flight.
+      if (libraryEntry?.last_watched_season != null) return "Continue";
     }
     return hasIncompleteMovieProgress ? "Continue" : "Watch";
   });
@@ -230,10 +236,7 @@
   // Starting playback always dismisses the modal so the full player (which
   // sits below this overlay in the stack) isn't left hidden behind it.
   function watchNow(): void {
-    onwatch(
-      libraryEntry?.last_watched_season ?? undefined,
-      libraryEntry?.last_watched_episode ?? undefined,
-    );
+    onwatch(tvWatchAction?.season, tvWatchAction?.episode);
     onclose();
   }
   function playStream(
