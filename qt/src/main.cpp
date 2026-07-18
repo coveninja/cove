@@ -472,7 +472,15 @@ int main(int argc, char *argv[]) {
   // (exit 64000). Under XWayland (xcb) the same buffer pool is bounded and was
   // measured flat for over an hour. Default to xcb until the upstream bug is fixed;
   // an explicitly-set QT_QPA_PLATFORM still wins (e.g. a user testing a patched Qt).
-  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+  //
+  // Skip both workarounds inside Flatpak: the manifest only grants
+  // fallback-x11, so in a Wayland session there is no X socket and forcing
+  // xcb aborts startup ("no Qt platform plugin could be initialized"). The
+  // sandbox pins QtWebEngine 6.9 (BaseApp), which predates the 6.11 leak, so
+  // native Wayland is safe there. Revisit if the BaseApp moves to an
+  // affected Qt.
+  const bool inFlatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID");
+  if (!inFlatpak && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
     qputenv("QT_QPA_PLATFORM", "xcb");
 
   // Under XWayland, Hyprland unmaps windows on workspace switch and the
@@ -480,7 +488,7 @@ int main(int argc, char *argv[]) {
   // window black. The basic render loop is not affected; the heavy
   // rendering (Chromium compositor, mpv) happens outside the Quick scene graph
   // either way, so the single-threaded loop costs nothing here.
-  if (qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
+  if (!inFlatpak && qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
     qputenv("QSG_RENDER_LOOP", "basic");
 #endif
 

@@ -152,8 +152,12 @@ inject-private:
 	cp _private/cove-auth/*.go internal/supabase/
 	cp _private/cove-discover/*.go internal/discover/
 
-## Build the gomobile AAR for Android arm64 + amd64 (API 29+).
-## arm64 targets real devices; amd64 is required for the x86_64 emulator AVD.
+## Build the gomobile AAR for all four Android ABIs (API 29+).
+## arm64 targets modern devices, arm covers armv7-only TV boxes (e.g. Mibox),
+## amd64 is required for the x86_64 emulator AVD. The ABI set must match what
+## the libmpv dependency ships (all four): if an ABI dir exists in the APK
+## without libgojni.so, Android may select it as the primary ABI and the
+## backend fails to load.
 ## Prerequisites:
 ##   1. gomobile: go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init
 ##   2. ANDROID_HOME / ANDROID_NDK_HOME set (defaults above, override as needed)
@@ -162,7 +166,7 @@ inject-private:
 ## corresponding implementation files are present (run `make inject-private` first).
 android-aar: web
 	mkdir -p android/app/libs
-	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm64,android/amd64 -androidapi 29 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
+	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 29 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
 
 ## Build the Android debug APK. Requires all android-aar prerequisites above.
 android: android-aar
