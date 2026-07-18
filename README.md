@@ -49,6 +49,7 @@ A media streaming app for Linux, Windows, Android & Android TV. Discover, track,
 - **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
 - **Multiple profiles** — profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
+- **Trakt.tv integration** — optional Trakt sign-in scrobbles what you watch in real time and two-way syncs your watch history and watchlist with Trakt automatically
 - **Android & Android TV App** — native Kotlin/Compose client with the same embedded Go backend and mpv playback; runs standalone, or connects to your desktop Cove over LAN in remote mode
 
 ## Install
@@ -80,6 +81,8 @@ Download `cove-windows-amd64-setup.exe` from the [latest release](https://github
 > **⚠️ Experimental:** Mobile & TV support is new and untested. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
 
 Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
+
+You only need to sideload once — the app checks GitHub for new releases and updates itself in-app (downloads are SHA-256 verified; the very first self-update asks for confirmation, after that they're silent).
 
 The same APK runs on Android TV — Cove detects the TV environment automatically and loads a D-pad-navigable 10-foot UI.
 
