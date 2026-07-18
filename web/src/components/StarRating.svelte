@@ -210,6 +210,13 @@
         class={rated ? "h-9 w-auto gap-1 px-2.5" : ""}
         onclick={(e: MouseEvent) => {
           e.stopPropagation();
+          // Blur before expanding: on touch, the tap focuses this button, and
+          // Chromium fires focusout (relatedTarget null) when the expansion
+          // swap removes the focused node — which the onfocusout handler
+          // below would read as "focus left" and collapse the row before the
+          // stars ever appear. Blurring now makes that focusout fire while
+          // expanded is still false, so the collapse is a no-op.
+          (e.currentTarget as HTMLElement).blur();
           expanded = true;
         }}
         aria-label="Rate"
