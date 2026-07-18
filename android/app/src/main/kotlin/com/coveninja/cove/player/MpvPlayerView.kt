@@ -75,6 +75,25 @@ class MpvPlayerView(context: Context) : SurfaceView(context), SurfaceHolder.Call
 
         MPVLib.init()
 
+        // If the user has saved a custom mpv.conf, load it now (post-init) so that
+        // their values win over the pre-init defaults set above. Pre-init options act
+        // like command-line flags and would NOT be overridden by the config loaded at
+        // init time, which is why we apply it explicitly here instead.
+        // After loading, re-pin the options that are hard requirements for the Android
+        // embed — the user must not accidentally break video/audio output. hwdec is
+        // intentionally NOT re-pinned: overriding it (e.g. to "mediacodec-copy" or
+        // "no") is a useful escape hatch on problem devices; mediacodec is only our
+        // default and a user who sets something else has a reason.
+        val confFile = File(context.filesDir, "mpv/mpv.conf")
+        if (confFile.exists()) {
+            MPVLib.command(arrayOf("load-config-file", confFile.absolutePath))
+            MPVLib.setOptionString("vo", "gpu")
+            MPVLib.setOptionString("gpu-context", "android")
+            MPVLib.setOptionString("ao", "audiotrack")
+            MPVLib.setOptionString("force-window", "yes")
+            Log.d(TAG, "mpv.conf loaded post-init")
+        }
+
         // Observe properties to drive the UI and progress saving.
         // Constants are static on MPVLib: MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG.
         MPVLib.observeProperty("time-pos",         MPVLib.MPV_FORMAT_DOUBLE)

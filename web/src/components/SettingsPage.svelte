@@ -10,9 +10,14 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
   import { isAndroid, isAndroidTV } from "$lib/platform";
-  import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
+  import {
+    STREAM_SELECTION_MODES,
+    SOURCE_PREFERENCES,
+  } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
   import { api, type TraktStatus, type TraktDeviceCode } from "$lib/api";
+  import { Textarea } from "$lib/components/ui/textarea/index.js";
+  import { Player } from "$lib/player/player.svelte";
   import type { AddonEntry } from "$lib/types/addons";
   import {
     KindProvider,
@@ -22,7 +27,16 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-  import { Trash2, Plus, RefreshCw, TriangleAlert, Eye, EyeOff, Copy, Check as CheckIcon } from "lucide-svelte";
+  import {
+    Trash2,
+    Plus,
+    RefreshCw,
+    TriangleAlert,
+    Eye,
+    EyeOff,
+    Copy,
+    Check as CheckIcon,
+  } from "lucide-svelte";
   import type {
     Repo as NuvioRepo,
     Scraper as NuvioScraper,
@@ -45,6 +59,7 @@
     loadAddons();
     loadNuvioRepos();
     loadTraktStatus();
+    loadMpvConf();
     // Read the native auto-update preference. The method is optional — absent
     // on desktop where __coveApp is undefined.
     const nativeVal = window.__coveApp?.getAutoUpdateEnabled?.();
@@ -68,7 +83,11 @@
     // and the token row never appears until a reload.
     const unsub = settings.subscribe((v) => {
       if (draft) {
-        draft = { ...draft, remoteAccessToken: v.remoteAccessToken, updatedAt: v.updatedAt };
+        draft = {
+          ...draft,
+          remoteAccessToken: v.remoteAccessToken,
+          updatedAt: v.updatedAt,
+        };
       }
     });
     unsub();
@@ -127,12 +146,22 @@
     addons = addons.filter((a) => !(a.id === addon.id && a.url === addon.url));
   }
 
-  async function handleToggleCatalog(addon: AddonEntry, key: string, enabled: boolean) {
+  async function handleToggleCatalog(
+    addon: AddonEntry,
+    key: string,
+    enabled: boolean,
+  ) {
     try {
       await api.toggleCatalog(addon.id, key, enabled, addon.url);
       addons = addons.map((a) =>
         (addon.url ? a.url === addon.url : a.id === addon.id)
-          ? { ...a, disabledCatalogs: { ...(a.disabledCatalogs ?? {}), [key]: !enabled } }
+          ? {
+              ...a,
+              disabledCatalogs: {
+                ...(a.disabledCatalogs ?? {}),
+                [key]: !enabled,
+              },
+            }
           : a,
       );
     } catch (e) {
@@ -359,7 +388,9 @@
   let traktFlow = $state<TraktDeviceCode | null>(null);
   // 'idle': show connect button; 'polling': device flow in progress;
   // 'expired'/'denied': flow ended without auth.
-  let traktFlowState = $state<"idle" | "polling" | "expired" | "denied">("idle");
+  let traktFlowState = $state<"idle" | "polling" | "expired" | "denied">(
+    "idle",
+  );
   let traktConnectError = $state<string | null>(null);
   let traktSyncLoading = $state(false);
   let traktUnlinkLoading = $state(false);
@@ -496,10 +527,52 @@
       testingSpeed = false;
     }
   }
+
+  // ── Advanced / mpv.conf ──────────────────────────────────────────────────────
+  // Draft and saved state for the device-global mpv.conf file.
+  let mpvConfDraft = $state("");
+  let mpvConfSaved = $state("");
+  let mpvConfSaving = $state(false);
+  let mpvConfSaveOk = $state(false);
+  let mpvConfError = $state<string | null>(null);
+  let mpvConfSaveTimer: ReturnType<typeof setTimeout>;
+
+  // dirty = draft differs from the last persisted value
+  let mpvConfDirty = $derived(mpvConfDraft !== mpvConfSaved);
+
+  async function loadMpvConf() {
+    try {
+      const val = await api.getMpvConf();
+      mpvConfDraft = val;
+      mpvConfSaved = val;
+    } catch (e) {
+      mpvConfError = e instanceof Error ? e.message : "Failed to load mpv.conf";
+    }
+  }
+
+  async function handleMpvConfSave() {
+    if (!mpvConfDirty || mpvConfSaving) return;
+    mpvConfSaving = true;
+    mpvConfError = null;
+    try {
+      await api.setMpvConf(mpvConfDraft);
+      mpvConfSaved = mpvConfDraft;
+      mpvConfSaveOk = true;
+      clearTimeout(mpvConfSaveTimer);
+      mpvConfSaveTimer = setTimeout(() => (mpvConfSaveOk = false), 2000);
+      // Best-effort live apply — only works inside the Qt shell and only on
+      // shell builds that expose the reloadMpvConf slot.
+      Player.reloadMpvConf();
+    } catch (e) {
+      mpvConfError = e instanceof Error ? e.message : "Failed to save mpv.conf";
+    } finally {
+      mpvConfSaving = false;
+    }
+  }
 </script>
 
 <ScrollArea class="h-full w-full">
-  <div class="mx-auto max-w-2xl space-y-6 p-6 pt-18 pb-16">
+  <div class="mx-auto max-w-3xl space-y-6 p-6 pt-18 pb-16">
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
       <div class="flex gap-2">
@@ -510,15 +583,21 @@
 
     {#if draft}
       <Tabs.Root value="playback">
-        <Tabs.List class="w-full">
-          <Tabs.Trigger value="playback">Playback</Tabs.Trigger>
-          <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
-          <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
-          <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
-          <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
-          <Tabs.Trigger value="plugins">Plugins</Tabs.Trigger>
-          <Tabs.Trigger value="trakt">Trakt</Tabs.Trigger>
-        </Tabs.List>
+        <!-- Scroll wrapper: the triggers can't shrink (nowrap), so on narrow
+             windows the list overflows sideways instead of spilling past its
+             pill background — w-max keeps the background behind every tab. -->
+        <ScrollArea orientation="horizontal" class="w-full">
+          <Tabs.List class="mb-2.5 w-max min-w-full">
+            <Tabs.Trigger value="playback">Playback</Tabs.Trigger>
+            <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
+            <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
+            <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
+            <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
+            <Tabs.Trigger value="plugins">Plugins</Tabs.Trigger>
+            <Tabs.Trigger value="trakt">Trakt</Tabs.Trigger>
+            <Tabs.Trigger value="advanced">Advanced</Tabs.Trigger>
+          </Tabs.List>
+        </ScrollArea>
 
         <!-- ── Playback ── -->
         <Tabs.Content value="playback" class="mt-4 space-y-1">
@@ -691,8 +770,8 @@
                 >Pre-download next episode</Label
               >
               <p class="text-xs text-muted-foreground">
-                When an episode finishes downloading, quietly download the
-                next one so it starts instantly.
+                When an episode finishes downloading, quietly download the next
+                one so it starts instantly.
               </p>
             </div>
             <Switch
@@ -727,8 +806,8 @@
                 >Verify streams before auto-selecting</Label
               >
               <p class="text-xs text-muted-foreground">
-                Checks that top candidates are reachable before playback
-                starts. Adds a brief delay but avoids picking dead links.
+                Checks that top candidates are reachable before playback starts.
+                Adds a brief delay but avoids picking dead links.
               </p>
             </div>
             <Switch
@@ -745,10 +824,9 @@
                 >Allow LAN stream sources</Label
               >
               <p class="text-xs text-muted-foreground">
-                Lets streams play from private/LAN addresses. Only enable
-                if you run a stream source on your own network — this
-                weakens protection against malicious addons probing your
-                network.
+                Lets streams play from private/LAN addresses. Only enable if you
+                run a stream source on your own network — this weakens
+                protection against malicious addons probing your network.
               </p>
             </div>
             <Switch
@@ -767,8 +845,8 @@
                   >Remote access</Label
                 >
                 <p class="text-xs text-muted-foreground">
-                  Opens a LAN port (6970) so the mobile app or other
-                  devices on your network can connect to this backend.
+                  Opens a LAN port (6970) so the mobile app or other devices on
+                  your network can connect to this backend.
                 </p>
               </div>
               <Switch
@@ -789,8 +867,12 @@
                   </p>
                 {:else}
                   <div class="flex items-center gap-2">
-                    <code class="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono">
-                      {tokenVisible && revealedToken ? revealedToken : "•".repeat(32)}
+                    <code
+                      class="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono"
+                    >
+                      {tokenVisible && revealedToken
+                        ? revealedToken
+                        : "•".repeat(32)}
                     </code>
                     <Button
                       variant="outline"
@@ -1227,12 +1309,15 @@
                       <div class="flex items-center gap-3 py-1">
                         <div class="min-w-0 flex-1">
                           <span class="text-xs font-medium">{cat.name}</span>
-                          <span class="ml-1.5 text-xs text-muted-foreground">({cat.type})</span>
+                          <span class="ml-1.5 text-xs text-muted-foreground"
+                            >({cat.type})</span
+                          >
                         </div>
                         <Switch
                           checked={!addon.disabledCatalogs?.[key]}
                           disabled={!addon.enabled}
-                          onCheckedChange={(v) => handleToggleCatalog(addon, key, v)}
+                          onCheckedChange={(v) =>
+                            handleToggleCatalog(addon, key, v)}
                           class="shrink-0"
                         />
                       </div>
@@ -1255,10 +1340,10 @@
           >
             <TriangleAlert class="mt-0.5 size-4 shrink-0" />
             <p>
-              Plugins are community-maintained JavaScript stream scrapers. Cove runs this code on your device to find streams
-              — it has not been reviewed by Cove and its safety and quality vary
-              by repository. Nothing runs until you explicitly enable a scraper
-              below.
+              Plugins are community-maintained JavaScript stream scrapers. Cove
+              runs this code on your device to find streams — it has not been
+              reviewed by Cove and its safety and quality vary by repository.
+              Nothing runs until you explicitly enable a scraper below.
             </p>
           </div>
 
@@ -1417,16 +1502,22 @@
             </p>
           {:else if traktStatus.connected}
             <!-- Connected state -->
-            <div class="rounded-lg border border-border bg-secondary/30 p-4 space-y-4">
+            <div
+              class="rounded-lg border border-border bg-secondary/30 p-4 space-y-4"
+            >
               <p class="text-sm font-medium">
-                Connected as <span class="text-primary">{traktStatus.username}</span>
+                Connected as <span class="text-primary"
+                  >{traktStatus.username}</span
+                >
               </p>
 
               <Separator />
 
               <div class="flex items-center justify-between">
                 <div>
-                  <Label for="trakt-scrobble" class="text-sm font-medium">Scrobble</Label>
+                  <Label for="trakt-scrobble" class="text-sm font-medium"
+                    >Scrobble</Label
+                  >
                   <p class="text-xs text-muted-foreground">
                     Send watch events to Trakt as you watch.
                   </p>
@@ -1440,7 +1531,9 @@
 
               <div class="flex items-center justify-between">
                 <div>
-                  <Label for="trakt-sync" class="text-sm font-medium">Two-way sync</Label>
+                  <Label for="trakt-sync" class="text-sm font-medium"
+                    >Two-way sync</Label
+                  >
                   <p class="text-xs text-muted-foreground">
                     Sync watch history and watchlist with Trakt.
                   </p>
@@ -1478,7 +1571,9 @@
             <!-- Not connected state -->
             {#if traktFlowState === "idle"}
               <div class="rounded-lg border border-border p-4 space-y-3">
-                <Label class="text-sm font-medium">Connect your Trakt account</Label>
+                <Label class="text-sm font-medium"
+                  >Connect your Trakt account</Label
+                >
                 <p class="text-xs text-muted-foreground">
                   Trakt tracks your watch history and watchlist across apps and
                   devices. Scrobbling sends watch events as you play.
@@ -1493,20 +1588,28 @@
             {:else if traktFlowState === "polling"}
               <!-- Device flow: show code + URL while polling -->
               <div class="rounded-lg border border-border p-4 space-y-4">
-                <Label class="text-sm font-medium">Authorize Cove on Trakt</Label>
+                <Label class="text-sm font-medium"
+                  >Authorize Cove on Trakt</Label
+                >
                 <div class="space-y-2">
-                  <p class="text-xs text-muted-foreground">1. Open this URL in a browser:</p>
+                  <p class="text-xs text-muted-foreground">
+                    1. Open this URL in a browser:
+                  </p>
                   <a
                     href={traktFlow?.verification_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     class="text-sm font-medium text-primary hover:underline break-all"
-                  >{traktFlow?.verification_url}</a>
-                  <p class="text-xs text-muted-foreground">2. Enter this code:</p>
+                    >{traktFlow?.verification_url}</a
+                  >
+                  <p class="text-xs text-muted-foreground">
+                    2. Enter this code:
+                  </p>
                   <div class="flex items-center gap-2">
                     <code
                       class="flex-1 rounded bg-muted px-4 py-3 text-center text-2xl font-mono tracking-widest font-semibold"
-                    >{traktFlow?.user_code}</code>
+                      >{traktFlow?.user_code}</code
+                    >
                     <Button
                       variant="outline"
                       size="icon"
@@ -1522,14 +1625,18 @@
                     </Button>
                   </div>
                 </div>
-                <p class="text-xs text-muted-foreground">Waiting for authorization…</p>
+                <p class="text-xs text-muted-foreground">
+                  Waiting for authorization…
+                </p>
               </div>
             {:else if traktFlowState === "expired"}
               <div class="rounded-lg border border-border p-4 space-y-3">
                 <p class="text-sm text-muted-foreground">
-                  The authorization request expired. Start a new one to try again.
+                  The authorization request expired. Start a new one to try
+                  again.
                 </p>
-                <Button size="sm" onclick={handleTraktConnect}>Try again</Button>
+                <Button size="sm" onclick={handleTraktConnect}>Try again</Button
+                >
               </div>
             {:else if traktFlowState === "denied"}
               <div class="rounded-lg border border-border p-4 space-y-3">
@@ -1537,10 +1644,54 @@
                   Authorization was denied or is invalid. Start a new request to
                   try again.
                 </p>
-                <Button size="sm" onclick={handleTraktConnect}>Try again</Button>
+                <Button size="sm" onclick={handleTraktConnect}>Try again</Button
+                >
               </div>
             {/if}
           {/if}
+        </Tabs.Content>
+
+        <!-- ── Advanced ── -->
+        <Tabs.Content value="advanced" class="mt-4 space-y-4">
+          <div>
+            <Label class="text-sm font-medium">MPV configuration</Label>
+            <p class="mt-1 text-xs text-muted-foreground">
+              Options written here are applied on top of Cove's defaults. Some
+              take effect immediately after saving; others require a playback
+              restart or app restart. On Android, you can override
+              <code class="font-mono">hwdec</code> here (e.g.
+              <code class="font-mono">hwdec=no</code> on devices with broken
+              hardware decoding). See the
+              <a
+                href="https://mpv.io/manual/stable/#configuration-files"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline"
+                >mpv configuration reference</a
+              > for all available options.
+            </p>
+          </div>
+
+          <Textarea
+            class="min-h-64 font-mono text-xs"
+            spellcheck={false}
+            placeholder="# hwdec=auto&#10;# volume=80"
+            bind:value={mpvConfDraft}
+          />
+
+          {#if mpvConfError}
+            <p class="text-xs text-red-500">{mpvConfError}</p>
+          {/if}
+
+          <div class="flex items-center gap-3">
+            <Button
+              size="sm"
+              onclick={handleMpvConfSave}
+              disabled={mpvConfSaving || !mpvConfDirty}
+            >
+              {mpvConfSaving ? "Saving…" : mpvConfSaveOk ? "Saved ✓" : "Save"}
+            </Button>
+          </div>
         </Tabs.Content>
       </Tabs.Root>
     {:else}

@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -415,6 +416,62 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(out)
+			return
+		}
+
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}))
+
+	// GET /PUT /api/settings/mpv-conf — read/write the device-global mpv.conf.
+	// The file is not per-profile; it lives in <configDir>/mpv/mpv.conf.
+	// GET responds with the file content as a JSON-encoded string (empty string
+	// when the file doesn't exist yet). PUT accepts a JSON-encoded string body
+	// (max 1 MiB) and writes it atomically, creating the mpv/ subdir as needed.
+	mux.HandleFunc("/api/settings/mpv-conf", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		path, err := utils.ConfigPath("mpv/mpv.conf")
+		if err != nil {
+			http.Error(w, "could not resolve config path: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if r.Method == http.MethodGet {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`""`))
+					return
+				}
+				http.Error(w, "could not read mpv.conf: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(string(data)); err != nil {
+				log.Println("settings mpv-conf encode:", err)
+			}
+			return
+		}
+
+		if r.Method == http.MethodPut {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			var content string
+			if err := json.NewDecoder(r.Body).Decode(&content); err != nil {
+				if err.Error() == "http: request body too large" {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				} else {
+					http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+				}
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				http.Error(w, "could not create mpv dir: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if err := utils.AtomicWriteFile(path, []byte(content), 0o644); err != nil {
+				http.Error(w, "could not write mpv.conf: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 

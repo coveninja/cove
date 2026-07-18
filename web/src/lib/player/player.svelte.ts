@@ -47,14 +47,15 @@ interface MpvBridge {
   setFullscreen(fullscreen: boolean): void;
   setMpvProperty(name: string, value: string): void;
   requestState(): void;
+  reloadMpvConf?(): void;
 }
 
 declare global {
   interface Window {
     qt?: { webChannelTransport: unknown };
     QWebChannel?: new (
-        transport: unknown,
-        cb: (channel: { objects: { mpv: MpvBridge } }) => void,
+      transport: unknown,
+      cb: (channel: { objects: { mpv: MpvBridge } }) => void,
     ) => void;
   }
 }
@@ -101,9 +102,14 @@ class MpvPlayer {
 
     new Channel(transport, (channel) => {
       const mpv = channel.objects.mpv;
-      if (!mpv) { console.error('[player] mpv missing from channel'); return; }
+      if (!mpv) {
+        console.error("[player] mpv missing from channel");
+        return;
+      }
       if (mpv.valid === false) {
-        console.warn('[player] mpv failed to initialize in the shell — playback unavailable');
+        console.warn(
+          "[player] mpv failed to initialize in the shell — playback unavailable",
+        );
         this.available = false;
         return;
       }
@@ -119,10 +125,14 @@ class MpvPlayer {
         }
         this.position = s;
       });
-      mpv.durationChanged.connect((s) => { this.duration = s; });
+      mpv.durationChanged.connect((s) => {
+        this.duration = s;
+      });
       mpv.pausedChanged.connect((p) => (this.paused = p));
       mpv.volumeChanged.connect((v) => (this.volume = v));
-      mpv.fileLoaded.connect(() => { this.ended = false; });
+      mpv.fileLoaded.connect(() => {
+        this.ended = false;
+      });
       mpv.endReached.connect(() => (this.ended = true));
       mpv.tracksChanged.connect((tracks) => this.#applyTracks(tracks));
 
@@ -201,8 +211,8 @@ class MpvPlayer {
 
   seek(seconds: number): void {
     const clamped = this.duration
-        ? Math.max(0, Math.min(seconds, this.duration))
-        : Math.max(0, seconds);
+      ? Math.max(0, Math.min(seconds, this.duration))
+      : Math.max(0, seconds);
     this.position = clamped; // optimistic; positionChanged confirms
     this.#seekLockUntil = Date.now() + 500; // suppress stale pre-seek events
     this.#mpv?.seek(clamped);
@@ -237,6 +247,13 @@ class MpvPlayer {
 
   toggleFullscreen(): void {
     this.setFullscreen(!this.isFullscreen);
+  }
+
+  /** Re-reads mpv.conf on disk and applies it without a full restart.
+   *  Delegates to the shell's reloadMpvConf slot; no-op outside the shell or
+   *  on older builds that don't expose the slot yet. */
+  reloadMpvConf(): void {
+    this.#mpv?.reloadMpvConf?.();
   }
 }
 

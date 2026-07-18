@@ -210,7 +210,10 @@ export const STATUS_LABELS: Record<LibraryStatus, string> = {
 };
 
 /** Accent color per library status, for at-a-glance color coding across the UI. */
-export const STATUS_COLORS: Record<LibraryStatus, { dot: string; text: string }> = {
+export const STATUS_COLORS: Record<
+  LibraryStatus,
+  { dot: string; text: string }
+> = {
   watch_later: { dot: "bg-amber-400", text: "text-amber-400" },
   watching: { dot: "bg-sky-400", text: "text-sky-400" },
   finished: { dot: "bg-emerald-400", text: "text-emerald-400" },
@@ -276,7 +279,6 @@ export interface DiscoverInsights {
   top_contributors: ContributingTitle[];
   negative_contributors: ContributingTitle[];
 }
-
 
 export interface StudioEntry {
   id: number;
@@ -492,7 +494,9 @@ export const api = {
     streams: { url: string }[],
     timeoutMs = 700,
     signal?: AbortSignal,
-  ): Promise<{ results: { url: string; alive: boolean; contentLength: number }[] }> =>
+  ): Promise<{
+    results: { url: string; alive: boolean; contentLength: number }[];
+  }> =>
     request(`/streams/probe`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -593,13 +597,24 @@ export const api = {
       body: JSON.stringify(s),
     }),
 
+  // GET/PUT /api/settings/mpv-conf — device-global mpv.conf content.
+  // GET returns an empty string when the file doesn't exist yet.
+  getMpvConf: (): Promise<string> => request<string>(`/settings/mpv-conf`),
+
+  setMpvConf: (content: string): Promise<void> =>
+    request<void>(`/settings/mpv-conf`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(content),
+    }),
+
   // GET /api/settings returns remoteAccessToken as "***" when set (empty when
   // unset). Call this to fetch the real value — only when the user explicitly
   // clicks show/copy, not on every settings load.
   revealRemoteAccessToken: (): Promise<string> =>
-    request<{ token: string }>(`/settings/reveal-token`, { method: "POST" }).then(
-      (r) => r.token,
-    ),
+    request<{ token: string }>(`/settings/reveal-token`, {
+      method: "POST",
+    }).then((r) => r.token),
 
   testDiscoveryAlgorithm: (
     url: string,
@@ -1097,6 +1112,5 @@ export const api = {
       body: JSON.stringify(p),
     }),
 
-  traktSyncNow: (): Promise<void> =>
-    request(`/trakt/sync`, { method: "POST" }),
+  traktSyncNow: (): Promise<void> => request(`/trakt/sync`, { method: "POST" }),
 };

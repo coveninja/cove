@@ -14,6 +14,7 @@ import androidx.webkit.WebViewFeature
 import dev.jdtech.mpv.MPVLib
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 
 /**
@@ -36,7 +37,7 @@ import java.util.Locale
  *
  * mpv adapter methods:  play, pause, resume, stop, seek, setAudioTrack,
  *   setSubtitleTrack, addSubtitle, setVolume, setFullscreen, requestState,
- *   command, setOption, setMpvProperty
+ *   command, setOption, setMpvProperty, reloadMpvConf
  * mpv adapter signals:  positionChanged, durationChanged, pausedChanged,
  *   volumeChanged, fileLoaded, endReached, tracksChanged
  */
@@ -138,7 +139,8 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
     requestState:    function()      { CoveMpv.requestState(); },
     command:         function(a)     { CoveMpv.command(JSON.stringify(a)); },
     setOption:       function(k,v)   { CoveMpv.setOption(k,v); },
-    setMpvProperty:  function(k,v)   { CoveMpv.setMpvProperty(k,v); }
+    setMpvProperty:  function(k,v)   { CoveMpv.setMpvProperty(k,v); },
+    reloadMpvConf:   function()      { CoveMpv.reloadMpvConf(); }
   };
   window.qt={webChannelTransport:{}};
   window.QWebChannel=function(t,cb){setTimeout(function(){cb({objects:{mpv:mpv}});},0);};
@@ -508,6 +510,29 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
         @JavascriptInterface
         fun setMpvProperty(k: String, v: String) {
             mainHandler.post { MPVLib.setPropertyString(k, v) }
+        }
+
+        /**
+         * Re-load the user's mpv.conf (best-effort live apply after the user saves
+         * their config in Settings). Resolves the same path as MpvPlayerView.create()
+         * uses. If the file doesn't exist yet, returns silently. The four embed-
+         * critical options are re-pinned after loading so a bad config cannot break
+         * the Android video/audio pipeline. hwdec is not re-pinned for the same
+         * reason as in MpvPlayerView: it is an intentional user escape hatch.
+         */
+        @JavascriptInterface
+        fun reloadMpvConf() {
+            val confFile = File(webView.context.filesDir, "mpv/mpv.conf")
+            if (!confFile.exists()) return
+            val path = confFile.absolutePath
+            mainHandler.post {
+                MPVLib.command(arrayOf("load-config-file", path))
+                MPVLib.setOptionString("vo", "gpu")
+                MPVLib.setOptionString("gpu-context", "android")
+                MPVLib.setOptionString("ao", "audiotrack")
+                MPVLib.setOptionString("force-window", "yes")
+                Log.d(TAG, "mpv.conf reloaded (live apply)")
+            }
         }
     }
 

@@ -8,10 +8,26 @@
 #include <QtQuick/QQuickWindow>
 #include <QByteArray>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QVector>
 
 namespace {
+
+// Returns the absolute path to the user-configurable mpv.conf:
+//   $COVE_DATA_DIR/mpv/mpv.conf   (if COVE_DATA_DIR is set — mirrors Go's utils.ConfigPath)
+//   else GenericConfigLocation/cove/mpv/mpv.conf
+// Matches the shell's existing config-dir convention (shell.log, gpu_workaround.ini).
+static QString mpvConfPath() {
+  const QByteArray dataDir = qgetenv("COVE_DATA_DIR");
+  const QString base = dataDir.isEmpty()
+      ? QDir(QStandardPaths::writableLocation(
+                 QStandardPaths::GenericConfigLocation)).filePath("cove")
+      : QString::fromUtf8(dataDir);
+  return QDir(base).filePath("mpv/mpv.conf");
+}
 
 // libmpv asks us to resolve GL function pointers; route to the current Qt GL
 // context (valid because mpv renders on Quick's render thread with it current).
@@ -158,6 +174,21 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
     return;
   }
 
+  // Load user mpv.conf post-init so its values override Cove's pre-init
+  // defaults above. Options set pre-init act like command-line arguments
+  // (highest precedence in mpv's option hierarchy); loading the file here
+  // inverts that, giving the user control over every tunable. vo=libmpv is
+  // then re-pinned because it is embed-critical and must not be overridden.
+  const QString confPath = mpvConfPath();
+  if (QFile::exists(confPath)) {
+    const int rc = mpv_load_config_file(m_mpv, confPath.toUtf8().constData());
+    if (rc < 0)
+      qWarning() << "[mpv] failed to load mpv.conf:" << mpv_error_string(rc);
+    // vo=libmpv composites video into our FBO; any config value overriding it
+    // would break rendering — re-pin unconditionally after the config load.
+    mpv_set_option_string(m_mpv, "vo", "libmpv");
+  }
+
   // Observe the properties we surface as signals, and wake us on mpv events.
   mpv_observe_property(m_mpv, 0, "time-pos", MPV_FORMAT_DOUBLE);
   mpv_observe_property(m_mpv, 0, "duration", MPV_FORMAT_DOUBLE);
@@ -287,6 +318,17 @@ void MpvObject::addSubtitle(const QString &url, const QString &title,
 
 void MpvObject::setVolume(double volume) {
   setMpvProperty("volume", QString::number(volume));
+}
+
+void MpvObject::reloadMpvConf() {
+  if (!m_mpv) return;
+  const QString confPath = mpvConfPath();
+  if (!QFile::exists(confPath)) return;
+  const int rc = mpv_load_config_file(m_mpv, confPath.toUtf8().constData());
+  if (rc < 0)
+    qWarning() << "[mpv] reloadMpvConf: failed to load mpv.conf:" << mpv_error_string(rc);
+  // Re-pin vo=libmpv after every reload — same rationale as the init-time load.
+  mpv_set_option_string(m_mpv, "vo", "libmpv");
 }
 
 void MpvObject::setFullscreen(bool fullscreen) {
