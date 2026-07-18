@@ -367,6 +367,18 @@
   let traktFlowTimeout: ReturnType<typeof setTimeout> | null = null;
   let traktPollIntervalMs = 0;
 
+  let traktCodeCopied = $state(false);
+  let traktCodeCopyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function handleCopyTraktCode() {
+    const code = traktFlow?.user_code;
+    if (!code) return;
+    await navigator.clipboard.writeText(code);
+    traktCodeCopied = true;
+    clearTimeout(traktCodeCopyTimer);
+    traktCodeCopyTimer = setTimeout(() => (traktCodeCopied = false), 2000);
+  }
+
   async function loadTraktStatus() {
     traktStatus = await api.traktStatus(); // null on 503 (not configured)
   }
@@ -1491,9 +1503,24 @@
                     class="text-sm font-medium text-primary hover:underline break-all"
                   >{traktFlow?.verification_url}</a>
                   <p class="text-xs text-muted-foreground">2. Enter this code:</p>
-                  <code
-                    class="block rounded bg-muted px-4 py-3 text-center text-2xl font-mono tracking-widest font-semibold"
-                  >{traktFlow?.user_code}</code>
+                  <div class="flex items-center gap-2">
+                    <code
+                      class="flex-1 rounded bg-muted px-4 py-3 text-center text-2xl font-mono tracking-widest font-semibold"
+                    >{traktFlow?.user_code}</code>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      class="shrink-0"
+                      onclick={handleCopyTraktCode}
+                      title="Copy code"
+                    >
+                      {#if traktCodeCopied}
+                        <CheckIcon class="size-4 text-green-500" />
+                      {:else}
+                        <Copy class="size-4" />
+                      {/if}
+                    </Button>
+                  </div>
                 </div>
                 <p class="text-xs text-muted-foreground">Waiting for authorization…</p>
               </div>

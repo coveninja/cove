@@ -14,6 +14,7 @@ import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -28,6 +29,7 @@ import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -414,6 +416,26 @@ class WebViewActivity : ComponentActivity() {
         }
 
         wv.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
+                // In-app navigations (the Svelte bundle / Vite dev server)
+                // stay in the WebView; anything else — e.g. the Trakt
+                // authorize link — opens in the system browser.
+                val own = Uri.parse(BuildConfig.WEB_URL)
+                val url = request.url
+                if (url.host == own.host && url.port == own.port) return false
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, url))
+                } catch (e: Exception) {
+                    // No browser on this device (common on TV) — never let the
+                    // link navigate the app shell away.
+                    android.util.Log.w(TAG, "no handler for external url $url", e)
+                }
+                return true
+            }
+
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 // Fallback shim injection when DOCUMENT_START_SCRIPT is
                 // unavailable. When it IS supported, the shim was already
