@@ -8,6 +8,8 @@
 // In a plain browser (e.g. `vite dev` outside the shell) neither global exists;
 // `available` stays false and every control is a no-op, so UI can branch on it.
 
+import { isDesktopTvMode } from "$lib/platform";
+
 export interface MpvTrack {
   id: number;
   type: "video" | "audio" | "sub";
@@ -50,12 +52,18 @@ interface MpvBridge {
   reloadMpvConf?(): void;
 }
 
+// Shell bridge: object registered on the WebChannel by the Qt side.
+// Currently exposes setTvZoom so the web layer can drive WebEngineView.zoomFactor.
+interface ShellBridge {
+  setTvZoom(enabled: boolean): void;
+}
+
 declare global {
   interface Window {
     qt?: { webChannelTransport: unknown };
     QWebChannel?: new (
       transport: unknown,
-      cb: (channel: { objects: { mpv: MpvBridge } }) => void,
+      cb: (channel: { objects: { mpv: MpvBridge; shell?: ShellBridge } }) => void,
     ) => void;
   }
 }
@@ -101,6 +109,14 @@ class MpvPlayer {
     this.available = true;
 
     new Channel(transport, (channel) => {
+      // Report the desktop TV-mode preference to the shell every boot: true
+      // applies the page zoom that matches Android TV's density scaling, false
+      // resets it (a reload reuses the same WebEngineView, so stale zoom from a
+      // previous TV-mode session must be cleared explicitly).
+      // This runs before the mpv presence/validity checks so zoom works even if
+      // mpv failed to initialize.
+      channel.objects.shell?.setTvZoom?.(isDesktopTvMode());
+
       const mpv = channel.objects.mpv;
       if (!mpv) {
         console.error("[player] mpv missing from channel");
@@ -178,8 +194,12 @@ class MpvPlayer {
     // overlay within moments of it starting.
     this.#seekLockUntil = Date.now() + 500;
     // mpv keeps `speed` across loadfile on the same instance; a 2× pick from a
-    // previous session must not leak into the next one.
-    if (this.playbackSpeed !== 1) this.setPlaybackSpeed(1);
+    // previous session must not leak into the next one. Reset unconditionally
+    // instead of guarding on the current value: play() runs inside the shells'
+    // playback $effect, and READING this.playbackSpeed here would register it
+    // as a dependency — making every speed change restart the stream.
+    this.playbackSpeed = 1;
+    this.#mpv?.setMpvProperty("speed", "1");
     this.#mpv?.play(url);
   }
 

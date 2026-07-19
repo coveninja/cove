@@ -549,6 +549,7 @@ int main(int argc, char *argv[]) {
       "play", "Compositing test: play this media file behind a test overlay.",
       "file");
   QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
+  QCommandLineOption tvOpt("tv", "Launch with the TV (D-pad) interface.");
   QCommandLineOption gpuWorkaroundOpt(
       "gpu-workaround",
       "GPU workaround level: 0=off, 1=QTWEBENGINE_FORCE_USE_GBM=0 (Vulkan fallback; may render incorrectly on some drivers), 2=level 1 + --disable-gpu (software raster, auto-recovery target). Pins the level for this run; overrides COVE_GPU_WORKAROUND and disables auto-escalation.",
@@ -557,6 +558,7 @@ int main(int argc, char *argv[]) {
   parser.addOption(webrootOpt);
   parser.addOption(playOpt);
   parser.addOption(devOpt);
+  parser.addOption(tvOpt);
   parser.addOption(gpuWorkaroundOpt);
   parser.process(app);
 
@@ -577,6 +579,7 @@ int main(int argc, char *argv[]) {
           ? QFileInfo(parser.value(playOpt)).absoluteFilePath()
           : QString();
   const bool isDev = parser.isSet(devOpt);
+  const bool isTv = parser.isSet(tvOpt);
 
   QQmlApplicationEngine engine;
 
@@ -601,6 +604,11 @@ int main(int argc, char *argv[]) {
   auto loadScene = [&](const QString &url, const QString &mpvFile) {
     engine.rootContext()->setContextProperty("launchUrl", url);
     engine.rootContext()->setContextProperty("mpvTestFile", mpvFile);
+    // isTv is captured by reference via [&]; it is declared above and outlives
+    // all loadScene calls (stack frame is main()). This lets the QML side zoom
+    // the WebEngineView from first paint rather than waiting for the WebChannel
+    // handshake — acceptable for the --tv flag path.
+    engine.rootContext()->setContextProperty("launchTvZoom", isTv);
     engine.load(QUrl("qrc:/qml/main.qml"));
   };
 
@@ -667,7 +675,7 @@ int main(int argc, char *argv[]) {
     // lambda) so the `finished` handler can invoke it again on a later
     // crash — a lambda can't capture itself directly.
     auto launchBackend = std::make_shared<std::function<void(bool)>>();
-    *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, apiPort,
+    *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, isTv, apiPort,
                        shuttingDown, currentBackend, restartCount, restartWindow,
                        launchBackend](bool first) {
       QProcess *backend = startBackend(backendPath, &app);
@@ -748,16 +756,22 @@ int main(int argc, char *argv[]) {
 
       waitForBackend(
           apiPort, 20000,
-          [loadScene, baseUrl, isDev, settled, first]() {
+          [loadScene, baseUrl, isDev, isTv, settled, first]() {
             if (*settled)
               return;
             *settled = true;
             if (first) {
               qInfo().noquote() << "[shell] backend up — loading UI";
               if (isDev) {
-                loadScene(QStringLiteral("http://localhost:5173"), QString());
+                const QString devUrl = isTv
+                    ? QStringLiteral("http://localhost:5173?tvui=1")
+                    : QStringLiteral("http://localhost:5173");
+                loadScene(devUrl, QString());
               } else {
-                loadScene(baseUrl.toString(), QString());
+                const QString prodUrl = isTv
+                    ? baseUrl.toString() + QStringLiteral("?tvui=1")
+                    : baseUrl.toString();
+                loadScene(prodUrl, QString());
               }
               // The GPU abort strikes within seconds of the first WebEngineView load.
               QTimer::singleShot(30000, qApp,

@@ -2,11 +2,27 @@ import { mount } from "svelte";
 
 import "./assets/app.css";
 
-import { isAndroid, isAndroidTV } from "$lib/platform";
+import { isAndroid, isTvMode } from "$lib/platform";
 
 async function init() {
+  // The Qt shell's --tv flag appends ?tvui=1 to the initial URL. Persist the
+  // preference to localStorage so later reloads don't need the param, then
+  // strip it from the address bar so it doesn't accumulate across history
+  // entries.
+  const params = new URLSearchParams(location.search);
+  if (params.get("tvui") === "1") {
+    localStorage.setItem("cove-tv-ui", "1");
+    params.delete("tvui");
+    const newSearch = params.toString();
+    history.replaceState(
+      null,
+      "",
+      location.pathname + (newSearch ? "?" + newSearch : ""),
+    );
+  }
+
   const target = document.getElementById("app")!;
-  if (isAndroidTV()) {
+  if (isTvMode()) {
     const { default: TvApp } = await import("./tv/TvApp.svelte");
     mount(TvApp, { target });
   } else if (isAndroid()) {

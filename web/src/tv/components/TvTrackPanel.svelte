@@ -12,7 +12,7 @@
     onClose,
   }: {
     title: string;
-    items: { id: string | number; label: string; sublabel?: string }[];
+    items: { id: string | number; label: string; sublabel?: string; dot?: string }[];
     selectedId?: string | number | null;
     onSelect: (id: string | number) => void;
     onClose: () => void;
@@ -97,6 +97,9 @@
         }}
         use:focusable={{ groupId: "tv-track-panel" }}
       >
+        {#if item.dot}
+          <span class="size-2 shrink-0 rounded-full {item.dot}"></span>
+        {/if}
         <span class="flex-1 min-w-0">
           <span class="block text-sm font-medium leading-snug">{item.label}</span>
           {#if item.sublabel}

@@ -9,7 +9,7 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
-  import { isAndroid, isAndroidTV } from "$lib/platform";
+  import { isAndroid, isAndroidTV, tvSwitchVisible, setTvSwitchVisible } from "$lib/platform";
   import {
     STREAM_SELECTION_MODES,
     SOURCE_PREFERENCES,
@@ -1201,6 +1201,25 @@
                   autoUpdateEnabled = v;
                   window.__coveApp?.setAutoUpdateEnabled?.(v);
                 }}
+              />
+            </div>
+          {/if}
+
+          {#if !isAndroid() && !isAndroidTV()}
+            <Separator class="my-2" />
+            <div class="flex items-center justify-between py-3">
+              <div>
+                <Label for="tv-switch-visible" class="text-sm font-medium"
+                  >TV interface switch</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Show a button in the top bar to switch to the remote-friendly TV interface.
+                </p>
+              </div>
+              <Switch
+                id="tv-switch-visible"
+                checked={$tvSwitchVisible}
+                onCheckedChange={(v) => setTvSwitchVisible(v)}
               />
             </div>
           {/if}

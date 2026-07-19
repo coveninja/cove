@@ -11,6 +11,7 @@
     SkipForward,
     SkipBack,
     Gauge,
+    ListVideo,
   } from "lucide-svelte";
   import { onDestroy, onMount, untrack, tick } from "svelte";
   import { fade } from "svelte/transition";
@@ -28,6 +29,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
   import TvTrackPanel from "./TvTrackPanel.svelte";
+  import TvEpisodePanel from "./TvEpisodePanel.svelte";
   import { focusable, focusGroup } from "../focus/actions";
   import { focusAfterKeyRelease } from "../focus/focusStore.svelte";
 
@@ -71,10 +73,11 @@
   // Register close-sheets with parent for Escape priority handling.
   $effect(() => {
     onRegisterCloseSheets?.(() => {
-      if (audioPanelOpen || subsPanelOpen || speedPanelOpen) {
+      if (audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen) {
         audioPanelOpen = false;
         subsPanelOpen = false;
         speedPanelOpen = false;
+        episodesPanelOpen = false;
         return true;
       }
       return false;
@@ -741,8 +744,9 @@
   let audioPanelOpen = $state(false);
   let subsPanelOpen = $state(false);
   let speedPanelOpen = $state(false);
+  let episodesPanelOpen = $state(false);
 
-  const anyPanelOpen = $derived(audioPanelOpen || subsPanelOpen || speedPanelOpen);
+  const anyPanelOpen = $derived(audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen);
 
   // ── Controls auto-hide ────────────────────────────────────────────────────────
 
@@ -1157,6 +1161,20 @@
             <span class="text-sm">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
           </button>
 
+          <!-- Episodes (TV shows only) -->
+          {#if media?.media_type === "tv" && onPlayNext}
+            <button
+              type="button"
+              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
+              onclick={() => { episodesPanelOpen = true; }}
+              aria-label="Episodes"
+              use:focusable={{ groupId: "tv-player-controls" }}
+            >
+              <ListVideo class="size-5 shrink-0" />
+              <span class="text-sm">Episodes</span>
+            </button>
+          {/if}
+
           <!-- Close -->
           <button
             type="button"
@@ -1327,5 +1345,15 @@
       Player.setPlaybackSpeed(parseFloat(id as string));
     }}
     onClose={() => (speedPanelOpen = false)}
+  />
+{/if}
+
+{#if episodesPanelOpen && media}
+  <TvEpisodePanel
+    {media}
+    activeSeason={season}
+    activeEpisode={episode}
+    onClose={() => (episodesPanelOpen = false)}
+    onSelect={(s, e) => { episodesPanelOpen = false; onPlayNext?.(s, e); }}
   />
 {/if}

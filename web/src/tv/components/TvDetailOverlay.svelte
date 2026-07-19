@@ -8,7 +8,7 @@
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
   import { resolveTvWatchAction, type TvWatchAction } from "$lib/watchAction";
-  import LibraryStatusPanel from "../../components/LibraryStatusPanel.svelte";
+  import TvLibraryStatusPanel from "./TvLibraryStatusPanel.svelte";
   import StarRating from "../../components/StarRating.svelte";
   import TvStreamsList from "./TvStreamsList.svelte";
   import { Button } from "$lib/components/ui/button";
@@ -58,7 +58,6 @@
   let castNames: string[] = $state([]);
   let ageRating = $state("");
   let similar: Media[] = $state([]);
-  let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
   let lastAiredSeason = $state<number | null>(null);
   let lastAiredEpisode = $state<number | null>(null);
@@ -83,7 +82,6 @@
         castNames = details.credits?.cast?.slice(0, 8).map((c: { name: string }) => c.name) ?? [];
         ageRating = formatRating(details);
         if (type === "tv") {
-          numberOfSeasons = details.number_of_seasons ?? null;
           numberOfEpisodes = details.number_of_episodes ?? null;
           lastAiredSeason = details.last_episode_to_air?.season_number ?? null;
           lastAiredEpisode = details.last_episode_to_air?.episode_number ?? null;
@@ -233,8 +231,10 @@
   use:focusGroup with free policy + trapFocus:true keeps all D-pad navigation
   inside the overlay while it is open. The geometric fallback (scoped to the
   group container by policyNavigate in focusStore) reaches every native
-  focusable inside StreamsList, LibraryStatusPanel, StarRating and TvMediaCard
-  without any edits to those shared components.
+  focusable inside StreamsList, StarRating and TvMediaCard without any edits to
+  those shared components. TvLibraryStatusPanel opens TvTrackPanel as a
+  separate focus group (its own trapFocus), so it is not scoped inside this
+  overlay group — that is intentional and correct.
 -->
 <!--
   tv-detail-root: hidden (not unmounted) while playback is fullscreen — this
@@ -317,9 +317,6 @@
       {#if runtime}
         <span>{runtime}</span>
       {/if}
-      {#if media.media_type === "tv" && numberOfSeasons !== null}
-        <span>{numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}</span>
-      {/if}
       {#if media.media_type === "tv" && numberOfEpisodes !== null}
         <span>{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span>
       {/if}
@@ -349,7 +346,7 @@
     {/if}
 
     <!-- Action row -->
-    <div class="flex items-center gap-4">
+    <div class="flex items-center gap-4 justify-between">
       <!-- Primary Watch / Continue button — wrapped for programmatic focus -->
       <div bind:this={playWrapEl}>
         <Button
@@ -362,35 +359,38 @@
         </Button>
       </div>
 
-      <!-- Library status -->
-      <LibraryStatusPanel
-        {libraryEntry}
-        {media}
-        {lastAiredSeason}
-        {lastAiredEpisode}
-        size="icon"
-        class="size-14 shrink-0 rounded-xl"
-      />
+      <div class="flex gap-4">
+        <!-- Library status -->
+        <TvLibraryStatusPanel
+                {libraryEntry}
+                {media}
+                {lastAiredSeason}
+                {lastAiredEpisode}
+                class="size-14 shrink-0 rounded-xl"
+        />
 
-      <!-- Not interested -->
-      <Button
-              variant={dismissed ? "destructive" : "outline"}
-              size="icon"
-              class="size-14 shrink-0 rounded-xl"
-              onclick={toggleDismissed}
-              title={dismissed ? "Undo not interested" : "Not interested"}
-      >
-        <ThumbsDown class="size-5" />
-      </Button>
+        <!-- Not interested -->
+        <Button
+                variant={dismissed ? "destructive" : "outline"}
+                size="icon"
+                class="size-14 shrink-0 rounded-xl"
+                onclick={toggleDismissed}
+                title={dismissed ? "Undo not interested" : "Not interested"}
+        >
+          <ThumbsDown class="size-5" />
+        </Button>
 
-      <!-- Star rating -->
-      <StarRating
-        {libraryEntry}
-        {media}
-        {lastAiredSeason}
-        {lastAiredEpisode}
-        variant="inline"
-      />
+        <!-- Star rating -->
+        <StarRating
+                {libraryEntry}
+                {media}
+                {lastAiredSeason}
+                {lastAiredEpisode}
+                variant="inline"
+        />
+      </div>
+
+
     </div>
 
     <!-- Overview -->

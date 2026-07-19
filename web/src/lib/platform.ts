@@ -1,3 +1,5 @@
+import { writable } from "svelte/store";
+
 declare global {
   interface Window {
     __covePlatform?: string;
@@ -37,8 +39,7 @@ export function codecCaps(): CodecCaps | null {
 export function isAndroid(): boolean {
   if (window.__covePlatform === "android") return true;
   if (new URLSearchParams(location.search).get("mobile") === "1") return true;
-  if (import.meta.env.VITE_MOBILE === "1") return true;
-  return false;
+  return import.meta.env.VITE_MOBILE === "1";
 }
 
 /**
@@ -52,8 +53,7 @@ export function isAndroid(): boolean {
 export function isAndroidTV(): boolean {
   if (window.__covePlatform === "androidtv") return true;
   if (new URLSearchParams(location.search).get("tv") === "1") return true;
-  if (import.meta.env.VITE_TV === "1") return true;
-  return false;
+  return import.meta.env.VITE_TV === "1";
 }
 
 /**
@@ -62,4 +62,63 @@ export function isAndroidTV(): boolean {
  */
 export function minimizeApp(): void {
   window.__coveApp?.minimizeApp();
+}
+
+// localStorage key used to persist the desktop TV-interface preference.
+const TV_UI_KEY = "cove-tv-ui";
+
+/**
+ * Returns true when the TV/D-pad shell should be mounted.
+ *
+ * Detection order:
+ *   1. `isAndroidTV()` — real Android TV device; TV shell is always correct.
+ *   2. `localStorage "cove-tv-ui" === "1"` — desktop opt-in via Settings
+ *      or the Qt `--tv` flag (which appends `?tvui=1` and persists the key).
+ */
+export function isTvMode(): boolean {
+  if (isAndroidTV()) return true;
+  return localStorage.getItem(TV_UI_KEY) === "1";
+}
+
+/**
+ * Returns true when the desktop TV-interface opt-in is active and this is
+ * not a real Android TV device. Used to show the "switch back to desktop"
+ * control inside TvSettingsPage so it is never visible on real Android TV.
+ */
+export function isDesktopTvMode(): boolean {
+  return (
+    localStorage.getItem(TV_UI_KEY) === "1" &&
+    window.__covePlatform !== "androidtv"
+  );
+}
+
+/**
+ * Enable or disable the desktop TV-interface mode. Persists the choice to
+ * localStorage and immediately reloads the page so the correct shell mounts.
+ */
+export function setTvMode(on: boolean): void {
+  if (on) {
+    localStorage.setItem(TV_UI_KEY, "1");
+  } else {
+    localStorage.removeItem(TV_UI_KEY);
+  }
+  location.reload();
+}
+
+// localStorage key used to persist the "TV interface switch" visibility preference.
+const TV_SWITCH_KEY = "cove-tv-switch";
+
+/**
+ * Controls whether the TopBar shows the TV-interface switch button.
+ * Device-local like the TV-mode preference itself, hence localStorage
+ * rather than backend settings.
+ */
+export const tvSwitchVisible = writable(
+  localStorage.getItem(TV_SWITCH_KEY) !== "0",
+);
+
+/** Persist and reactively update the TV-interface switch visibility. */
+export function setTvSwitchVisible(on: boolean): void {
+  localStorage.setItem(TV_SWITCH_KEY, on ? "1" : "0");
+  tvSwitchVisible.set(on);
 }

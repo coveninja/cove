@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { settings } from "$lib/stores/settings";
   import type { Settings } from "$lib/types/settings";
-  import { isAndroid, isAndroidTV } from "$lib/platform";
+  import { isAndroid, isAndroidTV, isDesktopTvMode, setTvMode } from "$lib/platform";
   import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
   import { api } from "$lib/api";
@@ -815,13 +815,12 @@
               </p>
             </div>
             <select
-              value={draft.streamSelectionMode ?? "balanced"}
               onchange={(e) => patch("streamSelectionMode", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each STREAM_SELECTION_MODES as m (m.value)}
-                <option value={m.value}>{m.label}</option>
+                <option value={m.value} selected={m.value === (draft.streamSelectionMode ?? "balanced")}>{m.label}</option>
               {/each}
             </select>
           </div>
@@ -837,13 +836,12 @@
               </p>
             </div>
             <select
-              value={draft.sourcePreference}
               onchange={(e) => patch("sourcePreference", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each SOURCE_PREFERENCES as p (p.value)}
-                <option value={p.value}>{p.label}</option>
+                <option value={p.value} selected={p.value === draft.sourcePreference}>{p.label}</option>
               {/each}
             </select>
           </div>
@@ -861,19 +859,18 @@
               </p>
             </div>
             <select
-              value={draft.defaultProvider}
               disabled={providerAddons.length === 0 && nuvioProviderOptions.length === 0}
               onchange={(e) => patch("defaultProvider", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      disabled:opacity-40
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
-              <option value="">No preference</option>
+              <option value="" selected={!draft.defaultProvider}>No preference</option>
               {#each providerAddons as a (a.url || a.id)}
-                <option value={a.manifest.name}>{a.manifest.name}</option>
+                <option value={a.manifest.name} selected={a.manifest.name === draft.defaultProvider}>{a.manifest.name}</option>
               {/each}
               {#each nuvioProviderOptions as name (name)}
-                <option value={name}>{name}</option>
+                <option value={name} selected={name === draft.defaultProvider}>{name}</option>
               {/each}
             </select>
           </div>
@@ -939,13 +936,12 @@
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Auto-select this language when subtitles are available.</p>
             </div>
             <select
-              value={draft.defaultSubtitleLang}
               onchange={(e) => patch("defaultSubtitleLang", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each LANGUAGES as l (l.value)}
-                <option value={l.value}>{l.label}</option>
+                <option value={l.value} selected={l.value === draft.defaultSubtitleLang}>{l.label}</option>
               {/each}
             </select>
           </div>
@@ -957,13 +953,12 @@
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Auto-select this audio track when multiple are available.</p>
             </div>
             <select
-              value={draft.defaultAudioLang}
               onchange={(e) => patch("defaultAudioLang", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each AUDIO_LANGUAGES as l (l.value)}
-                <option value={l.value}>{l.label}</option>
+                <option value={l.value} selected={l.value === draft.defaultAudioLang}>{l.label}</option>
               {/each}
             </select>
           </div>
@@ -1022,13 +1017,12 @@
               </p>
             </div>
             <select
-              value={draft.discoveryAlgorithm}
               onchange={(e) => patch("discoveryAlgorithm", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each DISCOVERY_ALGORITHMS as a (a.value)}
-                <option value={a.value}>{a.label}</option>
+                <option value={a.value} selected={a.value === draft.discoveryAlgorithm}>{a.label}</option>
               {/each}
             </select>
           </div>
@@ -1094,6 +1088,26 @@
                        {trackBg(autoUpdateEnabled)}"
               >
                 <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(autoUpdateEnabled)}"></span>
+              </button>
+            </div>
+          {/if}
+
+          <!-- Desktop interface — shown only when the user opted in via desktop Settings
+               or the --tv Qt flag; never visible on a real Android TV device. -->
+          {#if isDesktopTvMode()}
+            <div class="flex min-h-[76px] items-center justify-between gap-8 py-5">
+              <div class="min-w-0 flex-1">
+                <p class="text-lg font-medium">Desktop interface</p>
+                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Return to the mouse-and-keyboard desktop interface.</p>
+              </div>
+              <button
+                type="button"
+                onclick={() => setTvMode(false)}
+                class="shrink-0 rounded-xl bg-secondary px-5 py-3 text-base font-medium text-muted-foreground
+                       transition-colors hover:text-foreground
+                       focus:outline-none focus:ring-2 focus:ring-accent"
+              >
+                Switch to desktop interface
               </button>
             </div>
           {/if}

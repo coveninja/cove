@@ -11,7 +11,7 @@
 
   // Grid columns: keep this constant in sync with the CSS grid-template-columns
   // below so the focusGroup grid policy matches the visual layout.
-  const COLS = 5;
+  const COLS = 6;
 
   // ── State ────────────────────────────────────────────────────────────────────
 

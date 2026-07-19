@@ -9,6 +9,7 @@
     Bookmark,
     Maximize2,
     Minimize2,
+    Tv,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
@@ -18,6 +19,7 @@
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { Player } from "$lib/player/player.svelte";
   import AccountPopover from "./AccountPopover.svelte";
+  import { setTvMode, tvSwitchVisible } from "$lib/platform";
 
   let {
     query = $bindable(""),
@@ -357,6 +359,18 @@
         </Tooltip.Content>
       </Tooltip.Root>
     {:else}
+      {#if $tvSwitchVisible}
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            <Button variant="outline" size="icon" onclick={() => setTvMode(true)}>
+              <Tv />
+            </Button>
+          </Tooltip.Trigger>
+          <Tooltip.Content>
+            <p>Switch to TV UI</p>
+          </Tooltip.Content>
+        </Tooltip.Root>
+      {/if}
       <Tooltip.Root>
         <Tooltip.Trigger>
           <Button

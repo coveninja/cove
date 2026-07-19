@@ -34,6 +34,11 @@ Window {
     property int rendererCrashCount: 0
     readonly property int rendererCrashLimit: 3
 
+    // Set by main.cpp via the launchTvZoom context property when --tv is passed.
+    // Drives WebEngineView.zoomFactor so the TV UI renders at the same visual
+    // scale as on Android TV (1080p panel at density 2.0 → ~960 CSS px wide).
+    property bool tvZoomEnabled: (typeof launchTvZoom !== "undefined") ? launchTvZoom : false
+
     // Deferred renderer recreation. Qt recommends not mutating the view
     // synchronously from renderProcessTerminated (the engine is mid-cleanup at
     // that point), so both the destroy and the recreate happen here, in a
@@ -66,11 +71,21 @@ Window {
         }
     }
 
-    // Bridge: exposes mpv's slots/signals to the web layer. QtWebEngine injects
-    // qt.webChannelTransport into the page once this channel is set on the view.
+    // Shell bridge: lets the web layer drive shell-level behaviour over the
+    // existing WebChannel. Currently used to toggle TV-mode page zoom so the
+    // desktop TV UI matches the CSS viewport the Android TV WebView reports.
+    QtObject {
+        id: shellBridge
+        WebChannel.id: "shell"
+        function setTvZoom(enabled) { win.tvZoomEnabled = enabled }
+    }
+
+    // Bridge: exposes mpv's slots/signals + the shell bridge to the web layer.
+    // QtWebEngine injects qt.webChannelTransport into the page once this channel
+    // is set on the view.
     WebChannel {
         id: coveChannel
-        registeredObjects: [mpv]
+        registeredObjects: [mpv, shellBridge]
     }
 
     Connections {
@@ -112,6 +127,23 @@ Window {
             webChannel: coveChannel
             url: launchUrl
 
+            // 960 = Android TV design viewport width (1080p panel at density 2.0).
+            // This factor makes the desktop QtWebEngine report the same CSS viewport
+            // width that the Android TV WebView does, so the TV UI renders at the
+            // same visual scale on both platforms. Clamped to 1.0 so a very wide
+            // window never shrinks below native scale. Factored into a function so
+            // the re-assertion in onLoadingChanged can reuse it without duplication.
+            function tvZoom() { return win.tvZoomEnabled ? Math.max(1.0, width / 960) : 1.0 }
+            zoomFactor: tvZoom()
+
+            // QtWebEngine ships with the Chromium scroll animator disabled, which
+            // silently downgrades scrollIntoView({ behavior: "smooth" }) to an
+            // instant jump — the TV focus engine relies on smooth scrolling for
+            // D-pad navigation (Android's WebView has the animator on by default,
+            // which is why the TV UI glides there). Scoped to TV mode so the
+            // desktop UI keeps stock wheel-scroll behaviour.
+            settings.scrollAnimatorEnabled: win.tvZoomEnabled
+
             // Open window.open() links (e.g. JustWatch provider pages) in the
             // system browser rather than a new Qt window.
             onNewWindowRequested: function(request) {
@@ -144,9 +176,15 @@ Window {
 
             // Reset the crash counter on every successful page load so that a
             // stable session doesn't accumulate credit toward the limit.
+            // Also re-assert the TV-mode zoom binding: QtWebEngine resets
+            // zoomFactor to 1.0 on navigation, breaking the declarative binding;
+            // restoring it via Qt.binding() re-establishes reactivity so any
+            // subsequent window resize or tvZoomEnabled toggle still takes effect.
             onLoadingChanged: function(loadingInfo) {
-                if (loadingInfo.status === WebEngineView.LoadSucceededStatus)
+                if (loadingInfo.status === WebEngineView.LoadSucceededStatus) {
                     rendererCrashCount = 0
+                    zoomFactor = Qt.binding(tvZoom)
+                }
             }
 
             // Forward JS console output to the Qt process stdout so it's visible

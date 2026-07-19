@@ -13,7 +13,7 @@
   // are D-pad-reachable via the geometric fallback without annotation.
 
   // Grid columns: kept in sync with CSS below.
-  const COLS = 5;
+  const COLS = 6;
 
   let query = $state("");
   let loading = $state(false);
