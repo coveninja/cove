@@ -1,7 +1,7 @@
 <script lang="ts">
   import MobileHero from "../components/MobileHero.svelte";
   import MobileMediaRow from "../components/MobileMediaRow.svelte";
-  import ContinueWatching from "../../components/ContinueWatching.svelte";
+  import MobileContinueWatching from "../components/MobileContinueWatching.svelte";
   import type { Media } from "$lib/types/tmdb";
   import { api, type DiscoverInsights, type LibraryStats } from "$lib/api";
   import type { CatalogRef } from "$lib/types/addons";
@@ -167,6 +167,8 @@
     <!-- Full-bleed hero (no top padding — goes under status bar) -->
     <MobileHero visible={visible && heroVisible} />
 
+    <!-- Continue watching -->
+    <MobileContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
     <!-- Catalog rows (addon catalogs, e.g. Debrid) -->
     {#each catalogRows as row (row.key)}
       {@const ref = catalogRefMap.get(row.key)}
@@ -189,9 +191,6 @@
           : undefined}
       />
     {/each}
-
-    <!-- Continue watching -->
-    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} navEnabled={false} />
 
     <!-- Taste-driven rows -->
     {#each rows as row (row.key)}

@@ -521,11 +521,6 @@
           {#if runtime}
             <span>{runtime}</span>
           {/if}
-          {#if media.media_type === "tv" && numberOfSeasons !== null}
-            <span
-              >{numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}</span
-            >
-          {/if}
           {#if media.media_type === "tv" && numberOfEpisodes !== null}
             <span
               >{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span
