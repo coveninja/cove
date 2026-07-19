@@ -3,7 +3,7 @@
 
 # Cove
 
-A media streaming app for Linux, Windows, Android & Android TV. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
+A media streaming app for Linux, Windows, Android & Android TV. Discover, track, and stream movies and TV shows - powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
 
 [![CI](https://github.com/coveninja/cove/actions/workflows/release.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
