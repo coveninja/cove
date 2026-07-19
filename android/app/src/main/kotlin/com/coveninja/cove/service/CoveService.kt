@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.coveninja.cove.BuildConfig
@@ -36,11 +37,16 @@ class CoveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Post the notification immediately — must happen before mobile.Mobile.start()
         // (which blocks until the HTTP server is up) to stay within the 5 s window.
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+            )
+        } else {
+            // foregroundServiceType is only enforced from API 34; 2-arg call is fine on API 28.
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
 
         // Guard double-start — isRunning() is safe to call from any thread.
         if (!mobile.Mobile.isRunning()) {

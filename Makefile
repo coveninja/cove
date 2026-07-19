@@ -166,7 +166,7 @@ inject-private:
 ## corresponding implementation files are present (run `make inject-private` first).
 android-aar: web
 	mkdir -p android/app/libs
-	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 29 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
+	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 28 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
 
 ## Build the Android debug APK. Requires all android-aar prerequisites above.
 android: android-aar

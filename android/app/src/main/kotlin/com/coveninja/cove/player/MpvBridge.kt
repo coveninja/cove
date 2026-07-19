@@ -2,6 +2,7 @@ package com.coveninja.cove.player
 
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -336,7 +337,7 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
         var av1 = false
         try {
             for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
-                if (info.isEncoder || !info.isHardwareAccelerated) continue
+                if (info.isEncoder || !isHardwareAccelerated(info)) continue
                 for (type in info.supportedTypes) {
                     when (type.lowercase(Locale.US)) {
                         "video/hevc" -> {
@@ -355,6 +356,13 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
             Log.w(TAG, "codec caps probe failed: ${e.message}")
         }
         return """{"hevcMain10":$hevcMain10,"av1":$av1}"""
+    }
+
+    /** API 29+ exposes isHardwareAccelerated directly; on API 28 fall back to a name heuristic. */
+    private fun isHardwareAccelerated(info: MediaCodecInfo): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return info.isHardwareAccelerated
+        // "OMX.google.*" and "c2.android.*" are Google's software implementations.
+        return !info.name.startsWith("OMX.google.") && !info.name.startsWith("c2.android.")
     }
 
     // ── Track-list normalisation ──────────────────────────────────────────────

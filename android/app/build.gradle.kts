@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "com.coveninja.cove"
-        minSdk = 29
+        minSdk = 28
         targetSdk = 35
         // CI passes the release tag via COVE_VERSION (e.g. "v1.2.3"); local
         // builds fall back to the dev placeholder. versionCode is derived as
@@ -127,7 +127,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
 
     // Keystore-backed encrypted storage for the Supabase JWT + refresh token.
-    // 1.0.0 is the stable release; works correctly on minSdk 23+ (our minSdk is 29).
+    // 1.0.0 is the stable release; works correctly on minSdk 23+ (our minSdk is 28).
     implementation("androidx.security:security-crypto:1.0.0")
 
     // libmpv — Findroid's prebuilt mpv for Android. Ships all 4 ABIs:
