@@ -30,6 +30,16 @@ class PlaybackStore {
   // stale and skip touching quickPlayPending/playerSession.
   #quickPlayToken = 0;
 
+  // Not $state — bumped on every startPlayback so the async getSubtitles
+  // response can tell whether a newer session has superseded it. Replaces an
+  // earlier `playerSession.stream === stream` identity check that silently
+  // failed: playerSession is a $state proxy, so reading `.stream` back yields a
+  // proxy while the `stream` arg is the raw object — `proxy === raw` is always
+  // false for a quickPlay winner (a fresh object from ranking), which dropped
+  // add-on subtitles on every auto-play (they only survived a manual pick,
+  // where the stream came from another $state and was already the same proxy).
+  #sessionSeq = 0;
+
   // Aborts the previous quickPlay's in-flight stream fetch the moment a new
   // one starts — quickPlayToken alone only prevents a stale response from
   // being *acted on*, it doesn't stop the superseded request from running to
@@ -77,6 +87,7 @@ class PlaybackStore {
     this.quickPlayPending = null;
     this.#playStartSound?.();
 
+    const seq = ++this.#sessionSeq;
     this.playerSession = {
       media,
       stream,
@@ -98,8 +109,11 @@ class PlaybackStore {
       })
       .then((subs) => {
         // Guard against a newer startPlayback call having superseded this one
-        // while the fetch was in flight.
-        if (this.playerSession && this.playerSession.stream === stream) {
+        // while the fetch was in flight. Compared by sequence, not stream
+        // identity — playerSession is a $state proxy, so `.stream === stream`
+        // is false whenever the stream arrived as a raw object (every auto-play
+        // winner), which used to drop the fetched subtitles entirely.
+        if (seq === this.#sessionSeq && this.playerSession) {
           this.playerSession = {
             ...this.playerSession,
             subtitles: Array.isArray(subs) ? subs : [],
