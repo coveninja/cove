@@ -31,7 +31,7 @@
   import { startAutoSync } from "$lib/sync";
   import { Spinner } from "$lib/components/ui/spinner";
   import { Player } from "$lib/player/player.svelte";
-  import { minimizeApp } from "$lib/platform";
+  import { isAndroid, minimizeApp } from "$lib/platform";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -165,6 +165,17 @@
   // MobilePlayer registers this via onRegisterCloseSheets; returns true if it
   // closed a sheet (caller should stop processing Escape further).
   let closePlayerSheets: () => boolean = () => false;
+
+  // ── Auto-fullscreen while the player is open (Android) ──────────────────────
+  // Entering the player puts the app into immersive fullscreen (system bars
+  // hidden via MpvBridge.setFullscreen); leaving it restores them. Derived off
+  // the session's presence only, so the effect fires on open/close transitions
+  // — a manual fullscreen exit inside the player (toggle button or back key)
+  // isn't re-forced by unrelated session updates.
+  const playerActive = $derived(playback.playerSession !== null);
+  $effect(() => {
+    if (isAndroid()) Player.setFullscreen(playerActive);
+  });
 
   // ── Centralized Escape / Android-back handler ────────────────────────────────
   // Android back button arrives as an Escape keydown on the document.

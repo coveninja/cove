@@ -12,8 +12,6 @@
     X,
     SkipForward,
     SkipBack,
-    Maximize2,
-    Minimize2,
     Gauge,
     ListVideo,
   } from "lucide-svelte";
@@ -1127,31 +1125,18 @@
             </button>
           {/if}
 
+          <div class="flex-1"></div>
+
           <!-- Playback speed -->
           <button
-            type="button"
-            class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-            onclick={() => { speedSheetOpen = true; showControls(); }}
-            aria-label="Playback speed"
+                  type="button"
+                  class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
+                  onclick={() => { speedSheetOpen = true; showControls(); }}
+                  aria-label="Playback speed"
           >
-            <Gauge class="size-4 shrink-0" />
-            <span class="text-xs">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
+            <Gauge class="size-5 shrink-0" />
+            <span class="text-sm">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
           </button>
-
-          <!-- Episodes (TV shows only) -->
-          {#if media?.media_type === "tv" && onPlayNext}
-            <button
-              type="button"
-              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-              onclick={() => { episodesSheetOpen = true; showControls(); }}
-              aria-label="Episodes"
-            >
-              <ListVideo class="size-4 shrink-0" />
-              <span class="text-xs">Episodes</span>
-            </button>
-          {/if}
-
-          <div class="flex-1"></div>
 
           <!-- Mute toggle (hardware volume keys handle level on Android) -->
           <button
@@ -1167,19 +1152,17 @@
             {/if}
           </button>
 
-          <!-- Fullscreen toggle (rotates device on Android) -->
-          <button
-            type="button"
-            class="flex size-11 items-center justify-center rounded-full text-white active:bg-white/15"
-            onclick={() => Player.setFullscreen(!Player.isFullscreen)}
-            aria-label={Player.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-          >
-            {#if Player.isFullscreen}
-              <Minimize2 class="size-5" />
-            {:else}
-              <Maximize2 class="size-5" />
-            {/if}
-          </button>
+          <!-- Episodes (TV shows only) -->
+          {#if media?.media_type === "tv" && onPlayNext}
+            <button
+                    type="button"
+                    class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
+                    onclick={() => { episodesSheetOpen = true; showControls(); }}
+                    aria-label="Episodes"
+            >
+              <ListVideo class="size-5 shrink-0" />
+            </button>
+          {/if}
         </div>
       </div>
     </div>
