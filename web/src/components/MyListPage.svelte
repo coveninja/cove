@@ -10,9 +10,7 @@
   import { libraryChanged } from "$lib/stores/library";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
-  import Upcoming from "./Upcoming.svelte";
-  import ReadyToWatch from "./cards/ReadyToWatch.svelte";
-  import ComingSoon from "./ComingSoon.svelte";
+  import CalendarAgenda from "./CalendarAgenda.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -535,15 +533,9 @@
     <!-- ── Content ────────────────────────────────────────────────────────────── -->
   {:else}
     <ScrollArea class="h-full">
-      <div class="mt-28 flex flex-col gap-4 p-4">
-        <div class="rounded-2xl border p-4">
-          <ComingSoon {onSelectMedia} />
-        </div>
-        <div class="rounded-2xl border p-4">
-          <Upcoming {onSelectMedia} />
-        </div>
-        <div class="rounded-2xl border p-4">
-          <ReadyToWatch {onSelectMedia} />
+      <div class="mt-28 flex flex-col">
+        <div>
+          <CalendarAgenda {onSelectMedia} />
         </div>
       </div>
 

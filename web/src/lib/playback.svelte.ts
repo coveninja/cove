@@ -179,11 +179,17 @@ class PlaybackStore {
 
     const s = get(settings);
     const mode = (s?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    // "original" resolves to the title's TMDB original language before ranking.
+    const effectiveAudioLang =
+      s?.defaultAudioLang === "original"
+        ? (media.original_language ?? "")
+        : (s?.defaultAudioLang ?? "");
     const ranked = await rankStreamsWithProbe(streams, mode, {
       measuredBandwidthMbps: s?.measuredBandwidthMbps,
       preferredProvider: s?.defaultProvider,
       sourcePreference: s?.sourcePreference,
       probeEnabled: s?.probeStreams ?? true,
+      defaultAudioLang: effectiveAudioLang || undefined,
     }, ctrl.signal);
     if (myToken !== this.#quickPlayToken) return;
     const best = ranked[0] ?? null;

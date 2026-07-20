@@ -3,6 +3,7 @@
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import MobileMediaCard from "../components/MobileMediaCard.svelte";
+  import MobileCalendarAgenda from "../components/MobileCalendarAgenda.svelte";
   import { BookMarked, Star, ArrowDownUp } from "lucide-svelte";
   import { onMount } from "svelte";
   import { libraryChanged } from "$lib/stores/library";
@@ -457,6 +458,8 @@
       class="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
       <div class="px-3 pb-8">
+        <MobileCalendarAgenda />
+
         {#if sections.length === 0}
           <div
             class="flex h-[50vh] flex-col items-center justify-center gap-3 text-center"

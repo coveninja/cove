@@ -334,13 +334,17 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
 
     private fun codecCapsJson(): String {
         var hevcMain10 = false
+        var hevc = false
         var av1 = false
+        var vp9 = false
+        var dolbyVision = false
         try {
             for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
                 if (info.isEncoder || !isHardwareAccelerated(info)) continue
                 for (type in info.supportedTypes) {
                     when (type.lowercase(Locale.US)) {
                         "video/hevc" -> {
+                            hevc = true
                             val profiles = info.getCapabilitiesForType(type).profileLevels
                             if (profiles.any {
                                     it.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
@@ -349,13 +353,15 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
                                 }) hevcMain10 = true
                         }
                         "video/av01" -> av1 = true
+                        "video/x-vnd.on2.vp9" -> vp9 = true
+                        "video/dolby-vision" -> dolbyVision = true
                     }
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "codec caps probe failed: ${e.message}")
         }
-        return """{"hevcMain10":$hevcMain10,"av1":$av1}"""
+        return """{"hevcMain10":$hevcMain10,"av1":$av1,"hevc":$hevc,"vp9":$vp9,"dolbyVision":$dolbyVision}"""
     }
 
     /** API 29+ exposes isHardwareAccelerated directly; on API 28 fall back to a name heuristic. */

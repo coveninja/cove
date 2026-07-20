@@ -294,6 +294,11 @@
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
+    // "original" resolves to the title's TMDB original language before ranking.
+    const effectiveAudioLang =
+      $settings?.defaultAudioLang === "original"
+        ? (m.original_language ?? "")
+        : ($settings?.defaultAudioLang ?? "");
     untrack(() => {
       (async () => {
         const next = await nextAiredEpisode(m.id, season!, episode!);
@@ -313,6 +318,7 @@
           measuredBandwidthMbps: bandwidth,
           preferredProvider,
           sourcePreference,
+          defaultAudioLang: effectiveAudioLang || undefined,
         });
         const best = ranked[0];
         if (best?.infoHash) {

@@ -12,10 +12,19 @@ declare global {
   }
 }
 
-/** Hardware video-decoder support probed by the Android shell (MediaCodecList). */
+/** Hardware video-decoder support probed by the Android shell (MediaCodecList).
+ * The optional fields were added after the first shell release — an older
+ * shell injects only the first two, so `undefined` must be read as "unknown,
+ * assume supported", never as "unsupported". */
 export interface CodecCaps {
   hevcMain10: boolean;
   av1: boolean;
+  /** Any hardware HEVC decoder (8-bit Main profile). */
+  hevc?: boolean;
+  /** Hardware VP9 decode. */
+  vp9?: boolean;
+  /** Hardware Dolby Vision decode. */
+  dolbyVision?: boolean;
 }
 
 /**

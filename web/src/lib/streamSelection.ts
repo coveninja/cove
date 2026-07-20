@@ -7,6 +7,7 @@
 import type { Stream } from "$lib/types/addons";
 import { inferQuality } from "$lib/utils";
 import { codecCaps } from "$lib/platform";
+import { parseStreamMeta, type ParsedStreamMeta } from "$lib/streamMeta";
 import { api } from "$lib/api";
 
 export type StreamSelectionMode =
@@ -62,9 +63,84 @@ const QUALITY_RANK: Record<string, number> = {
   cam: 0,
 };
 
-function qualityRank(q: string | null): number {
+export function qualityRank(q: string | null): number {
   if (!q) return -1;
   return QUALITY_RANK[q] ?? -1;
+}
+
+// ── Manual list sorting ──────────────────────────────────────────────────────
+//
+// The stream lists' user-facing sort dropdown/cycle. Distinct from the
+// auto-select modes above: these are simple deterministic comparators over
+// already-parsed rows, not scored rankings.
+
+export type StreamSortMode =
+  | "seeders"
+  | "largest"
+  | "smallest"
+  | "quality"
+  | "language"
+  | "cached";
+
+export const STREAM_SORT_MODES: { value: StreamSortMode; label: string }[] = [
+  { value: "seeders", label: "Seeders" },
+  { value: "largest", label: "Largest" },
+  { value: "smallest", label: "Smallest" },
+  { value: "quality", label: "Quality" },
+  { value: "language", label: "Language" },
+  { value: "cached", label: "Cached" },
+];
+
+/** The row shape the list components derive per stream — structural subset of
+ * their local ParsedStream interfaces. */
+export interface SortableStream {
+  stream: Stream;
+  seeders: number;
+  sizeBytes: number;
+  quality: string | null;
+  meta: ParsedStreamMeta;
+}
+
+/** Comparator for the manual sort modes. `preferredLang` (ISO 639-1) only
+ * affects "language" mode — without it that mode degrades to seeders. */
+export function compareStreamsBy(
+  mode: StreamSortMode,
+  preferredLang?: string,
+): (a: SortableStream, b: SortableStream) => number {
+  const bySeeders = (a: SortableStream, b: SortableStream) =>
+    b.seeders - a.seeders;
+  switch (mode) {
+    case "largest":
+      return (a, b) => b.sizeBytes - a.sizeBytes;
+    case "smallest":
+      // Unknown sizes (0) sort last — "we don't know" isn't "smallest".
+      return (a, b) =>
+        (a.sizeBytes > 0 ? a.sizeBytes : Number.MAX_SAFE_INTEGER) -
+        (b.sizeBytes > 0 ? b.sizeBytes : Number.MAX_SAFE_INTEGER);
+    case "quality":
+      return (a, b) => {
+        const diff = qualityRank(b.quality) - qualityRank(a.quality);
+        return diff !== 0 ? diff : bySeeders(a, b);
+      };
+    case "language":
+      return (a, b) => {
+        if (preferredLang) {
+          const matches = (s: SortableStream) =>
+            s.meta.isMulti || s.meta.langs.includes(preferredLang) ? 1 : 0;
+          const diff = matches(b) - matches(a);
+          if (diff !== 0) return diff;
+        }
+        return bySeeders(a, b);
+      };
+    case "cached":
+      return (a, b) => {
+        const diff = (b.stream.cached ? 1 : 0) - (a.stream.cached ? 1 : 0);
+        return diff !== 0 ? diff : bySeeders(a, b);
+      };
+    case "seeders":
+    default:
+      return bySeeders;
+  }
 }
 
 // ── Torrent vs. direct-HTTP streams ──────────────────────────────────────────
@@ -162,6 +238,10 @@ interface ScoredStream {
    * DEAD_LINK_PENALTY subtracted from their boost so they sink below all live
    * candidates while remaining in the ranked list for watchdog fallback. */
   dead: boolean;
+  /** True when the device probe confirms this release's codec can't be
+   * hardware-decoded — see isCodecHardDisabled. Excluded from every mode's
+   * pool and appended at the absolute tail of the ranking. */
+  isHardDisabled: boolean;
 }
 
 /** "" (none) | "torrent" | "direct" — see Settings.sourcePreference. */
@@ -185,11 +265,17 @@ const PROVIDER_BOOST = 0.15;
 // both the preferred provider AND the preferred source type gets 0.3.
 const SOURCE_BOOST = 0.15;
 
-// Streams the device cannot hardware-decode sink hard: mode metrics are
-// normalized 0..1 and the positive boosts cap at 0.3, so -0.5 pushes an
-// unsupported release below every supported alternative while still letting
-// it play when it's genuinely the only candidate (never a hard filter).
-const UNSUPPORTED_CODEC_PENALTY = 0.5;
+// A release advertising the user's preferred audio language (or MULTi/dual
+// audio) wins close calls; one that *explicitly* advertises only other
+// languages sinks a little. Untagged releases are neutral — title parsing is
+// lossy and absence of a tag usually just means an original-language release.
+const LANG_BOOST = 0.2;
+const LANG_PENALTY = 0.15;
+
+// Dolby Vision Profile 5 has no HDR10 fallback layer — on a device whose
+// probe confirms no DV decoder it plays with green/purple tinting. Soft
+// penalty (not a hard disable) because the video itself still decodes.
+const DV_P5_PENALTY = 0.3;
 
 // Sinks confirmed-dead links below every live candidate (including
 // codec-penalized ones) while keeping them ranked so the watchdog fallback
@@ -204,22 +290,25 @@ const CACHED_RELIABILITY = 0.95;
 const UNCACHED_DEBRID_RELIABILITY = 0.3;
 const DIRECT_RELIABILITY = 0.6;
 
-// Release-name heuristics for codecs that need explicit hardware support.
-// 10-bit HEVC ("x265 10bit", "HEVC Main 10", "Hi10P") software-decodes at
-// well under realtime on phone SoCs whose decoder lacks the Main 10 profile,
-// and AV1 is the same story on anything without an AV1 block.
-const TEN_BIT_RE = /10.?bits?\b|\bhi10p?\b|\bmain ?10\b/i;
-const AV1_RE = /\bav1\b/i;
-
 /** True when the device is known (via the Android shell's MediaCodecList
- * probe) to lack hardware decode for what this release name advertises.
- * Desktop/browser have no probe — codecCaps() is null and nothing sinks. */
-function isUnsupportedCodec(s: Stream): boolean {
+ * probe) to lack hardware decode for what this release name advertises —
+ * software decode at these bitrates is well under realtime on the affected
+ * SoCs. Hard-disabled streams are excluded from auto-selection and rendered
+ * unselectable in the stream lists (with a per-row "Play anyway" override).
+ * Desktop/browser have no probe — codecCaps() is null and nothing disables.
+ * Optional caps fields left undefined by an older shell mean "unknown,
+ * assume supported": only an explicit `false` disables. */
+export function isCodecHardDisabled(s: Stream): boolean {
   const caps = codecCaps();
   if (!caps) return false;
-  const text = `${s.name} ${s.title}`;
-  if (!caps.hevcMain10 && TEN_BIT_RE.test(text)) return true;
-  if (!caps.av1 && AV1_RE.test(text)) return true;
+  const meta = parseStreamMeta(s);
+  // Any 10-bit marker (x265 10bit, Main 10, Hi10P) needs the Main 10 decode
+  // path — this intentionally also catches 10-bit releases whose codec token
+  // didn't parse.
+  if (meta.is10bit && caps.hevcMain10 === false) return true;
+  if (meta.codec === "av1" && caps.av1 === false) return true;
+  if (meta.codec === "vp9" && caps.vp9 === false) return true;
+  if (meta.codec === "h265" && !meta.is10bit && caps.hevc === false) return true;
   return false;
 }
 
@@ -229,7 +318,9 @@ function scoreCandidates(
   sourcePreference?: string,
   deadUrls?: ReadonlySet<string>,
   probedSizes?: ReadonlyMap<string, number>,
+  defaultAudioLang?: string,
 ): ScoredStream[] {
+  const caps = codecCaps();
   return streams.map((s) => {
     const isTorrent = isTorrentStream(s);
     const isPreferred = !!preferredProvider && s.addonName === preferredProvider;
@@ -242,6 +333,19 @@ function scoreCandidates(
     const baseSizeBytes = getSizeBytes(s);
     const sizeBytes =
       baseSizeBytes > 0 ? baseSizeBytes : (s.url ? (probedSizes?.get(s.url) ?? 0) : 0);
+    const meta = parseStreamMeta(s);
+    // Language preference is a soft nudge in both directions: only a release
+    // that explicitly tags other languages *without* a multi/preferred tag is
+    // penalized — untagged means "unknown", not "wrong language".
+    let langBoost = 0;
+    if (defaultAudioLang && meta.hasLangTags) {
+      langBoost =
+        meta.isMulti || meta.langs.includes(defaultAudioLang)
+          ? LANG_BOOST
+          : -LANG_PENALTY;
+    }
+    const dvP5Penalty =
+      meta.isDvProfile5 && caps?.dolbyVision === false ? DV_P5_PENALTY : 0;
     return {
       stream: s,
       isTorrent,
@@ -250,10 +354,12 @@ function scoreCandidates(
       quality: inferQuality(s),
       isPreferred,
       dead,
+      isHardDisabled: isCodecHardDisabled(s),
       boost:
         (isPreferred ? PROVIDER_BOOST : 0) +
-        (matchesSource ? SOURCE_BOOST : 0) -
-        (isUnsupportedCodec(s) ? UNSUPPORTED_CODEC_PENALTY : 0) -
+        (matchesSource ? SOURCE_BOOST : 0) +
+        langBoost -
+        dvP5Penalty -
         (dead ? DEAD_LINK_PENALTY : 0),
     };
   });
@@ -326,6 +432,39 @@ export interface PickBestOptions {
   deadUrls?: ReadonlySet<string>;
   /** Probe results: contentLength fills unknown sizes when getSizeBytes returns 0. */
   probedSizes?: ReadonlyMap<string, number>;
+  /** ISO 639-1 preferred audio language — see Settings.defaultAudioLang.
+   * Callers resolve the "original" mode to a concrete code (via TMDB
+   * original_language) before passing it here; empty/undefined disables
+   * language-aware ranking. */
+  defaultAudioLang?: string;
+}
+
+/** Multiple addons routinely list the same torrent (identical infohash) with
+ * diverging seeder counts. For ranking, collapse each infohash to the copy
+ * with the highest parsed seeder count so the swarm is counted once and the
+ * auto-pick doesn't flip between duplicate entries. First-seen order is
+ * preserved; direct-URL streams pass through untouched. */
+function dedupeByInfoHash(streams: Stream[]): Stream[] {
+  const bestByHash = new Map<string, Stream>();
+  for (const s of streams) {
+    if (!s.infoHash) continue;
+    const current = bestByHash.get(s.infoHash);
+    if (!current || getSeeders(s) > getSeeders(current)) {
+      bestByHash.set(s.infoHash, s);
+    }
+  }
+  if (bestByHash.size === 0) return streams;
+  const emitted = new Set<string>();
+  const out: Stream[] = [];
+  for (const s of streams) {
+    if (!s.infoHash) {
+      out.push(s);
+    } else if (!emitted.has(s.infoHash)) {
+      emitted.add(s.infoHash);
+      out.push(bestByHash.get(s.infoHash)!);
+    }
+  }
+  return out;
 }
 
 /**
@@ -336,6 +475,11 @@ export interface PickBestOptions {
  * appended at the tail in their own sorted order as last-resort fallbacks,
  * so a caller doing candidate-list fallback (B2's watchdog/auto-advance)
  * always has somewhere further to go. Deduped by url || infoHash.
+ *
+ * Streams the device provably cannot hardware-decode (isCodecHardDisabled)
+ * never rank: they're excluded from every mode's pool and appended at the
+ * absolute tail — unless *every* candidate is hard-disabled, in which case
+ * disabling is waived (trying is better than offering nothing).
  */
 export function rankStreams(
   streams: Stream[],
@@ -344,7 +488,45 @@ export function rankStreams(
 ): Stream[] {
   if (streams.length === 0) return [];
 
-  const all = scoreCandidates(streams, opts.preferredProvider, opts.sourcePreference, opts.deadUrls, opts.probedSizes);
+  const scored = scoreCandidates(
+    dedupeByInfoHash(streams),
+    opts.preferredProvider,
+    opts.sourcePreference,
+    opts.deadUrls,
+    opts.probedSizes,
+    opts.defaultAudioLang,
+  );
+  const disabled = scored.filter((c) => c.isHardDisabled);
+  const eligible =
+    disabled.length === 0 || disabled.length === scored.length
+      ? scored
+      : scored.filter((c) => !c.isHardDisabled);
+
+  const ranked = rankScored(eligible, mode, opts);
+  if (eligible.length === scored.length) return ranked;
+
+  // Hard-disabled tail, sorted by boost/seeders — only reachable by the
+  // watchdog when fewer than five eligible candidates exist.
+  const rankedKeys = new Set(ranked.map((s) => s.url || s.infoHash || s.title));
+  const tail = rankByBoosted(
+    disabled,
+    () => 0,
+    (a, b) => b.seeders - a.seeders,
+  )
+    .map((c) => c.stream)
+    .filter((s) => !rankedKeys.has(s.url || s.infoHash || s.title));
+  return [...ranked, ...tail];
+}
+
+/** The per-mode ranking core, operating on pre-scored (and pre-filtered)
+ * candidates. Split out of rankStreams so the hard-disable partition and
+ * infohash dedupe happen exactly once, including across the bandwidth →
+ * balanced fallback. */
+function rankScored(
+  all: ScoredStream[],
+  mode: StreamSelectionMode,
+  opts: PickBestOptions,
+): Stream[] {
   // A zero-seeder torrent will likely never actually start downloading, so
   // it's excluded from the primary pool — unless it's literally the only
   // option. Direct HTTP streams (Nuvio, etc.) have no seeder concept at
@@ -422,7 +604,7 @@ export function rankStreams(
       if (!mbps || mbps <= 0) {
         // No measurement on file — guessing a quality/bandwidth match without
         // data isn't meaningfully better than just balancing seeders & size.
-        return rankStreams(streams, "balanced", opts);
+        return rankScored(all, "balanced", opts);
       }
       const minutes = opts.estimatedMinutes ?? 90;
       const seconds = minutes * 60;
@@ -473,6 +655,24 @@ export function rankStreams(
       );
     }
   }
+}
+
+/** formatStreamSummary plus the parsed codec/language tags, e.g.
+ * "42 seeders, 2.10 GB, 1080p [h265 10bit multi]" — used by the auto-select
+ * log line so the pick's rationale is visible. */
+export function formatAutoPickReason(stream: Stream): string {
+  const meta = parseStreamMeta(stream);
+  const tags: string[] = [];
+  if (meta.codec !== "unknown") {
+    tags.push(meta.is10bit ? `${meta.codec} 10bit` : meta.codec);
+  }
+  if (meta.isMulti) {
+    tags.push("multi");
+  } else if (meta.langs.length > 0) {
+    tags.push(meta.langs.join("+"));
+  }
+  const summary = formatStreamSummary(stream);
+  return tags.length > 0 ? `${summary} [${tags.join(" ")}]` : summary;
 }
 
 /**

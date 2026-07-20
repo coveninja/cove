@@ -3,6 +3,7 @@
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import TvMediaCard from "../components/TvMediaCard.svelte";
+  import TvCalendarAgenda from "../components/TvCalendarAgenda.svelte";
   import { BookMarked, Star } from "lucide-svelte";
   import { onMount } from "svelte";
   import { libraryChanged } from "$lib/stores/library";
@@ -301,6 +302,8 @@
       class="min-h-0 px-4 flex-1 overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden rounded-2xl"
     >
       <div class="pb-12">
+        <TvCalendarAgenda />
+
         {#if sections.length === 0}
           <div class="flex h-[40vh] flex-col items-center justify-center gap-3 text-center">
             <p class="text-xl font-medium">No titles for current filter</p>

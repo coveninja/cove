@@ -27,3 +27,5 @@ packages:
     output_path: "web/src/lib/types/profiles.ts"
   - path: "github.com/coveninja/cove/internal/updater"
     output_path: "web/src/lib/types/updater.ts"
+  - path: "github.com/coveninja/cove/internal/calendar"
+    output_path: "web/src/lib/types/calendar.ts"

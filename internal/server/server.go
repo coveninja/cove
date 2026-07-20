@@ -19,6 +19,7 @@ import (
 
 	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/calendar"
 	"github.com/coveninja/cove/internal/clientsession"
 	"github.com/coveninja/cove/internal/discover"
 	"github.com/coveninja/cove/internal/imgcache"
@@ -358,6 +359,7 @@ func Start(cfg Config) (*Handle, error) {
 	p.SetupHandlers(mux)
 	st.SetupHandlers(mux)
 	lib.SetupHandlers(mux)
+	calendar.New(lib, tmdbClient).SetupHandlers(mux)
 	act.SetupHandlers(mux)
 	profileStore.SetupHandlers(mux)
 	updater.SetupHandlers(mux, cfg.Version)

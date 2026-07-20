@@ -63,6 +63,13 @@ type Client struct {
 	detailsCache   map[string]detailsCacheEntry
 	detailsSF      singleflight.Group
 
+	// GetEpisodesCached cache. Keyed "<tmdbID>:<seasonNumber>", TTL 6h — season
+	// episode lists change only when TMDB gets updated metadata. Mirrors the
+	// detailsCache field layout exactly (mutex + map + singleflight.Group).
+	episodesCacheMu sync.Mutex
+	episodesCache   map[string]episodesCacheEntry
+	episodesSF      singleflight.Group
+
 	// Catalog page cache for /api/catalog. Keyed
 	// addonURL+"|"+type+"|"+id+"|"+skip+"|"+limit, TTL catalogCacheTTL.
 	// Expired entries are swept on insert (same inline-expiry style as
@@ -83,6 +90,19 @@ const (
 	// unbounded — dropping the whole map on overflow, same tradeoff as
 	// Client.imdbCache.
 	detailsCacheCap = 2000
+)
+
+type episodesCacheEntry struct {
+	episodes []TVEpisode
+	expires  time.Time
+}
+
+const (
+	episodesCacheTTL = 6 * time.Hour
+	// episodesCacheCap bounds the episodes cache to 500 entries — a very large
+	// library fanout won't grow it unbounded. Overflow drops the whole map,
+	// same tradeoff as detailsCache.
+	episodesCacheCap = 500
 )
 
 type qualityCacheEntry struct {
@@ -162,12 +182,13 @@ func (c *Client) catalogCacheSet(key string, medias []Media, nextSkip int) {
 // open forever; TMDB is normally fast, so 15s only trips on a dead connection.
 func New(apiKey string) *Client {
 	return &Client{
-		apiKey:       apiKey,
-		client:       &http.Client{Timeout: 15 * time.Second},
-		imdbCache:    make(map[string]string),
-		qualityCache: make(map[string]qualityCacheEntry),
-		detailsCache: make(map[string]detailsCacheEntry),
-		catalogCache: make(map[string]catalogPageEntry),
+		apiKey:        apiKey,
+		client:        &http.Client{Timeout: 15 * time.Second},
+		imdbCache:     make(map[string]string),
+		qualityCache:  make(map[string]qualityCacheEntry),
+		detailsCache:  make(map[string]detailsCacheEntry),
+		catalogCache:  make(map[string]catalogPageEntry),
+		episodesCache: make(map[string]episodesCacheEntry),
 	}
 }
 
@@ -273,7 +294,10 @@ type Details struct {
 	} `json:"genres"`
 	Runtime        int   `json:"runtime"`
 	EpisodeRunTime []int `json:"episode_run_time"`
-	Credits        struct {
+	// ReleaseDate is the theatrical/digital release date in YYYY-MM-DD form.
+	// Movies only; empty for TV.
+	ReleaseDate string `json:"release_date"`
+	Credits     struct {
 		Cast []struct {
 			ID    int    `json:"id"`
 			Name  string `json:"name"`
@@ -985,6 +1009,48 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 		}
 	}
 	return data.Episodes, nil
+}
+
+// GetEpisodesCached returns the episodes for a TV season, cached for
+// episodesCacheTTL and coalesced across concurrent callers (same pattern as
+// GetDetails). Callers must treat the returned slice as read-only.
+func (c *Client) GetEpisodesCached(tmdbID, seasonNumber int) ([]TVEpisode, error) {
+	key := fmt.Sprintf("%d:%d", tmdbID, seasonNumber)
+
+	c.episodesCacheMu.Lock()
+	if entry, ok := c.episodesCache[key]; ok && time.Now().Before(entry.expires) {
+		c.episodesCacheMu.Unlock()
+		return entry.episodes, nil
+	}
+	c.episodesCacheMu.Unlock()
+
+	v, err, _ := c.episodesSF.Do(key, func() (interface{}, error) {
+		eps, err := c.GetEpisodes(tmdbID, seasonNumber)
+		if err != nil {
+			return nil, err
+		}
+		c.episodesCacheMu.Lock()
+		// Sweep expired entries while already holding the lock — same inline-expiry
+		// style as GetDetails / qualityCacheSet, avoiding a separate goroutine.
+		now := time.Now()
+		for k, v := range c.episodesCache {
+			if now.After(v.expires) {
+				delete(c.episodesCache, k)
+			}
+		}
+		if len(c.episodesCache) > episodesCacheCap {
+			// Simplest possible cap: drop the whole map rather than tracking
+			// per-entry recency, same tradeoff as detailsCache / imdbCache.
+			c.episodesCache = make(map[string]episodesCacheEntry)
+		}
+		c.episodesCache[key] = episodesCacheEntry{episodes: eps, expires: now.Add(episodesCacheTTL)}
+		c.episodesCacheMu.Unlock()
+		return eps, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]TVEpisode), nil
 }
 
 func (c *Client) GetImages(tmdbID int, mediaType string) (*MediaImages, error) {

@@ -19,14 +19,20 @@
   import type { WatchProgress } from "$lib/types/library";
   import { settings } from "$lib/stores/settings";
   import {
+    compareStreamsBy,
+    formatAutoPickReason,
     formatStreamSummary,
     getSeeders,
     getSizeBytes,
+    isCodecHardDisabled,
     isTorrentStream,
     rankStreams,
     rankStreamsWithProbe,
+    STREAM_SORT_MODES,
     type StreamSelectionMode,
+    type StreamSortMode,
   } from "$lib/streamSelection";
+  import { codecLabel, langLabel, parseStreamMeta, type ParsedStreamMeta } from "$lib/streamMeta";
   import type { TVEpisode } from "$lib/types/tmdb";
   import { focusGroup, focusable } from "../focus/actions";
   import TvEpisodeCard from "./TvEpisodeCard.svelte";
@@ -34,7 +40,7 @@
   // ── Identical prop contract to StreamsList ────────────────────────────────
 
   let loadingStreams = $state(false);
-  let sortMode = $state<"seeders" | "size">("seeders");
+  let sortMode = $state<StreamSortMode>("seeders");
   let qualityFilter = $state("all");
 
   let {
@@ -231,6 +237,12 @@
     seeders: number;
     sizeBytes: number;
     quality: string | null;
+    /** Codec/language details parsed from the release name — drives the
+     * showStreamDetails badges. */
+    meta: ParsedStreamMeta;
+    /** Device probe says this codec can't be hardware-decoded — row renders
+     * greyed/unselectable with a "Play anyway" override. */
+    isHardDisabled: boolean;
   }
 
   const parsedStreams = $derived.by(() => {
@@ -246,25 +258,34 @@
         seeders: getSeeders(s),
         sizeBytes: getSizeBytes(s),
         quality: inferQuality(s),
+        meta: parseStreamMeta(s),
+        isHardDisabled: isCodecHardDisabled(s),
       });
     }
     return result;
   });
+
+  // Preferred audio language with "original" resolved to the title's TMDB
+  // original language — shared by the auto-select ranking and language sort.
+  const effectiveAudioLang = $derived(
+    $settings?.defaultAudioLang === "original"
+      ? (media.original_language ?? "")
+      : ($settings?.defaultAudioLang ?? ""),
+  );
 
   const filteredStreams = $derived.by(() => {
     const filtered = parsedStreams.filter(
       (s) => qualityFilter === "all" || s.quality === qualityFilter,
     );
     const preferred = $settings?.defaultProvider;
+    const compare = compareStreamsBy(sortMode, effectiveAudioLang || undefined);
     return filtered.toSorted((a, b) => {
       if (preferred) {
         const aPref = a.stream.addonName === preferred ? 1 : 0;
         const bPref = b.stream.addonName === preferred ? 1 : 0;
         if (aPref !== bPref) return bPref - aPref;
       }
-      return sortMode === "seeders"
-        ? b.seeders - a.seeders
-        : b.sizeBytes - a.sizeBytes;
+      return compare(a, b);
     });
   });
 
@@ -322,6 +343,7 @@
         measuredBandwidthMbps: $settings.measuredBandwidthMbps,
         preferredProvider: $settings.defaultProvider,
         sourcePreference: $settings.sourcePreference,
+        defaultAudioLang: effectiveAudioLang || undefined,
       };
       // Synchronous initial ranking — drives the log line and the fallback
       // used when the probe doesn't land before the 500ms window closes.
@@ -330,7 +352,7 @@
       if (best) {
         const mode = $settings.streamSelectionMode ?? "balanced";
         console.log(
-          `[stream-select] auto (${mode}): "${best.name}" — ${formatStreamSummary(best)}`,
+          `[stream-select] auto (${mode}): "${best.name}" — ${formatAutoPickReason(best)}`,
           best,
         );
         autoPicking = true;
@@ -371,7 +393,8 @@
   }
 
   function cycleSort(): void {
-    sortMode = sortMode === "seeders" ? "size" : "seeders";
+    const idx = STREAM_SORT_MODES.findIndex((m) => m.value === sortMode);
+    sortMode = STREAM_SORT_MODES[(idx + 1) % STREAM_SORT_MODES.length].value;
   }
 </script>
 
@@ -569,7 +592,7 @@
             onclick={cycleSort}
             class="flex-1 rounded-xl bg-secondary px-4 py-3 text-base font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
-            Sort: {sortMode === "seeders" ? "Seeders" : "Size"}
+            Sort: {STREAM_SORT_MODES.find((m) => m.value === sortMode)?.label}
           </button>
         </div>
       {/if}
@@ -681,6 +704,71 @@
             >
               {#each filteredStreams as item (item.key)}
                 {@const stream = item.stream}
+                {#if item.isHardDisabled}
+                  <!-- Codec the device provably can't hardware-decode: the
+                       outer row is a plain div (skipped by D-pad focus); the
+                       inner "Play anyway" button stays focusable so the
+                       override is still reachable by remote. -->
+                  <div
+                    aria-disabled="true"
+                    class="flex w-full flex-col gap-2 rounded-xl border border-border/30 bg-secondary/20 p-4 text-left opacity-60"
+                  >
+                    <span class="flex items-center justify-between gap-2">
+                      <span class="text-base font-semibold text-foreground">{stream.name}</span>
+                      <span
+                        class="shrink-0 rounded-lg bg-destructive/20 px-2 py-1 text-sm font-medium text-destructive"
+                      >
+                        Unsupported
+                      </span>
+                    </span>
+
+                    <span class="line-clamp-2 text-sm whitespace-pre-line text-muted-foreground">
+                      {stream.title}
+                    </span>
+
+                    <span class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                      {#if $settings?.showStreamDetails ?? true}
+                        {#if isTorrentStream(stream)}
+                          <span class="rounded-lg bg-background/70 px-2 py-1">
+                            👤 {item.seeders}
+                          </span>
+                        {/if}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          {item.quality}
+                        </span>
+                      {/if}
+                      <!-- Always shown — it's why the row is unsupported. -->
+                      {#if codecLabel(item.meta)}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          {codecLabel(item.meta)}
+                        </span>
+                      {/if}
+                      {#if stream.addonName}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          {stream.addonName}
+                        </span>
+                      {/if}
+                      <button
+                        type="button"
+                        class="ml-auto rounded-lg border border-border px-3 py-1 underline transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                        onclick={() => {
+                          console.log(
+                            `[stream-select] play-anyway: "${stream.name}" — ${formatStreamSummary(stream)}`,
+                            stream,
+                          );
+                          onPlayStream(
+                            stream,
+                            selectedSeason ?? undefined,
+                            selectedEpisode?.episode_number,
+                            selectedEpisode?.name,
+                          );
+                        }}
+                      >
+                        Play anyway
+                      </button>
+                    </span>
+                  </div>
+                {:else}
                 <button
                   type="button"
                   class="flex w-full flex-col gap-2 rounded-xl border border-border/50 bg-secondary/50 p-4 text-left transition-colors hover:border-border hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
@@ -708,13 +796,15 @@
                     {stream.title}
                   </span>
 
-                  <!-- Badges: seeders, size, quality, provider -->
+                  <!-- Badges: seeders, size, quality, codec, language, provider -->
                   <span class="flex flex-wrap gap-2 text-sm text-muted-foreground">
                     {#if $settings?.showStreamDetails ?? true}
                       {#if isTorrentStream(stream)}
                         <span class="rounded-lg bg-background/70 px-2 py-1">
                           👤 {item.seeders}
                         </span>
+                      {/if}
+                      {#if item.sizeBytes > 0}
                         <span class="rounded-lg bg-background/70 px-2 py-1">
                           💾 {item.sizeBytes / 1024 ** 3 >= 1
                             ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
@@ -724,6 +814,32 @@
                       <span class="rounded-lg bg-background/70 px-2 py-1">
                         {item.quality}
                       </span>
+                      {#if codecLabel(item.meta)}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          {codecLabel(item.meta)}
+                        </span>
+                      {/if}
+                      <!-- The quality tier already says "4k dv"/"4k hdr" — only
+                           badge DV/HDR when the tier doesn't carry it. -->
+                      {#if item.meta.isDolbyVision && !item.quality?.includes("dv")}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">DV</span>
+                      {:else if item.meta.isHDR && !item.quality?.includes("hdr")}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">HDR</span>
+                      {/if}
+                      {#if langLabel(item.meta)}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          {langLabel(item.meta)}
+                        </span>
+                      {/if}
+                      {#if stream.cached}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          ⚡ {stream.debrid || "Cached"}
+                        </span>
+                      {:else if stream.debrid}
+                        <span class="rounded-lg bg-background/70 px-2 py-1">
+                          {stream.debrid}
+                        </span>
+                      {/if}
                     {/if}
                     {#if stream.addonName}
                       <span
@@ -737,6 +853,7 @@
                     {/if}
                   </span>
                 </button>
+                {/if}
               {/each}
             </div>
           {/if}

@@ -18,6 +18,7 @@ import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-g
 import type { Profile } from "$lib/types/profiles"; // tygo-generated
 import type { Stats as ActivityStats, TitleSeconds } from "$lib/types/activity"; // tygo-generated
 import type { CheckResult as UpdateCheckResult } from "$lib/types/updater"; // tygo-generated
+import type { CalendarItem } from "$lib/types/calendar"; // tygo-generated
 export type { ActivityStats, TitleSeconds, UpdateCheckResult };
 
 // Single source of truth for the backend origin. Override per-environment with
@@ -744,6 +745,8 @@ export const api = {
   },
 
   // ── Library ──────────────────────────────────────────────────────────────────
+  libraryCalendar: (): Promise<CalendarItem[]> => request(`/library/calendar`),
+
   libraryList: (status?: LibraryStatus): Promise<LibraryEntry[]> =>
     request(`/library${status ? `?status=${status}` : ""}`),
 
