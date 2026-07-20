@@ -12,12 +12,14 @@
     SkipBack,
     Gauge,
     ListVideo,
+    Ratio,
   } from "lucide-svelte";
   import { onDestroy, onMount, untrack, tick } from "svelte";
   import { fade } from "svelte/transition";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
+  import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
   import {
     ProgressSaver,
     type ProgressContext,
@@ -130,6 +132,7 @@
       }
     });
     Player.play(api.playUrl(src, { season, episode, fileIdx }));
+    untrack(() => Player.setAspectMode(media ? loadAspectMode(media.id) : "fit"));
   });
 
   // Resolve original_language for "original" audio preference.
@@ -171,8 +174,9 @@
       if (media && Player.duration > 0) {
         // Pass the actual ended state so onDestroy and the "ended" effect firing
         // in the same tick don't race — #completedSaved prevents downgrade.
-        progress.saveNow(Player.position, Player.duration, progressCtx, Player.ended);
-        libraryChanged.update((n) => n + 1);
+        // The bump waits for the save to land so the refetch can't race the POST.
+        void progress.saveNow(Player.position, Player.duration, progressCtx, Player.ended)
+          .then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
       console.error(e);
@@ -265,8 +269,8 @@
 
   $effect(() => {
     if (Player.ended && media) {
-      progress.saveNow(Player.duration, Player.duration, progressCtx, true);
-      libraryChanged.update((n) => n + 1);
+      void progress.saveNow(Player.duration, Player.duration, progressCtx, true)
+        .then(() => libraryChanged.update((n) => n + 1));
     }
   });
 
@@ -733,6 +737,11 @@
     Player.seek(target);
   }
 
+  function cycleAspect(): void {
+    const next = Player.cycleAspectMode();
+    if (media) saveAspectMode(media.id, next);
+  }
+
   // ── Seek bar (keyboard-friendly: focusable div with key handling) ─────────────
 
   let scrubbing = $state(false);
@@ -1159,6 +1168,18 @@
           >
             <Gauge class="size-5 shrink-0" />
             <span class="text-sm">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
+          </button>
+
+          <!-- Aspect ratio cycle -->
+          <button
+            type="button"
+            class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
+            onclick={cycleAspect}
+            aria-label="Aspect ratio"
+            use:focusable={{ groupId: "tv-player-controls" }}
+          >
+            <Ratio class="size-5 shrink-0" />
+            <span class="text-sm">{ASPECT_LABELS[Player.aspectMode]}</span>
           </button>
 
           <!-- Episodes (TV shows only) -->

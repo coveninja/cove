@@ -18,6 +18,22 @@ export interface MpvTrack {
   selected: boolean;
 }
 
+// How the video frame is fit to the display. Cycled by the player's aspect
+// button. Each maps to a fixed combination of mpv props (see setAspectMode):
+//   fit     — whole frame, letterboxed (mpv default)
+//   fill    — crop edges to fill the screen, aspect preserved (panscan)
+//   stretch — distort to fill the screen (keepaspect=no)
+//   zoom    — ~1.2× punch-in on top of fit (video-zoom)
+export type AspectMode = "fit" | "fill" | "stretch" | "zoom";
+
+// Cycle order for the aspect button.
+export const ASPECT_MODES: readonly AspectMode[] = [
+  "fit",
+  "fill",
+  "stretch",
+  "zoom",
+];
+
 // The injected globals have no shipped types; describe just what we touch.
 interface QtSignal<A extends unknown[]> {
   connect(cb: (...args: A) => void): void;
@@ -81,6 +97,7 @@ class MpvPlayer {
   ended = $state(false);
   isFullscreen = $state(false);
   playbackSpeed = $state(1);
+  aspectMode = $state<AspectMode>("fit");
 
   audioTracks = $state<MpvTrack[]>([]);
   subtitleTracks = $state<MpvTrack[]>([]);
@@ -206,6 +223,31 @@ class MpvPlayer {
   setPlaybackSpeed(speed: number): void {
     this.playbackSpeed = speed;
     this.#mpv?.setMpvProperty("speed", String(speed));
+  }
+
+  /** Apply an aspect-fit mode. All three props are set every time so switching
+   *  modes fully undoes the previous mode's effect. video-zoom is log2, so
+   *  0.263 ≈ 2^0.263 ≈ 1.2× for the "zoom" punch-in. Not reset in play(): the
+   *  player components re-apply the per-media saved mode on every src change
+   *  (reading aspectMode here would make it a play() dependency and restart the
+   *  stream on each aspect change — same hazard the speed reset avoids). */
+  setAspectMode(mode: AspectMode): void {
+    this.aspectMode = mode;
+    const panscan = mode === "fill" ? "1.0" : "0";
+    const keepaspect = mode === "stretch" ? "no" : "yes";
+    const zoom = mode === "zoom" ? "0.263" : "0";
+    this.#mpv?.setMpvProperty("panscan", panscan);
+    this.#mpv?.setMpvProperty("keepaspect", keepaspect);
+    this.#mpv?.setMpvProperty("video-zoom", zoom);
+  }
+
+  /** Advance to the next aspect mode in ASPECT_MODES and return it (so callers
+   *  can persist the choice). */
+  cycleAspectMode(): AspectMode {
+    const i = ASPECT_MODES.indexOf(this.aspectMode);
+    const next = ASPECT_MODES[(i + 1) % ASPECT_MODES.length];
+    this.setAspectMode(next);
+    return next;
   }
 
   pause(): void {

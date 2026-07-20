@@ -14,6 +14,7 @@
     SkipBack,
     Gauge,
     ListVideo,
+    Ratio,
   } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
   import { fade, scale } from "svelte/transition";
@@ -21,6 +22,7 @@
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
+  import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
   import {
     ProgressSaver,
     type ProgressContext,
@@ -125,6 +127,7 @@
       }
     });
     Player.play(api.playUrl(src, { season, episode }));
+    untrack(() => Player.setAspectMode(media ? loadAspectMode(media.id) : "fit"));
   });
 
   // Resolve original_language for "original" audio preference.
@@ -164,8 +167,8 @@
     if (!Player.available) return;
     try {
       if (media && Player.duration > 0) {
-        progress.saveNow(Player.position, Player.duration, progressCtx, false);
-        libraryChanged.update((n) => n + 1);
+        void progress.saveNow(Player.position, Player.duration, progressCtx, false)
+          .then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
       console.error(e);
@@ -258,8 +261,8 @@
 
   $effect(() => {
     if (Player.ended && media) {
-      progress.saveNow(Player.duration, Player.duration, progressCtx, true);
-      libraryChanged.update((n) => n + 1);
+      void progress.saveNow(Player.duration, Player.duration, progressCtx, true)
+        .then(() => libraryChanged.update((n) => n + 1));
     }
   });
 
@@ -745,6 +748,11 @@
     Player.seek(target);
   }
 
+  function cycleAspect(): void {
+    const next = Player.cycleAspectMode();
+    if (media) saveAspectMode(media.id, next);
+  }
+
   // ── Seek bar (pointer-based, adapted for touch with larger hit area) ──────────
 
   let seekTrackEl = $state<HTMLDivElement | null>(null);
@@ -1126,6 +1134,12 @@
           {/if}
 
           <div class="flex-1"></div>
+
+          <!-- Aspect ratio cycle -->
+          <button type="button" class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15" onclick={() => { cycleAspect(); showControls(); }} aria-label="Aspect ratio">
+            <Ratio class="size-5 shrink-0" />
+            <span class="text-sm">{ASPECT_LABELS[Player.aspectMode]}</span>
+          </button>
 
           <!-- Playback speed -->
           <button

@@ -19,6 +19,7 @@
     X,
     SkipForward,
     ListVideo,
+    Ratio,
   } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
   import { fade, fly } from "svelte/transition";
@@ -26,6 +27,7 @@
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
+  import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
   import {
     ProgressSaver,
     type ProgressContext,
@@ -158,6 +160,7 @@
       }
     });
     Player.play(api.playUrl(src, { season, episode, fileIdx }));
+    untrack(() => Player.setAspectMode(media ? loadAspectMode(media.id) : "fit"));
   });
 
   // Resolve original_language for "original" audio preference. media is
@@ -214,16 +217,16 @@
         // in the same tick don't race: if ended=true the #completedSaved guard
         // in ProgressSaver prevents any downgrade; if false the record is left
         // as-is (not marked complete when it wasn't).
-        progress.saveNow(
+        // One bump per session teardown — never on the ~10s maybeSave ticks,
+        // which would make every libraryChanged subscriber refetch during
+        // playback. The bump waits for the save to land so the refetch it
+        // triggers can't race the POST and read pre-save state.
+        void progress.saveNow(
                 Player.position,
                 Player.duration,
                 progressCtx,
                 Player.ended,
-        );
-        // One bump per session teardown — never on the ~10s maybeSave ticks,
-        // which would make every libraryChanged subscriber refetch during
-        // playback.
-        libraryChanged.update((n) => n + 1);
+        ).then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
       console.error(e);
@@ -339,13 +342,12 @@
   // Mark complete at end of file.
   $effect(() => {
     if (Player.ended && media) {
-      progress.saveNow(
+      void progress.saveNow(
               Player.duration,
               Player.duration,
               progressCtx,
               true,
-      );
-      libraryChanged.update((n) => n + 1);
+      ).then(() => libraryChanged.update((n) => n + 1));
       // Trakt: stop at 100% — registers as watched on Trakt's side (≥80%).
       if (traktState !== "stopped") {
         traktState = "stopped";
@@ -933,6 +935,12 @@
   }
   onDestroy(() => clearTimeout(feedbackTimer));
 
+  function cycleAspect(): void {
+    const next = Player.cycleAspectMode();
+    if (media) saveAspectMode(media.id, next);
+    flash(ASPECT_LABELS[next]);
+  }
+
   // ─── Keyboard shortcuts ──────────────────────────────────────────────────────
 
   function isTypingTarget(t: EventTarget | null): boolean {
@@ -996,6 +1004,9 @@
         break;
       case "c":
         toggleCaptions();
+        break;
+      case "v":
+        cycleAspect();
         break;
       case "Home":
         Player.seek(0);
@@ -1525,6 +1536,25 @@
             </Tooltip.Root>
           {/if}
 
+          <!-- Aspect ratio cycle -->
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <Button
+                        {...props}
+                        variant="ghost"
+                        size="sm"
+                        class="gap-1.5 text-white hover:bg-white/15 hover:text-white"
+                        onclick={cycleAspect}
+                >
+                  <Ratio class="size-4" />
+                  <span class="max-w-28 truncate text-xs">{ASPECT_LABELS[Player.aspectMode]}</span>
+                </Button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content>Aspect ratio · V</Tooltip.Content>
+          </Tooltip.Root>
+
           <!-- Keyboard shortcuts -->
           <Popover.Root bind:open={helpOpen}>
             <Popover.Trigger>
@@ -1551,6 +1581,7 @@
                 {@render shortcut("Volume", "↑ ↓")}
                 {@render shortcut("Mute", "M")}
                 {@render shortcut("Subtitles", "C")}
+                {@render shortcut("Aspect ratio", "V")}
                 {@render shortcut("Jump to 0–90%", "0–9")}
               </dl>
             </Popover.Content>
