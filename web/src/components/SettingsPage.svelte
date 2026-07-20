@@ -1064,6 +1064,75 @@
 
           <div class="flex items-center justify-between py-3">
             <div>
+              <Label class="text-sm font-medium">Subtitle size</Label>
+              <p class="text-xs text-muted-foreground">
+                Text size relative to normal.
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <Slider
+                type="multiple"
+                value={[draft.subtitleSize]}
+                min={50}
+                max={200}
+                step={10}
+                class="w-32"
+                onValueChange={([v]) => patch("subtitleSize", v)}
+              />
+              <span
+                class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+              >
+                {Math.round(draft.subtitleSize)}%
+              </span>
+            </div>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label class="text-sm font-medium">Subtitle position</Label>
+              <p class="text-xs text-muted-foreground">
+                Distance up from the bottom of the screen.
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <Slider
+                type="multiple"
+                value={[draft.subtitlePosition]}
+                min={2}
+                max={90}
+                step={1}
+                class="w-32"
+                onValueChange={([v]) => patch("subtitlePosition", v)}
+              />
+              <span
+                class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+              >
+                {Math.round(draft.subtitlePosition)}%
+              </span>
+            </div>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="subs-background" class="text-sm font-medium"
+                >Subtitle background</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Draw a dark box behind the text for readability.
+              </p>
+            </div>
+            <Switch
+              id="subs-background"
+              checked={draft.subtitleBackground}
+              onCheckedChange={(v) => patch("subtitleBackground", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
               <Label class="text-sm font-medium">Preferred audio language</Label
               >
               <p class="text-xs text-muted-foreground">

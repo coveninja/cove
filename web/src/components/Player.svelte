@@ -698,6 +698,21 @@
     if (ext) selectSubtitle({ kind: "external", id: ext.id });
   });
 
+  // ─── Apply subtitle-style preferences (size / position / background box) ─────
+  // Re-applies whenever the settings change or the bridge becomes ready. mpv
+  // applies these live and keeps them across loadfile, so no per-file re-arming
+  // is needed beyond this.
+  $effect(() => {
+    if (!Player.ready) return;
+    const s = $settings;
+    if (!s) return;
+    Player.setSubtitleStyle(
+      s.subtitleSize ?? 100,
+      s.subtitlePosition ?? 8,
+      s.subtitleBackground ?? false,
+    );
+  });
+
   // ─── Up-next overlay + autoplay countdown (F6) ──────────────────────────────
   // autoPlay has existed as a setting since settings.go:23 but nothing ever
   // read it — this is what actually wires it up.
@@ -1067,6 +1082,28 @@
       );
     }
   }
+
+  // ─── In-player subtitle style controls ───────────────────────────────────────
+  // Live-tweak size/position/background from the subtitle menu. The change is
+  // applied to mpv immediately for instant preview, and the persisted settings
+  // write is debounced so dragging a slider doesn't spam the settings PUT (the
+  // "Apply subtitle-style preferences" $effect also re-applies it once the store
+  // updates — idempotent).
+  let subStyleSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function updateSubStyle(patch: {
+    subtitleSize?: number;
+    subtitlePosition?: number;
+    subtitleBackground?: boolean;
+  }): void {
+    const size = patch.subtitleSize ?? $settings?.subtitleSize ?? 100;
+    const pos = patch.subtitlePosition ?? $settings?.subtitlePosition ?? 8;
+    const bg = patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
+    Player.setSubtitleStyle(size, pos, bg);
+    clearTimeout(subStyleSaveTimer);
+    subStyleSaveTimer = setTimeout(() => settings.save(patch), 400);
+  }
+  onDestroy(() => clearTimeout(subStyleSaveTimer));
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1515,6 +1552,57 @@
                       )}
                     {/each}
                   {/each}
+                </div>
+
+                <!-- Style controls (size / position / background box) -->
+                <div class="mt-1 border-t border-border px-2 pt-2 pb-1">
+                  <p class="pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase">
+                    Style
+                  </p>
+                  <div class="space-y-3 py-1">
+                    <div class="space-y-1.5">
+                      <div class="flex items-center justify-between text-xs">
+                        <span>Size</span>
+                        <span class="tabular-nums text-muted-foreground">
+                          {Math.round($settings?.subtitleSize ?? 100)}%
+                        </span>
+                      </div>
+                      <Slider
+                              type="single"
+                              value={$settings?.subtitleSize ?? 100}
+                              min={50}
+                              max={200}
+                              step={10}
+                              onValueChange={(v) => updateSubStyle({ subtitleSize: v })}
+                              aria-label="Subtitle size"
+                      />
+                    </div>
+                    <div class="space-y-1.5">
+                      <div class="flex items-center justify-between text-xs">
+                        <span>Position</span>
+                        <span class="tabular-nums text-muted-foreground">
+                          {Math.round($settings?.subtitlePosition ?? 8)}%
+                        </span>
+                      </div>
+                      <Slider
+                              type="single"
+                              value={$settings?.subtitlePosition ?? 8}
+                              min={2}
+                              max={90}
+                              step={1}
+                              onValueChange={(v) => updateSubStyle({ subtitlePosition: v })}
+                              aria-label="Subtitle position"
+                      />
+                    </div>
+                  </div>
+                  {@render menuItem(
+                          "Background box",
+                          $settings?.subtitleBackground ?? false,
+                          () =>
+                                  updateSubStyle({
+                                    subtitleBackground: !($settings?.subtitleBackground ?? false),
+                                  }),
+                  )}
                 </div>
               </Popover.Content>
             </Popover.Root>

@@ -529,6 +529,20 @@
     if (ext) selectSubtitle({ kind: "external", id: ext.id });
   });
 
+  // ─── Apply subtitle-style preferences (size / position / background box) ─────
+  // Re-applies whenever the settings change or the bridge becomes ready. mpv
+  // applies these live and keeps them across loadfile.
+  $effect(() => {
+    if (!Player.ready) return;
+    const s = $settings;
+    if (!s) return;
+    Player.setSubtitleStyle(
+      s.subtitleSize ?? 100,
+      s.subtitlePosition ?? 8,
+      s.subtitleBackground ?? false,
+    );
+  });
+
   // ── Up-next overlay + autoplay countdown ─────────────────────────────────────
 
   $effect(() => {

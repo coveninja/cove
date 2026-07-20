@@ -249,6 +249,26 @@ class MpvPlayer {
     this.#mpv?.setMpvProperty("sub-ass-force-margins", forceMargins);
   }
 
+  /** Apply the user's subtitle-style preferences to mpv. All three apply live
+   *  and persist across loadfile on this instance, so callers re-run this only
+   *  when the settings change or the bridge becomes ready.
+   *    sizePct        — 50–200, percentage (maps to sub-scale, 1.0 = normal)
+   *    posFromBottom  — 2–90, percent up from the bottom edge (sub-pos counts
+   *                     from the top where 100 = bottom, so invert)
+   *    background     — draw an opaque box behind the text */
+  setSubtitleStyle(
+    sizePct: number,
+    posFromBottom: number,
+    background: boolean,
+  ): void {
+    this.#mpv?.setMpvProperty("sub-scale", String(sizePct / 100));
+    this.#mpv?.setMpvProperty("sub-pos", String(100 - posFromBottom));
+    this.#mpv?.setMpvProperty(
+      "sub-border-style",
+      background ? "opaque-box" : "outline-and-shadow",
+    );
+  }
+
   /** Advance to the next aspect mode in ASPECT_MODES and return it (so callers
    *  can persist the choice). */
   cycleAspectMode(): AspectMode {
