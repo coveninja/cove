@@ -1145,46 +1145,64 @@
           ),
   );
 
-  // Subtitle menu grouped by language: embedded mpv tracks + external
-  // (OpenSubtitles) entries fall under their language; tracks with no language
-  // tag land in "Other". Groups are sorted alphabetically with "Other" last.
+  // Subtitle menu grouped two levels deep: by source (Embedded tracks from the
+  // file vs Add-ons fetched from subtitle addons), then by language within each
+  // source. Tracks with no language tag land in "Other". Language groups are
+  // sorted alphabetically with "Other" last; empty sources are omitted.
   type SubMenuItem =
           | { kind: "embedded"; key: string; id: number; label: string }
           | { kind: "external"; key: string; id: string; label: string };
 
+  type SubLangGroup = { label: string; items: SubMenuItem[] };
+  type SubSourceSection = { source: string; groups: SubLangGroup[] };
+
   const OTHER = "Other";
 
-  const subtitleGroups = $derived.by(() => {
+  // Bucket items by language name and sort (Other last).
+  function groupByLang(
+    entries: { lang: string; item: SubMenuItem }[],
+  ): SubLangGroup[] {
     const groups = new SvelteMap<string, SubMenuItem[]>();
-    const push = (g: string, item: SubMenuItem) => {
+    for (const { lang, item } of entries) {
+      const g = lang || OTHER;
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g)!.push(item);
-    };
-
-    for (const t of Player.subtitleTracks) {
-      const g = t.lang ? langName(t.lang) : t.title || OTHER;
-      push(g, {
-        kind: "embedded",
-        key: `e${t.id}`,
-        id: t.id,
-        label: trackLabel(t, "Subtitle"),
-      });
     }
-    for (const s of externalSubtitles) {
-      const g = s.lang ? langName(s.lang) : OTHER;
-      push(g, {
-        kind: "external",
-        key: `x${s.id}`,
-        id: s.id,
-        label: `${langName(s.lang)} · OpenSubtitles`,
-      });
-    }
-
     return [...groups.entries()]
             .sort((a, b) =>
                     a[0] === OTHER ? 1 : b[0] === OTHER ? -1 : a[0].localeCompare(b[0]),
             )
             .map(([label, items]) => ({ label, items }));
+  }
+
+  const subtitleSections = $derived.by((): SubSourceSection[] => {
+    const embedded = groupByLang(
+      Player.subtitleTracks.map((t) => ({
+        lang: t.lang ? langName(t.lang) : t.title || "",
+        item: {
+          kind: "embedded" as const,
+          key: `e${t.id}`,
+          id: t.id,
+          label: trackLabel(t, "Subtitle"),
+        },
+      })),
+    );
+    const external = groupByLang(
+      externalSubtitles.map((s) => ({
+        lang: s.lang ? langName(s.lang) : "",
+        item: {
+          kind: "external" as const,
+          key: `x${s.id}`,
+          id: s.id,
+          label: s.lang ? langName(s.lang) : "Subtitle",
+        },
+      })),
+    );
+
+    const sections: SubSourceSection[] = [];
+    if (embedded.length) sections.push({ source: "Embedded", groups: embedded });
+    if (external.length) sections.push({ source: "Add-ons", groups: external });
+    return sections;
   });
 
   const title = $derived(
@@ -1530,26 +1548,33 @@
                   {@render menuItem("Off", subSelection.kind === "off", () =>
                           selectSubtitle({ kind: "off" }),
                   )}
-                  {#each subtitleGroups as group (group.label)}
+                  {#each subtitleSections as section (section.source)}
                     <p
-                            class="px-2 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase"
+                            class="px-2 pt-2 pb-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
                     >
-                      {group.label}
+                      {section.source}
                     </p>
-                    {#each group.items as item (item.key)}
-                      {@render menuItem(
-                              item.label,
-                              (subSelection.kind === "embedded" &&
-                                      item.kind === "embedded" &&
-                                      subSelection.id === item.id) ||
-                              (subSelection.kind === "external" &&
-                                      item.kind === "external" &&
-                                      subSelection.id === item.id),
-                              () =>
-                                      item.kind === "embedded"
-                                              ? selectSubtitle({ kind: "embedded", id: item.id })
-                                              : selectSubtitle({ kind: "external", id: item.id }),
-                      )}
+                    {#each section.groups as group (group.label)}
+                      <p
+                              class="px-2 pt-1 pb-0.5 pl-3 text-[10px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+                      >
+                        {group.label}
+                      </p>
+                      {#each group.items as item (item.key)}
+                        {@render menuItem(
+                                item.label,
+                                (subSelection.kind === "embedded" &&
+                                        item.kind === "embedded" &&
+                                        subSelection.id === item.id) ||
+                                (subSelection.kind === "external" &&
+                                        item.kind === "external" &&
+                                        subSelection.id === item.id),
+                                () =>
+                                        item.kind === "embedded"
+                                                ? selectSubtitle({ kind: "embedded", id: item.id })
+                                                : selectSubtitle({ kind: "external", id: item.id }),
+                        )}
+                      {/each}
                     {/each}
                   {/each}
                 </div>
