@@ -234,7 +234,7 @@
           policy: { type: "row" },
           rememberFocus: true,
         }}
-        class="flex gap-3 overflow-x-hidden"
+        class="flex gap-3 overflow-x-hidden p-4"
       >
         {#each chips as item (`${item.tmdb_id}-${item.kind}-${item.season_number ?? ""}-${item.episode_number ?? ""}`)}
           <button
@@ -247,11 +247,11 @@
                 openItem(item);
               }
             }}
-            class="flex w-40 shrink-0 flex-col overflow-hidden rounded-xl bg-secondary/50 text-left transition-[transform,filter] duration-150 focus:scale-[1.08] focus:brightness-[1.15] focus:outline-none"
+            class="flex w-64 h-42 shrink-0 flex-col overflow-hidden rounded-xl bg-secondary/50 text-left transition-[transform,filter] duration-150 focus:scale-[1.08] focus:brightness-[1.15] focus:outline-none"
             title={item.title}
           >
             <!-- 16:9 thumbnail — larger than desktop (w-24 → w-40) -->
-            <div class="relative w-full overflow-hidden">
+            <span class="relative w-full overflow-hidden">
               {#if item.still_path}
                 <img
                   src={item.still_path}
@@ -281,7 +281,7 @@
                   aria-hidden="true"
                 ></div>
               {/if}
-            </div>
+            </span>
             <!-- Title + sublabel -->
             <div class="px-2 py-1.5">
               <p class="truncate text-sm font-medium leading-tight">

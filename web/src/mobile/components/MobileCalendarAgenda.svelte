@@ -127,22 +127,22 @@
   <!-- ── Header ──────────────────────────────────────────────────────────────── -->
   {#if isEmpty}
     <!-- No expand toggle when empty -->
-    <div class="flex items-center gap-1.5 px-1 py-0.5">
-      <CalendarDays class="size-3.5 text-muted-foreground" />
-      <h2 class="text-sm font-semibold">Calendar</h2>
+    <div class="flex items-center gap-2 p-6">
+      <CalendarDays class="size-4 text-muted-foreground" />
+      <h2 class="text-base font-semibold">Calendar</h2>
     </div>
   {:else}
     <button
       onclick={() => (expanded = !expanded)}
       aria-expanded={expanded}
-      class="flex w-full items-center gap-1.5 rounded-lg px-1 py-0.5 text-left transition-colors active:bg-secondary/70"
+      class="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left transition-colors active:bg-secondary/70"
     >
-      <CalendarDays class="size-3.5 shrink-0 text-muted-foreground" />
-      <h2 class="flex-1 text-sm font-semibold">Calendar</h2>
+      <CalendarDays class="size-4 shrink-0 text-muted-foreground" />
+      <h2 class="flex-1 text-base font-semibold">Calendar</h2>
       {#if expanded}
-        <ChevronUp class="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronUp class="size-4 shrink-0 text-muted-foreground" />
       {:else}
-        <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronDown class="size-4 shrink-0 text-muted-foreground" />
       {/if}
     </button>
   {/if}
@@ -152,13 +152,13 @@
   {#if loading}
     <!-- Skeleton matching collapsed height -->
     <div class="mt-2 space-y-2">
-      <Skeleton class="h-3 w-36 rounded" />
-      <div class="flex gap-2 overflow-hidden">
-        {#each { length: 4 } as _, i (i)}
-          <div class="w-20 shrink-0 space-y-1">
-            <Skeleton class="aspect-video w-full rounded" />
-            <Skeleton class="h-2.5 w-14 rounded" />
-            <Skeleton class="h-2 w-8 rounded" />
+      <Skeleton class="h-3.5 w-40 rounded" />
+      <div class="flex gap-2.5 overflow-hidden">
+        {#each { length: 3 } as _, i (i)}
+          <div class="w-36 shrink-0 space-y-1">
+            <Skeleton class="aspect-video w-full rounded-md" />
+            <Skeleton class="h-3 w-24 rounded" />
+            <Skeleton class="h-2.5 w-12 rounded" />
           </div>
         {/each}
       </div>
@@ -173,7 +173,7 @@
 
   {:else}
     <!-- Summary line (always visible) -->
-    <p class="mt-0.5 px-1 text-[10px] text-muted-foreground">{label}</p>
+    <p class="mt-0.5 px-1 text-xs text-muted-foreground">{label}</p>
 
     {#if !expanded}
       <!-- ── Collapsed: next-up chip strip ───────────────────────────────────── -->
@@ -182,16 +182,16 @@
         mobile conventions — mirrors the ContinueWatching and filter-chip rows.
       -->
       <div
-        class="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
+        class="mt-2 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
       >
         {#each chips as item (`${item.tmdb_id}-${item.kind}-${item.season_number ?? ""}-${item.episode_number ?? ""}`)}
           <button
             onclick={() => openItem(item)}
-            class="flex w-20 shrink-0 flex-col overflow-hidden rounded-lg bg-secondary/40 text-left active:bg-secondary"
+            class="flex w-36 shrink-0 flex-col overflow-hidden rounded-lg bg-secondary/40 text-left active:bg-secondary"
             title={item.title}
           >
             <!-- 16:9 thumbnail -->
-            <div class="relative w-full overflow-hidden">
+            <span class="relative w-full overflow-hidden">
               {#if item.still_path}
                 <img
                   src={item.still_path}
@@ -209,30 +209,30 @@
                   class="flex aspect-video w-full items-center justify-center bg-secondary"
                 >
                   {#if item.media_type === "tv"}
-                    <Tv class="size-3 text-muted-foreground/40" />
+                    <Tv class="size-5 text-muted-foreground/40" />
                   {:else}
-                    <Film class="size-3 text-muted-foreground/40" />
+                    <Film class="size-5 text-muted-foreground/40" />
                   {/if}
                 </div>
               {/if}
               {#if item.kind === "available"}
                 <div
-                  class="absolute bottom-1 left-1 h-1.5 w-1.5 rounded-full bg-accent"
+                  class="absolute bottom-1.5 left-1.5 h-2 w-2 rounded-full bg-accent"
                   aria-hidden="true"
                 ></div>
               {/if}
-            </div>
+            </span>
             <!-- Title + sublabel -->
-            <div class="px-1.5 py-1">
-              <p class="truncate text-[10px] font-medium leading-tight">
+            <span class="px-2 py-1.5">
+              <span class="truncate text-xs font-medium leading-tight">
                 {item.title}
-              </p>
-              <p
-                class="mt-0.5 truncate text-[9px] leading-tight text-muted-foreground"
+              </span>
+              <span
+                class="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground"
               >
                 {chipSublabel(item)}
-              </p>
-            </div>
+              </span>
+            </span>
           </button>
         {/each}
       </div>
@@ -255,15 +255,15 @@
               >
                 {#if day.key === "available"}
                   <div
-                    class="flex h-6 w-6 items-center justify-center rounded-full bg-accent"
+                    class="flex h-7 w-7 items-center justify-center rounded-full bg-accent"
                   >
-                    <CalendarDays class="size-3 text-accent-foreground" />
+                    <CalendarDays class="size-3.5 text-accent-foreground" />
                   </div>
                 {:else}
                   <div
-                    class="flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background"
+                    class="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background"
                   >
-                    <span class="text-[10px] font-semibold tabular-nums">
+                    <span class="text-[11px] font-semibold tabular-nums">
                       {dayOfMonth(day.key)}
                     </span>
                   </div>
@@ -277,10 +277,10 @@
                   aria-expanded={!collapsedGroups[day.key]}
                   class="mb-1 flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors active:bg-secondary/60"
                 >
-                  <span class="flex-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <span class="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     {day.label}
                   </span>
-                  <span class="text-[9px] tabular-nums text-muted-foreground/60">{day.items.length}</span>
+                  <span class="text-[11px] tabular-nums text-muted-foreground/60">{day.items.length}</span>
                   {#if collapsedGroups[day.key]}
                     <ChevronDown class="size-3 shrink-0 text-muted-foreground/60" />
                   {:else}
@@ -295,9 +295,9 @@
                       onclick={() => openItem(item)}
                       class="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors active:bg-secondary/80"
                     >
-                      <!-- Still / poster: ~h-12 w-20 (smaller than desktop h-16 w-28) -->
-                      <div
-                        class="relative h-12 w-20 shrink-0 overflow-hidden rounded"
+                      <!-- Still / poster: ~h-14 w-24 (smaller than desktop h-16 w-28) -->
+                      <span
+                        class="relative h-14 w-24 shrink-0 overflow-hidden rounded-md"
                       >
                         {#if item.still_path}
                           <img
@@ -324,20 +324,20 @@
                         {/if}
                         {#if item.media_type === "tv" && item.season_number != null && item.episode_number != null}
                           <span
-                            class="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-0.5 py-px text-[8px] font-medium leading-none text-white"
+                            class="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[10px] font-medium leading-none text-white"
                           >
                             S{item.season_number}E{item.episode_number}
                           </span>
                         {/if}
-                      </div>
+                      </span>
 
                       <!-- Text (text-xs/sm) -->
-                      <div class="min-w-0 flex-1">
-                        <p class="truncate text-xs font-medium">{item.title}</p>
-                        <p class="truncate text-[10px] text-muted-foreground">
+                      <span class="min-w-0 flex-1">
+                        <p class="truncate text-sm font-medium">{item.title}</p>
+                        <p class="truncate text-xs text-muted-foreground">
                           {#if item.media_type === "tv" && item.episode_name}
                             {item.episode_name}{#if item.kind === "available" && item.waiting_count > 1}&nbsp;<span
-                                class="font-medium text-accent-foreground"
+                                class="font-medium text-accent"
                                 >+{item.waiting_count - 1} more</span
                               >{/if}
                           {:else if item.media_type === "tv" && item.season_number != null}
@@ -346,20 +346,7 @@
                             &nbsp;
                           {/if}
                         </p>
-                      </div>
-
-                      <!-- Right badge -->
-                      {#if item.kind === "available"}
-                        <span
-                          class="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground"
-                        >
-                          Watch
-                        </span>
-                      {:else if item.kind === "movie"}
-                        <span class="shrink-0 text-[10px] text-muted-foreground"
-                          >release</span
-                        >
-                      {/if}
+                      </span>
                     </button>
                   {/each}
                 </div>

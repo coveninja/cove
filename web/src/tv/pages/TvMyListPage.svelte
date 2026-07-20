@@ -301,7 +301,7 @@
     <div
       class="min-h-0 px-4 flex-1 overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden rounded-2xl"
     >
-      <div class="pb-12">
+      <div class="pb-12 pt-4">
         <TvCalendarAgenda />
 
         {#if sections.length === 0}
