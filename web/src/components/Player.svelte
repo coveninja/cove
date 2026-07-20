@@ -20,6 +20,7 @@
     SkipForward,
     ListVideo,
     Ratio,
+    Gauge,
   } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
   import { fade, fly } from "svelte/transition";
@@ -818,11 +819,17 @@
   // down so the menu's own arrow-key navigation isn't hijacked.
   let audioOpen = $state(false);
   let subsOpen = $state(false);
+  let speedOpen = $state(false);
   let helpOpen = $state(false);
   let episodesOpen = $state(false);
   // The season Select inside the sidebar uses arrow keys — include episodesOpen
   // so keyboard shortcuts stand down while the panel is open.
-  const menuOpen = $derived(audioOpen || subsOpen || helpOpen || episodesOpen);
+  const menuOpen = $derived(
+          audioOpen || subsOpen || speedOpen || helpOpen || episodesOpen,
+  );
+
+  // Playback-speed options — same set as the mobile/TV players.
+  const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
   // Scrubbing: while dragging the seek bar, show the dragged time and only issue
   // the real seek on release, so we don't spam mpv (costly on torrent sources).
@@ -1535,6 +1542,37 @@
               <Tooltip.Content>Episodes</Tooltip.Content>
             </Tooltip.Root>
           {/if}
+
+          <!-- Playback speed -->
+          <Popover.Root bind:open={speedOpen}>
+            <Popover.Trigger>
+              {#snippet child({ props })}
+                <Button
+                        {...props}
+                        variant="ghost"
+                        size="sm"
+                        class="gap-1.5 text-white hover:bg-white/15 hover:text-white"
+                >
+                  <Gauge class="size-4" />
+                  <span class="text-xs">
+                    {Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}
+                  </span>
+                </Button>
+              {/snippet}
+            </Popover.Trigger>
+            <Popover.Content side="top" align="end" class="w-40 p-1">
+              <p class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                Playback speed
+              </p>
+              {#each SPEEDS as speed (speed)}
+                {@render menuItem(
+                        speed === 1 ? "Normal (1×)" : `${speed}×`,
+                        Player.playbackSpeed === speed,
+                        () => Player.setPlaybackSpeed(speed),
+                )}
+              {/each}
+            </Popover.Content>
+          </Popover.Root>
 
           <!-- Aspect ratio cycle -->
           <Tooltip.Root>

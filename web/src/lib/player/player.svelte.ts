@@ -236,9 +236,17 @@ class MpvPlayer {
     const panscan = mode === "fill" ? "1.0" : "0";
     const keepaspect = mode === "stretch" ? "no" : "yes";
     const zoom = mode === "zoom" ? "0.263" : "0";
+    // "fill" (panscan) and "zoom" (video-zoom) scale the video past the window
+    // and crop the overflow. mpv otherwise anchors subtitles to that oversized
+    // video rectangle, so bottom subs land in the cropped-off region and vanish
+    // off-screen. Forcing margins clamps subs to the visible window instead;
+    // reset to mpv's defaults (force-margins off) for the non-cropping modes.
+    const forceMargins = mode === "fill" || mode === "zoom" ? "yes" : "no";
     this.#mpv?.setMpvProperty("panscan", panscan);
     this.#mpv?.setMpvProperty("keepaspect", keepaspect);
     this.#mpv?.setMpvProperty("video-zoom", zoom);
+    this.#mpv?.setMpvProperty("sub-use-margins", "yes");
+    this.#mpv?.setMpvProperty("sub-ass-force-margins", forceMargins);
   }
 
   /** Advance to the next aspect mode in ASPECT_MODES and return it (so callers
