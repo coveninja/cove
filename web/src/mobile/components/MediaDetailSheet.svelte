@@ -56,7 +56,6 @@
   let castNames: string[] = $state([]);
   let ageRating = $state("");
   let similar: Media[] = $state([]);
-  let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
   let lastAiredSeason = $state<number | null>(null);
   let lastAiredEpisode = $state<number | null>(null);
@@ -83,7 +82,6 @@
         castNames = details.credits?.cast?.slice(0, 8).map((c: { name: string }) => c.name) ?? [];
         ageRating = formatRating(details);
         if (type === "tv") {
-          numberOfSeasons = details.number_of_seasons ?? null;
           numberOfEpisodes = details.number_of_episodes ?? null;
           lastAiredSeason = details.last_episode_to_air?.season_number ?? null;
           lastAiredEpisode = details.last_episode_to_air?.episode_number ?? null;
