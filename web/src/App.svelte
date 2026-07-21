@@ -7,7 +7,7 @@
   import ProviderExpandedModal from "./components/modals/ProviderExpandedModal.svelte";
   import type { Media } from "$lib/types/tmdb";
   import type { Person, Provider } from "$lib/api";
-  import PlayerComponent from "./components/Player.svelte";
+  import PlayerComponent from "./components/player/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { setMode } from "mode-watcher";
 

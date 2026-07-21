@@ -2,6 +2,7 @@
   import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
   import { Spinner } from "$lib/components/ui/spinner";
+  import { Slider } from "$lib/components/ui/slider/index.js";
   import {
     Play,
     Pause,
@@ -24,6 +25,11 @@
   import { Player } from "$lib/player/player.svelte";
   import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
   import {
+    loadShowTrackPrefs,
+    saveShowTrackPrefs,
+    type ShowTrackPrefs,
+  } from "$lib/player/trackPrefs";
+  import {
     ProgressSaver,
     type ProgressContext,
   } from "$lib/player/progressSaver.svelte.js";
@@ -31,7 +37,7 @@
   import { langMatches } from "$lib/lang";
   import { nextAiredEpisode } from "$lib/nextEpisode";
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteSet, SvelteMap } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
   import TrackSheet from "./TrackSheet.svelte";
   import EpisodeSheet from "./EpisodeSheet.svelte";
@@ -89,6 +95,8 @@
   let appliedSubDefault = false;
   const addedExternal = new SvelteSet<string>();
 
+  let showPrefs = $state<ShowTrackPrefs>({});
+
   let originalLang = $state<string | null>(null);
 
   // Up-next overlay state
@@ -127,7 +135,13 @@
       }
     });
     Player.play(api.playUrl(src, { season, episode }));
-    untrack(() => Player.setAspectMode(media ? loadAspectMode(media.id) : "fit"));
+    untrack(() => {
+      Player.setAspectMode(media ? loadAspectMode(media.id) : "fit");
+      showPrefs = media ? loadShowTrackPrefs(media.id) : {};
+      if (showPrefs.speed && showPrefs.speed !== 1) {
+        Player.setPlaybackSpeed(showPrefs.speed);
+      }
+    });
   });
 
   // Resolve original_language for "original" audio preference.
@@ -493,16 +507,21 @@
 
   $effect(() => {
     if (appliedAudioDefault || Player.audioTracks.length <= 1) return;
-    const setting = $settings?.defaultAudioLang;
-    if (!setting) return;
-    if (setting === "original") {
-      if (originalLang === null) return;
-      if (originalLang === "") {
-        appliedAudioDefault = true;
-        return;
+    // A remembered per-show audio language wins over the global default.
+    const prefLang = showPrefs.audioLang;
+    let targetLang: string | null | undefined = prefLang;
+    if (!prefLang) {
+      const setting = $settings?.defaultAudioLang;
+      if (!setting) return;
+      if (setting === "original") {
+        if (originalLang === null) return;
+        if (originalLang === "") {
+          appliedAudioDefault = true;
+          return;
+        }
       }
+      targetLang = setting === "original" ? originalLang : setting;
     }
-    const targetLang = setting === "original" ? originalLang : setting;
     appliedAudioDefault = true;
     const match = Player.audioTracks.find((t) => langMatches(t.lang, targetLang));
     if (match && !match.selected) Player.setAudioTrack(match.id);
@@ -512,6 +531,31 @@
 
   $effect(() => {
     if (appliedSubDefault || !canPlay) return;
+    // A remembered per-show subtitle choice wins over the global default.
+    const pref = showPrefs.sub;
+    if (pref) {
+      if (pref.kind === "off") {
+        appliedSubDefault = true;
+        selectSubtitle({ kind: "off" });
+        return;
+      }
+      const embMatch = Player.subtitleTracks.find((t) => langMatches(t.lang, pref.lang));
+      if (embMatch) {
+        appliedSubDefault = true;
+        selectSubtitle({ kind: "embedded", id: embMatch.id });
+        return;
+      }
+      const extMatch = externalSubtitles.find((s) => langMatches(s.lang, pref.lang));
+      if (extMatch) {
+        appliedSubDefault = true;
+        selectSubtitle({ kind: "external", id: extMatch.id });
+        return;
+      }
+      // Preferred language not present yet — wait for the external list; only
+      // once it's arrived (and still no match) do we fall through to the
+      // global-default behavior below.
+      if (externalSubtitles.length === 0) return;
+    }
     if (!$settings?.subtitlesEnabled) return;
     const lang = $settings.defaultSubtitleLang;
     const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
@@ -656,6 +700,49 @@
     }
   }
 
+  // ── Per-show track / speed save wrappers ─────────────────────────────────────
+
+  function chooseAudioTrack(id: number): void {
+    Player.setAudioTrack(id);
+    const t = Player.audioTracks.find((x) => x.id === id);
+    if (media && t?.lang) saveShowTrackPrefs(media.id, { audioLang: t.lang });
+  }
+
+  function chooseSubtitle(sel: SubSel): void {
+    selectSubtitle(sel);
+    if (!media) return;
+    if (sel.kind === "off") { saveShowTrackPrefs(media.id, { sub: { kind: "off" } }); return; }
+    const lang = sel.kind === "embedded"
+      ? Player.subtitleTracks.find((x) => x.id === sel.id)?.lang
+      : externalSubtitles.find((x) => x.id === sel.id)?.lang;
+    if (lang) saveShowTrackPrefs(media.id, { sub: { kind: "lang", lang } });
+  }
+
+  function chooseSpeed(speed: number): void {
+    Player.setPlaybackSpeed(speed);
+    if (media) saveShowTrackPrefs(media.id, { speed });
+  }
+
+  // ── In-player subtitle style controls ────────────────────────────────────────
+  // Applied to mpv immediately for live preview; the persisted settings write is
+  // debounced so dragging a slider doesn't spam the settings PUT (the "apply
+  // subtitle-style" effect re-applies it once the store updates — idempotent).
+  let subStyleSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function updateSubStyle(patch: {
+    subtitleSize?: number;
+    subtitlePosition?: number;
+    subtitleBackground?: boolean;
+  }): void {
+    const size = patch.subtitleSize ?? $settings?.subtitleSize ?? 100;
+    const pos = patch.subtitlePosition ?? $settings?.subtitlePosition ?? 8;
+    const bg = patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
+    Player.setSubtitleStyle(size, pos, bg);
+    clearTimeout(subStyleSaveTimer);
+    subStyleSaveTimer = setTimeout(() => settings.save(patch), 400);
+  }
+  onDestroy(() => clearTimeout(subStyleSaveTimer));
+
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
   function langName(code: string): string {
@@ -709,6 +796,59 @@
       });
     }
     return items;
+  });
+
+  // Subtitle source/language grouping helper (mirroring desktop groupByLang).
+  function groupByLang<T>(entries: { lang: string; item: T }[]): { label: string; items: T[] }[] {
+    const OTHER = "Other";
+    const groups = new SvelteMap<string, T[]>();
+    for (const { lang, item } of entries) {
+      const g = lang || OTHER;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g)!.push(item);
+    }
+    return [...groups.entries()]
+      .sort((a, b) =>
+        a[0] === OTHER ? 1 : b[0] === OTHER ? -1 : a[0].localeCompare(b[0]),
+      )
+      .map(([label, items]) => ({ label, items }));
+  }
+
+  type SubRowItem = { id: string | number; label: string; header?: boolean; indent?: boolean };
+
+  // Grouped subtitle list for the sheet: Off + per-source headers + per-lang headers + tracks.
+  const subtitleRows = $derived.by((): SubRowItem[] => {
+    const rows: SubRowItem[] = [{ id: "off", label: "Off" }];
+
+    if (Player.subtitleTracks.length > 0) {
+      rows.push({ id: "hdr-embedded", label: "Embedded", header: true });
+      const embGroups = groupByLang(
+        Player.subtitleTracks.map((t) => ({
+          lang: t.lang ? langName(t.lang) : t.title || "",
+          item: { id: t.id as string | number, label: trackLabel(t, "Subtitle") },
+        })),
+      );
+      for (const g of embGroups) {
+        rows.push({ id: `hdr-embedded-${g.label}`, label: g.label, header: true, indent: true });
+        for (const item of g.items) rows.push(item);
+      }
+    }
+
+    if (externalSubtitles.length > 0) {
+      rows.push({ id: "hdr-addons", label: "Add-ons", header: true });
+      const extGroups = groupByLang(
+        externalSubtitles.map((s) => ({
+          lang: s.lang ? langName(s.lang) : "",
+          item: { id: s.id as string | number, label: langName(s.lang) || "Subtitle" },
+        })),
+      );
+      for (const g of extGroups) {
+        rows.push({ id: `hdr-addons-${g.label}`, label: g.label, header: true, indent: true });
+        for (const item of g.items) rows.push(item);
+      }
+    }
+
+    return rows;
   });
 
   const selectedSubId = $derived.by((): string | number => {
@@ -1323,29 +1463,97 @@
     title="Audio"
     items={sortedAudio.map((t) => ({ id: t.id, label: trackLabel(t, "Audio") }))}
     selectedId={selectedAudio?.id ?? null}
-    onSelect={(id) => Player.setAudioTrack(id as number)}
+    onSelect={(id) => chooseAudioTrack(id as number)}
     onClose={() => (audioSheetOpen = false)}
   />
 {/if}
 
+{#snippet subStyleFooter()}
+  <div class="border-t border-white/10 px-5 pb-3 pt-3">
+    <p class="pb-2 text-xs font-semibold uppercase tracking-widest text-white/40">
+      Style
+    </p>
+    <div class="space-y-4">
+      <div class="space-y-2">
+        <div class="flex items-center justify-between text-sm">
+          <span>Size</span>
+          <span class="tabular-nums text-white/50">
+            {Math.round($settings?.subtitleSize ?? 100)}%
+          </span>
+        </div>
+        <Slider
+          type="single"
+          value={$settings?.subtitleSize ?? 100}
+          min={50}
+          max={200}
+          step={10}
+          onValueChange={(v) => updateSubStyle({ subtitleSize: v })}
+          aria-label="Subtitle size"
+        />
+      </div>
+      <div class="space-y-2">
+        <div class="flex items-center justify-between text-sm">
+          <span>Position</span>
+          <span class="tabular-nums text-white/50">
+            {Math.round($settings?.subtitlePosition ?? 8)}%
+          </span>
+        </div>
+        <Slider
+          type="single"
+          value={$settings?.subtitlePosition ?? 8}
+          min={2}
+          max={90}
+          step={1}
+          onValueChange={(v) => updateSubStyle({ subtitlePosition: v })}
+          aria-label="Subtitle position"
+        />
+      </div>
+      <button
+        type="button"
+        class="flex w-full items-center justify-between py-1 text-sm"
+        onclick={() =>
+          updateSubStyle({
+            subtitleBackground: !($settings?.subtitleBackground ?? false),
+          })}
+      >
+        <span>Background box</span>
+        <span
+          class="relative inline-flex h-6 w-10 items-center rounded-full transition-colors {($settings?.subtitleBackground ??
+          false)
+            ? 'bg-white/80'
+            : 'bg-white/20'}"
+        >
+          <span
+            class="inline-block size-4 rounded-full bg-neutral-900 transition-transform {($settings?.subtitleBackground ??
+            false)
+              ? 'translate-x-5'
+              : 'translate-x-1'}"
+          ></span>
+        </span>
+      </button>
+    </div>
+  </div>
+{/snippet}
+
 {#if subsSheetOpen}
   <TrackSheet
     title="Subtitles"
-    items={subtitleItems.map((i) => ({ id: i.id, label: i.label }))}
+    items={subtitleRows}
     selectedId={selectedSubId}
     onSelect={(id) => {
       if (id === "off") {
-        selectSubtitle({ kind: "off" });
+        chooseSubtitle({ kind: "off" });
       } else {
         const item = subtitleItems.find((i) => i.id === id);
         if (item?.kind === "embedded") {
-          selectSubtitle({ kind: "embedded", id: item.id as number });
+          chooseSubtitle({ kind: "embedded", id: item.id as number });
         } else if (item?.kind === "external") {
-          selectSubtitle({ kind: "external", id: item.id as string });
+          chooseSubtitle({ kind: "external", id: item.id as string });
         }
       }
     }}
     onClose={() => (subsSheetOpen = false)}
+    footer={subStyleFooter}
   />
 {/if}
 
@@ -1355,7 +1563,7 @@
     items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {
-      Player.setPlaybackSpeed(parseFloat(id as string));
+      chooseSpeed(parseFloat(id as string));
     }}
     onClose={() => (speedSheetOpen = false)}
   />

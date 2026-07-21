@@ -1,34 +1,24 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
-  import { Spinner } from "$lib/components/ui/spinner";
-  import * as Popover from "$lib/components/ui/popover";
-  import * as Tooltip from "$lib/components/ui/tooltip";
-  import { Button } from "$lib/components/ui/button";
-  import { Slider } from "$lib/components/ui/slider/index.js";
-  import {
-    Play,
-    Pause,
-    Volume2,
-    Volume1,
-    VolumeX,
-    Headphones,
-    Captions,
-    Check,
-    Keyboard,
-    X,
-    SkipForward,
-    ListVideo,
-    Ratio,
-    Gauge,
-  } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { fade, fly } from "svelte/transition";
-  import StreamsList from "./StreamsList.svelte";
+  import { fade } from "svelte/transition";
+  import SkipSegmentButton from "./SkipSegmentButton.svelte";
+  import UpNextOverlay from "./UpNextOverlay.svelte";
+  import LoadingScreen from "./LoadingScreen.svelte";
+  import EpisodesSidebar from "./EpisodesSidebar.svelte";
+  import PlayerControls from "./PlayerControls.svelte";
+  import type { SubSel } from "$lib/player/subtitles";
+  import { computeChapterBars } from "$lib/player/chapters";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
   import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
+  import {
+    loadShowTrackPrefs,
+    saveShowTrackPrefs,
+    type ShowTrackPrefs,
+  } from "$lib/player/trackPrefs";
   import {
     ProgressSaver,
     type ProgressContext,
@@ -37,7 +27,7 @@
   import { langMatches } from "$lib/lang";
   import { nextAiredEpisode } from "$lib/nextEpisode";
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
-  import {SvelteMap, SvelteSet} from "svelte/reactivity";
+  import { SvelteSet } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
 
   // ─── Props (unchanged from the old Player) ──────────────────────────────────
@@ -101,6 +91,12 @@
   let appliedSubDefault = false;
   const addedExternal = new SvelteSet<string>(); // external sub ids already sub-add'd
 
+  // Per-show remembered audio/subtitle/speed picks (device-local, keyed by
+  // media.id). Loaded on every src change and consulted by the auto-select
+  // effects below (they prefer these over the global defaults); updated when
+  // the user changes a track or the speed. Reset to {} for an unknown title.
+  let showPrefs = $state<ShowTrackPrefs>({});
+
   // "Original language" audio (F1): the ISO 639-1 code of the title's
   // original audio, resolved once per src. null while unresolved (or if the
   // title genuinely has no original_language, in which case it stays null
@@ -123,8 +119,6 @@
   $effect(() => {
     if (!src || !Player.available) return;
     switching = true;
-    scrubbing = false;
-    scrubValue = 0;
     appliedAudioDefault = false;
     appliedSubDefault = false;
     originalLang = null;
@@ -161,7 +155,16 @@
       }
     });
     Player.play(api.playUrl(src, { season, episode, fileIdx }));
-    untrack(() => Player.setAspectMode(media ? loadAspectMode(media.id) : "fit"));
+    untrack(() => {
+      Player.setAspectMode(media ? loadAspectMode(media.id) : "fit");
+      // Load this title's remembered picks. Audio/subtitle are applied by the
+      // auto-select effects (which read showPrefs); speed has no such effect,
+      // so apply it here — play() just reset it to 1×.
+      showPrefs = media ? loadShowTrackPrefs(media.id) : {};
+      if (showPrefs.speed && showPrefs.speed !== 1) {
+        Player.setPlaybackSpeed(showPrefs.speed);
+      }
+    });
   });
 
   // Resolve original_language for "original" audio preference. media is
@@ -579,71 +582,9 @@
   }
 
   // ─── Seek bar chapter markers ────────────────────────────────────────────────
-
-  type ChapterBar = {
-    startFrac: number;
-    endFrac: number;
-    type: "content" | "intro" | "recap" | "credits" | "preview";
-  };
-
-  // Splits the timeline into content + named segment chapters whenever we have
-  // both timestamp data and a known duration. Returns null when unified bar is
-  // needed (no data, or all segments collapsed to a single chapter).
-  const chapterBars = $derived.by((): ChapterBar[] | null => {
-    if (!timestamps) return null;
-    if (!Player.duration) return null;
-    const durMs = Player.duration * 1000;
-
-    const named: { startMs: number; endMs: number; type: string }[] = [];
-    const addAll = (arr: TimestampSegment[] | undefined, type: string) =>
-      arr?.forEach((s) =>
-        named.push({ startMs: s.start_ms ?? 0, endMs: s.end_ms ?? durMs, type }),
-      );
-    addAll(timestamps.intro, "intro");
-    addAll(timestamps.recap, "recap");
-    addAll(timestamps.credits, "credits");
-    addAll(timestamps.preview, "preview");
-    if (named.length === 0) return null;
-
-    named.sort((a, b) => a.startMs - b.startMs);
-
-    const bars: ChapterBar[] = [];
-    let pos = 0;
-    for (const seg of named) {
-      if (seg.startMs > pos)
-        bars.push({ startFrac: pos / durMs, endFrac: seg.startMs / durMs, type: "content" });
-      bars.push({
-        startFrac: seg.startMs / durMs,
-        endFrac: Math.min(seg.endMs / durMs, 1),
-        type: seg.type as ChapterBar["type"],
-      });
-      pos = seg.endMs;
-    }
-    if (pos < durMs) bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
-
-    return bars.length > 1 ? bars : null;
-  });
-
-  function segmentBgClass(type: ChapterBar["type"]): string {
-    switch (type) {
-      case "intro":   return "bg-amber-400/50";
-      case "recap":   return "bg-blue-400/50";
-      case "credits": return "bg-purple-400/50";
-      case "preview": return "bg-green-400/50";
-      default:        return "";
-    }
-  }
-
-  let hoveredChapter = $state<ChapterBar | null>(null);
-
-  // Fraction (0–100) of a chapter pill that should be filled white by the progress bar.
-  function chapterFill(chapter: ChapterBar): number {
-    if (!Player.duration) return 0;
-    const posFrac = displayPos / Player.duration;
-    if (posFrac >= chapter.endFrac) return 100;
-    if (posFrac <= chapter.startFrac) return 0;
-    return ((posFrac - chapter.startFrac) / (chapter.endFrac - chapter.startFrac)) * 100;
-  }
+  // Computed here (it needs the fetched timestamps + duration) and passed down
+  // to PlayerControls → SeekBar, which colours and fills the pills.
+  const chapterBars = $derived(computeChapterBars(timestamps, Player.duration));
 
   // ─── Auto-select preferred audio track ──────────────────────────────────────
   // mpv/ffmpeg tag embedded audio tracks with ISO 639-2 (three-letter, e.g.
@@ -653,21 +594,26 @@
 
   $effect(() => {
     if (appliedAudioDefault || Player.audioTracks.length <= 1) return;
-    const setting = $settings?.defaultAudioLang;
-    if (!setting) return;
-    if (setting === "original") {
-      // originalLang is still resolving (or media hasn't arrived yet) — don't
-      // mark this applied, so the effect re-runs once it settles instead of
-      // permanently giving up on the "original language" preference.
-      if (originalLang === null) return;
-      if (originalLang === "") {
-        // Resolved to "unresolvable" (title has no original_language) —
-        // nothing sensible to match against; leave mpv's own default alone.
-        appliedAudioDefault = true;
-        return;
+    // A remembered per-show audio language wins over the global default.
+    const prefLang = showPrefs.audioLang;
+    let targetLang: string | null | undefined = prefLang;
+    if (!prefLang) {
+      const setting = $settings?.defaultAudioLang;
+      if (!setting) return;
+      if (setting === "original") {
+        // originalLang is still resolving (or media hasn't arrived yet) — don't
+        // mark this applied, so the effect re-runs once it settles instead of
+        // permanently giving up on the "original language" preference.
+        if (originalLang === null) return;
+        if (originalLang === "") {
+          // Resolved to "unresolvable" (title has no original_language) —
+          // nothing sensible to match against; leave mpv's own default alone.
+          appliedAudioDefault = true;
+          return;
+        }
       }
+      targetLang = setting === "original" ? originalLang : setting;
     }
-    const targetLang = setting === "original" ? originalLang : setting;
     appliedAudioDefault = true;
     const match = Player.audioTracks.find((t) => langMatches(t.lang, targetLang));
     if (match && !match.selected) Player.setAudioTrack(match.id);
@@ -681,6 +627,31 @@
 
   $effect(() => {
     if (appliedSubDefault || !canPlay) return;
+    // A remembered per-show subtitle choice wins over the global default.
+    const pref = showPrefs.sub;
+    if (pref) {
+      if (pref.kind === "off") {
+        appliedSubDefault = true;
+        selectSubtitle({ kind: "off" });
+        return;
+      }
+      const embMatch = Player.subtitleTracks.find((t) => langMatches(t.lang, pref.lang));
+      if (embMatch) {
+        appliedSubDefault = true;
+        selectSubtitle({ kind: "embedded", id: embMatch.id });
+        return;
+      }
+      const extMatch = externalSubtitles.find((s) => langMatches(s.lang, pref.lang));
+      if (extMatch) {
+        appliedSubDefault = true;
+        selectSubtitle({ kind: "external", id: extMatch.id });
+        return;
+      }
+      // Preferred language not present yet — wait for the external list; only
+      // once it's arrived (and still no match) do we fall through to the
+      // global-default behavior below.
+      if (externalSubtitles.length === 0) return;
+    }
     if (!$settings?.subtitlesEnabled) return;
     const lang = $settings.defaultSubtitleLang;
     const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
@@ -830,27 +801,12 @@
 
   let lastVolume = $state(100);
 
-  // Track-menu open state. While any picker is open, keyboard shortcuts stand
-  // down so the menu's own arrow-key navigation isn't hijacked.
-  let audioOpen = $state(false);
-  let subsOpen = $state(false);
-  let speedOpen = $state(false);
-  let helpOpen = $state(false);
+  // The episodes sidebar's open state (shared with PlayerControls' toggle button).
   let episodesOpen = $state(false);
-  // The season Select inside the sidebar uses arrow keys — include episodesOpen
-  // so keyboard shortcuts stand down while the panel is open.
-  const menuOpen = $derived(
-          audioOpen || subsOpen || speedOpen || helpOpen || episodesOpen,
-  );
-
-  // Playback-speed options — same set as the mobile/TV players.
-  const SPEEDS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-
-  // Scrubbing: while dragging the seek bar, show the dragged time and only issue
-  // the real seek on release, so we don't spam mpv (costly on torrent sources).
-  let scrubbing = $state(false);
-  let scrubValue = $state(0);
-  const displayPos = $derived(scrubbing ? scrubValue : Player.position);
+  // Any track menu / the episodes sidebar being open — reported up from
+  // PlayerControls. While open, keyboard shortcuts stand down so the menu's own
+  // arrow-key navigation isn't hijacked.
+  let menuOpen = $state(false);
 
   function toggleMute(): void {
     if (Player.volume > 0) {
@@ -862,37 +818,6 @@
       Player.setVolume(v);
       flash(`Volume ${Math.round(v)}%`);
     }
-  }
-
-  // ─── Custom seek bar (pointer-based, no third-party slider) ────────────────
-  let seekTrackEl = $state<HTMLDivElement | null>(null);
-
-  function seekFraction(e: PointerEvent): number {
-    if (!seekTrackEl || !Player.duration) return 0;
-    const { left, width } = seekTrackEl.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - left) / width));
-  }
-
-  function onSeekPointerDown(e: PointerEvent): void {
-    if (!Player.duration) return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    scrubbing = true;
-    scrubValue = seekFraction(e) * Player.duration;
-  }
-
-  function onSeekPointerMove(e: PointerEvent): void {
-    if (!scrubbing) return;
-    scrubValue = seekFraction(e) * Player.duration;
-  }
-
-  function onSeekPointerUp(e: PointerEvent): void {
-    if (!scrubbing) return;
-    Player.seek(seekFraction(e) * Player.duration);
-    scrubbing = false;
-  }
-
-  function onVolumeChange(v: number): void {
-    Player.setVolume(v);
   }
 
   function nudgeVolume(delta: number): void {
@@ -909,39 +834,25 @@
     flash(`${delta > 0 ? "+" : "−"}${Math.abs(delta)}s`);
   }
 
-  function formatBytes(bytes: number): string {
-    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${bytes} B`;
-  }
-
-  function formatEta(remainingBytes: number, speedBps: number): string {
-    if (speedBps <= 0) return "";
-    const secs = remainingBytes / speedBps;
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return m > 0 ? `~${m}m ${s}s` : `~${s}s`;
-  }
   function seekToFraction(frac: number): void {
     if (Player.duration) Player.seek(Player.duration * frac);
   }
 
   function toggleCaptions(): void {
     if (subSelection.kind !== "off") {
-      selectSubtitle({ kind: "off" });
+      chooseSubtitle({ kind: "off" });
       flash("Subtitles off");
       return;
     }
     const emb = Player.subtitleTracks[0];
     if (emb) {
-      selectSubtitle({ kind: "embedded", id: emb.id });
+      chooseSubtitle({ kind: "embedded", id: emb.id });
       flash("Subtitles on");
       return;
     }
     const ext = externalSubtitles[0];
     if (ext) {
-      selectSubtitle({ kind: "external", id: ext.id });
+      chooseSubtitle({ kind: "external", id: ext.id });
       flash("Subtitles on");
     }
   }
@@ -1049,11 +960,6 @@
 
   // ─── Subtitle selection (embedded mpv tracks + lazy external) ────────────────
 
-  type SubSel =
-          | { kind: "off" }
-          | { kind: "embedded"; id: number }
-          | { kind: "external"; id: string };
-
   let subSelection = $state<SubSel>({ kind: "off" });
 
   function selectSubtitle(sel: SubSel): void {
@@ -1105,127 +1011,41 @@
   }
   onDestroy(() => clearTimeout(subStyleSaveTimer));
 
+  // ─── Persist per-show track / speed picks on explicit user action ────────────
+  // Wrappers around the raw Player calls used by the control menus and the
+  // captions/speed keys, so an actual user choice (not the auto-select effects)
+  // is remembered for this title. Audio/subtitle are stored by language so they
+  // re-match on the next episode; speed is stored verbatim.
+  function chooseAudioTrack(track: { id: number; lang: string }): void {
+    Player.setAudioTrack(track.id);
+    if (media) saveShowTrackPrefs(media.id, { audioLang: track.lang || undefined });
+  }
+
+  function chooseSubtitle(sel: SubSel): void {
+    selectSubtitle(sel);
+    if (!media) return;
+    if (sel.kind === "off") {
+      saveShowTrackPrefs(media.id, { sub: { kind: "off" } });
+      return;
+    }
+    const lang =
+      sel.kind === "embedded"
+        ? Player.subtitleTracks.find((x) => x.id === sel.id)?.lang
+        : externalSubtitles.find((x) => x.id === sel.id)?.lang;
+    // No language tag → can't re-match next episode, so don't store a pref.
+    if (lang) saveShowTrackPrefs(media.id, { sub: { kind: "lang", lang } });
+  }
+
+  function chooseSpeed(speed: number): void {
+    Player.setPlaybackSpeed(speed);
+    if (media) saveShowTrackPrefs(media.id, { speed });
+  }
+
   // ─── Helpers ────────────────────────────────────────────────────────────────
-
-  function langName(code: string): string {
-    try {
-      return (
-              new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code
-      );
-    } catch {
-      return code;
-    }
-  }
-
-  function fmt(t: number): string {
-    if (!isFinite(t) || t < 0) t = 0;
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    const mm = h ? String(m).padStart(2, "0") : String(m);
-    return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
-  }
-
-  // Best available human label for a track. mpv exposes whatever the container
-  // tagged: prefer an explicit title, else the language name, else a numbered
-  // fallback (some files ship untagged tracks — nothing to name them by).
-  function trackLabel(
-          t: { id: number; title: string; lang: string },
-          kind: "Audio" | "Subtitle",
-  ): string {
-    if (t.title) return t.title;
-    if (t.lang) return langName(t.lang);
-    return `${kind} ${t.id}`;
-  }
-
-  // Sorted for stable, language-grouped menus (untagged → bottom by number).
-  const sortedAudio = $derived(
-          [...Player.audioTracks].sort((a, b) =>
-                  trackLabel(a, "Audio").localeCompare(trackLabel(b, "Audio")),
-          ),
-  );
-
-  // Subtitle menu grouped two levels deep: by source (Embedded tracks from the
-  // file vs Add-ons fetched from subtitle addons), then by language within each
-  // source. Tracks with no language tag land in "Other". Language groups are
-  // sorted alphabetically with "Other" last; empty sources are omitted.
-  type SubMenuItem =
-          | { kind: "embedded"; key: string; id: number; label: string }
-          | { kind: "external"; key: string; id: string; label: string };
-
-  type SubLangGroup = { label: string; items: SubMenuItem[] };
-  type SubSourceSection = { source: string; groups: SubLangGroup[] };
-
-  const OTHER = "Other";
-
-  // Bucket items by language name and sort (Other last).
-  function groupByLang(
-    entries: { lang: string; item: SubMenuItem }[],
-  ): SubLangGroup[] {
-    const groups = new SvelteMap<string, SubMenuItem[]>();
-    for (const { lang, item } of entries) {
-      const g = lang || OTHER;
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g)!.push(item);
-    }
-    return [...groups.entries()]
-            .sort((a, b) =>
-                    a[0] === OTHER ? 1 : b[0] === OTHER ? -1 : a[0].localeCompare(b[0]),
-            )
-            .map(([label, items]) => ({ label, items }));
-  }
-
-  const subtitleSections = $derived.by((): SubSourceSection[] => {
-    const embedded = groupByLang(
-      Player.subtitleTracks.map((t) => ({
-        lang: t.lang ? langName(t.lang) : t.title || "",
-        item: {
-          kind: "embedded" as const,
-          key: `e${t.id}`,
-          id: t.id,
-          label: trackLabel(t, "Subtitle"),
-        },
-      })),
-    );
-    const external = groupByLang(
-      externalSubtitles.map((s) => ({
-        lang: s.lang ? langName(s.lang) : "",
-        item: {
-          kind: "external" as const,
-          key: `x${s.id}`,
-          id: s.id,
-          label: s.lang ? langName(s.lang) : "Subtitle",
-        },
-      })),
-    );
-
-    const sections: SubSourceSection[] = [];
-    if (embedded.length) sections.push({ source: "Embedded", groups: embedded });
-    if (external.length) sections.push({ source: "Add-ons", groups: external });
-    return sections;
-  });
 
   const title = $derived(
           media ? (media.media_type === "tv" ? media.name : media.title) : "",
   );
-
-  const selectedAudio = $derived(
-          Player.audioTracks.find((t) => t.selected),
-  );
-
-  const subtitleLabel = $derived.by(() => {
-    // Capture into a const so the discriminated-union narrowing survives into
-    // the .find() callbacks below (TS drops narrowing of a reassignable `let`
-    // inside nested closures, but keeps it for a const).
-    const sel = subSelection;
-    if (sel.kind === "off") return "Subtitles";
-    if (sel.kind === "embedded") {
-      const t = Player.subtitleTracks.find((x) => x.id === sel.id);
-      return t ? trackLabel(t, "Subtitle") : "Subtitles";
-    }
-    const e = externalSubtitles.find((x) => x.id === sel.id);
-    return e ? langName(e.lang) : "Subtitles";
-  });
 
   // ─── Controls auto-hide ──────────────────────────────────────────────────────
 
@@ -1243,31 +1063,6 @@
 </script>
 
 <svelte:window onkeydown={onKey} />
-
-{#snippet menuItem(label: string, active: boolean, onSelect: () => void)}
-  <button
-          type="button"
-          onclick={onSelect}
-          class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground {active
-      ? 'font-medium'
-      : ''}"
-  >
-    <span class="flex-1 truncate">{label}</span>
-    {#if active}<Check class="size-4 shrink-0" />{/if}
-  </button>
-{/snippet}
-
-{#snippet shortcut(label: string, keys: string)}
-  <div class="flex items-center justify-between gap-4">
-    <dt class="text-muted-foreground">{label}</dt>
-    <dd>
-      <kbd
-              class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-      >{keys}</kbd
-      >
-    </dd>
-  </div>
-{/snippet}
 
 <!-- Root is transparent so mpv (rendered behind the WebEngineView) shows through.
      For this to reveal video, the page background and every ancestor down to the
@@ -1309,584 +1104,65 @@
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"
     >
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-              class="flex w-full flex-col gap-2 px-4 pb-4 text-white"
-              onclick={(e) => e.stopPropagation()}
-              onkeydown={(e) => e.stopPropagation()}
-      >
-        <!-- Seek bar (full width, custom — no third-party slider) -->
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div
-                role="slider"
-                aria-label="Seek"
-                aria-valuemin={0}
-                aria-valuemax={Player.duration || 0}
-                aria-valuenow={displayPos}
-                tabindex={0}
-                class="relative flex h-2 w-full cursor-pointer items-center"
-                bind:this={seekTrackEl}
-                onpointerdown={onSeekPointerDown}
-                onpointermove={onSeekPointerMove}
-                onpointerup={onSeekPointerUp}
-                onpointercancel={onSeekPointerUp}
-        >
-          {#if chapterBars}
-            <!-- Segmented: each chapter is its own rounded pill with a gap -->
-            <div class="flex h-full w-full gap-0.5">
-              {#each chapterBars as chapter}
-                <div
-                  class="relative h-full overflow-hidden rounded-full {chapter.type !== 'content'
-                    ? segmentBgClass(chapter.type)
-                    : 'bg-white/20'}"
-                  style="flex: {chapter.endFrac - chapter.startFrac}"
-                  onmouseenter={() => chapter.type !== 'content' && (hoveredChapter = chapter)}
-                  onmouseleave={() => hoveredChapter = null}
-                >
-                  <div
-                    class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-                    style="width: {chapterFill(chapter)}%"
-                  ></div>
-                </div>
-              {/each}
-            </div>
-            <!-- Chapter label tooltip, centered over the hovered pill -->
-            {#if hoveredChapter}
-              <div
-                class="pointer-events-none absolute -top-6 -translate-x-1/2 rounded bg-black/80 px-2 py-0.5 text-xs font-medium capitalize text-white"
-                style="left: {(hoveredChapter.startFrac + hoveredChapter.endFrac) / 2 * 100}%"
-                transition:fade={{ duration: 100 }}
-              >
-                {hoveredChapter.type}
-              </div>
-            {/if}
-          {:else}
-            <!-- Unified bar (no timestamp data) -->
-            <div class="absolute inset-0 overflow-hidden rounded-full bg-white/20">
-              <div
-                class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-                style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-              ></div>
-            </div>
-          {/if}
-          <!-- Scrubber thumb (not inside any overflow-hidden clip) -->
-          <div
-                  class="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/10"
-                  style="left: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-          ></div>
-        </div>
-
-        <!-- Transport + tracks -->
-        <div class="flex items-center gap-1">
-          <!-- Play / pause -->
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              {#snippet child({ props })}
-                <Button
-                        {...props}
-                        variant="ghost"
-                        size="icon"
-                        class="text-white hover:bg-white/15 hover:text-white"
-                        onclick={() => Player.togglePause()}
-                >
-                  {#if Player.paused}
-                    <Play class="size-5" />
-                  {:else}
-                    <Pause class="size-5" />
-                  {/if}
-                </Button>
-              {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content>
-              {Player.paused ? "Play" : "Pause"} · Space
-            </Tooltip.Content>
-          </Tooltip.Root>
-
-          <!-- Volume: button + slider that expands on hover/focus -->
-          <div class="group/vol flex items-center">
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                {#snippet child({ props })}
-                  <Button
-                          {...props}
-                          variant="ghost"
-                          size="icon"
-                          class="text-white hover:bg-white/15 hover:text-white"
-                          onclick={toggleMute}
-                  >
-                    {#if Player.volume === 0}
-                      <VolumeX class="size-5" />
-                    {:else if Player.volume < 50}
-                      <Volume1 class="size-5" />
-                    {:else}
-                      <Volume2 class="size-5" />
-                    {/if}
-                  </Button>
-                {/snippet}
-              </Tooltip.Trigger>
-              <Tooltip.Content>
-                {Player.volume === 0 ? "Unmute" : "Mute"} · M
-              </Tooltip.Content>
-            </Tooltip.Root>
-            <div
-                    class="ml-1 w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover/vol:w-24 group-hover/vol:opacity-100 group-focus-within/vol:w-24 group-focus-within/vol:opacity-100"
-            >
-              <Slider
-                      type="single"
-                      value={Player.volume}
-                      max={100}
-                      step={1}
-                      onValueChange={onVolumeChange}
-                      aria-label="Volume"
-                      class="w-24"
-              />
-            </div>
-          </div>
-
-          <span class="ml-2 text-xs tabular-nums text-white/80">
-            {fmt(displayPos)}<span class="mx-1 text-white/40">/</span>{fmt(
-                  Player.duration,
-          )}
-          </span>
-
-          <div class="flex-1"></div>
-
-          <!-- Torrent download progress (hash sources, mid-download) -->
-          {#if isHash && torrent.progress > 0 && torrent.progress < 100}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                {#snippet child({ props })}
-                  <span {...props} class="mr-1 cursor-default text-xs tabular-nums text-white/60">
-                    ↓ {torrent.progress.toFixed(0)}%
-                  </span>
-                {/snippet}
-              </Tooltip.Trigger>
-              <Tooltip.Content side="top">
-                <div class="space-y-1.5 text-xs">
-                  <!-- Progress bar -->
-                  <div class="flex items-center gap-2">
-                    <div class="h-1 w-24 overflow-hidden rounded-full bg-white/20">
-                      <div class="h-full rounded-full bg-white/70" style="width: {torrent.progress.toFixed(1)}%"></div>
-                    </div>
-                    <span class="tabular-nums">{torrent.progress.toFixed(1)}%</span>
-                  </div>
-                  <!-- Speed -->
-                  <div>Speed: {torrent.speed}</div>
-                  <!-- Peers -->
-                  <div>Peers: {torrent.peers} active / {torrent.totalPeers} known · {torrent.seeders} seeders</div>
-                  <!-- Size -->
-                  {#if torrent.totalBytes > 0}
-                    <div>Size: {formatBytes(torrent.downloadedBytes)} / {formatBytes(torrent.totalBytes)}</div>
-                  {/if}
-                  <!-- ETA -->
-                  {#if torrent.speedBps > 0 && torrent.totalBytes > 0}
-                    <div>ETA: {formatEta(torrent.totalBytes - torrent.downloadedBytes, torrent.speedBps)}</div>
-                  {/if}
-                </div>
-              </Tooltip.Content>
-            </Tooltip.Root>
-          {/if}
-
-          <!-- Audio tracks -->
-          {#if Player.audioTracks.length > 0}
-            <Popover.Root bind:open={audioOpen}>
-              <Popover.Trigger>
-                {#snippet child({ props })}
-                  <Button
-                          {...props}
-                          variant="ghost"
-                          size="sm"
-                          class="gap-1.5 text-white hover:bg-white/15 hover:text-white"
-                  >
-                    <Headphones class="size-4" />
-                    <span class="max-w-28 truncate text-xs">
-                      {selectedAudio?.title ||
-                      langName(selectedAudio?.lang ?? "") ||
-                      "Audio"}
-                    </span>
-                  </Button>
-                {/snippet}
-              </Popover.Trigger>
-              <Popover.Content side="top" align="end" class="w-56 p-1">
-                <p class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  Audio
-                </p>
-                <div class="max-h-72 overflow-y-auto">
-                  {#each sortedAudio as track (track.id)}
-                    {@render menuItem(
-                            trackLabel(track, "Audio"),
-                            !!track.selected,
-                            () => Player.setAudioTrack(track.id),
-                    )}
-                  {/each}
-                </div>
-              </Popover.Content>
-            </Popover.Root>
-          {/if}
-
-          <!-- Subtitles -->
-          {#if Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
-            <Popover.Root bind:open={subsOpen}>
-              <Popover.Trigger>
-                {#snippet child({ props })}
-                  <Button
-                          {...props}
-                          variant="ghost"
-                          size="sm"
-                          class="gap-1.5 text-white hover:bg-white/15 hover:text-white"
-                  >
-                    <Captions class="size-4" />
-                    <span class="max-w-28 truncate text-xs">{subtitleLabel}</span>
-                  </Button>
-                {/snippet}
-              </Popover.Trigger>
-              <Popover.Content side="top" align="end" class="w-60 p-1">
-                <p class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  Subtitles
-                </p>
-                <div class="max-h-72 overflow-y-auto">
-                  {@render menuItem("Off", subSelection.kind === "off", () =>
-                          selectSubtitle({ kind: "off" }),
-                  )}
-                  {#each subtitleSections as section (section.source)}
-                    <p
-                            class="px-2 pt-2 pb-0.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
-                    >
-                      {section.source}
-                    </p>
-                    {#each section.groups as group (group.label)}
-                      <p
-                              class="px-2 pt-1 pb-0.5 pl-3 text-[10px] font-medium tracking-wide text-muted-foreground/60 uppercase"
-                      >
-                        {group.label}
-                      </p>
-                      {#each group.items as item (item.key)}
-                        {@render menuItem(
-                                item.label,
-                                (subSelection.kind === "embedded" &&
-                                        item.kind === "embedded" &&
-                                        subSelection.id === item.id) ||
-                                (subSelection.kind === "external" &&
-                                        item.kind === "external" &&
-                                        subSelection.id === item.id),
-                                () =>
-                                        item.kind === "embedded"
-                                                ? selectSubtitle({ kind: "embedded", id: item.id })
-                                                : selectSubtitle({ kind: "external", id: item.id }),
-                        )}
-                      {/each}
-                    {/each}
-                  {/each}
-                </div>
-
-                <!-- Style controls (size / position / background box) -->
-                <div class="mt-1 border-t border-border px-2 pt-2 pb-1">
-                  <p class="pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/70 uppercase">
-                    Style
-                  </p>
-                  <div class="space-y-3 py-1">
-                    <div class="space-y-1.5">
-                      <div class="flex items-center justify-between text-xs">
-                        <span>Size</span>
-                        <span class="tabular-nums text-muted-foreground">
-                          {Math.round($settings?.subtitleSize ?? 100)}%
-                        </span>
-                      </div>
-                      <Slider
-                              type="single"
-                              value={$settings?.subtitleSize ?? 100}
-                              min={50}
-                              max={200}
-                              step={10}
-                              onValueChange={(v) => updateSubStyle({ subtitleSize: v })}
-                              aria-label="Subtitle size"
-                      />
-                    </div>
-                    <div class="space-y-1.5">
-                      <div class="flex items-center justify-between text-xs">
-                        <span>Position</span>
-                        <span class="tabular-nums text-muted-foreground">
-                          {Math.round($settings?.subtitlePosition ?? 8)}%
-                        </span>
-                      </div>
-                      <Slider
-                              type="single"
-                              value={$settings?.subtitlePosition ?? 8}
-                              min={2}
-                              max={90}
-                              step={1}
-                              onValueChange={(v) => updateSubStyle({ subtitlePosition: v })}
-                              aria-label="Subtitle position"
-                      />
-                    </div>
-                  </div>
-                  {@render menuItem(
-                          "Background box",
-                          $settings?.subtitleBackground ?? false,
-                          () =>
-                                  updateSubStyle({
-                                    subtitleBackground: !($settings?.subtitleBackground ?? false),
-                                  }),
-                  )}
-                </div>
-              </Popover.Content>
-            </Popover.Root>
-          {/if}
-
-          <!-- Episodes sidebar toggle (TV only, when caller provides onPlayStream) -->
-          {#if media?.media_type === "tv" && onPlayStream}
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                {#snippet child({ props })}
-                  <Button
-                    {...props}
-                    variant="ghost"
-                    size="sm"
-                    class="gap-1.5 text-white hover:bg-white/15 hover:text-white {episodesOpen
-                      ? 'bg-white/15'
-                      : ''}"
-                    onclick={() => (episodesOpen = !episodesOpen)}
-                  >
-                    <ListVideo class="size-4" />
-                    <span class="text-xs">Episodes</span>
-                  </Button>
-                {/snippet}
-              </Tooltip.Trigger>
-              <Tooltip.Content>Episodes</Tooltip.Content>
-            </Tooltip.Root>
-          {/if}
-
-          <!-- Playback speed -->
-          <Popover.Root bind:open={speedOpen}>
-            <Popover.Trigger>
-              {#snippet child({ props })}
-                <Button
-                        {...props}
-                        variant="ghost"
-                        size="sm"
-                        class="gap-1.5 text-white hover:bg-white/15 hover:text-white"
-                >
-                  <Gauge class="size-4" />
-                  <span class="text-xs">
-                    {Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}
-                  </span>
-                </Button>
-              {/snippet}
-            </Popover.Trigger>
-            <Popover.Content side="top" align="end" class="w-40 p-1">
-              <p class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                Playback speed
-              </p>
-              {#each SPEEDS as speed (speed)}
-                {@render menuItem(
-                        speed === 1 ? "Normal (1×)" : `${speed}×`,
-                        Player.playbackSpeed === speed,
-                        () => Player.setPlaybackSpeed(speed),
-                )}
-              {/each}
-            </Popover.Content>
-          </Popover.Root>
-
-          <!-- Aspect ratio cycle -->
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              {#snippet child({ props })}
-                <Button
-                        {...props}
-                        variant="ghost"
-                        size="sm"
-                        class="gap-1.5 text-white hover:bg-white/15 hover:text-white"
-                        onclick={cycleAspect}
-                >
-                  <Ratio class="size-4" />
-                  <span class="max-w-28 truncate text-xs">{ASPECT_LABELS[Player.aspectMode]}</span>
-                </Button>
-              {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content>Aspect ratio · V</Tooltip.Content>
-          </Tooltip.Root>
-
-          <!-- Keyboard shortcuts -->
-          <Popover.Root bind:open={helpOpen}>
-            <Popover.Trigger>
-              {#snippet child({ props })}
-                <Button
-                        {...props}
-                        variant="ghost"
-                        size="icon"
-                        class="text-white hover:bg-white/15 hover:text-white"
-                        aria-label="Keyboard shortcuts"
-                >
-                  <Keyboard class="size-4" />
-                </Button>
-              {/snippet}
-            </Popover.Trigger>
-            <Popover.Content side="top" align="end" class="w-64 p-3">
-              <p class="mb-2 text-xs font-medium text-muted-foreground">
-                Keyboard shortcuts
-              </p>
-              <dl class="space-y-1.5 text-sm">
-                {@render shortcut("Play / pause", "Space")}
-                {@render shortcut("Seek ±5s", "← →")}
-                {@render shortcut("Seek ±10s", "J L")}
-                {@render shortcut("Volume", "↑ ↓")}
-                {@render shortcut("Mute", "M")}
-                {@render shortcut("Subtitles", "C")}
-                {@render shortcut("Aspect ratio", "V")}
-                {@render shortcut("Jump to 0–90%", "0–9")}
-              </dl>
-            </Popover.Content>
-          </Popover.Root>
-        </div>
-      </div>
+      <PlayerControls
+        {externalSubtitles}
+        {subSelection}
+        {chapterBars}
+        {isHash}
+        {torrent}
+        showEpisodes={media?.media_type === "tv" && !!onPlayStream}
+        bind:episodesOpen
+        {toggleMute}
+        {chooseAudioTrack}
+        {chooseSubtitle}
+        {updateSubStyle}
+        {chooseSpeed}
+        {cycleAspect}
+        onMenuOpenChange={(o) => (menuOpen = o)}
+      />
     </div>
 
     <!-- ── Episodes sidebar ─────────────────────────────────────────────────── -->
     {#if episodesOpen && media}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-              class="flex flex-col bg-background/75 rounded-2xl absolute top-20 bottom-24 right-0 z-20 w-[35vw] max-w-[85vw] pt-4 gap-4"
-              transition:fly={{ x: 420, duration: 250 }}
-              onclick={(e) => e.stopPropagation()}
-              onkeydown={(e) => e.stopPropagation()}
-      >
-        <Button
-                class="absolute top-3 right-3 z-30"
-                size="icon"
-                variant="outline"
-                onclick={() => (episodesOpen = false)}
-                aria-label="Close episodes"
-        >
-          <X class="size-4" />
-        </Button>
-
-        <div class="pt-10 overflow-y-auto flex-1">
-          <StreamsList
-                  {media}
-                  streamActive={true}
-                  activeSeason={season}
-                  activeEpisode={episode}
-                  autoJumpToActive={false}
-                  onPlayStream={(stream, s, e, name, candidates) => {
-        episodesOpen = false;
-        onPlayStream?.(stream, s, e, name, candidates);
-      }}
-          />
-        </div>
-      </div>
+      <EpisodesSidebar
+        {media}
+        {season}
+        {episode}
+        {onPlayStream}
+        onClose={() => (episodesOpen = false)}
+      />
     {/if}
   {/if}
 
   <!-- ── Skip segment button (IntroDB) ────────────────────────────────────── -->
   {#if activeSegment}
-    <!-- svelte-ignore a11y_consider_explicit_label -->
-    <Button
-      variant="default"
-      size="lg"
-      class="absolute bottom-20 right-6 z-20 font-semibold"
-      onclick={(e) => { e.stopPropagation(); skipSegment(activeSegment!); }}
-    >
-      Skip {activeSegment.label}
-    </Button>
+    <SkipSegmentButton
+      label={activeSegment.label}
+      onSkip={() => skipSegment(activeSegment!)}
+    />
   {/if}
 
   <!-- ── Up-next overlay (F6) ─────────────────────────────────────────────── -->
   {#if showUpNext && nextEp}
-    <div
-      class="absolute bottom-20 right-6 z-20 w-72 overflow-hidden rounded-lg border border-white/20 bg-black/80 text-white shadow-2xl backdrop-blur-sm p-4"
-      transition:fade={{ duration: 150 }}
-    >
-      <div class="flex items-start justify-between gap-2">
-        <p class="text-xs font-medium uppercase tracking-wide text-white/60">
-          Up next · S{nextEp.season}E{nextEp.episode.episode_number}
-        </p>
-        <Button
-          variant="outline"
-          size="icon-sm"
-          class="shrink-0 p-0.5"
-          onclick={(e) => { e.stopPropagation(); dismissUpNext(); }}
-          aria-label="Dismiss"
-        >
-          <X class="size-4" />
-        </Button>
-      </div>
-      {#if !$settings?.hideSpoilers && nextEp.episode.name}
-        <p class="truncate px-4 pb-3 text-sm text-white/90">{nextEp.episode.name}</p>
-      {:else}
-        <div class="pb-3"></div>
-      {/if}
-      <Button
-        variant="outline"
-        class="flex w-full items-center justify-center hover:text-accent"
-        onclick={(e) => { e.stopPropagation(); advance(); }}
-      >
-        <SkipForward class="size-4" />
-        Watch now
-      </Button>
-      {#if countdownSecs !== null}
-        <div class="px-4 py-2">
-          <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>
-          <div class="h-1 w-full overflow-hidden rounded-full bg-white/20">
-            <div
-              class="h-full bg-white transition-[width] duration-1000 ease-linear"
-              style="width: {((10 - countdownSecs) / 10) * 100}%"
-            ></div>
-          </div>
-        </div>
-      {/if}
-    </div>
+    <UpNextOverlay
+      {nextEp}
+      {countdownSecs}
+      hideSpoilers={$settings?.hideSpoilers ?? false}
+      onDismiss={dismissUpNext}
+      onWatchNow={advance}
+    />
   {/if}
 
   <!-- ── Loading screen ─────────────────────────────────────────────────────── -->
   {#if Player.available && !canPlay}
-    <div class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black">
-      {#if _onclose}
-        <button
-          type="button"
-          class="absolute right-4 top-4 z-10 flex size-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white"
-          onclick={() => _onclose?.()}
-          aria-label="Close player"
-        >
-          <X class="size-5" />
-        </button>
-      {/if}
-      {#if media?.poster_path}
-        <div
-                class="absolute inset-0 scale-110 bg-cover bg-center"
-                style="background-image: url('{media.poster_path}'); filter: blur(5px); opacity: 0.35;"
-        ></div>
-      {/if}
-      <div class="absolute inset-0 bg-black/65"></div>
-      {#if logoUrl}
-        <img
-                src={logoUrl}
-                alt={title}
-                class="relative z-10 max-h-40 max-w-xs object-contain drop-shadow-2xl"
-        />
-      {:else if media?.poster_path}
-        <img
-                src={media.poster_path}
-                alt={title}
-                class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
-        />
-      {:else if title}
-        <span class="relative z-10 px-8 text-center text-3xl font-bold text-white">{title}</span>
-      {/if}
-      <Spinner class="relative z-10 mt-6 size-10" />
-      <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>
-      {#if takingAWhile}
-        <p class="relative z-10 mt-2 text-xs text-white/40" transition:fade={{ duration: 150 }}>
-          This is taking a while…
-        </p>
-        <Button
-          variant="outline"
-          size="sm"
-          class="relative z-10 mt-4 text-white"
-          onclick={() => triggerPlaybackFailed()}
-        >
-          Cancel
-        </Button>
-      {/if}
-    </div>
+    <LoadingScreen
+      {media}
+      {title}
+      {logoUrl}
+      {loadingMessage}
+      {takingAWhile}
+      onCancel={triggerPlaybackFailed}
+      onClose={_onclose}
+    />
   {/if}
 </div>

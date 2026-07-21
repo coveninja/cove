@@ -12,7 +12,7 @@
     onClose,
   }: {
     title: string;
-    items: { id: string | number; label: string; sublabel?: string; dot?: string }[];
+    items: { id: string | number; label: string; sublabel?: string; dot?: string; header?: boolean; indent?: boolean }[];
     selectedId?: string | number | null;
     onSelect: (id: string | number) => void;
     onClose: () => void;
@@ -87,29 +87,35 @@
   <!-- Item list -->
   <div class="flex-1 overflow-y-auto py-2">
     {#each items as item (item.id)}
-      <button
-        type="button"
-        class="flex min-h-[56px] w-full items-center gap-3 px-6 py-3 text-left transition-colors hover:bg-white/8 focus:bg-white/10"
-        data-track-selected={selectedId === item.id ? "true" : "false"}
-        onclick={() => {
-          onSelect(item.id);
-          onClose();
-        }}
-        use:focusable={{ groupId: "tv-track-panel" }}
-      >
-        {#if item.dot}
-          <span class="size-2 shrink-0 rounded-full {item.dot}"></span>
-        {/if}
-        <span class="flex-1 min-w-0">
-          <span class="block text-sm font-medium leading-snug">{item.label}</span>
-          {#if item.sublabel}
-            <span class="block text-xs text-white/50 leading-snug">{item.sublabel}</span>
+      {#if item.header}
+        <p class="px-6 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-white/40 {item.indent ? 'pl-9 pt-3 text-[10px] normal-case tracking-wide text-white/30' : ''}">
+          {item.label}
+        </p>
+      {:else}
+        <button
+          type="button"
+          class="flex min-h-[56px] w-full items-center gap-3 px-6 py-3 text-left transition-colors hover:bg-white/8 focus:bg-white/10"
+          data-track-selected={selectedId === item.id ? "true" : "false"}
+          onclick={() => {
+            onSelect(item.id);
+            onClose();
+          }}
+          use:focusable={{ groupId: "tv-track-panel" }}
+        >
+          {#if item.dot}
+            <span class="size-2 shrink-0 rounded-full {item.dot}"></span>
           {/if}
-        </span>
-        {#if selectedId === item.id}
-          <Check class="size-5 shrink-0 text-white" />
-        {/if}
-      </button>
+          <span class="flex-1 min-w-0">
+            <span class="block text-sm font-medium leading-snug">{item.label}</span>
+            {#if item.sublabel}
+              <span class="block text-xs text-white/50 leading-snug">{item.sublabel}</span>
+            {/if}
+          </span>
+          {#if selectedId === item.id}
+            <Check class="size-5 shrink-0 text-white" />
+          {/if}
+        </button>
+      {/if}
     {/each}
   </div>
 </div>

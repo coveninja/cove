@@ -9,12 +9,15 @@
     selectedId = null,
     onSelect,
     onClose,
+    footer,
   }: {
     title: string;
-    items: { id: string | number; label: string; sublabel?: string }[];
+    items: { id: string | number; label: string; sublabel?: string; header?: boolean; indent?: boolean }[];
     selectedId?: string | number | null;
     onSelect: (id: string | number) => void;
     onClose: () => void;
+    /** Optional controls rendered in a fixed section below the scrollable list. */
+    footer?: import("svelte").Snippet;
   } = $props();
 
   // Custom springy slide-up entrance transition (outBack easing with overshoot).
@@ -149,24 +152,34 @@
   <!-- Item list -->
   <div bind:this={listEl} class="overflow-y-auto pb-3" style="max-height: 65vh;">
     {#each items as item (item.id)}
-      <button
-        type="button"
-        class="flex min-h-[52px] w-full items-center gap-3 px-5 py-3 text-left transition-colors active:bg-white/10"
-        onclick={() => {
-          onSelect(item.id);
-          onClose();
-        }}
-      >
-        <span class="min-w-0 flex-1">
-          <span class="block text-sm font-medium leading-snug">{item.label}</span>
-          {#if item.sublabel}
-            <span class="block text-xs leading-snug text-white/50">{item.sublabel}</span>
+      {#if item.header}
+        <p class="px-5 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-white/40 {item.indent ? 'pl-8 pt-3 text-[10px] normal-case tracking-wide text-white/30' : ''}">
+          {item.label}
+        </p>
+      {:else}
+        <button
+          type="button"
+          class="flex min-h-[52px] w-full items-center gap-3 px-5 py-3 text-left transition-colors active:bg-white/10"
+          onclick={() => {
+            onSelect(item.id);
+            onClose();
+          }}
+        >
+          <span class="min-w-0 flex-1">
+            <span class="block text-sm font-medium leading-snug">{item.label}</span>
+            {#if item.sublabel}
+              <span class="block text-xs leading-snug text-white/50">{item.sublabel}</span>
+            {/if}
+          </span>
+          {#if selectedId === item.id}
+            <Check class="size-4 shrink-0 text-white" />
           {/if}
-        </span>
-        {#if selectedId === item.id}
-          <Check class="size-4 shrink-0 text-white" />
-        {/if}
-      </button>
+        </button>
+      {/if}
     {/each}
   </div>
+
+  {#if footer}
+    <div class="shrink-0">{@render footer()}</div>
+  {/if}
 </div>
