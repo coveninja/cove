@@ -5,7 +5,7 @@
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import { RefreshCw, LogOut, LogIn, Trash2, Check } from "lucide-svelte";
+  import { RefreshCw, LogOut, LogIn, Trash2, Check, Pencil, X } from "lucide-svelte";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import InsightsPage from "./InsightsPage.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";

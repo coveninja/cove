@@ -34,15 +34,39 @@ func TestGeneration_Bumps(t *testing.T) {
 	l.MergeFrom([]*LibraryEntry{{
 		ID: "id1", TmdbID: 1, MediaType: "movie", Title: "Test",
 		Status: StatusWatchLater, AddedAt: time.Now(), UpdatedAt: time.Now(),
-	}}, nil, nil)
+	}}, nil, nil, nil)
 	assert.Greater(t, l.Generation(), g0)
+}
+
+func TestMergeFrom_IdenticalDataDoesNotBumpGeneration(t *testing.T) {
+	l := newLib(t)
+	now := time.Now().UTC()
+	e := &LibraryEntry{
+		ID: "id1", TmdbID: 1, MediaType: "movie", Title: "Test",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now,
+	}
+	p := &WatchProgress{
+		ID: "progress1", TmdbID: 1, MediaType: "movie",
+		PositionSeconds: 10, WatchedAt: now,
+	}
+	d := &Dismissal{TmdbID: 2, MediaType: "movie", DismissedAt: now}
+	r := &Removal{TmdbID: 3, MediaType: "movie", RemovedAt: now}
+
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, []*Dismissal{d}, []*Removal{r})
+	gen := l.Generation()
+	tasteGen := l.TasteGeneration()
+
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, []*Dismissal{d}, []*Removal{r})
+
+	assert.Equal(t, gen, l.Generation())
+	assert.Equal(t, tasteGen, l.TasteGeneration())
 }
 
 func TestMergeFrom_AddEntry(t *testing.T) {
 	l := newLib(t)
 	now := time.Now()
 	e := &LibraryEntry{ID: "abc", TmdbID: 42, MediaType: "movie", Title: "Foo", Status: StatusWatching, AddedAt: now, UpdatedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, nil, nil)
+	l.MergeFrom([]*LibraryEntry{e}, nil, nil, nil)
 	entries := l.AllEntries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, 42, entries[0].TmdbID)
@@ -53,10 +77,10 @@ func TestMergeFrom_LastWriteWins(t *testing.T) {
 	old := time.Now().Add(-time.Hour)
 	recent := time.Now()
 	e1 := &LibraryEntry{ID: "e1", TmdbID: 7, MediaType: "tv", Title: "Old", Status: StatusWatchLater, AddedAt: old, UpdatedAt: old}
-	l.MergeFrom([]*LibraryEntry{e1}, nil, nil)
+	l.MergeFrom([]*LibraryEntry{e1}, nil, nil, nil)
 
 	e2 := &LibraryEntry{ID: "e1", TmdbID: 7, MediaType: "tv", Title: "New", Status: StatusFinished, AddedAt: old, UpdatedAt: recent}
-	l.MergeFrom([]*LibraryEntry{e2}, nil, nil)
+	l.MergeFrom([]*LibraryEntry{e2}, nil, nil, nil)
 	entries := l.AllEntries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, StatusFinished, entries[0].Status)
@@ -66,20 +90,20 @@ func TestMergeFrom_MostRecentProgressWins(t *testing.T) {
 	l := newLib(t)
 	base := time.Now()
 	p1 := &WatchProgress{ID: "p1", TmdbID: 1, MediaType: "movie", PositionSeconds: 100, WatchedAt: base}
-	l.MergeFrom(nil, []*WatchProgress{p1}, nil)
+	l.MergeFrom(nil, []*WatchProgress{p1}, nil, nil)
 
 	// A more recent write wins, even with a LOWER position — this is what
 	// makes "mark as unwatched" (position 0) and rewatch-from-start
 	// syncable. The old max-position rule reverted both.
 	p2 := &WatchProgress{ID: "p2", TmdbID: 1, MediaType: "movie", PositionSeconds: 0, Completed: false, WatchedAt: base.Add(time.Minute)}
-	l.MergeFrom(nil, []*WatchProgress{p2}, nil)
+	l.MergeFrom(nil, []*WatchProgress{p2}, nil, nil)
 	progs := l.AllProgress()
 	require.Len(t, progs, 1)
 	assert.Equal(t, float64(0), progs[0].PositionSeconds)
 
 	// An older write never overwrites a newer one, regardless of position.
 	p3 := &WatchProgress{ID: "p3", TmdbID: 1, MediaType: "movie", PositionSeconds: 5000, WatchedAt: base.Add(-time.Hour)}
-	l.MergeFrom(nil, []*WatchProgress{p3}, nil)
+	l.MergeFrom(nil, []*WatchProgress{p3}, nil, nil)
 	progs = l.AllProgress()
 	require.Len(t, progs, 1)
 	assert.Equal(t, float64(0), progs[0].PositionSeconds)
@@ -89,7 +113,7 @@ func TestMergeFrom_MostRecentProgressWins(t *testing.T) {
 func TestDismissal(t *testing.T) {
 	l := newLib(t)
 	d := &Dismissal{TmdbID: 99, MediaType: "movie", DismissedAt: time.Now()}
-	l.MergeFrom(nil, nil, []*Dismissal{d})
+	l.MergeFrom(nil, nil, []*Dismissal{d}, nil)
 	ds := l.AllDismissals()
 	require.Len(t, ds, 1)
 	assert.Equal(t, 99, ds[0].TmdbID)
@@ -101,7 +125,7 @@ func TestStats(t *testing.T) {
 	l.MergeFrom([]*LibraryEntry{
 		{ID: "a", TmdbID: 1, MediaType: "movie", Status: StatusFinished, Rating: &rating, AddedAt: time.Now(), UpdatedAt: time.Now()},
 		{ID: "b", TmdbID: 2, MediaType: "tv", Status: StatusWatching, AddedAt: time.Now(), UpdatedAt: time.Now()},
-	}, nil, []*Dismissal{{TmdbID: 3, MediaType: "movie", DismissedAt: time.Now()}})
+	}, nil, []*Dismissal{{TmdbID: 3, MediaType: "movie", DismissedAt: time.Now()}}, nil)
 
 	st := l.Stats()
 	assert.Equal(t, 2, st.Total)
@@ -116,7 +140,7 @@ func TestTasteSignals(t *testing.T) {
 	l := newLib(t)
 	l.MergeFrom([]*LibraryEntry{
 		{ID: "a", TmdbID: 1, MediaType: "movie", Status: StatusFinished, AddedAt: time.Now(), UpdatedAt: time.Now()},
-	}, nil, []*Dismissal{{TmdbID: 2, MediaType: "tv", DismissedAt: time.Now()}})
+	}, nil, []*Dismissal{{TmdbID: 2, MediaType: "tv", DismissedAt: time.Now()}}, nil)
 
 	signals := l.TasteSignals()
 	require.Len(t, signals, 2)
@@ -243,7 +267,7 @@ func TestGeneration_NotDoubleBumpedByMergeFrom(t *testing.T) {
 	l.MergeFrom([]*LibraryEntry{{
 		ID: "id1", TmdbID: 1, MediaType: "movie", Title: "Test",
 		Status: StatusWatchLater, AddedAt: time.Now(), UpdatedAt: time.Now(),
-	}}, nil, nil)
+	}}, nil, nil, nil)
 	// persist() bumps gen exactly once; MergeFrom must not add a second bump
 	// on top of it.
 	assert.Equal(t, g0+1, l.Generation())
@@ -271,7 +295,7 @@ func TestRegenerateIDsNotIn_RegeneratesNonOwned(t *testing.T) {
 		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
 	p := &WatchProgress{ID: "foreign-progress-id", TmdbID: 1, MediaType: "movie",
 		LibraryEntryID: "foreign-entry-id", WatchedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil, nil)
 
 	gen0 := l.Generation()
 
@@ -300,7 +324,7 @@ func TestRegenerateIDsNotIn_OwnershipPreservesIDs(t *testing.T) {
 		Status: StatusWatching, AddedAt: now, UpdatedAt: now}
 	p := &WatchProgress{ID: "owned-progress", TmdbID: 2, MediaType: "tv",
 		LibraryEntryID: "owned-entry", WatchedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil, nil)
 
 	// Both IDs ARE in the owned sets → must not change.
 	l.RegenerateIDsNotIn(
@@ -325,7 +349,7 @@ func TestRegenerateIDsNotIn_MixedOwnership(t *testing.T) {
 		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
 	eForeign := &LibraryEntry{ID: "foreign-e", TmdbID: 4, MediaType: "movie", Title: "B",
 		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
-	l.MergeFrom([]*LibraryEntry{eOwned, eForeign}, nil, nil)
+	l.MergeFrom([]*LibraryEntry{eOwned, eForeign}, nil, nil, nil)
 
 	l.RegenerateIDsNotIn(
 		map[string]bool{"owned-e": true},
@@ -355,7 +379,7 @@ func TestAdoptRemoteIDs_EntryIDAdopted(t *testing.T) {
 
 	e := &LibraryEntry{ID: "local-entry-uuid", TmdbID: 10, MediaType: "movie", Title: "T",
 		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, nil, nil)
+	l.MergeFrom([]*LibraryEntry{e}, nil, nil, nil)
 
 	gen0 := l.Generation()
 
@@ -377,7 +401,7 @@ func TestAdoptRemoteIDs_EntryNotInRemote(t *testing.T) {
 
 	e := &LibraryEntry{ID: "local-only-uuid", TmdbID: 20, MediaType: "tv", Title: "T",
 		Status: StatusWatching, AddedAt: now, UpdatedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, nil, nil)
+	l.MergeFrom([]*LibraryEntry{e}, nil, nil, nil)
 
 	// Remote list contains a different title — local entry must not change.
 	l.AdoptRemoteIDs([]RemoteRowID{
@@ -399,7 +423,7 @@ func TestAdoptRemoteIDs_ProgressIDAdopted(t *testing.T) {
 		Status: StatusWatching, AddedAt: now, UpdatedAt: now}
 	p := &WatchProgress{ID: "local-prog-uuid", TmdbID: 30, MediaType: "tv",
 		LibraryEntryID: "entry-uuid", Season: intPtr(1), Episode: intPtr(2), WatchedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil, nil)
 
 	l.AdoptRemoteIDs(nil, []RemoteRowID{
 		{ID: "remote-prog-uuid", TmdbID: 30, MediaType: "tv", Season: intPtr(1), Episode: intPtr(2)},
@@ -420,7 +444,7 @@ func TestAdoptRemoteIDs_LibraryEntryIDRemapped(t *testing.T) {
 		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now}
 	p := &WatchProgress{ID: "prog-uuid", TmdbID: 40, MediaType: "movie",
 		LibraryEntryID: "old-entry-uuid", WatchedAt: now}
-	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil)
+	l.MergeFrom([]*LibraryEntry{e}, []*WatchProgress{p}, nil, nil)
 
 	l.AdoptRemoteIDs([]RemoteRowID{
 		{ID: "new-entry-uuid", TmdbID: 40, MediaType: "movie"},

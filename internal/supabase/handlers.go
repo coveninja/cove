@@ -8,6 +8,7 @@ package supabase
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -110,6 +111,18 @@ func (s *Server) pushAsync(userJWT, profileID, context string) {
 			if err := s.cfg.PushActivity(userJWT, profileID, s.activityStore); err != nil {
 				log.Println(context+": push activity:", err)
 				pushErrs = append(pushErrs, "activity: "+err.Error())
+			}
+		}
+
+		active := s.profileStore.ActiveProfile()
+		if active.SupabaseUID != nil {
+			nameTS := active.NameUpdatedAt
+			if nameTS.IsZero() {
+				nameTS = time.Now()
+			}
+			if err := s.cfg.EnsureProfile(userJWT, active.ID, *active.SupabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
+				log.Println(context+": push profile name:", err)
+				pushErrs = append(pushErrs, "profile: "+err.Error())
 			}
 		}
 
@@ -262,7 +275,7 @@ func (s *Server) finishRegistration(w http.ResponseWriter, userID, accessToken, 
 	if err := s.profileStore.LinkSupabase(activeProfile.ID, userID); err != nil {
 		log.Println("supabase register: link profile:", err)
 	}
-	if err := s.cfg.EnsureProfile(accessToken, activeProfile.ID, userID, profileName, activeProfile.IsPrimary); err != nil {
+	if err := s.cfg.EnsureProfile(accessToken, activeProfile.ID, userID, profileName, activeProfile.IsPrimary, time.Now()); err != nil {
 		http.Error(w, "could not create remote profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -303,7 +316,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mergeRemote(userID, accessToken)
+	if err := s.mergeRemote(userID, accessToken); err != nil {
+		http.Error(w, "signed in but initial sync failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -366,7 +382,10 @@ func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mergeRemote(userID, accessToken)
+	if err := s.mergeRemote(userID, accessToken); err != nil {
+		http.Error(w, "signed in but initial sync failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -382,8 +401,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Clear the supabase link on the active profile by linking to empty string...
-	// actually just return OK; the frontend clears its session via supabase-js.
+	if err := s.profileStore.UnlinkSupabase(s.profileStore.ActiveProfile().ID); err != nil {
+		log.Println("supabase logout: unlink:", err)
+	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -424,7 +444,10 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pull remote → merge locally.
-	s.mergeRemote(userID, token)
+	if err := s.mergeRemote(userID, token); err != nil {
+		http.Error(w, "sync pull failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 
 	// Push local → remote (catches any records that failed during initial push).
 	s.pushAsync(token, s.profileStore.ActiveProfile().ID, "supabase sync")
@@ -457,25 +480,34 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 // Without this, a device that didn't perform the original registration
 // pushes rows whose profile_id has no owner in `profiles` — which RLS
 // rejects with 42501 — and pulls a profile ID that has no remote data.
-func (s *Server) reconcileProfile(supabaseUID, userJWT string) profiles.Profile {
+func (s *Server) reconcileProfile(supabaseUID, userJWT string) (profiles.Profile, error) {
 	active := s.profileStore.ActiveProfile()
 
 	remotes, err := s.cfg.RemoteProfilesForUser(userJWT, supabaseUID)
 	if err != nil {
-		log.Println("supabase: list remote profiles:", err)
-		return active
+		return active, fmt.Errorf("list remote profiles: %w", err)
 	}
 	for _, r := range remotes {
 		if r.ID == active.ID {
-			return active
+			if r.Name != "" && r.Name != active.Name && r.UpdatedAt.After(active.NameUpdatedAt) {
+				if err := s.profileStore.RenameFromRemote(active.ID, r.Name, r.UpdatedAt); err != nil {
+					return active, fmt.Errorf("reconcile profile name: %w", err)
+				}
+				return s.profileStore.ActiveProfile(), nil
+			}
+			return active, nil
 		}
 	}
 
 	if len(remotes) == 0 {
-		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary); err != nil {
-			log.Println("supabase: create remote profile:", err)
+		nameTS := active.NameUpdatedAt
+		if nameTS.IsZero() {
+			nameTS = time.Now()
 		}
-		return active
+		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
+			return active, fmt.Errorf("create remote profile: %w", err)
+		}
+		return active, nil
 	}
 
 	target := remotes[0]
@@ -491,18 +523,22 @@ func (s *Server) reconcileProfile(supabaseUID, userJWT string) profiles.Profile 
 		// pushes stop violating RLS; it becomes another profile of the
 		// same account.
 		log.Println("supabase: adopt remote profile:", err)
-		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary); err != nil {
-			log.Println("supabase: create remote profile:", err)
+		nameTS := active.NameUpdatedAt
+		if nameTS.IsZero() {
+			nameTS = time.Now()
 		}
-		return active
+		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
+			return active, fmt.Errorf("create remote profile after adoption failed: %w", err)
+		}
+		return active, nil
 	}
 	if target.Name != "" && target.Name != active.Name {
-		if err := s.profileStore.Rename(target.ID, target.Name); err != nil {
+		if err := s.profileStore.RenameFromRemote(target.ID, target.Name, target.UpdatedAt); err != nil {
 			log.Println("supabase: rename adopted profile:", err)
 		}
 	}
 	log.Printf("supabase: local profile adopted remote profile %s (%q)", target.ID, target.Name)
-	return s.profileStore.ActiveProfile()
+	return s.profileStore.ActiveProfile(), nil
 }
 
 // CleanupDeletedProfile removes all remote Supabase data for a deleted profile.
@@ -516,23 +552,25 @@ func (s *Server) CleanupDeletedProfile(userJWT, profileID string, supabaseUID *s
 }
 
 // mergeRemote pulls all Supabase data for a user and merges it into the active profile.
-func (s *Server) mergeRemote(supabaseUID, userJWT string) {
-	active := s.reconcileProfile(supabaseUID, userJWT)
+func (s *Server) mergeRemote(supabaseUID, userJWT string) error {
+	active, err := s.reconcileProfile(supabaseUID, userJWT)
+	if err != nil {
+		return err
+	}
 
 	// Link UID to profile if not already set.
 	if active.SupabaseUID == nil {
 		if err := s.profileStore.LinkSupabase(active.ID, supabaseUID); err != nil {
-			log.Println("supabase: link profile:", err)
+			return fmt.Errorf("link profile: %w", err)
 		}
 	}
 
 	pulled, err := s.cfg.PullAll(userJWT, active.ID)
 	if err != nil {
-		log.Println("supabase: pull:", err)
-		return
+		return fmt.Errorf("pull remote data: %w", err)
 	}
 
-	s.lib.MergeFrom(pulled.Entries, pulled.Progress, pulled.Dismissals)
+	s.lib.MergeFrom(pulled.Entries, pulled.Progress, pulled.Dismissals, pulled.Removals)
 
 	if pulled.Settings != nil {
 		s.st.MergeFrom(*pulled.Settings)
@@ -557,4 +595,5 @@ func (s *Server) mergeRemote(supabaseUID, userJWT string) {
 			log.Println("supabase: merge activity:", err)
 		}
 	}
+	return nil
 }

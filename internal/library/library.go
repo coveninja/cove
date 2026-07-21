@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,11 +83,20 @@ type Dismissal struct {
 	DismissedAt time.Time `json:"dismissed_at"`
 }
 
+// Removal is a tombstone recording that a title was intentionally removed
+// from the library, so a sync pull cannot resurrect it. Synced like Dismissal.
+type Removal struct {
+	TmdbID    int       `json:"tmdb_id"`
+	MediaType string    `json:"media_type"`
+	RemovedAt time.Time `json:"removed_at"`
+}
+
 // diskStore is the on-disk JSON format.
 type diskStore struct {
 	Entries   map[string]*LibraryEntry  `json:"entries"`   // key: entryKey()
 	Progress  map[string]*WatchProgress `json:"progress"`  // key: progressKey()
 	Dismissed map[string]*Dismissal     `json:"dismissed"` // key: entryKey()
+	Removed   map[string]*Removal       `json:"removed"`   // key: entryKey()
 }
 
 // TasteSignal is the minimal per-title signal the discover package needs,
@@ -161,22 +171,117 @@ func (l *Library) AllDismissals() []*Dismissal {
 	return out
 }
 
+// AllRemovals returns a snapshot of all removal tombstone records. Used for sync.
+func (l *Library) AllRemovals() []*Removal {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*Removal, 0, len(l.db.Removed))
+	for _, r := range l.db.Removed {
+		cp := *r
+		out = append(out, &cp)
+	}
+	return out
+}
+
 // MergeFrom merges remote data (pulled from Supabase) into the local store.
-// Remote entries replace local ones for the same (tmdb_id, media_type) key.
-// Watch progress takes the most recent write (WatchedAt). Dismissals are
-// unioned.
-func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal) {
+// Remote entries replace local ones for the same (tmdb_id, media_type) key
+// using last-write-wins semantics. Watch progress uses most-recent-write-wins.
+// Dismissals are unioned. Removal tombstones are LWW: a tombstone beats an
+// entry if the removal timestamp is >= the entry's UpdatedAt (removal wins
+// ties), and a re-added entry beats a tombstone only if its UpdatedAt is
+// strictly after the removal. Remote removals are applied to local entries and
+// both sides' tombstone maps are kept consistent.
+func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal, removals []*Removal) {
 	l.mu.Lock()
+	changed := false
+
+	// Build a map of incoming removals for O(1) lookup in the entries loop.
+	incomingRemovals := make(map[string]*Removal, len(removals))
+	for _, r := range removals {
+		key := entryKey(r.TmdbID, r.MediaType)
+		incomingRemovals[key] = r
+	}
+
+	// Merge remote entries with tombstone-aware last-write-wins.
 	for _, e := range entries {
 		key := entryKey(e.TmdbID, e.MediaType)
+
+		// Determine effective tombstone: the later of local and incoming.
+		localRemoval := l.db.Removed[key]
+		incomingRemoval := incomingRemovals[key]
+		var effectiveTombstone *Removal
+		if localRemoval != nil && incomingRemoval != nil {
+			if localRemoval.RemovedAt.After(incomingRemoval.RemovedAt) {
+				effectiveTombstone = localRemoval
+			} else {
+				effectiveTombstone = incomingRemoval
+			}
+		} else if localRemoval != nil {
+			effectiveTombstone = localRemoval
+		} else if incomingRemoval != nil {
+			effectiveTombstone = incomingRemoval
+		}
+
+		if effectiveTombstone != nil && !e.UpdatedAt.After(effectiveTombstone.RemovedAt) {
+			// Removal is at least as recent as the entry — removal wins; skip.
+			continue
+		}
+
+		// Entry is strictly newer than the tombstone (or there is no tombstone).
+		if effectiveTombstone != nil {
+			// Re-add wins: the entry was added back after the deletion.
+			// Clear the stale local tombstone so it does not block future merges.
+			if _, ok := l.db.Removed[key]; ok {
+				delete(l.db.Removed, key)
+				changed = true
+			}
+		}
+
 		if local, ok := l.db.Entries[key]; ok {
 			if e.UpdatedAt.After(local.UpdatedAt) {
-				l.db.Entries[key] = e
+				if !reflect.DeepEqual(local, e) {
+					l.db.Entries[key] = e
+					changed = true
+				}
 			}
 		} else {
 			l.db.Entries[key] = e
+			changed = true
 		}
 	}
+
+	// Apply remote removals to local entries and merge tombstones.
+	// This loop agrees with the entries loop: an entry survives only if its
+	// UpdatedAt is strictly after the removal timestamp.
+	for _, r := range removals {
+		key := entryKey(r.TmdbID, r.MediaType)
+		if local, ok := l.db.Entries[key]; ok {
+			if !local.UpdatedAt.After(r.RemovedAt) {
+				// Remote removal is at least as recent as the local entry — delete it.
+				delete(l.db.Entries, key)
+				changed = true
+				// Merge tombstone, keeping the later RemovedAt.
+				if existing := l.db.Removed[key]; existing == nil || r.RemovedAt.After(existing.RemovedAt) {
+					l.db.Removed[key] = r
+					changed = true
+				}
+			} else {
+				// Local entry is strictly newer (re-add wins) — do not keep the tombstone.
+				if _, ok := l.db.Removed[key]; ok {
+					delete(l.db.Removed, key)
+					changed = true
+				}
+			}
+		} else {
+			// No local entry. Merge the tombstone, keeping the later RemovedAt.
+			if existing := l.db.Removed[key]; existing == nil || r.RemovedAt.After(existing.RemovedAt) {
+				l.db.Removed[key] = r
+				changed = true
+			}
+		}
+	}
+
+	// Merge watch progress: most-recent-write wins.
 	for _, p := range progress {
 		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
 		if local, ok := l.db.Progress[key]; ok {
@@ -188,29 +293,41 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 			// silently reverted the change, and the push that follows a pull
 			// then uploaded the reverted record, cementing it.
 			if p.WatchedAt.After(local.WatchedAt) {
-				l.db.Progress[key] = p
+				if !reflect.DeepEqual(local, p) {
+					l.db.Progress[key] = p
+					changed = true
+				}
 			}
 		} else {
 			l.db.Progress[key] = p
+			changed = true
 		}
 	}
+
+	// Union dismissals.
 	for _, d := range dismissals {
 		key := entryKey(d.TmdbID, d.MediaType)
 		if _, ok := l.db.Dismissed[key]; !ok {
 			l.db.Dismissed[key] = d
+			changed = true
 		}
 	}
+
 	// Synchronous, not debounced (D3) — this is external data pulled from
 	// Supabase sync, not a local UI mutation, so it should hit disk right
 	// away rather than wait out persistDebounce.
-	if err := l.writeNow(); err != nil {
-		log.Println("library persist:", err)
+	if changed {
+		if err := l.writeNow(); err != nil {
+			log.Println("library persist:", err)
+		}
+		l.gen.Add(1)
 	}
-	l.gen.Add(1)
 	l.mu.Unlock()
 	// tasteGen is a distinct counter (D2): MergeFrom pulls in
-	// entries/progress/dismissals wholesale, all taste-relevant.
-	l.tasteGen.Add(1)
+	// entries/progress/dismissals/removals wholesale, all taste-relevant.
+	if changed {
+		l.tasteGen.Add(1)
+	}
 }
 
 // RemoteRowID identifies a remote Supabase row by its natural key and UUID,
@@ -603,6 +720,7 @@ func New(profileID string) (*Library, error) {
 			Entries:   make(map[string]*LibraryEntry),
 			Progress:  make(map[string]*WatchProgress),
 			Dismissed: make(map[string]*Dismissal),
+			Removed:   make(map[string]*Removal),
 		},
 	}
 
@@ -629,6 +747,10 @@ func New(profileID string) (*Library, error) {
 	if err := json.Unmarshal(raw, &l.db); err != nil {
 		return l, err
 	}
+	// Nil guard for on-disk files predating the "removed" field.
+	if l.db.Removed == nil {
+		l.db.Removed = make(map[string]*Removal)
+	}
 	return l, nil
 }
 
@@ -649,6 +771,7 @@ func (l *Library) SetProfile(profileID string) error {
 		Entries:   make(map[string]*LibraryEntry),
 		Progress:  make(map[string]*WatchProgress),
 		Dismissed: make(map[string]*Dismissal),
+		Removed:   make(map[string]*Removal),
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -657,6 +780,10 @@ func (l *Library) SetProfile(profileID string) error {
 	if err == nil {
 		if err := json.Unmarshal(raw, &newDB); err != nil {
 			return err
+		}
+		// Nil guard for on-disk files predating the "removed" field.
+		if newDB.Removed == nil {
+			newDB.Removed = make(map[string]*Removal)
 		}
 	}
 
@@ -707,6 +834,7 @@ func (l *Library) MarkExternallyWatched(
 			UpdatedAt:  now,
 		}
 		l.db.Entries[eKey] = entry
+		delete(l.db.Removed, eKey)
 	}
 
 	pKey := progressKey(tmdbID, mediaType, season, episode)
@@ -771,6 +899,7 @@ func (l *Library) AddWatchLater(
 		UpdatedAt:  now,
 	}
 	l.db.Entries[eKey] = entry
+	delete(l.db.Removed, eKey)
 	l.gen.Add(1)
 	l.markDirty()
 }
@@ -863,6 +992,7 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			entry = &LibraryEntry{ID: newUUID(), AddedAt: now}
 			l.db.Entries[key] = entry
+			delete(l.db.Removed, key)
 		}
 		entry.TmdbID = body.TmdbID
 		entry.MediaType = body.MediaType
@@ -1147,6 +1277,8 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "" && r.Method == http.MethodDelete:
 		l.mu.Lock()
 		delete(l.db.Entries, key)
+		// Record a removal tombstone so a sync pull cannot resurrect this entry.
+		l.db.Removed[key] = &Removal{TmdbID: tmdbID, MediaType: mediaType, RemovedAt: time.Now()}
 		// Deliberately do NOT delete WatchProgress records. The user is only
 		// removing the title from their list, not erasing their watch history.
 		// Progress records are keyed by (tmdb_id, media_type, season, episode)

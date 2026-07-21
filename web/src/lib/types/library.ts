@@ -69,6 +69,15 @@ export interface Dismissal {
   dismissed_at: string;
 }
 /**
+ * Removal is a tombstone recording that a title was intentionally removed
+ * from the library, so a sync pull cannot resurrect it. Synced like Dismissal.
+ */
+export interface Removal {
+  tmdb_id: number /* int */;
+  media_type: string;
+  removed_at: string;
+}
+/**
  * TasteSignal is the minimal per-title signal the discover package needs,
  * without exposing the library's internals.
  */

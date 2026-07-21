@@ -31,7 +31,7 @@ func TestBuildCandidates_SkipsNonWatchingStatuses(t *testing.T) {
 		{ID: "a", TmdbID: 1, MediaType: "movie", Status: library.StatusWatchLater, AddedAt: now, UpdatedAt: now},
 		{ID: "b", TmdbID: 2, MediaType: "movie", Status: library.StatusFinished, AddedAt: now, UpdatedAt: now},
 		{ID: "c", TmdbID: 3, MediaType: "movie", Status: library.StatusDropped, AddedAt: now, UpdatedAt: now},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()
@@ -45,7 +45,7 @@ func TestBuildCandidates_MidProgressMovie(t *testing.T) {
 		{ID: "a", TmdbID: 42, MediaType: "movie", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
 	}, []*library.WatchProgress{
 		{ID: "p1", TmdbID: 42, MediaType: "movie", PositionSeconds: 600, DurationSeconds: 6000, WatchedAt: now},
-	}, nil)
+	}, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()
@@ -62,7 +62,7 @@ func TestBuildCandidates_MidProgressTVEpisode(t *testing.T) {
 		{ID: "a", TmdbID: 99, MediaType: "tv", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
 	}, []*library.WatchProgress{
 		{ID: "p1", TmdbID: 99, MediaType: "tv", Season: intp(2), Episode: intp(5), PositionSeconds: 100, DurationSeconds: 1200, WatchedAt: now},
-	}, nil)
+	}, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()
@@ -82,7 +82,7 @@ func TestBuildCandidates_NearCompleteMovieSkipped(t *testing.T) {
 		{ID: "a", TmdbID: 7, MediaType: "movie", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
 	}, []*library.WatchProgress{
 		{ID: "p1", TmdbID: 7, MediaType: "movie", PositionSeconds: 95, DurationSeconds: 100, WatchedAt: now},
-	}, nil)
+	}, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()
@@ -94,7 +94,7 @@ func TestBuildCandidates_WatchingNoProgressRow(t *testing.T) {
 	now := time.Now()
 	lib.MergeFrom([]*library.LibraryEntry{
 		{ID: "a", TmdbID: 5, MediaType: "tv", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()
@@ -115,7 +115,7 @@ func TestBuildCandidates_WatchingNoProgressRowUsesLastWatched(t *testing.T) {
 			LastWatchedSeason: &s, LastWatchedEpisode: &e,
 			AddedAt: now, UpdatedAt: now,
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()
@@ -137,7 +137,7 @@ func TestBuildCandidates_CapAndMostRecentFirst(t *testing.T) {
 			Status: library.StatusWatching, AddedAt: ts, UpdatedAt: ts,
 		})
 	}
-	lib.MergeFrom(entries, nil, nil)
+	lib.MergeFrom(entries, nil, nil, nil)
 
 	w := New(lib, nil, nil, nil, nil)
 	candidates := w.buildCandidates()

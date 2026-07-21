@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coveninja/cove/internal/utils"
 )
@@ -29,10 +30,11 @@ var validProfileID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 // account can own many profiles; each profile has its own library, settings,
 // and addon config stored in separate files on disk.
 type Profile struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	IsPrimary   bool    `json:"is_primary"`
-	SupabaseUID *string `json:"supabase_uid"` // nil = guest / local-only
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	IsPrimary     bool      `json:"is_primary"`
+	SupabaseUID   *string   `json:"supabase_uid"`    // nil = guest / local-only
+	NameUpdatedAt time.Time `json:"name_updated_at"` // last time Name was changed; zero = unknown
 }
 
 type diskStore struct {
@@ -208,17 +210,48 @@ func (s *Store) Create(name string) (Profile, error) {
 	return p, s.write()
 }
 
-// Rename updates a profile's display name.
+// Rename updates a profile's display name and records the change timestamp.
 func (s *Store) Rename(id, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, p := range s.disk.Profiles {
 		if p.ID == id {
 			s.disk.Profiles[i].Name = name
+			s.disk.Profiles[i].NameUpdatedAt = time.Now()
 			return s.write()
 		}
 	}
 	return fmt.Errorf("profile %q not found", id)
+}
+
+// RenameFromRemote updates a profile's display name using an explicit timestamp
+// (from a remote pull), rather than time.Now(). Used by the sync pull path so
+// the stored NameUpdatedAt reflects the actual remote mutation time and LWW
+// comparisons stay accurate across devices.
+func (s *Store) RenameFromRemote(id, name string, updatedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, p := range s.disk.Profiles {
+		if p.ID == id {
+			s.disk.Profiles[i].Name = name
+			s.disk.Profiles[i].NameUpdatedAt = updatedAt
+			return s.write()
+		}
+	}
+	return fmt.Errorf("profile %q not found", id)
+}
+
+// UnlinkSupabase clears the Supabase user ID from a profile, making it local-only.
+func (s *Store) UnlinkSupabase(profileID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, p := range s.disk.Profiles {
+		if p.ID == profileID {
+			s.disk.Profiles[i].SupabaseUID = nil
+			return s.write()
+		}
+	}
+	return fmt.Errorf("profile %q not found", profileID)
 }
 
 // Delete removes a profile and its per-profile data files from disk. Returns

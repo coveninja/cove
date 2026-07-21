@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/coveninja/cove/internal/library"
 	"github.com/coveninja/cove/internal/settings"
@@ -44,6 +46,11 @@ type Server struct {
 	lib        *library.Library
 	settings   *settings.Store
 	syncWorker *SyncWorker
+
+	// Device-flow backend polling state. All fields guarded by flowMu.
+	flowMu     sync.Mutex
+	flowState  string             // "idle" | "pending" | "authorized" | "expired" | "denied"
+	flowCancel context.CancelFunc // cancels an in-flight runDeviceFlow goroutine
 }
 
 // New creates a Server for the given active profile. Errors loading the sidecar
@@ -67,7 +74,10 @@ func New(cfg Config, profileID string, lib *library.Library, st *settings.Store,
 }
 
 // SetProfile reloads the token sidecar for the newly active profile.
+// Any in-flight device-flow polling loop is cancelled — the flow was for the
+// old profile and must not authorize the new one.
 func (s *Server) SetProfile(profileID string) error {
+	s.cancelFlow("idle")
 	if err := s.store.SetProfile(profileID); err != nil {
 		return err
 	}
@@ -112,6 +122,7 @@ func (s *Server) SetupHandlers(mux *http.ServeMux) {
 
 // POST /api/trakt/device-code — starts the device-code flow.
 // Response: {device_code, user_code, verification_url, expires_in, interval}
+// Also starts a backend polling goroutine so the flow survives a backgrounded WebView.
 func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -123,6 +134,19 @@ func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start device flow: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+
+	// Cancel any previous in-flight poll loop and start a fresh one.
+	s.flowMu.Lock()
+	if s.flowCancel != nil {
+		s.flowCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.flowCancel = cancel
+	s.flowState = "pending"
+	s.flowMu.Unlock()
+
+	go s.runDeviceFlow(ctx, code.DeviceCode, code.Interval, code.ExpiresIn)
+
 	jsonOK(w, code)
 }
 
@@ -153,17 +177,25 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/trakt/status — returns connection state from the local sidecar (no Trakt call).
-// Response: {connected: bool, username: string, expires_at: time.Time}
+// Response: {connected: bool, username: string, expires_at: time.Time, flow_state: string}
+// flow_state is one of: "idle" | "pending" | "authorized" | "expired" | "denied"
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	st := s.store.Get()
+	s.flowMu.Lock()
+	fs := s.flowState
+	if fs == "" {
+		fs = "idle"
+	}
+	s.flowMu.Unlock()
 	jsonOK(w, map[string]any{
 		"connected":  st.AccessToken != "",
 		"username":   st.Username,
 		"expires_at": st.ExpiresAt,
+		"flow_state": fs,
 	})
 }
 
@@ -173,6 +205,8 @@ func (s *Server) handleUnlink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Cancel any in-flight device flow before clearing the store.
+	s.cancelFlow("idle")
 	// Best-effort revoke — fire and forget; we clear locally regardless.
 	go s.client.RevokeToken()
 	if err := s.store.Clear(); err != nil {
@@ -233,6 +267,81 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	s.syncWorker.Notify()
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// ── Device-flow backend polling ───────────────────────────────────────────────
+
+// cancelFlow cancels any in-flight runDeviceFlow goroutine and sets flowState
+// to state. Safe to call from any goroutine; acquires flowMu internally.
+func (s *Server) cancelFlow(state string) {
+	s.flowMu.Lock()
+	defer s.flowMu.Unlock()
+	if s.flowCancel != nil {
+		s.flowCancel()
+		s.flowCancel = nil
+	}
+	s.flowState = state
+}
+
+// setFlowState sets flowState under flowMu.
+func (s *Server) setFlowState(state string) {
+	s.flowMu.Lock()
+	s.flowState = state
+	s.flowMu.Unlock()
+}
+
+// runDeviceFlow polls Trakt for device-flow authorization until the code
+// expires, the user authorizes/denies, or ctx is cancelled. It runs in its
+// own goroutine and updates flowState accordingly. Token saving is handled
+// inside PollDeviceFlow on a 200 response.
+func (s *Server) runDeviceFlow(ctx context.Context, deviceCode string, intervalSec, expiresInSec int) {
+	interval := time.Duration(max(intervalSec, 1)+1) * time.Second
+	deadline := time.NewTimer(time.Duration(expiresInSec) * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			s.setFlowState("expired")
+			return
+		case <-ticker.C:
+			result, err := s.client.PollDeviceFlow(deviceCode)
+			if err != nil {
+				// Transient network error — keep trying until expiry.
+				log.Println("trakt: backend poll error:", err)
+				continue
+			}
+			switch result.Status {
+			case PollAuthorized:
+				// Token already saved by PollDeviceFlow.
+				s.flowMu.Lock()
+				s.flowState = "authorized"
+				s.flowCancel = nil
+				s.flowMu.Unlock()
+				return
+			case PollSlowDown:
+				// Trakt asked us to back off; increase interval by 5s, cap at 30s.
+				ticker.Stop()
+				interval += 5 * time.Second
+				if interval > 30*time.Second {
+					interval = 30 * time.Second
+				}
+				ticker = time.NewTicker(interval)
+			case PollExpired:
+				s.setFlowState("expired")
+				return
+			case PollDenied, PollInvalid:
+				s.setFlowState("denied")
+				return
+			case PollPending:
+				// Not yet — keep looping.
+			}
+		}
+	}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

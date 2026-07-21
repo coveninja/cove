@@ -84,7 +84,7 @@ func TestMergeFrom_WritesSynchronously(t *testing.T) {
 	l.MergeFrom([]*LibraryEntry{{
 		ID: "id1", TmdbID: 3, MediaType: "movie", Title: "Synced",
 		Status: StatusWatchLater, AddedAt: time.Now(), UpdatedAt: time.Now(),
-	}}, nil, nil)
+	}}, nil, nil, nil)
 
 	assert.True(t, titleOnDisk(t, l.path, "Synced"), "MergeFrom should write to disk synchronously, not debounced")
 }
