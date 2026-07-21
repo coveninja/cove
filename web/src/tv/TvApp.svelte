@@ -12,7 +12,7 @@
   import TvCatalogGridPage from "./pages/TvCatalogGridPage.svelte";
   import TvSideNav from "./components/TvSideNav.svelte";
   import TvDetailOverlay from "./components/TvDetailOverlay.svelte";
-  import TvPlayer from "./components/TvPlayer.svelte";
+  import TvPlayer from "./components/player/TvPlayer.svelte";
   import TvSettingsPage from "./pages/TvSettingsPage.svelte";
   import TvAccountPage from "./pages/TvAccountPage.svelte";
   import TvOnboardingPage from "./pages/TvOnboardingPage.svelte";

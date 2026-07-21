@@ -1,25 +1,11 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
-  import { Spinner } from "$lib/components/ui/spinner";
-  import {
-    Play,
-    Pause,
-    Headphones,
-    Captions,
-    X,
-    SkipForward,
-    SkipBack,
-    Gauge,
-    ListVideo,
-    Ratio,
-  } from "lucide-svelte";
   import { onDestroy, onMount, untrack, tick } from "svelte";
-  import { fade } from "svelte/transition";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
-  import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
+  import { loadAspectMode, saveAspectMode } from "$lib/player/aspectRatio";
   import {
     loadShowTrackPrefs,
     saveShowTrackPrefs,
@@ -37,8 +23,11 @@
   import { libraryChanged } from "$lib/stores/library";
   import TvTrackPanel from "./TvTrackPanel.svelte";
   import TvEpisodePanel from "./TvEpisodePanel.svelte";
-  import { focusable, focusGroup } from "../focus/actions";
-  import { focusAfterKeyRelease } from "../focus/focusStore.svelte";
+  import TvPlayerControls from "./TvPlayerControls.svelte";
+  import TvLoadingScreen from "./TvLoadingScreen.svelte";
+  import TvUpNext from "./TvUpNext.svelte";
+  import TvSeekFlash from "./TvSeekFlash.svelte";
+  import { focusAfterKeyRelease } from "../../focus/focusStore.svelte";
 
   // ── Props (identical contract to MobilePlayer) ──────────────────────────────
 
@@ -488,23 +477,6 @@
     return bars.length > 1 ? bars : null;
   });
 
-  function segmentBgClass(type: ChapterBar["type"]): string {
-    switch (type) {
-      case "intro":   return "bg-amber-400/50";
-      case "recap":   return "bg-blue-400/50";
-      case "credits": return "bg-purple-400/50";
-      case "preview": return "bg-green-400/50";
-      default:        return "";
-    }
-  }
-
-  // Fraction (0–100) of a chapter pill covered up to the given global timeline fraction.
-  function pillFill(chapter: ChapterBar, frac: number): number {
-    if (frac >= chapter.endFrac) return 100;
-    if (frac <= chapter.startFrac) return 0;
-    return ((frac - chapter.startFrac) / (chapter.endFrac - chapter.startFrac)) * 100;
-  }
-
   // ── Auto-select preferred audio track ────────────────────────────────────────
 
   $effect(() => {
@@ -733,15 +705,6 @@
     } catch {
       return code;
     }
-  }
-
-  function fmt(t: number): string {
-    if (!isFinite(t) || t < 0) t = 0;
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    const mm = h ? String(m).padStart(2, "0") : String(m);
-    return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
   }
 
   function trackLabel(
@@ -1090,7 +1053,6 @@
 <!--
   Root: fully transparent — mpv renders behind the WebView and shows through.
 -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="relative h-full w-full overflow-hidden">
 
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
@@ -1102,357 +1064,69 @@
     </div>
   {/if}
 
-  <!-- ── Controls overlay ───────────────────────────────────────────────────── -->
+  <!-- ── Controls overlay + up-next ────────────────────────────────────────── -->
   {#if canPlay}
-    <div
-      class="absolute inset-0 z-10 flex flex-col transition-opacity duration-200"
-      class:opacity-0={!controlsActive}
-      class:pointer-events-none={!controlsActive}
-    >
-      <!-- TOP gradient scrim: title + close -->
-      <div
-        class="flex shrink-0 items-start justify-between bg-gradient-to-b from-black/75 to-transparent px-8 pb-10 pt-6"
-        role="toolbar"
-        tabindex={-1}
-        aria-label="Top controls"
-      >
-        <!-- Title + episode label -->
-        <div class="flex min-w-0 flex-1 flex-col">
-          <p class="max-w-full truncate text-lg font-semibold text-white drop-shadow">
-            {title}
-          </p>
-          {#if episodeLabel}
-            <p class="text-sm text-white/60">{episodeLabel}</p>
-          {/if}
-        </div>
-      </div>
+    <TvPlayerControls
+      {title}
+      {episodeLabel}
+      {controlsActive}
+      {activeSegment}
+      bind:skipBtnEl
+      onSkipSegment={() => skipSegment(activeSegment!)}
+      {chapterBars}
+      {isHash}
+      torrentProgress={torrent.progress}
+      {displayPos}
+      onSeekbarKeydown={handleSeekbarKeydown}
+      onSeekBack={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
+      bind:playPauseBtn
+      onPlayPause={() => { Player.togglePause(); showControls(); }}
+      onSeekForward={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
+      bind:audioPanelOpen
+      {subtitleItems}
+      {selectedSubId}
+      {subSelection}
+      hasSubtitles={Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
+      bind:subsPanelOpen
+      bind:speedPanelOpen
+      onCycleAspect={cycleAspect}
+      {media}
+      {onPlayNext}
+      {onclose}
+      bind:episodesPanelOpen
+      bind:barEl={controlBarEl}
+      onBarKeydown={handleBarKeydown}
+    />
 
-      <!-- SPACER (center area — no interactive controls here on TV) -->
-      <div class="flex-1"></div>
-
-      <!-- BOTTOM control bar: gradient backdrop + all controls in a row -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        bind:this={controlBarEl}
-        class="shrink-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-8 pb-8 pt-16"
-        onkeydown={handleBarKeydown}
-        use:focusGroup={{ id: "tv-player-controls", policy: { type: "row" } }}
-      >
-        <!-- IntroDB skip button (inside bar area, focusable) -->
-        {#if activeSegment}
-          <div class="mb-4 flex justify-end">
-            <button
-              bind:this={skipBtnEl}
-              type="button"
-              class="rounded-full border border-white/60 bg-black/70 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm hover:bg-white/20 focus:bg-white/20"
-              onclick={() => skipSegment(activeSegment!)}
-              use:focusable={{ groupId: "tv-player-controls" }}
-            >
-              Skip {activeSegment.label}
-            </button>
-          </div>
-        {/if}
-
-        <!-- Seekbar -->
-        <div
-          role="slider"
-          aria-label="Seek"
-          aria-valuemin={0}
-          aria-valuemax={Player.duration || 0}
-          aria-valuenow={displayPos}
-          tabindex={0}
-          class="relative mb-3 flex h-5 w-full cursor-pointer items-center"
-          onkeydown={handleSeekbarKeydown}
-          use:focusable={{ groupId: "tv-player-controls" }}
-        >
-          {#if chapterBars}
-            <!-- Segmented: each chapter is its own rounded pill with a gap -->
-            <div class="absolute inset-x-0 top-1/2 flex h-1.5 -translate-y-1/2 gap-0.5">
-              {#each chapterBars as chapter}
-                <div
-                  class="relative h-full overflow-hidden rounded-full {chapter.type !== 'content' ? segmentBgClass(chapter.type) : 'bg-white/25'}"
-                  style="flex: {chapter.endFrac - chapter.startFrac}"
-                >
-                  <!-- Torrent buffer fill -->
-                  {#if isHash && torrent.progress > 0 && torrent.progress < 100}
-                    <div
-                      class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
-                      style="width: {pillFill(chapter, torrent.progress / 100)}%"
-                    ></div>
-                  {/if}
-                  <!-- Playback progress fill -->
-                  <div
-                    class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-                    style="width: {pillFill(chapter, Player.duration ? displayPos / Player.duration : 0)}%"
-                  ></div>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <!-- Unified bar (no timestamp data) -->
-            <div class="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/25">
-              {#if isHash && torrent.progress > 0 && torrent.progress < 100}
-                <div
-                  class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
-                  style="width: {torrent.progress}%"
-                ></div>
-              {/if}
-              <div
-                class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-                style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-              ></div>
-            </div>
-          {/if}
-          <!-- Thumb -->
-          <div
-            class="pointer-events-none absolute top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/20"
-            style="left: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-          ></div>
-        </div>
-
-        <!-- Main button row -->
-        <div class="flex items-center gap-2">
-          <!-- Seek -10s -->
-          <button
-            type="button"
-            class="flex size-12 items-center justify-center rounded-full text-white hover:bg-white/20 focus:bg-white/20"
-            onclick={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
-            aria-label="Seek back 10 seconds"
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            <SkipBack class="size-6" />
-          </button>
-
-          <!-- Play / Pause -->
-          <button
-            bind:this={playPauseBtn}
-            type="button"
-            class="flex size-14 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm hover:bg-white/35 focus:bg-white/35"
-            onclick={() => { Player.togglePause(); showControls(); }}
-            aria-label={Player.paused ? "Play" : "Pause"}
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            {#if Player.paused}
-              <Play class="size-7 translate-x-0.5" />
-            {:else}
-              <Pause class="size-7" />
-            {/if}
-          </button>
-
-          <!-- Seek +10s -->
-          <button
-            type="button"
-            class="flex size-12 items-center justify-center rounded-full text-white hover:bg-white/20 focus:bg-white/20"
-            onclick={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
-            aria-label="Seek forward 10 seconds"
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            <SkipForward class="size-6" />
-          </button>
-
-          <!-- Time display (not focusable) -->
-          <span class="ml-3 tabular-nums text-sm text-white/70">
-            {fmt(displayPos)} / {fmt(Player.duration)}
-          </span>
-
-          <div class="flex-1"></div>
-
-          <!-- Audio tracks -->
-          {#if Player.audioTracks.length > 0}
-            <button
-              type="button"
-              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-              onclick={() => { audioPanelOpen = true; }}
-              aria-label="Audio tracks"
-              use:focusable={{ groupId: "tv-player-controls" }}
-            >
-              <Headphones class="size-5 shrink-0" />
-              <span class="max-w-24 truncate text-sm">
-                {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
-              </span>
-            </button>
-          {/if}
-
-          <!-- Subtitles -->
-          {#if Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
-            <button
-              type="button"
-              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-              onclick={() => { subsPanelOpen = true; }}
-              aria-label="Subtitles"
-              use:focusable={{ groupId: "tv-player-controls" }}
-            >
-              <Captions class="size-5 shrink-0" />
-              <span class="max-w-24 truncate text-sm">
-                {subSelection.kind === "off"
-                  ? "Subs"
-                  : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? "Subs")}
-              </span>
-            </button>
-          {/if}
-
-          <!-- Playback speed -->
-          <button
-            type="button"
-            class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-            onclick={() => { speedPanelOpen = true; }}
-            aria-label="Playback speed"
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            <Gauge class="size-5 shrink-0" />
-            <span class="text-sm">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
-          </button>
-
-          <!-- Aspect ratio cycle -->
-          <button
-            type="button"
-            class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-            onclick={cycleAspect}
-            aria-label="Aspect ratio"
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            <Ratio class="size-5 shrink-0" />
-            <span class="text-sm">{ASPECT_LABELS[Player.aspectMode]}</span>
-          </button>
-
-          <!-- Episodes (TV shows only) -->
-          {#if media?.media_type === "tv" && onPlayNext}
-            <button
-              type="button"
-              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-              onclick={() => { episodesPanelOpen = true; }}
-              aria-label="Episodes"
-              use:focusable={{ groupId: "tv-player-controls" }}
-            >
-              <ListVideo class="size-5 shrink-0" />
-              <span class="text-sm">Episodes</span>
-            </button>
-          {/if}
-
-          <!-- Close -->
-          <button
-            type="button"
-            class="flex size-11 items-center justify-center rounded-full text-white hover:bg-white/20 focus:bg-white/20"
-            onclick={() => onclose?.()}
-            aria-label="Close player"
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            <X class="size-6" />
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Up-next card ───────────────────────────────────────────────────────── -->
+    <!-- ── Up-next card ─────────────────────────────────────────────────────── -->
     {#if showUpNext && nextEp}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="absolute right-8 bottom-40 z-20 w-80 overflow-hidden rounded-2xl border border-white/20 bg-black/90 text-white shadow-2xl backdrop-blur-sm"
-        transition:fade={{ duration: 150 }}
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={() => {}}
-      >
-        <div class="p-5">
-          <div class="flex items-start justify-between gap-2">
-            <p class="text-xs font-medium uppercase tracking-wide text-white/60">
-              Up next · S{nextEp.season}E{nextEp.episode.episode_number}
-            </p>
-            <button
-              type="button"
-              class="flex size-6 shrink-0 items-center justify-center rounded-full text-white/60 hover:bg-white/20 focus:bg-white/20"
-              onclick={() => (upNextDismissed = true)}
-              aria-label="Dismiss"
-              use:focusable={{ groupId: "tv-player-controls" }}
-            >
-              <X class="size-4" />
-            </button>
-          </div>
-          {#if !$settings?.hideSpoilers && nextEp.episode.name}
-            <p class="mt-1 truncate text-sm text-white/90">{nextEp.episode.name}</p>
-          {/if}
-          <button
-            bind:this={upNextPlayBtnEl}
-            type="button"
-            class="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-white/30 bg-white/10 py-3 text-sm font-medium text-white hover:bg-white/20 focus:bg-white/20"
-            onclick={() => advance()}
-            use:focusable={{ groupId: "tv-player-controls" }}
-          >
-            <SkipForward class="size-4" />
-            Watch now
-          </button>
-          {#if countdownSecs !== null}
-            <div class="mt-3">
-              <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>
-              <div class="h-1 w-full overflow-hidden rounded-full bg-white/20">
-                <div
-                  class="h-full bg-white transition-[width] duration-1000 ease-linear"
-                  style="width: {((10 - countdownSecs) / 10) * 100}%"
-                ></div>
-              </div>
-            </div>
-          {/if}
-        </div>
-      </div>
+      <TvUpNext
+        {nextEp}
+        {countdownSecs}
+        hideSpoilers={$settings?.hideSpoilers ?? false}
+        onDismiss={() => (upNextDismissed = true)}
+        onWatchNow={() => advance()}
+        bind:watchNowBtnEl={upNextPlayBtnEl}
+      />
     {/if}
 
   {:else}
-    <!-- ── Loading / buffering screen ─────────────────────────────────────────── -->
+    <!-- ── Loading / buffering screen ───────────────────────────────────────── -->
     {#if Player.available}
-      <div class="absolute inset-0 z-20 flex flex-col items-center justify-center">
-        {#if media?.poster_path}
-          <div
-            class="absolute inset-0 scale-110 bg-cover bg-center"
-            style="background-image: url('{media.poster_path}'); filter: blur(6px); opacity: 0.3;"
-          ></div>
-        {/if}
-        <div class="absolute inset-0 bg-black/70"></div>
-        {#if logoUrl}
-          <img
-            src={logoUrl}
-            alt={title}
-            class="relative z-10 max-h-48 max-w-[60vw] object-contain drop-shadow-2xl"
-          />
-        {:else if media?.poster_path}
-          <img
-            src={media.poster_path}
-            alt={title}
-            class="relative z-10 h-56 w-36 rounded-xl object-cover shadow-2xl"
-          />
-        {:else if title}
-          <span class="relative z-10 px-8 text-center text-3xl font-bold text-white">{title}</span>
-        {/if}
-        <Spinner class="relative z-10 mt-8 size-14 text-white" />
-        <p class="relative z-10 mt-4 text-base text-white/50">{loadingMessage}</p>
-        <p class="relative z-10 mt-2 text-sm text-white/40">Press Back to cancel</p>
-        {#if takingAWhile}
-          <p
-            class="relative z-10 mt-2 text-sm text-white/40"
-            transition:fade={{ duration: 150 }}
-          >
-            This is taking a while…
-          </p>
-          <button
-            type="button"
-            class="relative z-10 mt-5 rounded-xl border border-white/30 bg-white/10 px-6 py-3 text-base text-white hover:bg-white/20 focus:bg-white/20"
-            onclick={() => triggerPlaybackFailed()}
-          >
-            Cancel
-          </button>
-        {/if}
-      </div>
+      <TvLoadingScreen
+        {media}
+        {title}
+        {logoUrl}
+        {loadingMessage}
+        {takingAWhile}
+        onCancel={() => triggerPlaybackFailed()}
+      />
     {/if}
   {/if}
 
   <!-- ── Seek flash indicators ─────────────────────────────────────────────── -->
   {#if seekFlash}
-    <div
-      class="pointer-events-none absolute inset-y-0 z-30 flex items-center justify-center {seekFlash === 'left' ? 'left-0 w-1/3' : 'right-0 w-1/3'}"
-      transition:fade={{ duration: 120 }}
-    >
-      <div class="rounded-full bg-white/20 px-5 py-3 text-xl font-semibold text-white backdrop-blur-sm">
-        {seekFlash === "left" ? "−10s" : "+10s"}
-      </div>
-    </div>
+    <TvSeekFlash {seekFlash} />
   {/if}
 
 </div>

@@ -7,7 +7,7 @@
   import { CircleCheckBig } from "lucide-svelte";
   import { api } from "$lib/api";
   import { epKey, epProgress, progressPct } from "$lib/utils";
-  import { imageFade } from "../lib/imageFade";
+  import { imageFade } from "../../lib/imageFade";
 
   let {
     media,

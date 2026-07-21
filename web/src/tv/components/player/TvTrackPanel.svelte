@@ -2,7 +2,7 @@
   import { Check } from "lucide-svelte";
   import { fly } from "svelte/transition";
   import { onMount, tick } from "svelte";
-  import { focusable, focusGroup } from "../focus/actions";
+  import { focusable, focusGroup } from "../../focus/actions";
 
   let {
     title,

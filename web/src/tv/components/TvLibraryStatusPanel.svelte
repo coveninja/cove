@@ -11,7 +11,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { BookmarkIcon, BookmarkPlus } from "lucide-svelte";
   import { libraryChanged } from "$lib/stores/library";
-  import TvTrackPanel from "./TvTrackPanel.svelte";
+  import TvTrackPanel from "./player/TvTrackPanel.svelte";
 
   let {
     libraryEntry,

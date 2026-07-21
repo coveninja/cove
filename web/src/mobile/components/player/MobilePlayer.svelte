@@ -1,29 +1,12 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
-  import { Spinner } from "$lib/components/ui/spinner";
   import { Slider } from "$lib/components/ui/slider/index.js";
-  import {
-    Play,
-    Pause,
-    Volume2,
-    VolumeX,
-    Headphones,
-    Captions,
-    X,
-    SkipForward,
-    SkipBack,
-    Gauge,
-    ListVideo,
-    Ratio,
-  } from "lucide-svelte";
   import { onDestroy, untrack } from "svelte";
-  import { fade, scale } from "svelte/transition";
-  import { cubicOut } from "svelte/easing";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
-  import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
+  import { loadAspectMode, saveAspectMode } from "$lib/player/aspectRatio";
   import {
     loadShowTrackPrefs,
     saveShowTrackPrefs,
@@ -41,6 +24,11 @@
   import { libraryChanged } from "$lib/stores/library";
   import TrackSheet from "./TrackSheet.svelte";
   import EpisodeSheet from "./EpisodeSheet.svelte";
+  import MobilePlayerControls from "./MobilePlayerControls.svelte";
+  import MobileUpNext from "./MobileUpNext.svelte";
+  import MobileLoadingScreen from "./MobileLoadingScreen.svelte";
+  import SeekFlash from "./SeekFlash.svelte";
+  import { computeChapterBars } from "$lib/player/chapters";
 
   // ── Props (same contract as desktop Player + mobile-specific additions) ──────
 
@@ -113,7 +101,6 @@
     if (!src || !Player.available) return;
     switching = true;
     scrubbing = false;
-    scrubValue = 0;
     appliedAudioDefault = false;
     appliedSubDefault = false;
     originalLang = null;
@@ -434,74 +421,8 @@
     Player.seek((seg.seg.end_ms ?? Player.duration * 1000) / 1000);
   }
 
-  // ─── Seek bar chapter markers ─────────────────────────────────────────────────
-
-  type ChapterBar = {
-    startFrac: number;
-    endFrac: number;
-    type: "content" | "intro" | "recap" | "credits" | "preview";
-  };
-
-  // Splits the timeline into content + named segment chapters whenever we have
-  // both timestamp data and a known duration. Returns null when unified bar is
-  // needed (no data, or all segments collapsed to a single chapter).
-  const chapterBars = $derived.by((): ChapterBar[] | null => {
-    if (!timestamps) return null;
-    if (!Player.duration) return null;
-    const durMs = Player.duration * 1000;
-
-    const named: { startMs: number; endMs: number; type: string }[] = [];
-    const addAll = (arr: TimestampSegment[] | undefined, type: string) =>
-      arr?.forEach((s) =>
-        named.push({ startMs: s.start_ms ?? 0, endMs: s.end_ms ?? durMs, type }),
-      );
-    addAll(timestamps.intro, "intro");
-    addAll(timestamps.recap, "recap");
-    addAll(timestamps.credits, "credits");
-    addAll(timestamps.preview, "preview");
-    if (named.length === 0) return null;
-
-    named.sort((a, b) => a.startMs - b.startMs);
-
-    const bars: ChapterBar[] = [];
-    let pos = 0;
-    for (const seg of named) {
-      if (seg.startMs > pos)
-        bars.push({ startFrac: pos / durMs, endFrac: seg.startMs / durMs, type: "content" });
-      bars.push({
-        startFrac: seg.startMs / durMs,
-        endFrac: Math.min(seg.endMs / durMs, 1),
-        type: seg.type as ChapterBar["type"],
-      });
-      pos = seg.endMs;
-    }
-    if (pos < durMs) bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
-
-    return bars.length > 1 ? bars : null;
-  });
-
-  function segmentBgClass(type: ChapterBar["type"]): string {
-    switch (type) {
-      case "intro":   return "bg-amber-400/50";
-      case "recap":   return "bg-blue-400/50";
-      case "credits": return "bg-purple-400/50";
-      case "preview": return "bg-green-400/50";
-      default:        return "";
-    }
-  }
-
-  // Fraction (0–100) of a chapter pill covered up to the given global timeline fraction.
-  function pillFill(chapter: ChapterBar, frac: number): number {
-    if (frac >= chapter.endFrac) return 100;
-    if (frac <= chapter.startFrac) return 0;
-    return ((frac - chapter.startFrac) / (chapter.endFrac - chapter.startFrac)) * 100;
-  }
-
-  const scrubChapter = $derived.by((): ChapterBar | null => {
-    if (!scrubbing || !chapterBars || !Player.duration) return null;
-    const frac = displayPos / Player.duration;
-    return chapterBars.find((c) => c.type !== "content" && frac >= c.startFrac && frac < c.endFrac) ?? null;
-  });
+  // ─── Seek bar chapter markers (passed down to MobileSeekBar) ──────────────────
+  const chapterBars = $derived(computeChapterBars(timestamps, Player.duration));
 
   // ── Auto-select preferred audio track ────────────────────────────────────────
 
@@ -753,15 +674,6 @@
     }
   }
 
-  function fmt(t: number): string {
-    if (!isFinite(t) || t < 0) t = 0;
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    const mm = h ? String(m).padStart(2, "0") : String(m);
-    return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
-  }
-
   function trackLabel(
     t: { id: number; title: string; lang: string },
     kind: "Audio" | "Subtitle",
@@ -907,37 +819,9 @@
     if (media) saveAspectMode(media.id, next);
   }
 
-  // ── Seek bar (pointer-based, adapted for touch with larger hit area) ──────────
-
-  let seekTrackEl = $state<HTMLDivElement | null>(null);
+  // ── Seek-bar scrubbing flag (the seek bar lives in MobilePlayerControls →
+  //    MobileSeekBar, which reports drag start/end via onScrub) ─────────────────
   let scrubbing = $state(false);
-  let scrubValue = $state(0);
-  const displayPos = $derived(scrubbing ? scrubValue : Player.position);
-
-  function seekFraction(e: PointerEvent): number {
-    if (!seekTrackEl || !Player.duration) return 0;
-    const { left, width } = seekTrackEl.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - left) / width));
-  }
-
-  function onSeekPointerDown(e: PointerEvent): void {
-    if (!Player.duration) return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    scrubbing = true;
-    scrubValue = seekFraction(e) * Player.duration;
-    showControls();
-  }
-
-  function onSeekPointerMove(e: PointerEvent): void {
-    if (!scrubbing) return;
-    scrubValue = seekFraction(e) * Player.duration;
-  }
-
-  function onSeekPointerUp(e: PointerEvent): void {
-    if (!scrubbing) return;
-    Player.seek(seekFraction(e) * Player.duration);
-    scrubbing = false;
-  }
 
   // ── Sheet open state ──────────────────────────────────────────────────────────
   // Must be declared before controlsActive which references them.
@@ -1060,398 +944,61 @@
 
   <!-- ── Controls overlay ───────────────────────────────────────────────────── -->
   {#if canPlay}
-    <!--
-      Single wrapper: opacity fades the whole overlay; pointer-events-none when
-      hidden so touches fall through to the transparent mpv layer.
-      Tailwind dynamic class interpolation is NOT used — only class: directives.
-    -->
-    <div
-      class="absolute inset-0 z-10 flex flex-col transition-opacity duration-200"
-      class:opacity-0={!controlsActive}
-      class:pointer-events-none={!controlsActive}
-    >
-      <!-- TOP gradient scrim: safe-area-inset-top aware -->
-      <div
-        class="flex shrink-0 items-start justify-between bg-gradient-to-b from-black/75 to-transparent px-4 pb-10"
-        style="padding-top: max(1rem, var(--safe-top));"
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={() => {}}
-        role="toolbar"
-        tabindex={-1}
-        aria-label="Top controls"
-      >
-        <!-- Close button (44px touch target) -->
-        <button
-          type="button"
-          class="flex size-11 items-center justify-center rounded-full text-white active:bg-white/20"
-          onclick={() => onclose?.()}
-          aria-label="Close player"
-        >
-          <X class="size-6" />
-        </button>
+    <MobilePlayerControls
+      {title}
+      {episodeLabel}
+      {activeSegment}
+      {chapterBars}
+      {isHash}
+      {torrent}
+      audioLabel={selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
+      subLabel={subSelection.kind === "off"
+        ? "Subs"
+        : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? "Subs")}
+      showAudio={Player.audioTracks.length > 0}
+      showSubs={Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
+      hasNextEp={media?.media_type === "tv" && !!onPlayNext}
+      bind:audioSheetOpen
+      bind:subsSheetOpen
+      bind:speedSheetOpen
+      bind:episodesSheetOpen
+      {controlsActive}
+      {onclose}
+      onSkipSegment={() => activeSegment && skipSegment(activeSegment)}
+      onToggleMute={toggleMute}
+      onCycleAspect={cycleAspect}
+      onNudgeBack={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
+      onNudgeForward={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
+      onScrub={(pos) => { scrubbing = pos !== null; if (pos !== null) showControls(); }}
+      onShowControls={showControls}
+    />
 
-        <!-- Title + episode label -->
-        <div class="flex min-w-0 flex-1 flex-col items-center px-3 pt-1">
-          <p class="max-w-full truncate text-center text-sm font-semibold text-white drop-shadow">
-            {title}
-          </p>
-          {#if episodeLabel}
-            <p class="text-xs text-white/60">{episodeLabel}</p>
-          {/if}
-        </div>
-
-        <!-- Spacer to balance close button width -->
-        <div class="size-11 shrink-0"></div>
-      </div>
-
-      <!-- CENTER controls: seek-back, play/pause, seek-forward -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="flex flex-1 items-center justify-center gap-8"
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={() => {}}
-      >
-        <!-- Seek -10s (48px target) -->
-        <button
-          type="button"
-          class="flex size-12 items-center justify-center rounded-full text-white active:bg-white/20"
-          onclick={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
-          aria-label="Seek back 10 seconds"
-        >
-          <SkipBack class="size-6" />
-        </button>
-
-        <!-- Play / Pause (64px) -->
-        <button
-          type="button"
-          class="flex size-16 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm active:bg-white/35"
-          onclick={() => { Player.togglePause(); showControls(); }}
-          aria-label={Player.paused ? "Play" : "Pause"}
-        >
-          {#key Player.paused}
-            <span class="inline-flex items-center justify-center" in:scale={{ duration: 120, start: 0.6, easing: cubicOut }}>
-              {#if Player.paused}
-                <Play class="size-8 translate-x-0.5" />
-              {:else}
-                <Pause class="size-8" />
-              {/if}
-            </span>
-          {/key}
-        </button>
-
-        <!-- Seek +10s (48px target) -->
-        <button
-          type="button"
-          class="flex size-12 items-center justify-center rounded-full text-white active:bg-white/20"
-          onclick={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
-          aria-label="Seek forward 10 seconds"
-        >
-          <SkipForward class="size-6" />
-        </button>
-      </div>
-
-      <!-- BOTTOM gradient scrim: safe-area-inset-bottom aware -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="shrink-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent px-4 pt-8"
-        style="padding-bottom: max(1rem, var(--safe-bottom));"
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={() => {}}
-      >
-        <!-- Skip intro/recap pill -->
-        {#if activeSegment}
-          <div class="mb-3 flex justify-end">
-            <button
-              type="button"
-              class="rounded-full border border-white/60 bg-black/60 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm active:bg-white/20"
-              onclick={() => skipSegment(activeSegment!)}
-            >
-              Skip {activeSegment.label}
-            </button>
-          </div>
-        {/if}
-
-        <!-- Seek bar: 24px hit box, 24px thumb -->
-        <div
-          role="slider"
-          aria-label="Seek"
-          aria-valuemin={0}
-          aria-valuemax={Player.duration || 0}
-          aria-valuenow={displayPos}
-          tabindex={0}
-          class="relative flex h-6 w-full cursor-pointer touch-none items-center"
-          bind:this={seekTrackEl}
-          onpointerdown={onSeekPointerDown}
-          onpointermove={onSeekPointerMove}
-          onpointerup={onSeekPointerUp}
-          onpointercancel={onSeekPointerUp}
-          onkeydown={() => {}}
-        >
-          {#if chapterBars}
-            <!-- Segmented: each chapter is its own rounded pill with a gap -->
-            <div class="absolute inset-x-0 top-1/2 flex h-1.5 -translate-y-1/2 gap-0.5">
-              {#each chapterBars as chapter}
-                <div
-                  class="relative h-full overflow-hidden rounded-full {chapter.type !== 'content' ? segmentBgClass(chapter.type) : 'bg-white/25'}"
-                  style="flex: {chapter.endFrac - chapter.startFrac}"
-                >
-                  <!-- Torrent buffer fill -->
-                  {#if isHash && torrent.progress > 0 && torrent.progress < 100}
-                    <div
-                      class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
-                      style="width: {pillFill(chapter, torrent.progress / 100)}%"
-                    ></div>
-                  {/if}
-                  <!-- Playback progress fill -->
-                  <div
-                    class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-                    style="width: {pillFill(chapter, Player.duration ? displayPos / Player.duration : 0)}%"
-                  ></div>
-                </div>
-              {/each}
-            </div>
-            <!-- Chapter label tooltip while scrubbing over a non-content segment -->
-            {#if scrubChapter}
-              <div
-                class="pointer-events-none absolute -top-7 -translate-x-1/2 rounded bg-black/80 px-2 py-0.5 text-xs font-medium capitalize text-white"
-                style="left: {((scrubChapter.startFrac + scrubChapter.endFrac) / 2) * 100}%"
-                transition:fade={{ duration: 100 }}
-              >
-                {scrubChapter.type}
-              </div>
-            {/if}
-          {:else}
-            <!-- Unified bar (no timestamp data) -->
-            <div class="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 overflow-hidden rounded-full bg-white/25">
-              <!-- Torrent buffer fill -->
-              {#if isHash && torrent.progress > 0 && torrent.progress < 100}
-                <div
-                  class="pointer-events-none absolute inset-y-0 left-0 bg-white/35"
-                  style="width: {torrent.progress}%"
-                ></div>
-              {/if}
-              <!-- Playback progress fill -->
-              <div
-                class="pointer-events-none absolute inset-y-0 left-0 bg-white"
-                style="width: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-              ></div>
-            </div>
-          {/if}
-          <!-- Thumb (24px) -->
-          <div
-            class="pointer-events-none absolute top-1/2 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-md ring-1 ring-black/20 transition-transform duration-150"
-            class:scale-150={scrubbing}
-            class:ring-2={scrubbing}
-            class:ring-accent={scrubbing}
-            style="left: {Player.duration ? (displayPos / Player.duration) * 100 : 0}%"
-          ></div>
-        </div>
-
-        <!-- Time row -->
-        <div class="mb-2 mt-1 flex items-center justify-between text-xs tabular-nums text-white/80">
-          <span>{fmt(displayPos)}</span>
-          <span class="text-white/40">{fmt(Player.duration)}</span>
-        </div>
-
-        <!-- Bottom button row -->
-        <div class="flex items-center gap-1">
-          <!-- Audio tracks (only if multiple tracks available) -->
-          {#if Player.audioTracks.length > 0}
-            <button
-              type="button"
-              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-              onclick={() => { audioSheetOpen = true; showControls(); }}
-              aria-label="Audio tracks"
-            >
-              <Headphones class="size-4 shrink-0" />
-              <span class="max-w-20 truncate text-xs">
-                {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
-              </span>
-            </button>
-          {/if}
-
-          <!-- Subtitles -->
-          {#if Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
-            <button
-              type="button"
-              class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-              onclick={() => { subsSheetOpen = true; showControls(); }}
-              aria-label="Subtitles"
-            >
-              <Captions class="size-4 shrink-0" />
-              <span class="max-w-20 truncate text-xs">
-                {subSelection.kind === "off"
-                  ? "Subs"
-                  : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? "Subs")}
-              </span>
-            </button>
-          {/if}
-
-          <div class="flex-1"></div>
-
-          <!-- Aspect ratio cycle -->
-          <button type="button" class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15" onclick={() => { cycleAspect(); showControls(); }} aria-label="Aspect ratio">
-            <Ratio class="size-5 shrink-0" />
-            <span class="text-sm">{ASPECT_LABELS[Player.aspectMode]}</span>
-          </button>
-
-          <!-- Playback speed -->
-          <button
-                  type="button"
-                  class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-                  onclick={() => { speedSheetOpen = true; showControls(); }}
-                  aria-label="Playback speed"
-          >
-            <Gauge class="size-5 shrink-0" />
-            <span class="text-sm">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
-          </button>
-
-          <!-- Mute toggle (hardware volume keys handle level on Android) -->
-          <button
-            type="button"
-            class="flex size-11 items-center justify-center rounded-full text-white active:bg-white/15"
-            onclick={toggleMute}
-            aria-label={Player.volume === 0 ? "Unmute" : "Mute"}
-          >
-            {#if Player.volume === 0}
-              <VolumeX class="size-5" />
-            {:else}
-              <Volume2 class="size-5" />
-            {/if}
-          </button>
-
-          <!-- Episodes (TV shows only) -->
-          {#if media?.media_type === "tv" && onPlayNext}
-            <button
-                    type="button"
-                    class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-                    onclick={() => { episodesSheetOpen = true; showControls(); }}
-                    aria-label="Episodes"
-            >
-              <ListVideo class="size-5 shrink-0" />
-            </button>
-          {/if}
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Up-next card (bottom-right, above bottom controls) ─────────────────── -->
+    <!-- ── Up-next card ─────────────────────────────────────────────────────── -->
     {#if showUpNext && nextEp}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="absolute right-4 z-20 w-64 overflow-hidden rounded-xl border border-white/20 bg-black/85 text-white shadow-2xl backdrop-blur-sm"
-        style="bottom: calc(max(1rem, var(--safe-bottom)) + 8rem);"
-        transition:fade={{ duration: 150 }}
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={() => {}}
-      >
-        <div class="p-4">
-          <div class="flex items-start justify-between gap-2">
-            <p class="text-xs font-medium uppercase tracking-wide text-white/60">
-              Up next · S{nextEp.season}E{nextEp.episode.episode_number}
-            </p>
-            <button
-              type="button"
-              class="flex size-6 shrink-0 items-center justify-center rounded-full text-white/60 active:bg-white/20"
-              onclick={() => (upNextDismissed = true)}
-              aria-label="Dismiss"
-            >
-              <X class="size-4" />
-            </button>
-          </div>
-          {#if !$settings?.hideSpoilers && nextEp.episode.name}
-            <p class="mt-1 truncate text-sm text-white/90">{nextEp.episode.name}</p>
-          {/if}
-          <button
-            type="button"
-            class="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-white/30 bg-white/10 py-2.5 text-sm font-medium text-white active:bg-white/20"
-            onclick={() => advance()}
-          >
-            <SkipForward class="size-4" />
-            Watch now
-          </button>
-          {#if countdownSecs !== null}
-            <div class="mt-3">
-              <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>
-              <div class="h-1 w-full overflow-hidden rounded-full bg-white/20">
-                <div
-                  class="h-full bg-white transition-[width] duration-1000 ease-linear"
-                  style="width: {((10 - countdownSecs) / 10) * 100}%"
-                ></div>
-              </div>
-            </div>
-          {/if}
-        </div>
-      </div>
+      <MobileUpNext
+        {nextEp}
+        {countdownSecs}
+        hideSpoilers={$settings?.hideSpoilers ?? false}
+        onDismiss={() => (upNextDismissed = true)}
+        onAdvance={advance}
+      />
     {/if}
-
-  {:else}
-    <!-- ── Loading / buffering screen (initial load or startup) ─────────────────── -->
-    {#if Player.available}
-      <div class="absolute inset-0 z-20 flex flex-col items-center justify-center">
-        <!-- Close button — top-left, matching the controls-bar X position -->
-        <button
-          type="button"
-          class="absolute left-4 z-10 flex size-11 items-center justify-center rounded-full text-white active:bg-white/20"
-          style="top: max(1rem, var(--safe-top));"
-          onclick={() => onclose?.()}
-          aria-label="Close player"
-        >
-          <X class="size-6" />
-        </button>
-        {#if media?.poster_path}
-          <div
-            class="absolute inset-0 scale-110 bg-cover bg-center"
-            style="background-image: url('{media.poster_path}'); filter: blur(6px); opacity: 0.3;"
-          ></div>
-        {/if}
-        <div class="absolute inset-0 bg-black/70"></div>
-        {#if logoUrl}
-          <img
-            src={logoUrl}
-            alt={title}
-            class="relative z-10 max-h-36 max-w-[80vw] object-contain drop-shadow-2xl"
-          />
-        {:else if media?.poster_path}
-          <img
-            src={media.poster_path}
-            alt={title}
-            class="relative z-10 h-44 w-28 rounded-lg object-cover shadow-2xl"
-          />
-        {:else if title}
-          <span class="relative z-10 px-8 text-center text-2xl font-bold text-white">{title}</span>
-        {/if}
-        <Spinner class="relative z-10 mt-6 size-12 text-white" />
-        <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>
-        {#if takingAWhile}
-          <p
-            class="relative z-10 mt-2 text-xs text-white/40"
-            transition:fade={{ duration: 150 }}
-          >
-            This is taking a while…
-          </p>
-          <button
-            type="button"
-            class="relative z-10 mt-4 rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"
-            onclick={() => triggerPlaybackFailed()}
-          >
-            Cancel
-          </button>
-        {/if}
-      </div>
-    {/if}
+  {:else if Player.available}
+    <!-- ── Loading / buffering screen ─────────────────────────────────────── -->
+    <MobileLoadingScreen
+      {media}
+      {title}
+      {logoUrl}
+      {loadingMessage}
+      {takingAWhile}
+      {onclose}
+      onCancel={triggerPlaybackFailed}
+    />
   {/if}
 
   <!-- ── Seek flash indicators (-10s / +10s) ───────────────────────────────── -->
   {#if seekFlash}
-    <div
-      class="pointer-events-none absolute inset-y-0 z-30 flex items-center justify-center {seekFlash === 'left' ? 'left-0 w-1/3' : 'right-0 w-1/3'}"
-      transition:fade={{ duration: 120 }}
-    >
-      <div class="rounded-full bg-white/20 px-4 py-2 text-lg font-semibold text-white backdrop-blur-sm">
-        {seekFlash === "left" ? "−10s" : "+10s"}
-      </div>
-    </div>
+    <SeekFlash {seekFlash} />
   {/if}
 
 </div>

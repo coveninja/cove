@@ -6,8 +6,8 @@
   import { epKey } from "$lib/utils";
   import type { Media, TVSeason, TVEpisode } from "$lib/types/tmdb";
   import type { WatchProgress } from "$lib/types/library";
-  import { focusable, focusGroup } from "../focus/actions";
-  import TvEpisodeCard from "./TvEpisodeCard.svelte";
+  import { focusable, focusGroup } from "../../focus/actions";
+  import TvEpisodeCard from "../TvEpisodeCard.svelte";
 
   // ── Props ─────────────────────────────────────────────────────────────────────
 

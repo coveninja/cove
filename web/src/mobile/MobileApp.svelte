@@ -6,7 +6,7 @@
   import ProviderExpandedModal from "../components/modals/ProviderExpandedModal.svelte";
   import type { Media } from "$lib/types/tmdb";
   import type { Person, Provider } from "$lib/api";
-  import MobilePlayer from "./components/MobilePlayer.svelte";
+  import MobilePlayer from "./components/player/MobilePlayer.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Cog, X } from "lucide-svelte";
 
