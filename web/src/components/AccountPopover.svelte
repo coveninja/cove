@@ -36,14 +36,8 @@
 
   async function switchProfile(id: string): Promise<void> {
     try {
-      const profile = await api.profileActivate(id);
-      const profs = await api.profilesList();
-      auth.setProfiles(
-        profs.profiles,
-        profs.profiles.find((p) => p.id === profile.id) ?? profile,
-      );
-      libraryChanged.update((n) => n + 1);
-      open = false;
+      await api.profileActivate(id);
+      window.location.reload();
     } catch (e) {
       console.error("switch profile:", e);
     }

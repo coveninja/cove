@@ -660,11 +660,6 @@ func (l *Library) SetProfile(profileID string) error {
 		}
 	}
 
-	// Synchronous exception (D3): flush any pending debounced write for the
-	// OLD profile before swapping l.db/l.path out from under it — otherwise
-	// a mutation made just before switching profiles could be lost (its
-	// debounced write would fire ~1s later against whatever l.path has
-	// become by then).
 	l.Flush()
 
 	l.mu.Lock()
@@ -672,6 +667,7 @@ func (l *Library) SetProfile(profileID string) error {
 	l.path = path
 	l.mu.Unlock()
 	l.gen.Add(1)
+	l.tasteGen.Add(1)
 	return nil
 }
 
