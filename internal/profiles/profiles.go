@@ -194,7 +194,7 @@ func (s *Store) SetActive(id string) error {
 		return err
 	}
 	if s.onChange != nil {
-		go s.onChange(id)
+		s.onChange(id)
 	}
 	return nil
 }
