@@ -51,8 +51,7 @@ jobs:
       - name: Verify formatting
         shell: bash
         run: |
-          files=$(git ls-files '*.go')
-          unformatted=$(gofmt -l $files)
+          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
           if [ -n "$unformatted" ]; then
             echo "$unformatted"
             exit 1
