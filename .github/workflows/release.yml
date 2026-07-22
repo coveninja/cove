@@ -320,6 +320,8 @@ jobs:
 
       - name: Download generated PKGBUILD from this release, push to AUR (as builder)
         run: |
+          # Variables in this command body intentionally expand in builder's shell.
+          # shellcheck disable=SC2016
           su builder -c '
             set -e
             cd ~
@@ -336,7 +338,7 @@ jobs:
               echo "No changes to push"
             else
               git commit -m "Update to ${{ github.ref_name }}"
-              # AUR'"'"'s SSH endpoint intermittently drops the connection
+              # The AUR SSH endpoint intermittently drops the connection
               # mid-handshake (unrelated to auth/config); retry a few times
               # before failing the job.
               for attempt in 1 2 3 4 5; do
