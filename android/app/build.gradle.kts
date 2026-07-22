@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // Load developer secrets from local.properties (gitignored).
 // TMDB_API_KEY is passed into BuildConfig so CoveApplication can forward it
@@ -17,7 +18,7 @@ plugins {
 
 android {
     namespace = "com.coveninja.cove"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.coveninja.cove"
@@ -96,9 +97,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
 
-    kotlinOptions {
-        jvmTarget = "17"
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 
