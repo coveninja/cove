@@ -15,6 +15,10 @@ require (
 	golang.org/x/time v0.15.0
 )
 
+// missinggo/v2 v2.11.0 uses roaring/v2, while torrent v1.61.0 still uses
+// roaring v1 for the same bitmap type.
+exclude github.com/anacrolix/missinggo/v2 v2.11.0
+
 require (
 	github.com/RoaringBitmap/roaring v1.9.4 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
