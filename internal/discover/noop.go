@@ -35,8 +35,13 @@ type TasteProvider interface {
 }
 
 type Service struct {
-	tmdb     *tmdb.Client
+	tmdb     tmdbDiscoverer
 	settings *settings.Store
+}
+
+type tmdbDiscoverer interface {
+	Discover(tmdb.DiscoverParams) (*tmdb.DiscoverResult, error)
+	GenreList(mediaType string) ([]tmdb.Keyword, error)
 }
 
 func New(t *tmdb.Client, lib TasteProvider, st *settings.Store) *Service {

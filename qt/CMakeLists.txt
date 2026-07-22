@@ -44,6 +44,8 @@ set(APP_SOURCES
   src/BackendProbe.h
   src/MpvObject.cpp
   src/MpvObject.h
+  src/RestartPolicy.cpp
+  src/RestartPolicy.h
   src/GpuWorkaround.cpp
   src/GpuWorkaround.h
   src/LinuxGraphicsEnvironment.cpp
@@ -137,4 +139,17 @@ if(COVE_BUILD_TESTS)
     add_test(NAME cove-shell-backend-probe
              COMMAND cove_shell_backend_probe_tests)
     set_tests_properties(cove-shell-backend-probe PROPERTIES TIMEOUT 10)
+
+    add_executable(cove_shell_restart_policy_tests
+        tests/RestartPolicyTest.cpp
+        src/RestartPolicy.cpp
+        src/RestartPolicy.h
+    )
+    target_include_directories(cove_shell_restart_policy_tests PRIVATE src)
+    target_link_libraries(cove_shell_restart_policy_tests PRIVATE
+        Qt6::Core
+        Qt6::Test
+    )
+    add_test(NAME cove-shell-restart-policy
+             COMMAND cove_shell_restart_policy_tests)
 endif()

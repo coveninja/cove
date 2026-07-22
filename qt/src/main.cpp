@@ -10,7 +10,6 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -52,6 +51,7 @@
 #include "GpuWorkaround.h"
 #include "LinuxGraphicsEnvironment.h"
 #include "MpvObject.h"
+#include "RestartPolicy.h"
 #include "StaticServer.h"
 
 // Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
@@ -497,15 +497,15 @@ int main(int argc, char *argv[]) {
 
     // Restart-with-backoff bookkeeping for a crash *after* the backend was
     // already up and serving (a startup failure still goes through
-    // reportStartupFailure via `settled`, unchanged). windowTimer resets the
-    // count whenever more than 60s has elapsed since the first restart in
+    // reportStartupFailure via `settled`, unchanged). The restart policy resets
+    // the count whenever more than 60s has elapsed since the first restart in
     // the current burst, so a backend that crashes rarely (e.g. once a day)
     // always gets a fresh 3 attempts rather than accumulating toward the cap
     // forever.
-    auto restartCount = std::make_shared<int>(0);
-    auto restartWindow = std::make_shared<QElapsedTimer>();
     constexpr int maxRestartsPerWindow = 3;
     constexpr int restartWindowMs = 60000;
+    auto restartPolicy = std::make_shared<RestartPolicy>(
+        maxRestartsPerWindow, restartWindowMs);
 
     // launchBackend starts the backend, wires up its error/exit signals, and
     // waits for it to answer on apiPort. `first` controls whether a
@@ -517,8 +517,8 @@ int main(int argc, char *argv[]) {
     // crash — a lambda can't capture itself directly.
     auto launchBackend = std::make_shared<std::function<void(bool)>>();
     *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, isTv, apiPort,
-                       shuttingDown, currentBackend, restartCount, restartWindow,
-                       launchBackend](bool first) {
+                      shuttingDown, currentBackend, restartPolicy,
+                      launchBackend](bool first) {
       QProcess *backend = startBackend(backendPath, &app);
       *currentBackend = backend;
 
@@ -547,7 +547,7 @@ int main(int argc, char *argv[]) {
       QObject::connect(
           backend,
           QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-          [&app, backendPath, settled, shuttingDown, restartCount, restartWindow,
+          [&app, backendPath, settled, shuttingDown, restartPolicy,
            launchBackend](int exitCode, QProcess::ExitStatus) {
             if (exitCode == 42) {
 #ifdef Q_OS_WIN
@@ -579,19 +579,17 @@ int main(int argc, char *argv[]) {
             if (*shuttingDown)
               return;
 
-            if (!restartWindow->isValid() || restartWindow->hasExpired(restartWindowMs)) {
-              restartWindow->start();
-              *restartCount = 0;
-            }
-            ++*restartCount;
-            if (*restartCount > maxRestartsPerWindow) {
-              reportStartupFailure(QStringLiteral(
-                  "Backend crashed repeatedly (exit code %1).").arg(exitCode));
+            if (restartPolicy->recordCrash() ==
+                RestartPolicy::Decision::GiveUp) {
+              reportStartupFailure(
+                  QStringLiteral("Backend crashed repeatedly (exit code %1).")
+                      .arg(exitCode));
               return;
             }
             qWarning().noquote()
-                << "[shell] backend crashed (exit code" << exitCode << ") — restarting ("
-                << *restartCount << "/" << maxRestartsPerWindow << " in this window)";
+                << "[shell] backend crashed (exit code" << exitCode
+                << ") — restarting (" << restartPolicy->restartCount() << "/"
+                << restartPolicy->maxRestarts() << " in this window)";
             (*launchBackend)(/*first=*/false);
           });
 
