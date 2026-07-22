@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Test release-note filtering
+        run: make test-release-notes
       - uses: actions/setup-go@v7
         with:
           go-version: stable

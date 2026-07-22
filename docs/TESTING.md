@@ -138,6 +138,9 @@ GitHub release is created only after public/private Go tests, the tagged build,
 web unit/browser/type/lint/build/audit checks, and the Linux Qt build succeed.
 Linux/Flatpak, Windows, and Android packaging then upload their assets with
 job-scoped `contents: write`; the workflow default remains read-only. Android
-packaging reruns lint and JVM tests before signing.
+packaging reruns lint and JVM tests before signing. `make patch`, `make minor`,
+and `make major` generate the release's linked change list from conventional
+`fix` and `feat` commit subjects only; run `make test-release-notes` to verify
+that filter locally.
 
 Coverage artifacts are diagnostic rather than release assets.

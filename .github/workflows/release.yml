@@ -15,9 +15,10 @@ concurrency:
 
 jobs:
   # Create the GitHub release up front with the tagged commit's body (the MSG
-  # + linked commit list that `make patch`/`minor`/`major` writes) as the
-  # release notes — the markdown only renders on the release page, and the
-  # softprops asset-upload steps otherwise create a body-less release. If a
+  # + linked user-facing fix/feat list that `make patch`/`minor`/`major`
+  # writes) as the release notes — the markdown only renders on the release
+  # page. The softprops asset-upload steps otherwise create a body-less
+  # release. If a
   # package job wins the race and creates the release first, fall back to
   # editing the notes in. softprops preserves an existing body when no body
   # input is given, so later asset uploads don't clobber the notes.

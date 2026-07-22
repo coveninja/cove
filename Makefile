@@ -44,7 +44,7 @@ ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
 export ANDROID_HOME
 export ANDROID_NDK_HOME
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell test test-all test-go test-web test-build test-workflows test-security test-qt test-android test-android-connected test-private patch minor major clean android-aar android android-install tv-avd tv-install
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell test test-all test-go test-web test-build test-workflows test-release-notes test-security test-qt test-android test-android-connected test-private patch minor major clean android-aar android android-install tv-avd tv-install
 
 all: build
 
@@ -127,9 +127,13 @@ test-build:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags supabase ./...
 
 ## Lint the GitHub Actions definitions. Go downloads actionlint on first use.
-test-workflows:
+test-workflows: test-release-notes
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required for full workflow linting (Arch: sudo pacman -S shellcheck)."; exit 1; }
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+
+## Verify that generated release notes contain only user-facing fixes/features.
+test-release-notes:
+	bash scripts/release-notes_test.sh
 
 ## Dependency and reachable-vulnerability checks. These require network access.
 test-security:
@@ -178,10 +182,10 @@ hot-debug: go qt
 ## bumps 0.22.5 -> 0.23.0, `make major` bumps 0.22.5 -> 1.0.0 (the target
 ## name is passed straight to `npm version`). Pass TITLE="..." to override
 ## the default commit title and/or MSG="..." to add a commit message body
-## note (multi-line is fine). All commits since the last release tag are
-## appended to the commit body underneath MSG as markdown links
-## ([subject](commit url)) — these render clickable in GitHub release notes
-## and PR/issue bodies, but show as raw markdown in the plain commit view.
+## note (multi-line is fine). User-facing `fix` and `feat` conventional commits
+## since the last release tag are appended to the commit body underneath MSG as
+## markdown links ([subject](commit url)). Merge, chore, docs, dependency, and
+## other internal commits are omitted from the GitHub release notes.
 ## Then push with: git push origin master v<version>
 ##
 ## TITLE/MSG reach the recipe via the environment ($$TITLE/$$MSG), NOT via
@@ -197,10 +201,10 @@ patch minor major:
 	LAST_TAG=$$(git describe --tags --abbrev=0 2>/dev/null || true); \
 	LOG=""; \
 	if [ -n "$$LAST_TAG" ]; then \
-		LOG=$$(git log --reverse --format="- [%s](https://github.com/coveninja/cove/commit/%H)" "$$LAST_TAG"..HEAD); \
+		LOG=$$(bash scripts/release-notes.sh "$$LAST_TAG" HEAD); \
 	fi; \
 	if [ -n "$$MSG" ] && [ -n "$$LOG" ]; then \
-		BODY=$$(printf '%s\n\Changes from %s:\n%s' "$$MSG" "$$LAST_TAG" "$$LOG"); \
+		BODY=$$(printf '%s\n\nChanges from %s:\n%s' "$$MSG" "$$LAST_TAG" "$$LOG"); \
 	elif [ -n "$$LOG" ]; then \
 		BODY=$$(printf 'Changes from %s:\n%s' "$$LAST_TAG" "$$LOG"); \
 	else \
