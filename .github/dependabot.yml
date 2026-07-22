@@ -7,6 +7,7 @@ updates:
     groups:
       go-dependencies:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: npm
     directory: /web
@@ -15,6 +16,11 @@ updates:
     groups:
       web-dependencies:
         patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # typescript-eslint 8.x only supports TypeScript versions below 6.1.
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
 
   - package-ecosystem: gradle
     directory: /android
@@ -23,6 +29,11 @@ updates:
     groups:
       android-dependencies:
         patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # libmpv 1.x removed the API used by MpvBridge and MpvPlayerView.
+      - dependency-name: dev.jdtech.mpv:libmpv
+        versions: [">=1.0.0"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -31,3 +42,4 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]
