@@ -109,11 +109,11 @@ dependencies {
 
     // ComponentActivity (base for WebViewActivity) + onBackPressedDispatcher.addCallback
     // extension. Previously pulled in transitively by activity-compose.
-    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.activity:activity-ktx:1.13.0")
 
     // lifecycleScope extension on LifecycleOwner. Previously pulled in
     // transitively by lifecycle-runtime-compose.
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
 
     // OkHttp — health-check polls to /api/ping from WebViewActivity and
     // provides HTTP for CoveApiClient (sync, auth).
@@ -121,15 +121,15 @@ dependencies {
 
     // kotlinx-serialization JSON — parsing backend responses in CoveApiClient
     // and SyncCoordinator.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     // ProcessLifecycleOwner — fires ON_START/ON_STOP for whole-app foreground events.
     // Used by SyncCoordinator.syncOnResume() to mirror the desktop window-focus sync.
-    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-process:2.11.0")
 
     // Keystore-backed encrypted storage for the Supabase JWT + refresh token.
     // 1.0.0 is the stable release; works correctly on minSdk 23+ (our minSdk is 28).
-    implementation("androidx.security:security-crypto:1.0.0")
+    implementation("androidx.security:security-crypto:1.1.0")
 
     // libmpv — Findroid's prebuilt mpv for Android. Ships all 4 ABIs:
     // arm64-v8a, armeabi-v7a, x86, x86_64 (confirmed via unzip -l inspection).
@@ -139,14 +139,14 @@ dependencies {
 
     // MediaSessionCompat — lock-screen / headset transport controls wired in
     // WebViewActivity for audio-focus and lock-screen media controls.
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.media:media:1.8.0")
 
     // WebKit extensions — required for WebViewCompat / addDocumentStartJavaScript
     // in MpvBridge and WebViewActivity.
-    implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.webkit:webkit:1.16.0")
 
     testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test:core-ktx:1.6.1")
-    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }
