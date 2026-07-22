@@ -4,8 +4,16 @@
   import { libraryChanged } from "$lib/stores/library";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
+  import { Input } from "$lib/components/ui/input/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import { RefreshCw, LogOut, LogIn, Trash2, Check } from "lucide-svelte";
+  import {
+    RefreshCw,
+    LogOut,
+    LogIn,
+    Trash2,
+    Check,
+    Pencil,
+  } from "lucide-svelte";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import InsightsPage from "./InsightsPage.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -38,12 +46,74 @@
   }
 
   // ── Profile switching ────────────────────────────────────────────────────────
+  let switchingProfileID = $state<string | null>(null);
+  let switchError = $state<string | null>(null);
+
   async function switchProfile(id: string): Promise<void> {
+    if (auth.activeProfile?.id === id || switchingProfileID) return;
+    switchingProfileID = id;
+    switchError = null;
     try {
       await api.profileActivate(id);
       window.location.reload();
     } catch (e) {
-      console.error("switch profile:", e);
+      switchError = e instanceof Error ? e.message : String(e);
+      switchingProfileID = null;
+    }
+  }
+
+  async function refreshProfiles(): Promise<void> {
+    const res = await api.profilesList();
+    auth.setProfiles(
+      res.profiles,
+      res.profiles.find((p) => p.id === res.active_profile_id) ??
+        res.profiles[0],
+    );
+  }
+
+  // ── Rename flow state ────────────────────────────────────────────────────────
+  let renamingProfileID = $state<string | null>(null);
+  let renameName = $state("");
+  let renaming = $state(false);
+  let renameError = $state<string | null>(null);
+
+  function startRename(id: string, name: string): void {
+    renamingProfileID = id;
+    renameName = name;
+    renameError = null;
+    switchError = null;
+  }
+
+  function cancelRename(): void {
+    renamingProfileID = null;
+    renameName = "";
+    renameError = null;
+  }
+
+  async function saveRename(): Promise<void> {
+    if (!renamingProfileID || renaming) return;
+    const name = renameName.trim();
+    if (!name) {
+      renameError = "Profile name is required.";
+      return;
+    }
+
+    const current = auth.profiles.find((p) => p.id === renamingProfileID);
+    if (current?.name === name) {
+      cancelRename();
+      return;
+    }
+
+    renaming = true;
+    renameError = null;
+    try {
+      await api.profileRename(renamingProfileID, name);
+      await refreshProfiles();
+      cancelRename();
+    } catch (e) {
+      renameError = e instanceof Error ? e.message : String(e);
+    } finally {
+      renaming = false;
     }
   }
 
@@ -58,12 +128,7 @@
     deleteError = null;
     try {
       await api.profileDelete(deleteTarget.id);
-      const res = await api.profilesList();
-      auth.setProfiles(
-        res.profiles,
-        res.profiles.find((p) => p.id === res.active_profile_id) ??
-          res.profiles[0],
-      );
+      await refreshProfiles();
       libraryChanged.update((n) => n + 1);
       deleteTarget = null;
     } catch (e) {
@@ -138,55 +203,128 @@
       <Card.Header>
         <Card.Title>Profiles</Card.Title>
       </Card.Header>
-      <Card.Content class="flex flex-col gap-1">
+      <Card.Content
+        class="flex flex-col gap-1"
+        role="list"
+        aria-label="Profiles"
+      >
         {#each auth.profiles as profile (profile.id)}
-          <div class="flex items-center justify-between rounded-md px-2 py-2">
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-center gap-3 text-left"
-              onclick={() => {
-                if (auth.activeProfile?.id !== profile.id)
-                  switchProfile(profile.id);
-              }}
-            >
+          <div
+            role="listitem"
+            aria-label={`Profile ${profile.name}`}
+            class="flex items-center justify-between gap-3 rounded-md px-2 py-2"
+          >
+            <div class="flex min-w-0 flex-1 items-center gap-3">
               <span
                 class="bg-secondary flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
               >
                 {profile.name.charAt(0).toUpperCase()}
               </span>
-              <span class="flex min-w-0 flex-col">
-                <span class="truncate text-sm font-medium">{profile.name}</span>
-                <span
-                  class="text-muted-foreground flex items-center gap-1.5 text-xs"
-                >
-                  {#if auth.activeProfile?.id === profile.id}
-                    <Check class="text-accent size-3" />
-                    <span class="text-accent">Active</span>
+              {#if renamingProfileID === profile.id}
+                <div class="flex min-w-0 flex-1 flex-col gap-1">
+                  <Input
+                    type="text"
+                    class="h-8"
+                    aria-label={`Profile name for ${profile.name}`}
+                    bind:value={renameName}
+                    disabled={renaming}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter") saveRename();
+                      if (event.key === "Escape") cancelRename();
+                    }}
+                    autofocus
+                  />
+                  {#if renameError}
+                    <span class="text-destructive text-xs">{renameError}</span>
                   {/if}
-                  {#if profile.is_primary}
-                    <span
-                      class="border-border text-muted-foreground rounded border px-1 py-0.5 text-[10px]"
-                      >Primary</span
-                    >
-                  {/if}
+                </div>
+              {:else}
+                <span class="flex min-w-0 flex-col">
+                  <span class="truncate text-sm font-medium"
+                    >{profile.name}</span
+                  >
+                  <span
+                    class="text-muted-foreground flex items-center gap-1.5 text-xs"
+                  >
+                    {#if auth.activeProfile?.id === profile.id}
+                      <Check class="text-accent size-3" />
+                      <span class="text-accent">Active</span>
+                    {/if}
+                    {#if profile.is_primary}
+                      <span
+                        class="border-border text-muted-foreground rounded border px-1 py-0.5 text-[10px]"
+                        >Primary</span
+                      >
+                    {/if}
+                  </span>
                 </span>
-              </span>
-            </button>
-            {#if !profile.is_primary}
-              <Button
-                variant="ghost"
-                size="icon"
-                class="text-muted-foreground hover:text-destructive size-7 shrink-0"
-                onclick={() => {
-                  deleteTarget = { id: profile.id, name: profile.name };
-                  deleteError = null;
-                }}
-              >
-                <Trash2 class="size-3.5" />
-              </Button>
-            {/if}
+              {/if}
+            </div>
+            <div class="flex shrink-0 items-center gap-1">
+              {#if renamingProfileID === profile.id}
+                <Button
+                  size="xs"
+                  onclick={saveRename}
+                  disabled={renaming || !renameName.trim()}
+                >
+                  {#if renaming}<Spinner class="size-3" />{/if}
+                  Save
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onclick={cancelRename}
+                  disabled={renaming}
+                >
+                  Cancel
+                </Button>
+              {:else}
+                {#if auth.activeProfile?.id !== profile.id}
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    aria-label={`Switch to ${profile.name}`}
+                    onclick={() => switchProfile(profile.id)}
+                    disabled={switchingProfileID !== null}
+                  >
+                    {#if switchingProfileID === profile.id}
+                      <Spinner class="size-3" />
+                    {/if}
+                    Switch
+                  </Button>
+                {/if}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  class="text-muted-foreground"
+                  aria-label={`Rename ${profile.name}`}
+                  title={`Rename ${profile.name}`}
+                  onclick={() => startRename(profile.id, profile.name)}
+                >
+                  <Pencil class="size-3.5" />
+                </Button>
+                {#if !profile.is_primary}
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    class="text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${profile.name}`}
+                    title={`Delete ${profile.name}`}
+                    onclick={() => {
+                      deleteTarget = { id: profile.id, name: profile.name };
+                      deleteError = null;
+                    }}
+                  >
+                    <Trash2 class="size-3.5" />
+                  </Button>
+                {/if}
+              {/if}
+            </div>
           </div>
         {/each}
+        {#if switchError}
+          <p class="text-destructive mt-1 text-xs">{switchError}</p>
+        {/if}
         {#if deleteError}
           <p class="text-destructive mt-1 text-xs">{deleteError}</p>
         {/if}
