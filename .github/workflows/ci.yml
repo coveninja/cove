@@ -251,6 +251,11 @@ jobs:
       - name: Lint and unit test
         working-directory: android
         run: gradle lintDebug testDebugUnitTest
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Emulator launch smoke test
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
