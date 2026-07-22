@@ -112,9 +112,47 @@ const streamHeadersTTL = 30 * time.Minute
 var torrentDataDirDefault = filepath.Join(os.TempDir(), "cove-torrents")
 
 // infoHashRe validates a BitTorrent v1 infohash: 40 hex characters (SHA-1,
-// hex-encoded). Used to reject garbage before /api/prefetch-download burns a
-// background metadata-fetch attempt on it.
+// hex-encoded). Every torrent entry point validates before the value reaches
+// the torrent client or any filesystem-related bookkeeping.
 var infoHashRe = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+func validateInfoHash(infoHash string) error {
+	if !infoHashRe.MatchString(infoHash) {
+		return fmt.Errorf("invalid infohash: expected 40 hexadecimal characters")
+	}
+	return nil
+}
+
+// removeTorrentDataEntry removes a path beneath dataDir without allowing the
+// supplied name to escape that directory or resolve back to the directory
+// itself. Torrent names originate in untrusted metadata, so filepath.Join plus
+// os.RemoveAll is not sufficient here. os.Root enforces containment while
+// following nested paths and symlinks.
+func removeTorrentDataEntry(dataDir, name string) error {
+	cleanName := filepath.Clean(name)
+	if dataDir == "" {
+		return fmt.Errorf("torrent data directory is empty")
+	}
+	if name == "" || cleanName == "." || filepath.IsAbs(name) || filepath.VolumeName(name) != "" ||
+		cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("unsafe torrent data path %q", name)
+	}
+
+	root, err := os.OpenRoot(dataDir)
+	if os.IsNotExist(err) {
+		// Match os.RemoveAll's behavior when the target tree does not exist.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open torrent data directory: %w", err)
+	}
+	defer root.Close()
+
+	if err := root.RemoveAll(cleanName); err != nil {
+		return fmt.Errorf("remove torrent data entry %q: %w", cleanName, err)
+	}
+	return nil
+}
 
 type torrentState struct {
 	torrent      *torrent.Torrent
@@ -612,6 +650,10 @@ func (p *Player) applyUploadPolicy(t *torrent.Torrent) {
 // regex matching, with fallback to regex when the index is invalid or points
 // to a non-video file.
 func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *int) (*torrent.File, error) {
+	if err := validateInfoHash(infoHash); err != nil {
+		return nil, err
+	}
+
 	// resolveFile applies fileIdx-first selection against an already-metadata-
 	// ready torrent, falling back to season/episode regex matching.
 	resolveFile := func(t *torrent.Torrent) (*torrent.File, error) {
@@ -655,10 +697,13 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *
 	select {
 	case <-t.GotInfo():
 	case <-ctx.Done():
+		canonicalHash := t.InfoHash().HexString()
 		t.Drop()
 		// Attempt best-effort cleanup of any partial data left under the infohash
 		// directory (anacrolix may create a dir by infohash before metadata arrives).
-		_ = os.RemoveAll(filepath.Join(p.dataDir, infoHash))
+		if err := removeTorrentDataEntry(p.dataDir, canonicalHash); err != nil {
+			log.Printf("torrent %s: could not remove timed-out data: %v", canonicalHash, err)
+		}
 		return nil, fmt.Errorf("timed out fetching metadata for %s", infoHash)
 	}
 
@@ -732,9 +777,10 @@ func (p *Player) PrefetchTorrent(infoHash string, season, episode *int, fileIdx 
 // touched within the idle cutoff. anacrolix
 // torrents hold open file handles plus on-disk pieces under torrentDataDir;
 // without this they accumulate for the life of the process and eventually
-// fill /tmp. Dropping removes the torrent from the client; we then RemoveAll
-// its data directory to reclaim disk (unlinking is safe even if a handle is
-// briefly still open on Linux).
+// fill /tmp. Dropping removes the torrent from the client; we then remove its
+// data directory through an os.Root so untrusted torrent metadata cannot
+// escape dataDir (unlinking is safe even if a handle is briefly still open on
+// Linux).
 //
 // A background prefetch (F7) is idle by this same definition — nothing is
 // streaming it, since it's downloading ahead of playback rather than during
@@ -774,7 +820,7 @@ func (p *Player) CleanupTorrents() {
 		name := d.t.Name() // capture before Drop; valid once metadata is known
 		d.t.Drop()
 		if name != "" {
-			if err := os.RemoveAll(filepath.Join(p.dataDir, name)); err != nil {
+			if err := removeTorrentDataEntry(p.dataDir, name); err != nil {
 				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
 			}
 		}
@@ -800,8 +846,7 @@ func (p *Player) CleanupTorrents() {
 			if activeNames[e.Name()] {
 				continue
 			}
-			orphan := filepath.Join(p.dataDir, e.Name())
-			if err := os.RemoveAll(orphan); err != nil {
+			if err := removeTorrentDataEntry(p.dataDir, e.Name()); err != nil {
 				log.Printf("torrent orphan sweep: could not remove %s: %v", e.Name(), err)
 			} else {
 				log.Printf("torrent orphan sweep: removed %s", e.Name())
@@ -843,7 +888,7 @@ func (p *Player) dropIdleNonPrefetch(exceptHash string) {
 		name := d.t.Name() // capture before Drop; valid once metadata is known
 		d.t.Drop()
 		if name != "" {
-			if err := os.RemoveAll(filepath.Join(p.dataDir, name)); err != nil {
+			if err := removeTorrentDataEntry(p.dataDir, name); err != nil {
 				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
 			}
 		}
@@ -1335,7 +1380,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		infoHash := r.URL.Query().Get("hash")
-		if !infoHashRe.MatchString(infoHash) {
+		if err := validateInfoHash(infoHash); err != nil {
 			http.Error(w, "invalid or missing ?hash= (expected a 40-char hex infohash)", http.StatusBadRequest)
 			return
 		}
