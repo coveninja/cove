@@ -22,7 +22,8 @@ make test-all
 
 The first browser-test run needs `npx playwright install chromium` from
 `web/`. `make test-all` additionally requires network access, Qt/libmpv, the
-Android SDK/NDK, gomobile, and JDK 17.
+Android SDK/NDK, gomobile, JDK 17, and ShellCheck. On Arch Linux, install the
+last dependency with `sudo pacman -S shellcheck`.
 
 ### Go
 
@@ -112,9 +113,9 @@ request, and manual dispatch.
 | Dependency review    | Vulnerable dependency changes introduced by pull requests                              |
 | govulncheck          | Reachable Go vulnerability scan                                                        |
 
-`.github/workflows/codeql.yml` separately analyzes Go and JavaScript/TypeScript
-on `master`, pull requests, a weekly schedule, and manual dispatch. Dependabot
-checks Go modules, npm, Gradle, and GitHub Actions weekly.
+GitHub CodeQL default setup analyzes Actions, C/C++, Go, and
+JavaScript/TypeScript without a competing advanced workflow. Dependabot checks
+Go modules, npm, Gradle, and GitHub Actions weekly.
 
 ## Coverage
 

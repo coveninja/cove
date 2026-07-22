@@ -29,7 +29,9 @@ async function mockBackend(
     syncPushError?: string;
   } = {},
 ): Promise<void> {
-  const profiles = options.profiles ?? [primary];
+  const profiles = (options.profiles ?? [primary]).map((profile) => ({
+    ...profile,
+  }));
 
   await page.route("http://127.0.0.1:6969/api/**", async (route) => {
     const request = route.request();
@@ -88,6 +90,18 @@ async function mockBackend(
     }
     if (path === `/api/profiles/${secondary.id}/activate`) {
       await route.fulfill({ json: secondary });
+      return;
+    }
+    if (path.startsWith("/api/profiles/") && request.method() === "PATCH") {
+      const id = path.slice("/api/profiles/".length);
+      const profile = profiles.find((candidate) => candidate.id === id);
+      const body = request.postDataJSON() as { name?: string };
+      if (!profile || !body.name?.trim()) {
+        await route.fulfill({ status: 400, body: "name required" });
+        return;
+      }
+      profile.name = body.name.trim();
+      await route.fulfill({ json: { id, name: profile.name } });
       return;
     }
     if (
@@ -172,6 +186,64 @@ test("switching profile calls the activation endpoint", async ({ page }) => {
   await page.getByRole("button", { name: /Secondary/ }).click();
 
   expect((await activation).method()).toBe("POST");
+});
+
+test("My Account uses explicit profile actions and supports renaming", async ({
+  page,
+}) => {
+  let activationRequests = 0;
+  page.on("request", (request) => {
+    if (
+      request.url().endsWith(`/api/profiles/${secondary.id}/activate`) &&
+      request.method() === "POST"
+    ) {
+      activationRequests += 1;
+    }
+  });
+
+  await mockBackend(page, {
+    savedSession: true,
+    profiles: [primary, secondary],
+  });
+  await page.goto("/");
+  await page.getByLabel("Account").click();
+  await page.getByRole("button", { name: "Manage account & insights" }).click();
+  await expect(page.getByRole("heading", { name: "My Account" })).toBeVisible();
+
+  const secondaryRow = page.getByRole("listitem", {
+    name: "Profile Secondary",
+  });
+  await expect(
+    secondaryRow.getByRole("button", { name: "Switch to Secondary" }),
+  ).toBeVisible();
+
+  await secondaryRow.getByText("Secondary", { exact: true }).click();
+  expect(activationRequests).toBe(0);
+
+  await secondaryRow.getByRole("button", { name: "Rename Secondary" }).click();
+  await secondaryRow
+    .getByRole("textbox", { name: "Profile name for Secondary" })
+    .fill("Family");
+
+  const rename = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/profiles/${secondary.id}`) &&
+      request.method() === "PATCH",
+  );
+  await secondaryRow.getByRole("button", { name: "Save" }).click();
+  expect((await rename).postDataJSON()).toEqual({ name: "Family" });
+
+  const familyRow = page.getByRole("listitem", { name: "Profile Family" });
+  await expect(familyRow).toBeVisible();
+
+  const activation = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/profiles/${secondary.id}/activate`) &&
+      request.method() === "POST",
+  );
+  await familyRow.getByRole("button", { name: "Switch to Family" }).click();
+  await activation;
+  expect(activationRequests).toBe(1);
 });
 
 test("a restored session surfaces a deduplicated sync push error", async ({

@@ -51,8 +51,7 @@ jobs:
       - name: Verify formatting
         shell: bash
         run: |
-          files=$(git ls-files '*.go')
-          unformatted=$(gofmt -l $files)
+          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
           if [ -n "$unformatted" ]; then
             echo "$unformatted"
             exit 1
@@ -252,6 +251,11 @@ jobs:
       - name: Lint and unit test
         working-directory: android
         run: gradle lintDebug testDebugUnitTest
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Emulator launch smoke test
         uses: ReactiveCircus/android-emulator-runner@v2
         with:

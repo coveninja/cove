@@ -84,7 +84,9 @@ make test-all  # add workflow/security checks plus Qt and Android builds
 The individual `test-go`, `test-web`, `test-build`, `test-workflows`,
 `test-security`, `test-qt`, and `test-android` targets are useful when changing
 one component. The web browser suite needs a one-time
-`cd web && npx playwright install chromium` setup.
+`cd web && npx playwright install chromium` setup. `test-workflows` also
+requires ShellCheck so actionlint performs the same embedded-shell analysis as
+CI.
 
 ```sh
 make test-private            # maintainers, after make inject-private

@@ -6,7 +6,6 @@
 A media streaming app for Linux, Windows, Android & Android TV. Discover, track, and stream movies and TV shows - powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
 
 [![CI](https://github.com/coveninja/cove/actions/workflows/ci.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/coveninja/cove/actions/workflows/codeql.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/codeql.yml)
 [![Coverage](https://codecov.io/gh/coveninja/cove/branch/master/graph/badge.svg)](https://codecov.io/gh/coveninja/cove)
 [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)

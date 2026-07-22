@@ -128,6 +128,7 @@ test-build:
 
 ## Lint the GitHub Actions definitions. Go downloads actionlint on first use.
 test-workflows:
+	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required for full workflow linting (Arch: sudo pacman -S shellcheck)."; exit 1; }
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
 
 ## Dependency and reachable-vulnerability checks. These require network access.
