@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -230,5 +231,42 @@ func TestStopIsIdempotent(t *testing.T) {
 	h.Stop()
 	if got := cancelCalls.Load(); got != 1 {
 		t.Fatalf("cancel called %d times, want once", got)
+	}
+}
+
+func TestStartServesPingAndStopsCleanly(t *testing.T) {
+	dataDir := t.TempDir()
+	h, err := Start(Config{
+		BindAddr:   "127.0.0.1:0",
+		DataDir:    dataDir,
+		CacheDir:   t.TempDir(),
+		TorrentDir: t.TempDir(),
+		Version:    "dev",
+	})
+	if err != nil {
+		t.Fatal("Start:", err)
+	}
+	t.Cleanup(h.Stop)
+
+	if h.srv.Addr == "127.0.0.1:0" || h.srv.Addr == "" {
+		t.Fatalf("server did not retain resolved listener address: %q", h.srv.Addr)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + h.srv.Addr + "/api/ping")
+	if err != nil {
+		t.Fatal("GET /api/ping:", err)
+	}
+	defer resp.Body.Close()
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal("decode ping:", err)
+	}
+	if resp.StatusCode != http.StatusOK || body["status"] != "ok" {
+		t.Fatalf("ping response = %d %#v", resp.StatusCode, body)
+	}
+
+	h.Stop()
+	if _, err := client.Get("http://" + h.srv.Addr + "/api/ping"); err == nil {
+		t.Fatal("main listener still accepted requests after Stop")
 	}
 }

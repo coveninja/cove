@@ -12,6 +12,7 @@ package player
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"log/slog"
@@ -49,9 +51,9 @@ type Player struct {
 	activeTorrents   map[string]*torrentState
 	activeTorrentsMu sync.RWMutex
 
-	tmdbClient *tmdb.Client
-	addonMgr   *addons.Manager
-	nuvioMgr   *nuvio.Manager
+	tmdbClient playerTMDB
+	addonMgr   playerAddons
+	nuvioMgr   playerNuvio
 
 	// streamHeaders remembers every stream URL the backend itself returned
 	// from /api/streams (keyed by URL), together with any extra HTTP headers
@@ -95,6 +97,22 @@ type Player struct {
 	// preferences (e.g. AllowUploading) without requiring a player restart.
 	// May be nil if the settings store failed to initialise.
 	settings *settings.Store
+}
+
+type playerTMDB interface {
+	GetIMDBId(tmdbID int) (string, error)
+	GetTVIMDBId(tmdbID int) (string, error)
+	GetMediaByID(tmdbID int, mediaType string) (*tmdb.Media, error)
+}
+
+type playerAddons interface {
+	GetAllStreams(ctx context.Context, mediaType, stremioID string) ([]addons.Stream, error)
+	GetAllSubtitles(ctx context.Context, mediaType, stremioID string) []addons.Subtitle
+}
+
+type playerNuvio interface {
+	HasEnabledScrapers() bool
+	GetStreams(ctx context.Context, mediaType string, tmdbID int, imdbID, title string, year int, season, episode *int) []addons.Stream
 }
 
 type streamHeaderEntry struct {
@@ -204,6 +222,15 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 	cfg.UploadRateLimiter = rate.NewLimiter(1<<20, 1<<20) // 1 MiB/s
 	cfg.DialRateLimiter = rate.NewLimiter(30, 30)         // default 10/s; reach full peer connectivity sooner
 	client, err := torrent.NewClient(cfg)
+	if errors.Is(err, syscall.EADDRINUSE) {
+		// The library defaults to a fixed inbound peer port. Another Cove
+		// instance (or any other process) may already own it; an ephemeral port
+		// retains outbound playback functionality and is preferable to refusing
+		// to start the entire backend.
+		log.Printf("torrent listen port %d is busy; retrying with an ephemeral port", cfg.ListenPort)
+		cfg.ListenPort = 0
+		client, err = torrent.NewClient(cfg)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +282,18 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		probeClient:       probeClient,
 		settings:          st,
 	}, nil
+}
+
+// Close releases torrent listeners, storage handles, and background client
+// goroutines. Server shutdown calls this after draining HTTP requests.
+func (p *Player) Close() {
+	if p == nil || p.client == nil {
+		return
+	}
+	for _, err := range p.client.Close() {
+		log.Println("torrent client close:", err)
+	}
+	p.client = nil
 }
 
 // rememberStream records a stream URL the backend returned to the client
@@ -1106,12 +1145,24 @@ func formatSpeed(bytesPerSec int64) string {
 	}
 }
 
+func positiveInt(raw string) (int, bool) {
+	value, err := strconv.Atoi(raw)
+	return value, err == nil && value > 0
+}
+
 func (p *Player) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
-		id := 0
-		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+		if mediaType == "" {
+			mediaType = "movie"
+		}
+		if mediaType != "movie" && mediaType != "tv" {
+			http.Error(w, "type must be movie or tv", http.StatusBadRequest)
+			return
+		}
+		id, validID := positiveInt(tmdbID)
+		if !validID {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
@@ -1132,7 +1183,15 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		if mediaType == "tv" {
 			season := r.URL.Query().Get("season")
 			episode := r.URL.Query().Get("episode")
-			if season != "" && episode != "" {
+			if season != "" || episode != "" {
+				if _, ok := positiveInt(season); !ok {
+					http.Error(w, "invalid season", http.StatusBadRequest)
+					return
+				}
+				if _, ok := positiveInt(episode); !ok {
+					http.Error(w, "invalid episode", http.StatusBadRequest)
+					return
+				}
 				stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
 			}
 		}
@@ -1156,13 +1215,17 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		if mediaType == "" {
 			mediaType = "movie"
 		}
+		if mediaType != "movie" && mediaType != "tv" {
+			http.Error(w, "type must be movie or tv", http.StatusBadRequest)
+			return
+		}
 
-		id := 0
-		_, err := fmt.Sscanf(tmdbID, "%d", &id)
-		if err != nil {
+		id, validID := positiveInt(tmdbID)
+		if !validID {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
+		var err error
 
 		var imdbID string
 		if mediaType == "tv" {
@@ -1185,13 +1248,14 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 				http.Error(w, "season and episode are required for tv streams", http.StatusBadRequest)
 				return
 			}
-			stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
-			if sv, serr := strconv.Atoi(season); serr == nil {
-				seasonNum = &sv
+			sv, seasonOK := positiveInt(season)
+			ev, episodeOK := positiveInt(episode)
+			if !seasonOK || !episodeOK {
+				http.Error(w, "season and episode must be positive integers", http.StatusBadRequest)
+				return
 			}
-			if ev, eerr := strconv.Atoi(episode); eerr == nil {
-				episodeNum = &ev
-			}
+			stremioID = fmt.Sprintf("%s:%d:%d", imdbID, sv, ev)
+			seasonNum, episodeNum = &sv, &ev
 		}
 
 		// Stremio addons and Nuvio scrapers are independent legs with no shared
