@@ -482,7 +482,7 @@ func imgURL(size, path string) string {
 
 func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 	normalized := normalizeQuery(query)
-	kwURL := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, c.apiKey, normalized)
+	kwURL := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, c.apiKey, neturl.QueryEscape(normalized))
 	res, err := c.client.Get(kwURL)
 	if err != nil {
 		return nil, err
@@ -493,6 +493,9 @@ func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /search/keyword", res.StatusCode)
+	}
 
 	var kwData struct {
 		Results []struct {
@@ -654,6 +657,9 @@ func (c *Client) SearchPeople(query string) ([]Person, error) {
 		return nil, err
 	}
 	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /search/person", res.StatusCode)
+	}
 
 	var data struct {
 		Results []Person `json:"results"`
@@ -788,6 +794,9 @@ func (c *Client) GetPerson(id int) (PersonDetails, error) {
 		return PersonDetails{}, err
 	}
 	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return PersonDetails{}, fmt.Errorf("tmdb: HTTP %d for /person/%d", res.StatusCode, id)
+	}
 
 	var data struct {
 		ID                 int    `json:"id"`
@@ -848,9 +857,12 @@ func (c *Client) DiscoverByProvider(mediaType string, providerID, limit int) ([]
 	if err != nil {
 		return nil, err
 	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /discover/%s", res.StatusCode, mediaType)
+	}
 	var data searchResponse
 	err = json.NewDecoder(res.Body).Decode(&data)
-	_ = res.Body.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -961,6 +973,9 @@ func (c *Client) GetSeasons(tmdbID int) ([]TVSeason, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /tv/%d", res.StatusCode, tmdbID)
+	}
 
 	var data struct {
 		Seasons []TVSeason `json:"seasons"`
@@ -995,6 +1010,9 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /tv/%d/season/%d", res.StatusCode, tmdbID, seasonNumber)
+	}
 
 	var data struct {
 		Episodes []TVEpisode `json:"episodes"`
@@ -1473,6 +1491,9 @@ func (c *Client) GenreList(mediaType string) ([]Keyword, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /genre/%s/list", res.StatusCode, mediaType)
+	}
 
 	var data struct {
 		Genres []Keyword `json:"genres"`
@@ -1485,7 +1506,7 @@ func (c *Client) GenreList(mediaType string) ([]Keyword, error) {
 
 func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {
 	normalized := normalizeQuery(query)
-	url := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, c.apiKey, normalized)
+	url := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, c.apiKey, neturl.QueryEscape(normalized))
 	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
@@ -1496,6 +1517,9 @@ func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /search/keyword", res.StatusCode)
+	}
 
 	var data struct {
 		Results []Keyword `json:"results"`

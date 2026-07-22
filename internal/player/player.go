@@ -274,7 +274,14 @@ func (p *Player) rememberStream(streamURL string, headers map[string]string) {
 			delete(p.streamHeaders, k)
 		}
 	}
-	p.streamHeaders[streamURL] = streamHeaderEntry{headers: headers, expires: now.Add(streamHeadersTTL)}
+	storedHeaders := make(map[string]string, len(headers))
+	for k, v := range headers {
+		storedHeaders[k] = v
+	}
+	if headers == nil {
+		storedHeaders = nil
+	}
+	p.streamHeaders[streamURL] = streamHeaderEntry{headers: storedHeaders, expires: now.Add(streamHeadersTTL)}
 }
 
 // lookupStream reports whether streamURL is one the backend itself offered,
@@ -285,11 +292,21 @@ func (p *Player) lookupStream(streamURL string) (headers map[string]string, know
 	defer p.streamHeadersMu.Unlock()
 	entry, ok := p.streamHeaders[streamURL]
 	if !ok || time.Now().After(entry.expires) {
+		if ok {
+			delete(p.streamHeaders, streamURL)
+		}
 		return nil, false
 	}
 	entry.expires = time.Now().Add(streamHeadersTTL)
 	p.streamHeaders[streamURL] = entry
-	return entry.headers, true
+	headers = make(map[string]string, len(entry.headers))
+	for k, v := range entry.headers {
+		headers[k] = v
+	}
+	if entry.headers == nil {
+		headers = nil
+	}
+	return headers, true
 }
 
 // proxyStream forwards the request to streamURL with extra headers attached,

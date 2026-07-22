@@ -14,7 +14,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
-#include <QHostAddress>
 #include <QIcon>
 #include <QLockFile>
 #include <QProcess>
@@ -23,7 +22,6 @@
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
-#include <QTcpSocket>
 #include <QTextStream>
 #include <QTemporaryFile>
 #include <QTimer>
@@ -50,6 +48,7 @@
 #include <unistd.h>
 #endif
 
+#include "BackendProbe.h"
 #include "GpuWorkaround.h"
 #include "LinuxGraphicsEnvironment.h"
 #include "MpvObject.h"
@@ -195,48 +194,6 @@ static QProcess *startBackend(const QString &exePath, QObject *parent) {
   }
 #endif
   return proc;
-}
-
-// Polls 127.0.0.1:port until it accepts a connection, then calls onReady.
-// Calls onTimeout instead if the backend never comes up within timeoutMs —
-// without this, a backend that's alive but never binds the port (or never
-// started at all) left the shell polling forever with no window and no
-// error, indistinguishable from the app doing nothing.
-static void waitForBackend(quint16 port, int timeoutMs,
-                            std::function<void()> onReady,
-                            std::function<void()> onTimeout) {
-  auto *timer = new QTimer;
-  timer->setInterval(150);
-  auto elapsed = std::make_shared<QElapsedTimer>();
-  elapsed->start();
-  QObject::connect(
-      timer, &QTimer::timeout, timer,
-      [timer, port, timeoutMs, onReady, onTimeout, elapsed]() {
-        if (elapsed->hasExpired(timeoutMs)) {
-          timer->stop();
-          timer->deleteLater();
-          onTimeout();
-          return;
-        }
-        // Parent probe to the timer so any pending probe is freed when the
-        // timer is destroyed (timeout path or app quit).
-        // Use timer as the context object (not probe) so Qt auto-disconnects
-        // this slot when the timer is destroyed — a late `connected` signal
-        // after the timeout must not touch the freed timer.
-        auto *probe = new QTcpSocket(timer);
-        QObject::connect(probe, &QTcpSocket::connected, timer,
-                         [timer, probe, onReady]() {
-                           timer->stop();
-                           timer->deleteLater();
-                           probe->abort();
-                           probe->deleteLater();
-                           onReady();
-                         });
-        QObject::connect(probe, &QTcpSocket::errorOccurred, probe,
-                         [probe]() { probe->deleteLater(); });
-        probe->connectToHost(QHostAddress::LocalHost, port);
-      });
-  timer->start();
 }
 
 // Qt ships qwebchannel.js as a compiled-in resource of the WebChannel module.
@@ -638,8 +595,8 @@ int main(int argc, char *argv[]) {
             (*launchBackend)(/*first=*/false);
           });
 
-      waitForBackend(
-          apiPort, 20000,
+      BackendProbe::waitFor(
+          &app, apiPort, 20000,
           [loadScene, baseUrl, isDev, isTv, settled, first]() {
             if (*settled)
               return;

@@ -40,6 +40,8 @@ endif()
 
 set(APP_SOURCES
   src/main.cpp
+  src/BackendProbe.cpp
+  src/BackendProbe.h
   src/MpvObject.cpp
   src/MpvObject.h
   src/GpuWorkaround.cpp
@@ -120,4 +122,19 @@ if(COVE_BUILD_TESTS)
     add_test(NAME cove-shell-static-server
              COMMAND cove_shell_static_server_tests)
     set_tests_properties(cove-shell-static-server PROPERTIES TIMEOUT 10)
+
+    add_executable(cove_shell_backend_probe_tests
+        tests/BackendProbeTest.cpp
+        src/BackendProbe.cpp
+        src/BackendProbe.h
+    )
+    target_include_directories(cove_shell_backend_probe_tests PRIVATE src)
+    target_link_libraries(cove_shell_backend_probe_tests PRIVATE
+        Qt6::Core
+        Qt6::Network
+        Qt6::Test
+    )
+    add_test(NAME cove-shell-backend-probe
+             COMMAND cove_shell_backend_probe_tests)
+    set_tests_properties(cove-shell-backend-probe PROPERTIES TIMEOUT 10)
 endif()
