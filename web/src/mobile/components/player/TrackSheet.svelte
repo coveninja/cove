@@ -37,21 +37,20 @@
 
   // ── Drag-to-dismiss ────────────────────────────────────────────────────────
   let panelEl = $state<HTMLElement | null>(null);
-  let listEl = $state<HTMLElement | null>(null);
+  let dragHandleEl = $state<HTMLElement | null>(null);
 
   onMount(() => {
     const el = panelEl;
-    if (!el) return;
+    const handle = dragHandleEl;
+    if (!el || !handle) return;
 
-    let touchStartY = 0;
+    let touchStartY: number | null = null;
     let lastY = 0;
     let lastT = 0;
     let velocity = 0;
     let isDragging = false;
 
     const onTouchStart = (e: TouchEvent) => {
-      // Gate on scroll position: if the list is scrolled down, don't hijack.
-      if (listEl && listEl.scrollTop > 2) return;
       touchStartY = e.touches[0].clientY;
       lastY = touchStartY;
       lastT = Date.now();
@@ -60,12 +59,12 @@
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (!touchStartY) return;
+      if (touchStartY === null) return;
       const y = e.touches[0].clientY;
       const dy = y - touchStartY;
       if (dy < 0) {
-        // Upward swipe — cancel drag, let native scroll handle it.
-        touchStartY = 0;
+        // Upward swipe on the handle is not a dismiss gesture.
+        touchStartY = null;
         isDragging = false;
         return;
       }
@@ -83,7 +82,7 @@
 
     const onTouchEnd = () => {
       if (!isDragging) {
-        touchStartY = 0;
+        touchStartY = null;
         return;
       }
       // Parse the current drag offset from the inline transform.
@@ -91,7 +90,7 @@
       const offset = match ? parseFloat(match[1]) : 0;
       const vel = velocity;
       isDragging = false;
-      touchStartY = 0;
+      touchStartY = null;
       if (offset > 60 || vel > 0.5) {
         // Flick or far-enough drag — dismiss.
         el.style.transform = "";
@@ -107,14 +106,16 @@
       }
     };
 
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    // Only the dedicated handle dismisses the sheet. Touches in the list stay
+    // with native scrolling, so pulling down at the top cannot close the panel.
+    handle.addEventListener("touchstart", onTouchStart, { passive: true });
+    handle.addEventListener("touchmove", onTouchMove, { passive: false });
+    handle.addEventListener("touchend", onTouchEnd, { passive: true });
 
     return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
+      handle.removeEventListener("touchstart", onTouchStart);
+      handle.removeEventListener("touchmove", onTouchMove);
+      handle.removeEventListener("touchend", onTouchEnd);
     };
   });
 </script>
@@ -132,7 +133,7 @@
 <div
   bind:this={panelEl}
   class="fixed inset-x-0 bottom-0 z-[61] flex flex-col rounded-t-2xl bg-neutral-900 text-white shadow-xl"
-  style="padding-bottom: var(--safe-bottom);"
+  style="max-height: calc(100vh - max(0.5rem, var(--safe-top))); padding-bottom: var(--safe-bottom);"
   in:slideUp={{ duration: 320 }}
   out:fly={{ y: 400, duration: 200, opacity: 1 }}
   onclick={(e) => e.stopPropagation()}
@@ -142,7 +143,11 @@
   aria-label={title}
 >
   <!-- Drag handle pill -->
-  <div class="flex shrink-0 justify-center pb-1 pt-3">
+  <div
+    bind:this={dragHandleEl}
+    class="flex shrink-0 touch-none justify-center pb-1 pt-3"
+    aria-hidden="true"
+  >
     <div class="h-1 w-10 rounded-full bg-white/25"></div>
   </div>
 
@@ -150,7 +155,7 @@
   <p class="shrink-0 px-5 pb-1 pt-3 text-base font-semibold">{title}</p>
 
   <!-- Item list -->
-  <div bind:this={listEl} class="overflow-y-auto pb-3" style="max-height: 65vh;">
+  <div class="min-h-0 flex-1 overscroll-contain overflow-y-auto pb-3">
     {#each items as item (item.id)}
       {#if item.header}
         <p class="px-5 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-white/40 {item.indent ? 'pl-8 pt-3 text-[10px] normal-case tracking-wide text-white/30' : ''}">

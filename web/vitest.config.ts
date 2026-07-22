@@ -4,6 +4,11 @@ import viteConfig from "./vite.config";
 export default mergeConfig(
   viteConfig,
   defineConfig({
+    // Component tests run in jsdom and must resolve Svelte's browser runtime;
+    // the default SSR condition exposes a server-only mount() placeholder.
+    resolve: {
+      conditions: ["browser"],
+    },
     test: {
       environment: "jsdom",
       exclude: ["e2e/**", "node_modules/**", "dist/**"],
