@@ -6,8 +6,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -165,4 +167,102 @@ func TestValidateJWTRequiresProjectIssuerAndAuthenticatedAudience(t *testing.T) 
 	assert.Error(t, err)
 	_, err = cfg.ValidateJWT(sign(cfg.URL+"/auth/v1", "other"))
 	assert.Error(t, err)
+}
+
+func TestBuildRowsAssignProfileAndPreserveFields(t *testing.T) {
+	now := time.Date(2026, time.July, 22, 10, 11, 12, 0, time.UTC)
+	season, episode := 2, 7
+	entry := &library.LibraryEntry{
+		ID: "entry-1", TmdbID: 42, MediaType: "tv", Title: "Series",
+		Status: library.StatusWatching, AddedAt: now.Add(-time.Hour), UpdatedAt: now,
+	}
+	progress := &library.WatchProgress{
+		ID: "progress-1", TmdbID: 42, MediaType: "tv", Season: &season,
+		Episode: &episode, PositionSeconds: 90, DurationSeconds: 120,
+		Completed: true, WatchedAt: now,
+	}
+
+	entryRows := buildEntryRows([]*library.LibraryEntry{entry}, "profile-1")
+	progressRows := buildProgressRows([]*library.WatchProgress{progress}, "profile-1")
+	require.Len(t, entryRows, 1)
+	require.Len(t, progressRows, 1)
+	assert.Equal(t, "profile-1", *entry.ProfileID)
+	assert.Equal(t, "profile-1", *progress.ProfileID)
+	assert.Equal(t, "entry-1", entryRows[0]["id"])
+	assert.Equal(t, 42, entryRows[0]["tmdb_id"])
+	assert.Equal(t, true, progressRows[0]["completed"])
+	assert.Equal(t, &season, progressRows[0]["season"])
+}
+
+func TestPushLibraryWritesAllCollectionsAndDeletesRemovedEntries(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	lib, err := library.New("profile-1")
+	require.NoError(t, err)
+	now := time.Date(2026, time.July, 22, 10, 11, 12, 0, time.UTC)
+	lib.MergeFrom(
+		[]*library.LibraryEntry{{
+			ID: "entry-1", TmdbID: 1, MediaType: "movie", Title: "Movie",
+			Status: library.StatusWatching, AddedAt: now, UpdatedAt: now,
+		}},
+		[]*library.WatchProgress{{
+			ID: "progress-1", LibraryEntryID: "entry-1", TmdbID: 1,
+			MediaType: "movie", PositionSeconds: 30, DurationSeconds: 100,
+			WatchedAt: now,
+		}},
+		[]*library.Dismissal{{TmdbID: 2, MediaType: "tv", DismissedAt: now}},
+		[]*library.Removal{{TmdbID: 3, MediaType: "movie", RemovedAt: now}},
+	)
+
+	type call struct {
+		method string
+		table  string
+		query  url.Values
+		body   []map[string]any
+	}
+	var calls []call
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		table := strings.TrimPrefix(r.URL.Path, "/rest/v1/")
+		var body []map[string]any
+		if r.Body != nil {
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		}
+		assert.Equal(t, "Bearer jwt", r.Header.Get("Authorization"))
+		assert.Equal(t, "anon", r.Header.Get("apikey"))
+		calls = append(calls, call{method: r.Method, table: table, query: r.URL.Query(), body: body})
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	cfg := &Config{URL: "https://project.invalid", AnonKey: "anon"}
+	require.NoError(t, cfg.PushLibrary("jwt", "profile-1", lib))
+	require.Len(t, calls, 5)
+	assert.Equal(t, []string{
+		"library_entries", "watch_progress", "dismissals", "library_removals", "library_entries",
+	}, []string{calls[0].table, calls[1].table, calls[2].table, calls[3].table, calls[4].table})
+	for _, index := range []int{0, 1, 2, 3} {
+		assert.Equal(t, http.MethodPost, calls[index].method)
+		require.Len(t, calls[index].body, 1)
+		assert.Equal(t, "profile-1", calls[index].body[0]["profile_id"])
+	}
+	assert.Equal(t, http.MethodDelete, calls[4].method)
+	assert.Equal(t, "eq.profile-1", calls[4].query.Get("profile_id"))
+	assert.Equal(t, "eq.3", calls[4].query.Get("tmdb_id"))
+	assert.Equal(t, "eq.movie", calls[4].query.Get("media_type"))
+}
+
+func TestDeleteProfileDataStopsBeforeParentWhenChildDeleteFails(t *testing.T) {
+	var tables []string
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		table := strings.TrimPrefix(r.URL.Path, "/rest/v1/")
+		tables = append(tables, table)
+		if table == "watch_progress" {
+			return response(http.StatusServiceUnavailable, `{"message":"unavailable"}`), nil
+		}
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	cfg := &Config{URL: "https://project.invalid", AnonKey: "anon"}
+	err := cfg.DeleteProfileData("jwt", "profile-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete watch_progress")
+	assert.Equal(t, []string{"library_entries", "watch_progress"}, tables)
 }

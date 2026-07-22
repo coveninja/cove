@@ -89,4 +89,17 @@ if(COVE_BUILD_TESTS)
     )
     add_test(NAME cove-shell-environment
              COMMAND cove_shell_environment_tests)
+
+    add_executable(cove_shell_gpu_workaround_tests
+        tests/GpuWorkaroundTest.cpp
+        src/GpuWorkaround.cpp
+        src/GpuWorkaround.h
+    )
+    target_include_directories(cove_shell_gpu_workaround_tests PRIVATE src)
+    target_link_libraries(cove_shell_gpu_workaround_tests PRIVATE
+        Qt6::Core
+        Qt6::Test
+    )
+    add_test(NAME cove-shell-gpu-workaround
+             COMMAND cove_shell_gpu_workaround_tests)
 endif()
