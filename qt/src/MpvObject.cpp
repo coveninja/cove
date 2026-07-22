@@ -1,5 +1,7 @@
 #include "MpvObject.h"
 
+#include "MpvHelpers.h"
+
 #include <clocale>
 
 #include <QtGui/QOpenGLContext>
@@ -8,26 +10,11 @@
 #include <QtQuick/QQuickWindow>
 #include <QByteArray>
 #include <QDebug>
-#include <QDir>
 #include <QFile>
-#include <QStandardPaths>
 #include <QStringList>
 #include <QVector>
 
 namespace {
-
-// Returns the absolute path to the user-configurable mpv.conf:
-//   $COVE_DATA_DIR/mpv/mpv.conf   (if COVE_DATA_DIR is set — mirrors Go's utils.ConfigPath)
-//   else GenericConfigLocation/cove/mpv/mpv.conf
-// Matches the shell's existing config-dir convention (shell.log, gpu_workaround.ini).
-static QString mpvConfPath() {
-  const QByteArray dataDir = qgetenv("COVE_DATA_DIR");
-  const QString base = dataDir.isEmpty()
-      ? QDir(QStandardPaths::writableLocation(
-                 QStandardPaths::GenericConfigLocation)).filePath("cove")
-      : QString::fromUtf8(dataDir);
-  return QDir(base).filePath("mpv/mpv.conf");
-}
 
 // libmpv asks us to resolve GL function pointers; route to the current Qt GL
 // context (valid because mpv renders on Quick's render thread with it current).
@@ -37,36 +24,6 @@ void *getProcAddressMpv(void *ctx, const char *name) {
   if (!glctx)
     return nullptr;
   return reinterpret_cast<void *>(glctx->getProcAddress(QByteArray(name)));
-}
-
-// Recursively convert an mpv_node (used by node-typed properties like
-// track-list) into a QVariant tree.
-QVariant nodeToVariant(const mpv_node *node) {
-  switch (node->format) {
-  case MPV_FORMAT_STRING:
-    return QString::fromUtf8(node->u.string);
-  case MPV_FORMAT_FLAG:
-    return bool(node->u.flag);
-  case MPV_FORMAT_INT64:
-    return qlonglong(node->u.int64);
-  case MPV_FORMAT_DOUBLE:
-    return node->u.double_;
-  case MPV_FORMAT_NODE_ARRAY: {
-    QVariantList list;
-    for (int i = 0; i < node->u.list->num; ++i)
-      list.append(nodeToVariant(&node->u.list->values[i]));
-    return list;
-  }
-  case MPV_FORMAT_NODE_MAP: {
-    QVariantMap map;
-    for (int i = 0; i < node->u.list->num; ++i)
-      map.insert(QString::fromUtf8(node->u.list->keys[i]),
-                 nodeToVariant(&node->u.list->values[i]));
-    return map;
-  }
-  default:
-    return {};
-  }
 }
 
 } // namespace
@@ -179,7 +136,7 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   // (highest precedence in mpv's option hierarchy); loading the file here
   // inverts that, giving the user control over every tunable. vo=libmpv is
   // then re-pinned because it is embed-critical and must not be overridden.
-  const QString confPath = mpvConfPath();
+  const QString confPath = MpvHelpers::configPath();
   if (QFile::exists(confPath)) {
     const int rc = mpv_load_config_file(m_mpv, confPath.toUtf8().constData());
     if (rc < 0)
@@ -322,7 +279,7 @@ void MpvObject::setVolume(double volume) {
 
 void MpvObject::reloadMpvConf() {
   if (!m_mpv) return;
-  const QString confPath = mpvConfPath();
+  const QString confPath = MpvHelpers::configPath();
   if (!QFile::exists(confPath)) return;
   const int rc = mpv_load_config_file(m_mpv, confPath.toUtf8().constData());
   if (rc < 0)
@@ -424,7 +381,7 @@ QVariantList MpvObject::readTrackList() {
       mpv_get_property(m_mpv, "track-list", MPV_FORMAT_NODE, &node) < 0)
     return {};
 
-  const QVariant tree = nodeToVariant(&node);
+  const QVariant tree = MpvHelpers::nodeToVariant(&node);
   mpv_free_node_contents(&node);
 
   QVariantList out;

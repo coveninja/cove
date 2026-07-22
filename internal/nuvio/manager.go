@@ -43,8 +43,9 @@ type Manager struct {
 	// live requests or the background prefetch worker — are served from here
 	// instead of re-running the whole batch. Keyed mediaType|tmdbID|S|E, same
 	// shape as addons.Manager's per-addon stream cache.
-	streamCacheMu sync.Mutex
-	streamCache   map[string]nuvioStreamCacheEntry
+	streamCacheMu   sync.Mutex
+	streamCache     map[string]nuvioStreamCacheEntry
+	cacheGeneration uint64
 }
 
 // nuvioStreamCacheEntry is one cached GetStreams result, pre-expiry.
@@ -80,7 +81,21 @@ func (m *Manager) streamCacheGet(key string) ([]addons.Stream, bool) {
 	if !ok || time.Now().After(entry.expires) {
 		return nil, false
 	}
-	return append([]addons.Stream(nil), entry.streams...), true
+	return cloneStreams(entry.streams), true
+}
+
+func cloneStreams(streams []addons.Stream) []addons.Stream {
+	cloned := append([]addons.Stream(nil), streams...)
+	for i := range cloned {
+		if streams[i].Headers == nil {
+			continue
+		}
+		cloned[i].Headers = make(map[string]string, len(streams[i].Headers))
+		for key, value := range streams[i].Headers {
+			cloned[i].Headers[key] = value
+		}
+	}
+	return cloned
 }
 
 // streamCacheSet stores a result and sweeps expired entries while it's
@@ -89,13 +104,39 @@ func (m *Manager) streamCacheGet(key string) ([]addons.Stream, bool) {
 func (m *Manager) streamCacheSet(key string, streams []addons.Stream) {
 	m.streamCacheMu.Lock()
 	defer m.streamCacheMu.Unlock()
+	m.streamCacheSetL(key, streams)
+}
+
+func (m *Manager) streamCacheSetL(key string, streams []addons.Stream) {
 	now := time.Now()
 	for k, v := range m.streamCache {
 		if now.After(v.expires) {
 			delete(m.streamCache, k)
 		}
 	}
-	m.streamCache[key] = nuvioStreamCacheEntry{streams: streams, expires: now.Add(streamCacheTTL)}
+	m.streamCache[key] = nuvioStreamCacheEntry{streams: cloneStreams(streams), expires: now.Add(streamCacheTTL)}
+}
+
+func (m *Manager) cacheGenerationSnapshot() uint64 {
+	m.streamCacheMu.Lock()
+	defer m.streamCacheMu.Unlock()
+	return m.cacheGeneration
+}
+
+func (m *Manager) streamCacheSetIfCurrent(key string, streams []addons.Stream, generation uint64) {
+	m.streamCacheMu.Lock()
+	defer m.streamCacheMu.Unlock()
+	if generation != m.cacheGeneration {
+		return
+	}
+	m.streamCacheSetL(key, streams)
+}
+
+func (m *Manager) invalidateStreamCache() {
+	m.streamCacheMu.Lock()
+	m.streamCache = make(map[string]nuvioStreamCacheEntry)
+	m.cacheGeneration++
+	m.streamCacheMu.Unlock()
 }
 
 // New returns a Manager loaded from the profile-scoped store (or empty on
@@ -138,6 +179,7 @@ func (m *Manager) SetProfile(profileID string) error {
 	m.repos = store.Repos
 	m.updatedAt = store.UpdatedAt
 	m.mu.Unlock()
+	m.invalidateStreamCache()
 	return nil
 }
 
@@ -147,6 +189,13 @@ func (m *Manager) GetRepos() []Repo {
 	defer m.mu.RUnlock()
 	repos := make([]Repo, len(m.repos))
 	copy(repos, m.repos)
+	for i := range repos {
+		repos[i].Scrapers = append([]Scraper(nil), repos[i].Scrapers...)
+		for j := range repos[i].Scrapers {
+			repos[i].Scrapers[j].SupportedTypes = append([]string(nil), repos[i].Scrapers[j].SupportedTypes...)
+			repos[i].Scrapers[j].ContentLanguage = append([]string(nil), repos[i].Scrapers[j].ContentLanguage...)
+		}
+	}
 	return repos
 }
 
@@ -193,8 +242,9 @@ func (m *Manager) SnapshotJSON() ([]byte, time.Time) {
 // last-write-wins gated on UpdatedAt. When the remote wins, repos are replaced
 // and the on-disk store is persisted with UpdatedAt = remoteUpdatedAt (NOT
 // time.Now()) for LWW convergence. Runtime state (m.repos) is updated so
-// scrapers reflecting the merged config are available immediately; the stream
-// cache is intentionally not invalidated (stale cached results expire normally).
+// scrapers reflecting the merged config are available immediately. Cached
+// streams are invalidated so a remotely disabled repo/scraper stops
+// contributing results immediately.
 func (m *Manager) MergeFromJSON(data []byte, remoteUpdatedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -207,6 +257,7 @@ func (m *Manager) MergeFromJSON(data []byte, remoteUpdatedAt time.Time) error {
 	}
 	m.repos = s.Repos
 	m.updatedAt = remoteUpdatedAt
+	m.invalidateStreamCache()
 	if m.storePath == "" {
 		return nil
 	}
@@ -237,6 +288,7 @@ func (m *Manager) GetStreams(ctx context.Context, mediaType string, tmdbID int, 
 	if streams, ok := m.streamCacheGet(key); ok {
 		return streams
 	}
+	cacheGeneration := m.cacheGenerationSnapshot()
 
 	m.mu.RLock()
 	var scrapers []enabledScraper
@@ -319,7 +371,10 @@ func (m *Manager) GetStreams(ctx context.Context, mediaType string, tmdbID int, 
 	mu.Unlock()
 
 	if completed {
-		m.streamCacheSet(key, result)
+		// A profile/repo/scraper change may have happened while third-party
+		// scraper code was running. Do not repopulate the freshly invalidated
+		// cache with results from that obsolete configuration.
+		m.streamCacheSetIfCurrent(key, result, cacheGeneration)
 	}
 	return result
 }

@@ -295,8 +295,17 @@ func exportStreams(v goja.Value) ([]scrapedStream, error) {
 		}
 		switch sz := m["size"].(type) {
 		case float64:
-			// goja exports JS numbers as float64 regardless of int-ness.
 			s.Size = int64(sz)
+		case float32:
+			s.Size = int64(sz)
+		case int:
+			s.Size = int64(sz)
+		case int32:
+			s.Size = int64(sz)
+		case int64:
+			// goja preserves exactly representable integer-valued JS numbers as
+			// int64 when exporting them through interface{}.
+			s.Size = sz
 		case string:
 			s.Size = sizeToBytes(sz)
 		}

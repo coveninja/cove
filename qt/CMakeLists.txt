@@ -44,6 +44,8 @@ set(APP_SOURCES
   src/BackendProbe.h
   src/MpvObject.cpp
   src/MpvObject.h
+  src/MpvHelpers.cpp
+  src/MpvHelpers.h
   src/RestartPolicy.cpp
   src/RestartPolicy.h
   src/GpuWorkaround.cpp
@@ -152,4 +154,20 @@ if(COVE_BUILD_TESTS)
     )
     add_test(NAME cove-shell-restart-policy
              COMMAND cove_shell_restart_policy_tests)
+
+    add_executable(cove_shell_mpv_helpers_tests
+        tests/MpvHelpersTest.cpp
+        src/MpvHelpers.cpp
+        src/MpvHelpers.h
+    )
+    target_include_directories(cove_shell_mpv_helpers_tests PRIVATE
+        src
+        "${MPV_INCLUDE_TARGET}"
+    )
+    target_link_libraries(cove_shell_mpv_helpers_tests PRIVATE
+        Qt6::Core
+        Qt6::Test
+    )
+    add_test(NAME cove-shell-mpv-helpers
+             COMMAND cove_shell_mpv_helpers_tests)
 endif()

@@ -138,10 +138,12 @@ func (m *Manager) AddRepo(ctx context.Context, rawURL string) (Repo, error) {
 	for i, r := range m.repos {
 		if r.ID == repo.ID {
 			m.repos[i] = repo
+			m.invalidateStreamCache()
 			return repo, m.saveL()
 		}
 	}
 	m.repos = append(m.repos, repo)
+	m.invalidateStreamCache()
 	return repo, m.saveL()
 }
 
@@ -152,6 +154,7 @@ func (m *Manager) RemoveRepo(id string) error {
 	for i, r := range m.repos {
 		if r.ID == id {
 			m.repos = append(m.repos[:i], m.repos[i+1:]...)
+			m.invalidateStreamCache()
 			return m.saveL()
 		}
 	}
@@ -166,6 +169,7 @@ func (m *Manager) SetRepoEnabled(id string, enabled bool) error {
 	for i, r := range m.repos {
 		if r.ID == id {
 			m.repos[i].Enabled = enabled
+			m.invalidateStreamCache()
 			return m.saveL()
 		}
 	}
@@ -199,6 +203,7 @@ func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID strin
 
 	if !enabled {
 		m.repos[repoIdx].Scrapers[scraperIdx].Enabled = false
+		m.invalidateStreamCache()
 		err := m.saveL()
 		m.mu.Unlock()
 		return err
@@ -232,6 +237,7 @@ func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID strin
 				m.repos[i].Scrapers[j].CodeFetchedAt = &now
 				m.repos[i].Scrapers[j].CodeErr = ""
 				m.repos[i].Scrapers[j].Enabled = true
+				m.invalidateStreamCache()
 				return m.saveL()
 			}
 		}
@@ -241,6 +247,7 @@ func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID strin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.repos[repoIdx].Scrapers[scraperIdx].Enabled = true
+	m.invalidateStreamCache()
 	return m.saveL()
 }
 
@@ -311,5 +318,6 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 			m.repos[i].FetchErr = ""
 		}
 	}
+	m.invalidateStreamCache()
 	return m.saveL()
 }
