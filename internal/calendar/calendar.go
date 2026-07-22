@@ -40,7 +40,15 @@ type CalendarItem struct {
 // Server owns the /api/library/calendar handler.
 type Server struct {
 	lib  *library.Library
-	tmdb *tmdb.Client
+	tmdb tmdbReader
+}
+
+// tmdbReader is the narrow metadata surface the calendar needs. Keeping this
+// boundary small makes the scheduling rules independently testable without
+// changing the concrete client used by the running server.
+type tmdbReader interface {
+	GetDetails(tmdbID int, mediaType string) (*tmdb.Details, error)
+	GetEpisodesCached(tmdbID, seasonNumber int) ([]tmdb.TVEpisode, error)
 }
 
 // New creates a calendar Server.
@@ -167,7 +175,7 @@ func (s *Server) processMovie(
 	if det.ReleaseDate == "" {
 		return nil, nil
 	}
-	rel, err := time.Parse("2006-01-02", det.ReleaseDate)
+	rel, err := time.ParseInLocation("2006-01-02", det.ReleaseDate, today.Location())
 	if err != nil {
 		return nil, nil // unparseable date — skip
 	}
@@ -317,7 +325,7 @@ func (s *Server) collectFutureEps(
 		if ep.EpisodeNumber <= 0 || ep.AirDate == "" {
 			continue
 		}
-		airDate, err := time.Parse("2006-01-02", ep.AirDate)
+		airDate, err := time.ParseInLocation("2006-01-02", ep.AirDate, today.Location())
 		if err != nil {
 			continue
 		}
@@ -378,12 +386,6 @@ func nextEpisode(realSeasons []tmdb.TVSeason, watchedS, watchedE int) (int, int)
 // and including (airedS, airedE) using season episode counts. Minimum 1.
 func computeWaiting(realSeasons []tmdb.TVSeason, watchedS, watchedE, airedS, airedE int) int {
 	count := 0
-	// Build a quick lookup: season number → episode count.
-	seasonEps := make(map[int]int, len(realSeasons))
-	for _, s := range realSeasons {
-		seasonEps[s.SeasonNumber] = s.EpisodeCount
-	}
-
 	// Walk real seasons in order, counting episodes after the watch position up
 	// through the aired position.
 	inRange := false

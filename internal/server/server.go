@@ -103,7 +103,7 @@ func remoteListenAddr(cfg Config) string {
 		return "0.0.0.0:6970" // safe fallback
 	}
 	port, err := strconv.Atoi(portStr)
-	if err != nil {
+	if err != nil || port < 1 || port >= 65535 {
 		return "0.0.0.0:6970"
 	}
 	return net.JoinHostPort("0.0.0.0", strconv.Itoa(port+1))
@@ -178,7 +178,9 @@ func (h *Handle) startLAN(addr string, handler http.Handler) {
 		return
 	}
 	srv := &http.Server{
-		Addr:              addr,
+		// Record the resolved address. This differs only when callers request
+		// port 0, and makes the listener observable for diagnostics and tests.
+		Addr:              ln.Addr().String(),
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		// ReadTimeout bounds request reads only; long-lived streaming responses
@@ -192,7 +194,7 @@ func (h *Handle) startLAN(addr string, handler http.Handler) {
 			log.Println("remote access LAN listener:", err)
 		}
 	}()
-	log.Printf("Remote access enabled: LAN listener on %s (token required)", addr)
+	log.Printf("Remote access enabled: LAN listener on %s (token required)", srv.Addr)
 }
 
 // stopLAN shuts down the remote-access LAN listener if it is running.

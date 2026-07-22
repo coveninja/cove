@@ -17,14 +17,12 @@
 #include <QHostAddress>
 #include <QIcon>
 #include <QLockFile>
-#include <QMimeDatabase>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
-#include <QTcpServer>
 #include <QTcpSocket>
 #include <QTextStream>
 #include <QTemporaryFile>
@@ -55,6 +53,7 @@
 #include "GpuWorkaround.h"
 #include "LinuxGraphicsEnvironment.h"
 #include "MpvObject.h"
+#include "StaticServer.h"
 
 // Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
 // properties (data, resources, states, transform, etc.) that don't have notify
@@ -142,114 +141,6 @@ static void reportStartupFailure(const QString &reason) {
   if (qApp)
     qApp->exit(1);
 }
-
-// ── Static file server ───────────────────────────────────────────────────────
-class StaticServer : public QTcpServer {
-public:
-  explicit StaticServer(const QString &root, QObject *parent = nullptr)
-      : QTcpServer(parent), m_root(QDir(root).absolutePath()) {}
-
-  QUrl start() {
-    if (!listen(QHostAddress::LocalHost, 5174)) {
-      qWarning() << "[shell] static server failed to listen:" << errorString();
-      return {};
-    }
-    return QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(serverPort()));
-  }
-
-protected:
-  void incomingConnection(qintptr handle) override {
-    auto *sock = new QTcpSocket(this);
-    sock->setSocketDescriptor(handle);
-    auto buffer = std::make_shared<QByteArray>();
-    connect(sock, &QTcpSocket::readyRead, this, [this, sock, buffer]() {
-      buffer->append(sock->readAll());
-      if (buffer->indexOf("\r\n\r\n") < 0) {
-        // Guard against a stalled or malformed client growing the buffer
-        // indefinitely; abort once we've received 64 KiB without a header end.
-        if (buffer->size() > 64 * 1024) {
-          sock->abort();
-          sock->deleteLater();
-        }
-        return;
-      }
-      serve(sock, *buffer);
-    });
-    connect(sock, &QTcpSocket::disconnected, sock, &QObject::deleteLater);
-    // Abort connections that never complete an HTTP request within 10s.
-    // respond() always sends Connection: close + disconnectFromHost(), so sock
-    // is never kept alive past a served request — the singleShot auto-cancels
-    // when sock is destroyed after a normal request completes.
-    QTimer::singleShot(10000, sock, [sock]() {
-      sock->abort();
-      sock->deleteLater();
-    });
-  }
-
-private:
-  void serve(QTcpSocket *sock, const QByteArray &request) {
-    const QByteArray firstLine = request.left(request.indexOf("\r\n"));
-    const QList<QByteArray> tokens = firstLine.split(' ');
-    QString path = tokens.size() >= 2 ? QString::fromUtf8(tokens[1]) : "/";
-    path = QUrl(path).path();
-    if (path.isEmpty() || path == "/")
-      path = "/index.html";
-
-    QString filePath =
-        QFileInfo(QDir(m_root).filePath(path.mid(1))).absoluteFilePath();
-    if (filePath != m_root && !filePath.startsWith(m_root + "/")) {
-      respond(sock, 403, "text/plain", "Forbidden");
-      return;
-    }
-
-    QFileInfo info(filePath);
-    if (!info.exists() || info.isDir()) {
-      if (QFileInfo(path).suffix().isEmpty())
-        filePath = QDir(m_root).filePath("index.html");
-      else {
-        respond(sock, 404, "text/plain", "Not found");
-        return;
-      }
-    }
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-      respond(sock, 500, "text/plain", "Read error");
-      return;
-    }
-    respond(sock, 200, mimeFor(filePath), file.readAll());
-  }
-
-  static QByteArray mimeFor(const QString &filePath) {
-    const QString ext = QFileInfo(filePath).suffix().toLower();
-    if (ext == "js" || ext == "mjs")
-      return "text/javascript; charset=utf-8";
-    if (ext == "css")
-      return "text/css; charset=utf-8";
-    if (ext == "html")
-      return "text/html; charset=utf-8";
-    if (ext == "json" || ext == "map")
-      return "application/json; charset=utf-8";
-    if (ext == "wasm")
-      return "application/wasm";
-    return QMimeDatabase().mimeTypeForFile(filePath).name().toUtf8();
-  }
-
-  void respond(QTcpSocket *sock, int code, const QByteArray &mime,
-               const QByteArray &body) {
-    QByteArray resp;
-    resp += "HTTP/1.1 " + QByteArray::number(code) + " OK\r\n";
-    resp += "Content-Type: " + mime + "\r\n";
-    resp += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
-    resp += "Cache-Control: no-cache\r\n";
-    resp += "Connection: close\r\n\r\n";
-    resp += body;
-    sock->write(resp);
-    sock->disconnectFromHost();
-  }
-
-  QString m_root;
-};
 
 // ── Backend (Go sidecar) ─────────────────────────────────────────────────────
 // The aboutToQuit handler in main() covers clean shutdowns, but a crashed or

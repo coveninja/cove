@@ -17,7 +17,7 @@ set(CMAKE_AUTORCC ON)
 # Note: WebChannel (not WebChannelQuick) is sufficient — the bridge JS is
 # injected via QWebEngineScript; no QML-side WebChannel types are used.
 find_package(Qt6 REQUIRED COMPONENTS
-  Core Gui Qml Quick WebEngineQuick WebEngineCore WebChannel OpenGL
+  Core Gui Qml Quick WebEngineQuick WebEngineCore WebChannel OpenGL Network
 )
 
 # libmpv — pkg-config on Linux/macOS; manual SDK path on Windows.
@@ -46,6 +46,8 @@ set(APP_SOURCES
   src/GpuWorkaround.h
   src/LinuxGraphicsEnvironment.cpp
   src/LinuxGraphicsEnvironment.h
+  src/StaticServer.cpp
+  src/StaticServer.h
   resources.qrc
 )
 # resources/cove.rc embeds resources/cove.ico into cove_shell.exe (taskbar,
@@ -70,6 +72,7 @@ target_link_libraries(cove_shell PRIVATE
   Qt6::WebEngineCore
   Qt6::WebChannel
   Qt6::OpenGL
+  Qt6::Network
   ${MPV_LINK_TARGET}
 )
 
@@ -102,4 +105,19 @@ if(COVE_BUILD_TESTS)
     )
     add_test(NAME cove-shell-gpu-workaround
              COMMAND cove_shell_gpu_workaround_tests)
+
+    add_executable(cove_shell_static_server_tests
+        tests/StaticServerTest.cpp
+        src/StaticServer.cpp
+        src/StaticServer.h
+    )
+    target_include_directories(cove_shell_static_server_tests PRIVATE src)
+    target_link_libraries(cove_shell_static_server_tests PRIVATE
+        Qt6::Core
+        Qt6::Network
+        Qt6::Test
+    )
+    add_test(NAME cove-shell-static-server
+             COMMAND cove_shell_static_server_tests)
+    set_tests_properties(cove-shell-static-server PROPERTIES TIMEOUT 10)
 endif()
