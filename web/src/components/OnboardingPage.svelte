@@ -217,7 +217,7 @@
       });
     }
     if (isLast) {
-      settings.save({ onboardingDone: true });
+      await settings.save({ onboardingDone: true });
       onclose();
     } else {
       stepIndex += 1;
@@ -458,7 +458,7 @@
                   <div class="h-12 w-8 shrink-0 rounded bg-muted"></div>
                 {/if}
                 <p class="min-w-0 flex-1 truncate text-sm font-medium">{title}</p>
-                <StarRating libraryEntry={seenEntries[i] ?? null} media={m} />
+                <StarRating libraryEntry={seenEntries[i] ?? null} media={m} variant="inline" />
               </div>
             {/each}
           </div>

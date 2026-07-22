@@ -229,11 +229,11 @@ func TestGetAllStreams_NoStreamResourceSkipped(t *testing.T) {
 
 	// An addon with no Resources at all should be skipped even if KindProvider.
 	noResources := AddonEntry{
-		ID:      "no-res",
-		URL:     srv.URL,
-		Kind:    KindProvider,
-		Source:  SourceStremio,
-		Enabled: true,
+		ID:       "no-res",
+		URL:      srv.URL,
+		Kind:     KindProvider,
+		Source:   SourceStremio,
+		Enabled:  true,
 		Manifest: Manifest{ID: "no-res", Name: "no-res"},
 	}
 	m := newTestManager([]AddonEntry{noResources})
@@ -315,4 +315,238 @@ func TestGetAllSubtitles_Parallel(t *testing.T) {
 	assert.Less(t, elapsed, 1*time.Second)
 	require.Len(t, subs, 1)
 	assert.Equal(t, "en", subs[0].Lang)
+}
+
+// ── MergeFrom tests ───────────────────────────────────────────────────────────
+
+func stremioEntry(id string) AddonEntry {
+	return AddonEntry{
+		ID:       id,
+		URL:      "https://example.com/" + id,
+		Kind:     KindProvider,
+		Source:   SourceStremio,
+		Enabled:  true,
+		Manifest: Manifest{ID: id, Name: id},
+	}
+}
+
+func officialEntry(id string, enabled bool) AddonEntry {
+	return AddonEntry{
+		ID:       id,
+		Source:   SourceOfficial,
+		Enabled:  enabled,
+		Manifest: Manifest{ID: id, Name: id},
+	}
+}
+
+func TestMergeFrom_RemoteNewerReplaces(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := &Manager{
+		client:          &http.Client{},
+		stremioAddons:   []AddonEntry{stremioEntry("local-addon")},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+		storePath:       t.TempDir() + "/addons-test.json",
+	}
+
+	localTime := time.Now().Add(-1 * time.Hour)
+	m.updatedAt = localTime
+
+	remote := []AddonEntry{stremioEntry("remote-addon")}
+	remoteTime := time.Now()
+
+	m.MergeFrom(remote, remoteTime)
+
+	entries := m.GetEntries()
+	// Should contain official addons + the one remote stremio addon (not local-addon).
+	var stremioNames []string
+	for _, e := range entries {
+		if e.Source == SourceStremio {
+			stremioNames = append(stremioNames, e.ID)
+		}
+	}
+	require.Len(t, stremioNames, 1)
+	assert.Equal(t, "remote-addon", stremioNames[0])
+	assert.Equal(t, remoteTime, m.UpdatedAt())
+}
+
+func TestMergeFrom_LocalNewerNoOp(t *testing.T) {
+	m := &Manager{
+		client:          &http.Client{},
+		stremioAddons:   []AddonEntry{stremioEntry("local-addon")},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+
+	m.updatedAt = time.Now() // local is newer
+
+	remote := []AddonEntry{stremioEntry("remote-addon")}
+	remoteTime := time.Now().Add(-1 * time.Hour) // remote is older
+
+	m.MergeFrom(remote, remoteTime)
+
+	// Local should be unchanged.
+	entries := m.GetEntries()
+	var stremioNames []string
+	for _, e := range entries {
+		if e.Source == SourceStremio {
+			stremioNames = append(stremioNames, e.ID)
+		}
+	}
+	require.Len(t, stremioNames, 1)
+	assert.Equal(t, "local-addon", stremioNames[0])
+}
+
+func TestMergeFrom_OfficialEnabledRebuilt(t *testing.T) {
+	m := &Manager{
+		client: &http.Client{},
+		officialEnabled: map[string]bool{
+			"cove.justwatch": true,
+		},
+		streamCache: make(map[string]streamCacheEntry),
+	}
+	m.updatedAt = time.Now().Add(-1 * time.Hour)
+
+	// Remote has JustWatch disabled and IntroSkip enabled.
+	remote := []AddonEntry{
+		officialEntry("cove.justwatch", false),
+		officialEntry("cove.introdb", true),
+	}
+	m.MergeFrom(remote, time.Now())
+
+	m.mu.RLock()
+	jw := m.officialEnabled["cove.justwatch"]
+	intro := m.officialEnabled["cove.introdb"]
+	m.mu.RUnlock()
+
+	assert.False(t, jw, "JustWatch should be disabled per remote")
+	assert.True(t, intro, "IntroSkip should be enabled per remote")
+}
+
+func TestMergeFrom_EqualTimeNoOp(t *testing.T) {
+	ts := time.Now()
+	m := &Manager{
+		client:          &http.Client{},
+		stremioAddons:   []AddonEntry{stremioEntry("local")},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+		updatedAt:       ts,
+	}
+
+	// Same timestamp — should not replace.
+	m.MergeFrom([]AddonEntry{stremioEntry("remote")}, ts)
+
+	entries := m.GetEntries()
+	var stremioNames []string
+	for _, e := range entries {
+		if e.Source == SourceStremio {
+			stremioNames = append(stremioNames, e.ID)
+		}
+	}
+	require.Len(t, stremioNames, 1)
+	assert.Equal(t, "local", stremioNames[0])
+}
+
+// ── Duplicate manifest ID tests ───────────────────────────────────────────────
+
+// manifestHandler builds an httptest handler that serves a Stremio manifest
+// with the given id and name.
+func manifestHandler(id, name string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/manifest.json" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":%q,"name":%q,"version":"1.0.0","resources":["stream"],"types":["movie"]}`, id, name)
+	}
+}
+
+func TestAddStremioAddon_SameIDDifferentURLKeepsBoth(t *testing.T) {
+	// Two addons with the same manifest ID but different config URLs should
+	// both be retained — the second install must not overwrite the first.
+	srv1 := httptest.NewServer(manifestHandler("shared.id", "Addon A"))
+	defer srv1.Close()
+	srv2 := httptest.NewServer(manifestHandler("shared.id", "Addon B"))
+	defer srv2.Close()
+
+	m := newTestManager(nil)
+
+	e1, err := m.AddStremioAddon(context.Background(), srv1.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "shared.id", e1.ID)
+
+	e2, err := m.AddStremioAddon(context.Background(), srv2.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "shared.id", e2.ID)
+
+	m.mu.RLock()
+	count := len(m.stremioAddons)
+	m.mu.RUnlock()
+	assert.Equal(t, 2, count, "both installs should be kept when URLs differ")
+}
+
+func TestAddStremioAddon_SameURLUpdatesInPlace(t *testing.T) {
+	// Re-adding the same URL must refresh the manifest in place (no duplicate).
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"same.url.id","name":"Addon v%d","version":"1.0.0","resources":["stream"],"types":["movie"]}`, n)
+	}))
+	defer srv.Close()
+
+	m := newTestManager(nil)
+
+	_, err := m.AddStremioAddon(context.Background(), srv.URL)
+	require.NoError(t, err)
+
+	e2, err := m.AddStremioAddon(context.Background(), srv.URL)
+	require.NoError(t, err)
+
+	m.mu.RLock()
+	count := len(m.stremioAddons)
+	m.mu.RUnlock()
+	assert.Equal(t, 1, count, "re-adding the same URL should update in place, not append")
+	assert.Equal(t, "Addon v2", e2.Manifest.Name, "manifest should be refreshed on re-add")
+}
+
+func TestRemoveAddon_URLRemovesOnlyMatchingEntry(t *testing.T) {
+	// When two addons share a manifest ID, RemoveAddon with addonURL must
+	// remove only the URL-matched entry, leaving the sibling intact.
+	m := newTestManager([]AddonEntry{
+		{ID: "dup.id", URL: "https://a.example.com", Kind: KindProvider, Source: SourceStremio, Enabled: true, Manifest: Manifest{ID: "dup.id"}},
+		{ID: "dup.id", URL: "https://b.example.com", Kind: KindProvider, Source: SourceStremio, Enabled: true, Manifest: Manifest{ID: "dup.id"}},
+	})
+
+	err := m.RemoveAddon("dup.id", "https://a.example.com")
+	require.NoError(t, err)
+
+	m.mu.RLock()
+	remaining := make([]AddonEntry, len(m.stremioAddons))
+	copy(remaining, m.stremioAddons)
+	m.mu.RUnlock()
+
+	require.Len(t, remaining, 1, "only the URL-matched entry should be removed")
+	assert.Equal(t, "https://b.example.com", remaining[0].URL)
+}
+
+func TestSetEnabled_URLTogglesOnlyMatchingEntry(t *testing.T) {
+	// When two addons share a manifest ID, SetEnabled with addonURL must
+	// toggle only the URL-matched entry.
+	m := newTestManager([]AddonEntry{
+		{ID: "dup.id", URL: "https://a.example.com", Kind: KindProvider, Source: SourceStremio, Enabled: true, Manifest: Manifest{ID: "dup.id"}},
+		{ID: "dup.id", URL: "https://b.example.com", Kind: KindProvider, Source: SourceStremio, Enabled: true, Manifest: Manifest{ID: "dup.id"}},
+	})
+
+	err := m.SetEnabled("dup.id", "https://a.example.com", false)
+	require.NoError(t, err)
+
+	m.mu.RLock()
+	enabledA := m.stremioAddons[0].Enabled
+	enabledB := m.stremioAddons[1].Enabled
+	m.mu.RUnlock()
+
+	assert.False(t, enabledA, "URL-matched entry should be disabled")
+	assert.True(t, enabledB, "sibling entry should remain enabled")
 }

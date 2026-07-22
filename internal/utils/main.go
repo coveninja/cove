@@ -10,6 +10,25 @@ import (
 	"strings"
 )
 
+// localAddr records the address the main HTTP listener was bound to.
+// Defaults to 127.0.0.1:6969 so test/standalone use works without a call to
+// SetLocalAddr. Only written once at server startup before handlers serve.
+var localAddr = "127.0.0.1:6969"
+
+// SetLocalAddr records the bind address for image-proxy URL builders
+// (imgURL in internal/tmdb and rewritePosterURL in internal/library).
+// Call before any HTTP handlers serve requests.
+func SetLocalAddr(addr string) {
+	if addr != "" {
+		localAddr = addr
+	}
+}
+
+// LocalAddr returns the recorded bind address for constructing backend-relative URLs.
+func LocalAddr() string {
+	return localAddr
+}
+
 // allowedOrigins are the only browser origins permitted to call the API:
 // the Qt shell's static server (:5174) and the Vite dev server (:5173).
 // Requests without an Origin header (the shell's probe, mpv, curl) are not
@@ -37,7 +56,13 @@ func CorsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		origin := r.Header.Get("Origin")
 
 		if origin != "" {
-			if allowedOrigins[origin] {
+			// Same-origin: the page was served by this server itself (the
+			// embedded web UI on Android loads from the backend's own address).
+			// A hostile page on another origin can never match r.Host here, so
+			// this keeps the CSRF posture of the allowlist intact.
+			sameOrigin := origin == "http://"+r.Host
+
+			if allowedOrigins[origin] || sameOrigin {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin, X-Requested-With")

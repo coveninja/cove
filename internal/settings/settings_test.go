@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,4 +202,76 @@ func TestHandlers_PutSettings(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.True(t, st.Get().AutoPlay)
 	assert.Equal(t, 0.7, st.Get().DefaultVolume)
+}
+
+// TestHandlers_MpvConf covers GET (no file), PUT+GET round-trip, and oversize body.
+func TestHandlers_MpvConf(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	mux := http.NewServeMux()
+	st.SetupHandlers(mux)
+
+	// GET when the file doesn't exist yet — should return the empty JSON string.
+	t.Run("GET_no_file", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/settings/mpv-conf", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+
+		var got string
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&got))
+		assert.Equal(t, "", got)
+	})
+
+	// PUT then GET round-trips content including quotes, backslashes, and newlines.
+	t.Run("PUT_GET_roundtrip", func(t *testing.T) {
+		content := "# hwdec=auto\n# volume=80\nvo=gpu\npath=\"C:\\\\test\"\n"
+		body, err := json.Marshal(content)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/mpv-conf", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusNoContent, rr.Code)
+
+		req2 := httptest.NewRequest(http.MethodGet, "/api/settings/mpv-conf", nil)
+		rr2 := httptest.NewRecorder()
+		mux.ServeHTTP(rr2, req2)
+
+		assert.Equal(t, http.StatusOK, rr2.Code)
+		var got string
+		require.NoError(t, json.NewDecoder(rr2.Body).Decode(&got))
+		assert.Equal(t, content, got)
+	})
+
+	// PUT with a body over 1 MiB — should return a 4xx error.
+	t.Run("PUT_oversize_body", func(t *testing.T) {
+		// Build a string just over 1 MiB, then JSON-encode it.
+		big := strings.Repeat("x", (1<<20)+1)
+		body, err := json.Marshal(big)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPut, "/api/settings/mpv-conf", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+
+		assert.GreaterOrEqual(t, rr.Code, 400)
+		assert.Less(t, rr.Code, 500)
+	})
+
+	// Method other than GET/PUT — should return 405.
+	t.Run("wrong_method", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/api/settings/mpv-conf", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+
+		assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	})
 }

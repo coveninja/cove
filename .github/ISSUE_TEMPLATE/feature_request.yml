@@ -3,6 +3,19 @@ description: Suggest an idea or improvement
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which platform(s) is this about?
+      multiple: true
+      options:
+        - All platforms
+        - Desktop (Windows / Linux)
+        - Android (phone / tablet)
+        - Android TV
+    validations:
+      required: true
+
   - type: textarea
     id: problem
     attributes:

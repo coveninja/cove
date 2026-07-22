@@ -15,7 +15,11 @@ import type {
 import type { Repo as NuvioRepo } from "$lib/types/nuvio";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
-import type { Profile } from "$lib/types/auth";
+import type { Profile } from "$lib/types/profiles"; // tygo-generated
+import type { Stats as ActivityStats, TitleSeconds } from "$lib/types/activity"; // tygo-generated
+import type { CheckResult as UpdateCheckResult } from "$lib/types/updater"; // tygo-generated
+import type { CalendarItem } from "$lib/types/calendar"; // tygo-generated
+export type { ActivityStats, TitleSeconds, UpdateCheckResult };
 
 // Single source of truth for the backend origin. Override per-environment with
 // VITE_API_BASE (e.g. in .env.production); falls back to 127.0.0.1 (the same
@@ -206,6 +210,17 @@ export const STATUS_LABELS: Record<LibraryStatus, string> = {
   dropped: "Dropped",
 };
 
+/** Accent color per library status, for at-a-glance color coding across the UI. */
+export const STATUS_COLORS: Record<
+  LibraryStatus,
+  { dot: string; text: string }
+> = {
+  watch_later: { dot: "bg-amber-400", text: "text-amber-400" },
+  watching: { dot: "bg-sky-400", text: "text-sky-400" },
+  finished: { dot: "bg-emerald-400", text: "text-emerald-400" },
+  dropped: { dot: "bg-rose-400", text: "text-rose-400" },
+};
+
 /** "1h 23m" / "4m 12s" / "8s" */
 export function formatPosition(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -266,32 +281,6 @@ export interface DiscoverInsights {
   negative_contributors: ContributingTitle[];
 }
 
-export interface TitleSeconds {
-  tmdb_id: number;
-  media_type: string;
-  title: string;
-  poster_path: string;
-  seconds: number;
-}
-
-export interface ActivityStats {
-  total_seconds: number;
-  total_titles: number;
-  current_streak: number;
-  longest_streak: number;
-  avg_seconds_per_active_day: number;
-  titles_this_year: number;
-  this_year_seconds: number;
-  last_year_seconds: number;
-  by_year: Record<string, number>;
-  by_month_this_year: number[];
-  by_month_last_year: number[];
-  by_day_of_week: number[];
-  by_hour_of_day: number[];
-  calendar: Record<string, number>;
-  titles_watched_this_year: TitleSeconds[];
-}
-
 export interface StudioEntry {
   id: number;
   name: string;
@@ -345,14 +334,31 @@ export interface PersonDetails {
   credits: Media[];
 }
 
-// ── Update ────────────────────────────────────────────────────────────────────
+// ── Trakt.tv types ───────────────────────────────────────────────────────────
 
-// Mirrors internal/updater/updater.go CheckResult.
-export interface UpdateCheckResult {
-  available: boolean;
-  current_version: string;
-  latest_version: string;
-  release_name: string;
+export interface TraktStatus {
+  connected: boolean;
+  username: string;
+  expires_at: string;
+}
+
+export interface TraktDeviceCode {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface TraktPollResult {
+  status:
+    | "pending"
+    | "authorized"
+    | "expired"
+    | "denied"
+    | "slow_down"
+    | "invalid";
+  username?: string;
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
@@ -446,13 +452,14 @@ export const api = {
     signal?: AbortSignal,
   ): Promise<void> => {
     if (ids.length === 0) return;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
       const res = await fetch(
         `${BASE}/quality/batch?ids=${ids.map(encodeURIComponent).join(",")}`,
         withAuth({ signal }),
       );
       if (!res.ok || !res.body) return;
-      const reader = res.body.getReader();
+      reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       while (true) {
@@ -472,10 +479,31 @@ export const api = {
         }
       }
     } catch (e) {
+      // Cancel the reader on any error/abort so the locked ReadableStream is
+      // released promptly instead of being held until GC collects it.
+      reader?.cancel().catch(() => {});
       if ((e as { name?: string } | null)?.name === "AbortError") return;
       throw e;
     }
   },
+
+  // Probes the liveness and Content-Length of a batch of direct-URL stream
+  // candidates. Results are returned in input order; URLs the backend's stream
+  // registry doesn't recognise come back with alive: false. Used by
+  // rankStreamsWithProbe to demote dead links before auto-select commits.
+  probeStreams: (
+    streams: { url: string }[],
+    timeoutMs = 700,
+    signal?: AbortSignal,
+  ): Promise<{
+    results: { url: string; alive: boolean; contentLength: number }[];
+  }> =>
+    request(`/streams/probe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ streams, timeoutMs }),
+      ...(signal ? { signal } : {}),
+    }),
 
   // ── Player: source URL builders ───────────────────────────────────────────────
   //
@@ -490,12 +518,13 @@ export const api = {
    */
   playUrl: (
     src: string,
-    opts?: { season?: number; episode?: number },
+    opts?: { season?: number; episode?: number; fileIdx?: number },
   ): string => {
     if (!isHashSrc(src)) return src;
     const p = new URLSearchParams({ hash: src });
     if (opts?.season != null) p.set("season", String(opts.season));
     if (opts?.episode != null) p.set("episode", String(opts.episode));
+    if (opts?.fileIdx != null) p.set("fileIdx", String(opts.fileIdx));
     return `${BASE}/play?${p}`;
   },
 
@@ -519,11 +548,12 @@ export const api = {
    */
   progressStreamUrl: (
     src: string,
-    opts?: { season?: number; episode?: number },
+    opts?: { season?: number; episode?: number; fileIdx?: number },
   ): string => {
     const p = new URLSearchParams({ hash: src });
     if (opts?.season != null) p.set("season", String(opts.season));
     if (opts?.episode != null) p.set("episode", String(opts.episode));
+    if (opts?.fileIdx != null) p.set("fileIdx", String(opts.fileIdx));
     return `${BASE}/progress/stream?${p}`;
   },
 
@@ -549,11 +579,12 @@ export const api = {
    */
   prefetchDownload: (
     hash: string,
-    opts?: { season?: number; episode?: number },
+    opts?: { season?: number; episode?: number; fileIdx?: number },
   ): Promise<{ started: boolean }> => {
     const p = new URLSearchParams({ hash });
     if (opts?.season != null) p.set("season", String(opts.season));
     if (opts?.episode != null) p.set("episode", String(opts.episode));
+    if (opts?.fileIdx != null) p.set("fileIdx", String(opts.fileIdx));
     return request(`/prefetch-download?${p}`, { method: "POST" });
   },
 
@@ -566,6 +597,25 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(s),
     }),
+
+  // GET/PUT /api/settings/mpv-conf — device-global mpv.conf content.
+  // GET returns an empty string when the file doesn't exist yet.
+  getMpvConf: (): Promise<string> => request<string>(`/settings/mpv-conf`),
+
+  setMpvConf: (content: string): Promise<void> =>
+    request<void>(`/settings/mpv-conf`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(content),
+    }),
+
+  // GET /api/settings returns remoteAccessToken as "***" when set (empty when
+  // unset). Call this to fetch the real value — only when the user explicitly
+  // clicks show/copy, not on every settings load.
+  revealRemoteAccessToken: (): Promise<string> =>
+    request<{ token: string }>(`/settings/reveal-token`, {
+      method: "POST",
+    }).then((r) => r.token),
 
   testDiscoveryAlgorithm: (
     url: string,
@@ -589,14 +639,14 @@ export const api = {
   removeAddon: (id: string, url?: string): Promise<void> => {
     const p = new URLSearchParams();
     if (id) p.set("id", id);
-    else if (url) p.set("url", url);
+    if (url) p.set("url", url);
     return request(`/addons?${p}`, { method: "DELETE" });
   },
 
   toggleAddon: (id: string, enabled: boolean, url?: string): Promise<void> => {
     const p = new URLSearchParams();
     if (id) p.set("id", id);
-    else if (url) p.set("url", url);
+    if (url) p.set("url", url);
     return request(`/addons?${p}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -612,6 +662,7 @@ export const api = {
     catalogId: string,
     skip: number,
     limit?: number,
+    addonUrl?: string,
   ): Promise<{ medias: Media[]; nextSkip: number }> => {
     const p = new URLSearchParams({
       addonId,
@@ -620,6 +671,7 @@ export const api = {
       skip: String(skip),
     });
     if (limit != null) p.set("limit", String(limit));
+    if (addonUrl) p.set("addonUrl", addonUrl);
     return request(`/catalog?${p}`);
   },
 
@@ -627,8 +679,10 @@ export const api = {
     addonId: string,
     catalogKey: string,
     enabled: boolean,
+    addonUrl?: string,
   ): Promise<void> => {
     const p = new URLSearchParams({ id: addonId, catalog: catalogKey });
+    if (addonUrl) p.set("url", addonUrl);
     return request(`/addons/catalog?${p}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -691,6 +745,8 @@ export const api = {
   },
 
   // ── Library ──────────────────────────────────────────────────────────────────
+  libraryCalendar: (): Promise<CalendarItem[]> => request(`/library/calendar`),
+
   libraryList: (status?: LibraryStatus): Promise<LibraryEntry[]> =>
     request(`/library${status ? `?status=${status}` : ""}`),
 
@@ -985,8 +1041,13 @@ export const api = {
 
   // library_generation is absent on older backends / a noop (non-proprietary)
   // build that 503s — callers fall back accordingly.
-  authSync: (): Promise<{ status: string; library_generation?: number }> =>
-    request(`/auth/sync`, { method: "POST" }),
+  // push_error reflects the PREVIOUS completed push (the current one is async);
+  // "" or absent means the last push fully succeeded.
+  authSync: (): Promise<{
+    status: string;
+    library_generation?: number;
+    push_error?: string;
+  }> => request(`/auth/sync`, { method: "POST" }),
 
   // Persistent client session — stored by the Go backend as a JSON file in
   // the OS user-config dir (~/.config/cove/session.json). More reliable than
@@ -1004,4 +1065,55 @@ export const api = {
     request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
   clientSessionDelete: (): Promise<void> =>
     request(`/client-session`, { method: "DELETE" }),
+
+  // Clears the in-flight GET-coalescing map. Call whenever the auth token or
+  // active profile changes so a pending response from the old identity can't
+  // be handed to the new one. Does NOT key by token — just empties the map
+  // so the next caller hits the network fresh under the new identity.
+  clearInflight: (): void => {
+    inflight.clear();
+  },
+
+  // ── Trakt.tv ─────────────────────────────────────────────────────────────────
+  // All trakt endpoints return 503 when credentials aren't compiled in.
+  // traktStatus absorbs 503 and returns null so callers can gate the UI
+  // without catching raw errors; all other methods throw on error as usual.
+
+  traktStatus: async (): Promise<TraktStatus | null> => {
+    try {
+      return await request<TraktStatus>(`/trakt/status`);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 503) return null;
+      throw e;
+    }
+  },
+
+  traktStartDeviceFlow: (): Promise<TraktDeviceCode> =>
+    request(`/trakt/device-code`, { method: "POST" }),
+
+  traktPoll: (device_code: string): Promise<TraktPollResult> =>
+    request(`/trakt/poll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_code }),
+    }),
+
+  traktUnlink: (): Promise<void> =>
+    request(`/trakt/unlink`, { method: "POST" }),
+
+  traktScrobble: (p: {
+    action: "start" | "pause" | "stop";
+    tmdb_id: number;
+    media_type: string;
+    season?: number | null;
+    episode?: number | null;
+    progress: number;
+  }): Promise<void> =>
+    request(`/trakt/scrobble`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    }),
+
+  traktSyncNow: (): Promise<void> => request(`/trakt/sync`, { method: "POST" }),
 };

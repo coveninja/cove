@@ -81,6 +81,11 @@ export interface Details {
   }[];
   runtime: number /* int */;
   episode_run_time: number /* int */[];
+  /**
+   * ReleaseDate is the theatrical/digital release date in YYYY-MM-DD form.
+   * Movies only; empty for TV.
+   */
+  release_date: string;
   credits: {
     cast: {
       id: number /* int */;

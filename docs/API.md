@@ -186,36 +186,47 @@ this instead.
 | `/api/client-session` | POST | Any valid JSON | `204`; overwrites the stored blob (mode `0600`) |
 | `/api/client-session` | DELETE | — | `204` |
 
-## `internal/supabase` — auth + sync (OSS vs proprietary differ, plus a known path mismatch)
+## `internal/supabase` — auth + sync
 
 Build-tagged: `noop.go` (`!supabase`, default) vs. the proprietary
-implementation (`-tags supabase`, sourced from `_private/cove-auth`).
+implementation (`-tags supabase`, mirrored in `internal/supabase` and checked
+against `_private/cove-auth` in trusted CI).
 
 **OSS build**: every route below returns `503` with body `"Supabase
 integration not enabled (build with -tags supabase)"` (still answers `OPTIONS`
 successfully, since `CorsMiddleware` wraps the stub too).
 
-**Proprietary build**: real Supabase-backed account creation, login, and
-cross-device library/settings/addon sync.
+**Proprietary build**: real Supabase-backed account creation, login, profile
+reconciliation, and cross-device library/settings/addon/plugin sync.
 
-| Route (OSS build) | Route (proprietary build) |
-|---|---|
-| `/api/auth/register` | `/api/auth/register` |
-| `/api/auth/confirm-register` | `/api/auth/register/confirm` ⚠️ |
-| `/api/auth/login` | `/api/auth/login` |
-| `/api/auth/otp` | `/api/auth/otp` |
-| `/api/auth/verify-otp` | `/api/auth/verify-otp` |
-| `/api/auth/logout` | `/api/auth/logout` |
-| `/api/auth/me` | `/api/auth/me` |
-| `/api/auth/sync` | `/api/auth/sync` |
+Both variants register the same route contract:
 
-⚠️ **Known inconsistency**: the OSS stub and the proprietary build register
-*different paths* for the registration-confirmation step
-(`/api/auth/confirm-register` vs. `/api/auth/register/confirm`). Neither
-build registers the other's path, so whichever one a frontend build assumes,
-the other build 404s on that specific route. Not fixed as part of this
-documentation pass — flagged here so it doesn't get load-bearing assumptions
-built on top of it silently.
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/auth/register` | POST | Create an account; may return `confirmation_required` |
+| `/api/auth/register/confirm` | POST | Confirm registration with the emailed code |
+| `/api/auth/login` | POST | Password login and profile list |
+| `/api/auth/otp` | POST | Send a one-time login code |
+| `/api/auth/verify-otp` | POST | Verify a one-time login code |
+| `/api/auth/logout` | POST | Unlink the active local profile |
+| `/api/auth/me` | GET | Return the active linked profile |
+| `/api/auth/sync` | POST | Pull, merge, persist, and start an asynchronous push |
+
+Successful sync returns:
+
+```json
+{
+  "status": "ok",
+  "library_generation": 42,
+  "push_error": ""
+}
+```
+
+`library_generation` changes only when the merged library changes, so clients
+can avoid unnecessary reloads. `push_error` describes the previous completed
+asynchronous push (the push started by the current request finishes later).
+Library removals sync as timestamped tombstones so stale entries on another
+device cannot resurrect deleted titles.
 
 ## `main.go` — routes registered directly (not via any package's `SetupHandlers`)
 

@@ -63,6 +63,13 @@ type Client struct {
 	detailsCache   map[string]detailsCacheEntry
 	detailsSF      singleflight.Group
 
+	// GetEpisodesCached cache. Keyed "<tmdbID>:<seasonNumber>", TTL 6h — season
+	// episode lists change only when TMDB gets updated metadata. Mirrors the
+	// detailsCache field layout exactly (mutex + map + singleflight.Group).
+	episodesCacheMu sync.Mutex
+	episodesCache   map[string]episodesCacheEntry
+	episodesSF      singleflight.Group
+
 	// Catalog page cache for /api/catalog. Keyed
 	// addonURL+"|"+type+"|"+id+"|"+skip+"|"+limit, TTL catalogCacheTTL.
 	// Expired entries are swept on insert (same inline-expiry style as
@@ -83,6 +90,19 @@ const (
 	// unbounded — dropping the whole map on overflow, same tradeoff as
 	// Client.imdbCache.
 	detailsCacheCap = 2000
+)
+
+type episodesCacheEntry struct {
+	episodes []TVEpisode
+	expires  time.Time
+}
+
+const (
+	episodesCacheTTL = 6 * time.Hour
+	// episodesCacheCap bounds the episodes cache to 500 entries — a very large
+	// library fanout won't grow it unbounded. Overflow drops the whole map,
+	// same tradeoff as detailsCache.
+	episodesCacheCap = 500
 )
 
 type qualityCacheEntry struct {
@@ -162,12 +182,13 @@ func (c *Client) catalogCacheSet(key string, medias []Media, nextSkip int) {
 // open forever; TMDB is normally fast, so 15s only trips on a dead connection.
 func New(apiKey string) *Client {
 	return &Client{
-		apiKey:       apiKey,
-		client:       &http.Client{Timeout: 15 * time.Second},
-		imdbCache:    make(map[string]string),
-		qualityCache: make(map[string]qualityCacheEntry),
-		detailsCache: make(map[string]detailsCacheEntry),
-		catalogCache: make(map[string]catalogPageEntry),
+		apiKey:        apiKey,
+		client:        &http.Client{Timeout: 15 * time.Second},
+		imdbCache:     make(map[string]string),
+		qualityCache:  make(map[string]qualityCacheEntry),
+		detailsCache:  make(map[string]detailsCacheEntry),
+		catalogCache:  make(map[string]catalogPageEntry),
+		episodesCache: make(map[string]episodesCacheEntry),
 	}
 }
 
@@ -273,7 +294,10 @@ type Details struct {
 	} `json:"genres"`
 	Runtime        int   `json:"runtime"`
 	EpisodeRunTime []int `json:"episode_run_time"`
-	Credits        struct {
+	// ReleaseDate is the theatrical/digital release date in YYYY-MM-DD form.
+	// Movies only; empty for TV.
+	ReleaseDate string `json:"release_date"`
+	Credits     struct {
 		Cast []struct {
 			ID    int    `json:"id"`
 			Name  string `json:"name"`
@@ -453,7 +477,7 @@ func imgURL(size, path string) string {
 	if path == "" {
 		return ""
 	}
-	return "http://127.0.0.1:6969/api/img/" + size + path
+	return "http://" + utils.LocalAddr() + "/api/img/" + size + path
 }
 
 func (c *Client) SearchByKeywords(query string) ([]Media, error) {
@@ -492,30 +516,33 @@ func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 	for _, mediaType := range []string{"movie", "tv"} {
 		discURL := fmt.Sprintf("%s/discover/%s?api_key=%s&with_keywords=%s&sort_by=popularity.desc",
 			baseURL, mediaType, c.apiKey, kwParam)
-		r, err := c.client.Get(discURL)
-		if err != nil {
-			continue
-		}
-		var data searchResponse
-		err = json.NewDecoder(r.Body).Decode(&data)
-		if err != nil {
-			log.Println(err)
-			return nil, err
-		}
-		err = r.Body.Close()
-		if err != nil {
-			log.Println(err)
-			return nil, err
-		}
-
-		for i := range data.Results {
-			data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
-			data.Results[i].MediaType = mediaType
-		}
-		for _, m := range data.Results {
-			if m.PosterURL != "" {
-				results = append(results, m)
+		// Inline closure so defer res.Body.Close() covers the decode error path.
+		if err := func() error {
+			r, err := c.client.Get(discURL)
+			if err != nil {
+				return nil // treat as a soft miss; continue to next media type
 			}
+			defer r.Body.Close()
+			if r.StatusCode != http.StatusOK {
+				return nil
+			}
+			var data searchResponse
+			if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+				log.Println(err)
+				return err
+			}
+			for i := range data.Results {
+				data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
+				data.Results[i].MediaType = mediaType
+			}
+			for _, m := range data.Results {
+				if m.PosterURL != "" {
+					results = append(results, m)
+				}
+			}
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return results, nil
@@ -570,35 +597,38 @@ func (c *Client) Search(query string) ([]Media, error) {
 
 		for _, mediaType := range []string{"movie", "tv"} {
 			url := fmt.Sprintf("%s/search/%s?api_key=%s&query=%s", baseURL, mediaType, c.apiKey, encoded)
-			res, err := c.client.Get(url)
-			if err != nil {
-				continue
-			}
-			var data searchResponse
-			err = json.NewDecoder(res.Body).Decode(&data)
-			if err != nil {
-				log.Println(err)
-				return nil, err
-			}
-			err = res.Body.Close()
-			if err != nil {
-				log.Println(err)
-				return nil, err
-			}
-
-			for i := range data.Results {
-				data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
-				data.Results[i].MediaType = mediaType
-			}
-			for _, m := range data.Results {
-				if m.PosterURL == "" || seen[m.ID] {
-					continue
+			// Inline closure so defer res.Body.Close() covers the decode error path.
+			if err := func() error {
+				res, err := c.client.Get(url)
+				if err != nil {
+					return nil // soft miss; continue to next variant/type
 				}
-				seen[m.ID] = true
-				scored = append(scored, scoredMedia{
-					media: m,
-					score: m.Popularity * boost,
-				})
+				defer res.Body.Close()
+				if res.StatusCode != http.StatusOK {
+					return nil
+				}
+				var data searchResponse
+				if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+					log.Println(err)
+					return err
+				}
+				for i := range data.Results {
+					data.Results[i].PosterURL = imgURL("w500", data.Results[i].PosterURL)
+					data.Results[i].MediaType = mediaType
+				}
+				for _, m := range data.Results {
+					if m.PosterURL == "" || seen[m.ID] {
+						continue
+					}
+					seen[m.ID] = true
+					scored = append(scored, scoredMedia{
+						media: m,
+						score: m.Popularity * boost,
+					})
+				}
+				return nil
+			}(); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -667,28 +697,33 @@ func (c *Client) SearchProviders(query string) ([]Provider, error) {
 	for _, mediaType := range []string{"movie", "tv"} {
 		url := fmt.Sprintf("%s/watch/providers/%s?api_key=%s&language=en-US&watch_region=US",
 			baseURL, mediaType, c.apiKey)
-		res, err := c.client.Get(url)
-		if err != nil {
-			continue
-		}
-		var data struct {
-			Results []Provider `json:"results"`
-		}
-		err = json.NewDecoder(res.Body).Decode(&data)
-		_ = res.Body.Close()
-		if err != nil {
-			continue
-		}
-		for _, p := range data.Results {
-			if seen[p.ID] || !strings.Contains(strings.ToLower(p.Name), q) {
-				continue
+		// Inline closure so defer res.Body.Close() always runs and we can check status.
+		func() {
+			res, err := c.client.Get(url)
+			if err != nil {
+				return
 			}
-			seen[p.ID] = true
-			if p.LogoURL != "" {
-				p.LogoURL = imgURL("w500", p.LogoURL)
+			defer res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				return
 			}
-			out = append(out, p)
-		}
+			var data struct {
+				Results []Provider `json:"results"`
+			}
+			if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+				return
+			}
+			for _, p := range data.Results {
+				if seen[p.ID] || !strings.Contains(strings.ToLower(p.Name), q) {
+					continue
+				}
+				seen[p.ID] = true
+				if p.LogoURL != "" {
+					p.LogoURL = imgURL("w500", p.LogoURL)
+				}
+				out = append(out, p)
+			}
+		}()
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Priority < out[j].Priority })
@@ -974,6 +1009,48 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 		}
 	}
 	return data.Episodes, nil
+}
+
+// GetEpisodesCached returns the episodes for a TV season, cached for
+// episodesCacheTTL and coalesced across concurrent callers (same pattern as
+// GetDetails). Callers must treat the returned slice as read-only.
+func (c *Client) GetEpisodesCached(tmdbID, seasonNumber int) ([]TVEpisode, error) {
+	key := fmt.Sprintf("%d:%d", tmdbID, seasonNumber)
+
+	c.episodesCacheMu.Lock()
+	if entry, ok := c.episodesCache[key]; ok && time.Now().Before(entry.expires) {
+		c.episodesCacheMu.Unlock()
+		return entry.episodes, nil
+	}
+	c.episodesCacheMu.Unlock()
+
+	v, err, _ := c.episodesSF.Do(key, func() (interface{}, error) {
+		eps, err := c.GetEpisodes(tmdbID, seasonNumber)
+		if err != nil {
+			return nil, err
+		}
+		c.episodesCacheMu.Lock()
+		// Sweep expired entries while already holding the lock — same inline-expiry
+		// style as GetDetails / qualityCacheSet, avoiding a separate goroutine.
+		now := time.Now()
+		for k, v := range c.episodesCache {
+			if now.After(v.expires) {
+				delete(c.episodesCache, k)
+			}
+		}
+		if len(c.episodesCache) > episodesCacheCap {
+			// Simplest possible cap: drop the whole map rather than tracking
+			// per-entry recency, same tradeoff as detailsCache / imdbCache.
+			c.episodesCache = make(map[string]episodesCacheEntry)
+		}
+		c.episodesCache[key] = episodesCacheEntry{episodes: eps, expires: now.Add(episodesCacheTTL)}
+		c.episodesCacheMu.Unlock()
+		return eps, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]TVEpisode), nil
 }
 
 func (c *Client) GetImages(tmdbID int, mediaType string) (*MediaImages, error) {
@@ -2035,10 +2112,24 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			limit = maxLimit
 		}
 
-		addonURL, ok := addonMgr.FindAddonURL(addonID)
-		if !ok {
-			http.Error(w, "addon not found", http.StatusNotFound)
-			return
+		// When the caller supplies ?addonUrl=, validate it against the
+		// configured registry (SSRF guard) and use it directly. This is
+		// required when two addons share a manifest ID but have different
+		// config URLs — FindAddonURL would always return the first match.
+		var addonURL string
+		if rawURL := r.URL.Query().Get("addonUrl"); rawURL != "" {
+			if !addonMgr.HasAddonURL(rawURL) {
+				http.Error(w, "addon not found", http.StatusNotFound)
+				return
+			}
+			addonURL = rawURL
+		} else {
+			var ok bool
+			addonURL, ok = addonMgr.FindAddonURL(addonID)
+			if !ok {
+				http.Error(w, "addon not found", http.StatusNotFound)
+				return
+			}
 		}
 
 		cacheKey := addonURL + "|" + catalogType + "|" + catalogID + "|" + strconv.Itoa(skip) + "|" + strconv.Itoa(limit)

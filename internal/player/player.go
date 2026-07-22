@@ -30,9 +30,12 @@ import (
 
 	"log/slog"
 
+	"golang.org/x/time/rate"
+
 	"github.com/anacrolix/torrent"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/nuvio"
+	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/tmdb"
 	"github.com/coveninja/cove/internal/utils"
 )
@@ -73,11 +76,25 @@ type Player struct {
 	// once in New and shared by CleanupTorrents for removal of stale data.
 	dataDir string
 
-	// proxyTransport is the shared HTTP transport for proxyStream. mpv issues
-	// many Range requests while seeking; reusing a single transport (and its
-	// connection pool) instead of allocating one per request avoids leaking
-	// idle connections and keeps TLS handshake overhead to a single session.
-	proxyTransport *http.Transport
+	// proxyTransport is the SSRF-safe shared HTTP transport for proxyStream —
+	// uses utils.SafeTransport as its base so stream URLs can't reach LAN/loopback
+	// addresses. proxyTransportLAN is the permissive fallback used when the user
+	// has enabled AllowLanStreamSources (local media servers, e.g. Jellyfin). mpv
+	// issues many Range requests while seeking; reusing a single transport keeps
+	// TLS handshake overhead to a single session across all of them.
+	proxyTransport    *http.Transport
+	proxyTransportLAN *http.Transport
+
+	// probeClient HEAD-checks direct stream URLs for /api/streams/probe. Built
+	// on SafeTransport (public-address-only) with a short header timeout —
+	// liveness check, not a delivery path — and kept separate from the
+	// streaming proxy transport so probe stalls never affect active playback.
+	probeClient *http.Client
+
+	// settings is the active settings store, used to read per-torrent user
+	// preferences (e.g. AllowUploading) without requiring a player restart.
+	// May be nil if the settings store failed to initialise.
+	settings *settings.Store
 }
 
 type streamHeaderEntry struct {
@@ -95,9 +112,47 @@ const streamHeadersTTL = 30 * time.Minute
 var torrentDataDirDefault = filepath.Join(os.TempDir(), "cove-torrents")
 
 // infoHashRe validates a BitTorrent v1 infohash: 40 hex characters (SHA-1,
-// hex-encoded). Used to reject garbage before /api/prefetch-download burns a
-// background metadata-fetch attempt on it.
+// hex-encoded). Every torrent entry point validates before the value reaches
+// the torrent client or any filesystem-related bookkeeping.
 var infoHashRe = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+func validateInfoHash(infoHash string) error {
+	if !infoHashRe.MatchString(infoHash) {
+		return fmt.Errorf("invalid infohash: expected 40 hexadecimal characters")
+	}
+	return nil
+}
+
+// removeTorrentDataEntry removes a path beneath dataDir without allowing the
+// supplied name to escape that directory or resolve back to the directory
+// itself. Torrent names originate in untrusted metadata, so filepath.Join plus
+// os.RemoveAll is not sufficient here. os.Root enforces containment while
+// following nested paths and symlinks.
+func removeTorrentDataEntry(dataDir, name string) error {
+	cleanName := filepath.Clean(name)
+	if dataDir == "" {
+		return fmt.Errorf("torrent data directory is empty")
+	}
+	if name == "" || cleanName == "." || filepath.IsAbs(name) || filepath.VolumeName(name) != "" ||
+		cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("unsafe torrent data path %q", name)
+	}
+
+	root, err := os.OpenRoot(dataDir)
+	if os.IsNotExist(err) {
+		// Match os.RemoveAll's behavior when the target tree does not exist.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open torrent data directory: %w", err)
+	}
+	defer root.Close()
+
+	if err := root.RemoveAll(cleanName); err != nil {
+		return fmt.Errorf("remove torrent data entry %q: %w", cleanName, err)
+	}
+	return nil
+}
 
 type torrentState struct {
 	torrent      *torrent.Torrent
@@ -129,7 +184,7 @@ type torrentState struct {
 // dataDir, when non-empty, overrides the default torrentDataDirDefault
 // (os.TempDir()/cove-torrents) as the directory where downloaded torrent
 // pieces are stored. Pass an empty string to use the platform default.
-func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager, dataDir string) (*Player, error) {
+func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Manager, dataDir string, st *settings.Store) (*Player, error) {
 	if dataDir == "" {
 		dataDir = torrentDataDirDefault
 	}
@@ -139,29 +194,66 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 	// mismatch. hashNoiseFilter passes everything else through unchanged.
 	cfg.Slogger = slog.New(hashNoiseFilter{slog.Default().Handler()})
 	cfg.DataDir = dataDir
-	cfg.EstablishedConnsPerTorrent = 20 // default 50; playback needs far fewer peers
-	cfg.MaxUnverifiedBytes = 32 << 20   // default 64 MiB of un-hashed piece data in RAM
-	cfg.NoUpload = true                 // playback client, not a seed box
+	cfg.EstablishedConnsPerTorrent = 50 // library default; more peers = faster piece acquisition
+	cfg.HalfOpenConnsPerTorrent = 50    // default 25; dial more peers in parallel during swarm ramp-up
+	cfg.MaxUnverifiedBytes = 64 << 20   // library default of un-hashed piece data in RAM
+	// Upload capped instead of NoUpload: never uploading gets us choked by
+	// tit-for-tat peers; modest reciprocity buys materially faster downloads.
+	// Whether uploading happens at all is the user's AllowUploading setting,
+	// applied per torrent — this only caps the rate when it's on.
+	cfg.UploadRateLimiter = rate.NewLimiter(1<<20, 1<<20) // 1 MiB/s
+	cfg.DialRateLimiter = rate.NewLimiter(30, 30)         // default 10/s; reach full peer connectivity sooner
 	client, err := torrent.NewClient(cfg)
 	if err != nil {
 		return nil, err
 	}
-	// Shared transport for proxyStream — see field comment on Player.
+	// Safe proxy transport: built on SafeTransport's SSRF-checking dialer with
+	// streaming-specific knobs layered on top. Used by default for proxyStream.
+	safeTransport := utils.SafeTransport()
+	safeTransport.MaxIdleConnsPerHost = 16               // Go default 2; mpv seek bursts otherwise redo TCP+TLS per request
+	safeTransport.ForceAttemptHTTP2 = true               // custom DialContext disables h2 by default; enables multiplexed Range requests
+	safeTransport.IdleConnTimeout = 90 * time.Second     // keep conns warm across pause/seek gaps
+	safeTransport.TLSHandshakeTimeout = 15 * time.Second // match permissive transport below
+	safeTransport.ResponseHeaderTimeout = 30 * time.Second
+
+	// Permissive proxy transport: same tuning but plain DialContext (no SSRF
+	// check). Only used when AllowLanStreamSources is enabled — needed for local
+	// media servers (Jellyfin, Plex) that resolve to LAN/loopback addresses.
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConnsPerHost:   16,               // Go default 2; mpv seek bursts otherwise redo TCP+TLS per request
+		ForceAttemptHTTP2:     true,             // custom DialContext disables h2 by default; enables multiplexed Range requests
+		IdleConnTimeout:       90 * time.Second, // keep conns warm across pause/seek gaps
+	}
+	// Probe transport: SafeTransport (public-address-only) with a short
+	// ResponseHeaderTimeout — liveness check only, not a delivery path.
+	probeTransport := utils.SafeTransport()
+	probeTransport.ResponseHeaderTimeout = 800 * time.Millisecond
+	probeTransport.MaxIdleConnsPerHost = 5
+	probeClient := &http.Client{
+		Transport: probeTransport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
 	}
 	return &Player{
-		client:         client,
-		activeTorrents: map[string]*torrentState{},
-		tmdbClient:     tmdbClient,
-		addonMgr:       addonMgr,
-		nuvioMgr:       nuvioMgr,
-		streamHeaders:  map[string]streamHeaderEntry{},
-		dataDir:        dataDir,
-		proxyTransport: transport,
+		client:            client,
+		activeTorrents:    map[string]*torrentState{},
+		tmdbClient:        tmdbClient,
+		addonMgr:          addonMgr,
+		nuvioMgr:          nuvioMgr,
+		streamHeaders:     map[string]streamHeaderEntry{},
+		dataDir:           dataDir,
+		proxyTransport:    safeTransport,
+		proxyTransportLAN: transport,
+		probeClient:       probeClient,
+		settings:          st,
 	}, nil
 }
 
@@ -211,6 +303,12 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		http.Error(w, "invalid stream url", http.StatusBadGateway)
 		return
 	}
+	// Select transport per-request: permissive (LAN-capable) only when the user
+	// has explicitly enabled AllowLanStreamSources; safe (SSRF-checked) otherwise.
+	transport := p.proxyTransport
+	if p.settings != nil && p.settings.Get().AllowLanStreamSources {
+		transport = p.proxyTransportLAN
+	}
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
@@ -225,9 +323,8 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		// Bound connection setup but never the transfer itself — a stream
 		// runs for the length of the film. FlushInterval -1 disables output
 		// buffering so playback data reaches mpv as it arrives.
-		// Transport is shared across calls (see Player.proxyTransport) so
-		// mpv's per-seek Range requests reuse existing TLS connections.
-		Transport:     p.proxyTransport,
+		// Transport is selected above (see Player.proxyTransport / proxyTransportLAN).
+		Transport:     transport,
 		FlushInterval: -1,
 		// Origin rejections (403 expired signature, 404 pulled file) reach mpv
 		// but were otherwise invisible in the backend log, making dead direct
@@ -244,6 +341,77 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// probeURL sends a HEAD request (or a Range GET fallback when the server
+// returns 405/501) to check whether a direct stream URL is alive. Returns
+// (alive, contentLength). contentLength is 0 when unknown. Respects ctx for
+// the overall probe timeout; connection reuse is handled by p.probeClient.
+func (p *Player) probeURL(ctx context.Context, streamURL string, headers map[string]string) (alive bool, contentLength int64) {
+	makeReq := func(method string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, method, streamURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	}
+
+	drainClose := func(resp *http.Response) {
+		if resp != nil && resp.Body != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+		}
+	}
+
+	// --- HEAD attempt ---
+	req, err := makeReq(http.MethodHead)
+	if err != nil {
+		return false, 0
+	}
+	resp, err := p.probeClient.Do(req)
+	if err != nil {
+		return false, 0
+	}
+
+	if resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusNotImplemented {
+		drainClose(resp)
+		// Server refuses HEAD — retry with a 1-byte Range GET.
+		req, err = makeReq(http.MethodGet)
+		if err != nil {
+			return false, 0
+		}
+		req.Header.Set("Range", "bytes=0-0")
+		resp, err = p.probeClient.Do(req)
+		if err != nil {
+			return false, 0
+		}
+		defer drainClose(resp)
+		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+			// Parse the total file size from Content-Range: bytes 0-0/TOTAL.
+			if cr := resp.Header.Get("Content-Range"); cr != "" {
+				if idx := strings.LastIndex(cr, "/"); idx >= 0 {
+					if n, perr := strconv.ParseInt(cr[idx+1:], 10, 64); perr == nil && n > 0 {
+						return true, n
+					}
+				}
+			}
+			return true, 0
+		}
+		return false, 0
+	}
+
+	defer drainClose(resp)
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		cl := resp.ContentLength
+		if cl < 0 {
+			cl = 0
+		}
+		return true, cl
+	}
+	return false, 0
 }
 
 // videoExtensions is the set of container extensions selectFile considers a
@@ -294,9 +462,11 @@ const episodePatternEnd = `(?:$|[^0-9])`
 // bare episode marker ("E02"/"Ep02"/"Episode 2", only trusted when it
 // matches exactly one file in the torrent, since without a season number
 // it can't otherwise be disambiguated from another season's same episode
-// number) — falling back to the largest video file if nothing matches.
-// Multiple files matching the same tier (e.g. an extras file that happens
-// to match) resolve to the largest of that tier's matches.
+// number), then an anime-style bare number (" - 05 ", " - 05v2 [BD]"),
+// season-marker aware, unambiguous-only — falling back to the largest video
+// file if nothing matches. Multiple files matching the same tier (e.g. an
+// extras file that happens to match) resolve to the largest of that tier's
+// matches.
 //
 // The actual decision logic lives in selectFileIndex, a pure function over
 // plain (path, length) pairs — torrent.File has no exported constructor, so
@@ -350,6 +520,43 @@ func selectFileIndex(files []fileCandidate, season, episode *int) (int, string) 
 		if matches := matchIndices(files, episodeOnly); len(matches) == 1 {
 			return matches[0], fmt.Sprintf("matched episode-only E%02d", e)
 		}
+
+		// Tier 4: anime-style bare episode number (" - 05 ", " - 05v2 [BD]").
+		// The mandatory " - " left boundary keeps resolution tags (1080p), CRC
+		// hashes ([80AC7B2E]) and codec markers (x265, 10bit) from matching.
+		// Season-marker disambiguation: each matched path is scanned for
+		// "Season N" markers; the *last* (deepest, closest-to-filename)
+		// occurrence is used — a root folder like "Show (Season 1+2)" would
+		// otherwise taint every file in the pack. A path is kept when its last
+		// marker equals s, or — s==1 only — when the path carries no marker at
+		// all (unmarked paths in multi-season batches are season 1 in practice;
+		// later seasons are always labelled). Only when exactly one path
+		// survives is it returned; otherwise we fall through to the largest-file
+		// fallback, same rule as the episode-only tier.
+		animeRe := regexp.MustCompile(fmt.Sprintf(`[ ]-[ ]0*%d(?:v\d+)?(?:[ _\[\(\.]|$)`, e))
+		if matches := matchIndices(files, animeRe); len(matches) > 0 {
+			seasonMarkerRe := regexp.MustCompile(`(?i)season[\s._-]*0*(\d+)`)
+			var filtered []int
+			for _, idx := range matches {
+				allMarkers := seasonMarkerRe.FindAllStringSubmatch(files[idx].path, -1)
+				if len(allMarkers) == 0 {
+					// No season marker — only valid for season 1.
+					if s == 1 {
+						filtered = append(filtered, idx)
+					}
+				} else {
+					// Use the last (deepest) marker to avoid root-folder false positives.
+					last := allMarkers[len(allMarkers)-1]
+					markerSeason, err := strconv.Atoi(last[1])
+					if err == nil && markerSeason == s {
+						filtered = append(filtered, idx)
+					}
+				}
+			}
+			if len(filtered) == 1 {
+				return filtered[0], fmt.Sprintf("matched anime-style E%02d (season %d)", e, s)
+			}
+		}
 	}
 
 	return largestIndex(files), "no episode match, using largest video file"
@@ -393,6 +600,24 @@ func largestIndex(files []fileCandidate) int {
 	return best
 }
 
+// selectFileByIdx returns the torrent file at the given 0-based raw index
+// (into t.Files(), not the filtered video subset). Returns nil if idx is out
+// of bounds or does not point to a video file — callers should fall back to
+// regex-based selection in that case.
+func selectFileByIdx(t *torrent.Torrent, idx int) *torrent.File {
+	all := t.Files()
+	if idx < 0 || idx >= len(all) {
+		log.Printf("selectFileByIdx: fileIdx=%d out of bounds (torrent has %d files)", idx, len(all))
+		return nil
+	}
+	f := all[idx]
+	if !isVideoFile(f.DisplayPath()) {
+		log.Printf("selectFileByIdx: fileIdx=%d (%s) is not a video file, falling back", idx, f.DisplayPath())
+		return nil
+	}
+	return f
+}
+
 // addReader adjusts readers (+1 on open, -1 on return) and refreshes lastUsed.
 func (p *Player) addReader(infoHash string, delta int) {
 	p.activeTorrentsMu.Lock()
@@ -406,11 +631,41 @@ func (p *Player) addReader(infoHash string, delta int) {
 	p.activeTorrentsMu.Unlock()
 }
 
+// applyUploadPolicy sets the torrent's upload policy according to the current
+// AllowUploading setting. Called every time a torrent handle is acquired so a
+// settings toggle takes effect from the next play without restarting the client.
+func (p *Player) applyUploadPolicy(t *torrent.Torrent) {
+	if p.settings != nil && p.settings.Get().AllowUploading {
+		t.AllowDataUpload()
+	} else {
+		t.DisallowDataUpload()
+	}
+}
+
 // getTorrentFile resolves the torrent for infoHash (fetching its metadata if
 // this is the first request for it) and selects which file within it to
 // stream — see selectFile for the season/episode matching logic. season and
-// episode are nil for movies.
-func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent.File, error) {
+// episode are nil for movies. fileIdx, when non-nil, is the 0-based raw file
+// index from the addon (Stremio fileIdx field); it takes priority over the
+// regex matching, with fallback to regex when the index is invalid or points
+// to a non-video file.
+func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *int) (*torrent.File, error) {
+	if err := validateInfoHash(infoHash); err != nil {
+		return nil, err
+	}
+
+	// resolveFile applies fileIdx-first selection against an already-metadata-
+	// ready torrent, falling back to season/episode regex matching.
+	resolveFile := func(t *torrent.Torrent) (*torrent.File, error) {
+		if fileIdx != nil {
+			if f := selectFileByIdx(t, *fileIdx); f != nil {
+				log.Printf("selectFile: using fileIdx=%d -> %s", *fileIdx, f.DisplayPath())
+				return f, nil
+			}
+		}
+		return selectFile(t, season, episode)
+	}
+
 	// Reuse a torrent we've already fetched metadata for. AddMagnet is
 	// idempotent, but reusing also avoids re-running the GotInfo wait and keeps
 	// the idle timer fresh.
@@ -419,7 +674,8 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 		t := st.torrent
 		st.lastUsed = time.Now()
 		p.activeTorrentsMu.Unlock()
-		return selectFile(t, season, episode)
+		p.applyUploadPolicy(t)
+		return resolveFile(t)
 	}
 	p.activeTorrentsMu.Unlock()
 
@@ -427,6 +683,10 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 	if err != nil {
 		return nil, fmt.Errorf("invalid magnet for %s: %w", infoHash, err)
 	}
+
+	// Apply upload policy immediately — before GotInfo — so the torrent's
+	// upload behaviour is set from the moment we join the swarm.
+	p.applyUploadPolicy(t)
 
 	// Bound the metadata fetch. A dead swarm never fires GotInfo, and without a
 	// deadline this blocks the request goroutine forever — the original cause
@@ -437,7 +697,13 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 	select {
 	case <-t.GotInfo():
 	case <-ctx.Done():
+		canonicalHash := t.InfoHash().HexString()
 		t.Drop()
+		// Attempt best-effort cleanup of any partial data left under the infohash
+		// directory (anacrolix may create a dir by infohash before metadata arrives).
+		if err := removeTorrentDataEntry(p.dataDir, canonicalHash); err != nil {
+			log.Printf("torrent %s: could not remove timed-out data: %v", canonicalHash, err)
+		}
 		return nil, fmt.Errorf("timed out fetching metadata for %s", infoHash)
 	}
 
@@ -458,7 +724,7 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 	}
 	p.activeTorrentsMu.Unlock()
 
-	return selectFile(t, season, episode)
+	return resolveFile(t)
 }
 
 // PrefetchTorrent background-downloads infoHash's selected file (F7): once
@@ -476,8 +742,8 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int) (*torrent
 // starting a prefetch for a different hash than whatever was previously
 // prefetching deprioritizes that old file back to PiecePriorityNone first, so
 // at most one background download is ever in flight.
-func (p *Player) PrefetchTorrent(infoHash string, season, episode *int) error {
-	file, err := p.getTorrentFile(infoHash, season, episode)
+func (p *Player) PrefetchTorrent(infoHash string, season, episode *int, fileIdx *int) error {
+	file, err := p.getTorrentFile(infoHash, season, episode, fileIdx)
 	if err != nil {
 		return err
 	}
@@ -511,9 +777,10 @@ func (p *Player) PrefetchTorrent(infoHash string, season, episode *int) error {
 // touched within the idle cutoff. anacrolix
 // torrents hold open file handles plus on-disk pieces under torrentDataDir;
 // without this they accumulate for the life of the process and eventually
-// fill /tmp. Dropping removes the torrent from the client; we then RemoveAll
-// its data directory to reclaim disk (unlinking is safe even if a handle is
-// briefly still open on Linux).
+// fill /tmp. Dropping removes the torrent from the client; we then remove its
+// data directory through an os.Root so untrusted torrent metadata cannot
+// escape dataDir (unlinking is safe even if a handle is briefly still open on
+// Linux).
 //
 // A background prefetch (F7) is idle by this same definition — nothing is
 // streaming it, since it's downloading ahead of playback rather than during
@@ -553,11 +820,38 @@ func (p *Player) CleanupTorrents() {
 		name := d.t.Name() // capture before Drop; valid once metadata is known
 		d.t.Drop()
 		if name != "" {
-			if err := os.RemoveAll(filepath.Join(p.dataDir, name)); err != nil {
+			if err := removeTorrentDataEntry(p.dataDir, name); err != nil {
 				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
 			}
 		}
 		log.Printf("torrent %s dropped (idle)", d.hash)
+	}
+
+	// Orphan sweep: remove dataDir entries whose name matches neither an active
+	// torrent's Name() nor its infohash. Catches partial data left by timed-out
+	// metadata fetches (which can't be removed by hash until the data dir exists).
+	// Conservative: any name present in the active set is left untouched.
+	activeNames := make(map[string]bool)
+	p.activeTorrentsMu.RLock()
+	for hash, st := range p.activeTorrents {
+		activeNames[hash] = true // infohash as possible dir name
+		if n := st.torrent.Name(); n != "" {
+			activeNames[n] = true
+		}
+	}
+	p.activeTorrentsMu.RUnlock()
+
+	if entries, err := os.ReadDir(p.dataDir); err == nil {
+		for _, e := range entries {
+			if activeNames[e.Name()] {
+				continue
+			}
+			if err := removeTorrentDataEntry(p.dataDir, e.Name()); err != nil {
+				log.Printf("torrent orphan sweep: could not remove %s: %v", e.Name(), err)
+			} else {
+				log.Printf("torrent orphan sweep: removed %s", e.Name())
+			}
+		}
 	}
 }
 
@@ -594,7 +888,7 @@ func (p *Player) dropIdleNonPrefetch(exceptHash string) {
 		name := d.t.Name() // capture before Drop; valid once metadata is known
 		d.t.Drop()
 		if name != "" {
-			if err := os.RemoveAll(filepath.Join(p.dataDir, name)); err != nil {
+			if err := removeTorrentDataEntry(p.dataDir, name); err != nil {
 				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
 			}
 		}
@@ -604,9 +898,11 @@ func (p *Player) dropIdleNonPrefetch(exceptHash string) {
 
 // StreamTorrent serves infoHash's selected file (see selectFile) as seekable
 // HTTP. season/episode (nil for movies) pick the right file out of a
-// season-pack torrent instead of always streaming its largest file.
-func (p *Player) StreamTorrent(infoHash string, season, episode *int, w http.ResponseWriter, r *http.Request) {
-	file, err := p.getTorrentFile(infoHash, season, episode)
+// season-pack torrent instead of always streaming its largest file. fileIdx,
+// when non-nil, overrides regex matching with the addon-supplied raw file
+// index (see getTorrentFile).
+func (p *Player) StreamTorrent(infoHash string, season, episode *int, fileIdx *int, w http.ResponseWriter, r *http.Request) {
+	file, err := p.getTorrentFile(infoHash, season, episode, fileIdx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -635,7 +931,20 @@ func (p *Player) StreamTorrent(infoHash string, season, episode *int, w http.Res
 	// readahead lets the client fetch pieces ahead of playback so a seek
 	// doesn't stall.
 	reader.SetResponsive()
-	reader.SetReadahead(16 << 20) // 16 MiB
+	reader.SetReadahead(32 << 20) // 32 MiB — doubled from 16 MiB for smoother seeking
+
+	// Prioritise the tail of the file so MP4 moov atom / MKV cue data arrives
+	// quickly. mpv seeks to end-of-file on open to read container metadata;
+	// without pre-warming those pieces startup stalls waiting on random pieces
+	// from the end. PiecePriorityHigh sits below the reader's Readahead/Now
+	// priorities so it can't starve the play cursor.
+	tor := file.Torrent()
+	plen := tor.Info().PieceLength
+	tailPieces := int(3<<20/plen) + 1 // pieces covering the file's last ~3 MiB
+	start := max(file.BeginPieceIndex(), file.EndPieceIndex()-tailPieces)
+	for i := start; i < file.EndPieceIndex(); i++ {
+		tor.Piece(i).SetPriority(torrent.PiecePriorityHigh)
+	}
 
 	http.ServeContent(w, r, file.DisplayPath(), time.Time{}, reader)
 }
@@ -658,17 +967,34 @@ func parseSeasonEpisode(r *http.Request) (season, episode *int) {
 	return season, episode
 }
 
+// parseFileIdx reads the optional ?fileIdx= query param. Returns nil when the
+// param is absent, non-numeric, or negative. Shared by /api/play,
+// /api/prefetch-download, /api/progress, and /api/progress/stream.
+func parseFileIdx(r *http.Request) *int {
+	s := r.URL.Query().Get("fileIdx")
+	if s == "" {
+		return nil
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 0 {
+		return nil
+	}
+	return &v
+}
+
 // GetProgress reports download progress for infoHash. When season/episode are
 // given and the torrent's metadata is available, progress is computed over
 // just the selected episode's file rather than the whole torrent — a season
 // pack torrent can be 8% complete overall while the one file being played is
 // already 100% done, and the whole-torrent number was wildly misleading in
-// that case. Falls back to whole-torrent progress when metadata isn't ready
-// yet or the torrent has no recognizable video files. Speed/peers stay
-// torrent-wide either way — a per-file speed isn't meaningful (pieces for the
-// selected file aren't fetched in isolation from the rest of the swarm
-// bookkeeping) and torrent-wide is a reasonable proxy for "is this moving".
-func (p *Player) GetProgress(infoHash string, season, episode *int) map[string]interface{} {
+// that case. fileIdx, when non-nil, is the addon-supplied raw file index and
+// takes priority over regex matching (mirrors the behaviour of getTorrentFile).
+// Falls back to whole-torrent progress when metadata isn't ready yet or the
+// torrent has no recognizable video files. Speed/peers stay torrent-wide
+// either way — a per-file speed isn't meaningful (pieces for the selected file
+// aren't fetched in isolation from the rest of the swarm bookkeeping) and
+// torrent-wide is a reasonable proxy for "is this moving".
+func (p *Player) GetProgress(infoHash string, season, episode *int, fileIdx *int) map[string]interface{} {
 	p.activeTorrentsMu.Lock()
 	state, ok := p.activeTorrents[infoHash]
 	if !ok {
@@ -705,22 +1031,33 @@ func (p *Player) GetProgress(infoHash string, season, episode *int) map[string]i
 	}
 
 	var complete, total int64
-	// Reuse the pure selection path (selectFileIndex), NOT selectFile — the
-	// latter logs on every call, and this runs on a 2s SSE tick for the
-	// lifetime of playback.
-	files := videoFiles(t)
-	if len(files) > 0 {
-		infos := make([]fileCandidate, len(files))
-		for i, f := range files {
-			infos[i] = fileCandidate{path: f.DisplayPath(), length: f.Length()}
+	// fileIdx-first selection mirrors getTorrentFile: when the addon told us
+	// exactly which file to play, use the same file for progress reporting.
+	// The idx validation is inlined (not selectFileByIdx) and the regex path
+	// reuses selectFileIndex (not selectFile) because both of those log —
+	// and this runs on a 2s SSE tick for the lifetime of playback.
+	if fileIdx != nil {
+		if all := t.Files(); *fileIdx >= 0 && *fileIdx < len(all) && isVideoFile(all[*fileIdx].DisplayPath()) {
+			f := all[*fileIdx]
+			complete = f.BytesCompleted()
+			total = f.Length()
 		}
-		idx, _ := selectFileIndex(infos, season, episode)
-		f := files[idx]
-		complete = f.BytesCompleted()
-		total = f.Length()
-	} else {
-		complete = t.BytesCompleted()
-		total = t.Length()
+	}
+	if total == 0 {
+		files := videoFiles(t)
+		if len(files) > 0 {
+			infos := make([]fileCandidate, len(files))
+			for i, f := range files {
+				infos[i] = fileCandidate{path: f.DisplayPath(), length: f.Length()}
+			}
+			idx, _ := selectFileIndex(infos, season, episode)
+			f := files[idx]
+			complete = f.BytesCompleted()
+			total = f.Length()
+		} else {
+			complete = t.BytesCompleted()
+			total = t.Length()
+		}
 	}
 
 	var pct float64
@@ -898,6 +1235,84 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		}
 	}))
 
+	// POST /api/streams/probe — HEAD-checks a batch of direct-URL streams and
+	// reports which are reachable. Only URLs previously issued by /api/streams
+	// (in the rememberStream registry) are probed — unknown URLs return alive:false
+	// without making any outbound request, so this can't be used as a proxy.
+	//
+	// Request:  {"streams":[{"url":"..."}], "timeoutMs":700}
+	// Response: {"results":[{"url":"...","alive":true,"contentLength":123}]}
+	mux.HandleFunc("/api/streams/probe", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			Streams []struct {
+				URL string `json:"url"`
+			} `json:"streams"`
+			TimeoutMs int `json:"timeoutMs"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if len(req.Streams) == 0 || len(req.Streams) > 10 {
+			http.Error(w, "streams must contain 1–10 entries", http.StatusBadRequest)
+			return
+		}
+
+		timeoutMs := req.TimeoutMs
+		if timeoutMs == 0 {
+			timeoutMs = 700
+		}
+		if timeoutMs < 100 {
+			timeoutMs = 100
+		}
+		if timeoutMs > 800 {
+			timeoutMs = 800
+		}
+
+		type probeResult struct {
+			URL           string `json:"url"`
+			Alive         bool   `json:"alive"`
+			ContentLength int64  `json:"contentLength,omitempty"`
+		}
+
+		results := make([]probeResult, len(req.Streams))
+		for i, s := range req.Streams {
+			results[i].URL = s.URL
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutMs)*time.Millisecond)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		for i, s := range req.Streams {
+			headers, known := p.lookupStream(s.URL)
+			if !known {
+				continue // results[i].Alive stays false — not our URL
+			}
+			wg.Add(1)
+			go func(idx int, streamURL string, hdrs map[string]string) {
+				defer wg.Done()
+				alive, cl := p.probeURL(ctx, streamURL, hdrs)
+				results[idx].Alive = alive
+				if cl > 0 {
+					results[idx].ContentLength = cl
+				}
+			}(i, s.URL, headers)
+		}
+		wg.Wait()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Results []probeResult `json:"results"`
+		}{Results: results})
+	}))
+
 	mux.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
@@ -935,7 +1350,8 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		// handles every codec/container natively, so no transcoding involved.
 		if infoHash != "" {
 			season, episode := parseSeasonEpisode(r)
-			p.StreamTorrent(infoHash, season, episode, w, r)
+			fileIdx := parseFileIdx(r)
+			p.StreamTorrent(infoHash, season, episode, fileIdx, w, r)
 			return
 		}
 
@@ -964,11 +1380,12 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		infoHash := r.URL.Query().Get("hash")
-		if !infoHashRe.MatchString(infoHash) {
+		if err := validateInfoHash(infoHash); err != nil {
 			http.Error(w, "invalid or missing ?hash= (expected a 40-char hex infohash)", http.StatusBadRequest)
 			return
 		}
 		season, episode := parseSeasonEpisode(r)
+		fileIdx := parseFileIdx(r)
 
 		if !p.prefetchInFlight.CompareAndSwap(false, true) {
 			// Another PrefetchTorrent is already running; a second concurrent
@@ -981,7 +1398,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		}
 		go func() {
 			defer p.prefetchInFlight.Store(false)
-			if err := p.PrefetchTorrent(infoHash, season, episode); err != nil {
+			if err := p.PrefetchTorrent(infoHash, season, episode, fileIdx); err != nil {
 				log.Println("prefetch-download:", err)
 			}
 		}()
@@ -995,7 +1412,8 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		season, episode := parseSeasonEpisode(r)
-		err := json.NewEncoder(w).Encode(p.GetProgress(hash, season, episode))
+		fileIdx := parseFileIdx(r)
+		err := json.NewEncoder(w).Encode(p.GetProgress(hash, season, episode, fileIdx))
 		if err != nil {
 			log.Println(err)
 		}
@@ -1004,6 +1422,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		season, episode := parseSeasonEpisode(r)
+		fileIdx := parseFileIdx(r)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -1022,7 +1441,7 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				data, _ := json.Marshal(p.GetProgress(hash, season, episode))
+				data, _ := json.Marshal(p.GetProgress(hash, season, episode, fileIdx))
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}

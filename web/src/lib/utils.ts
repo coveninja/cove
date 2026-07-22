@@ -55,8 +55,8 @@ export function inferQuality(stream: Stream): string | null {
   const text = `${stream.name} ${stream.title}`.toLowerCase();
   if (text.includes("dolby vision") || text.includes("4k dv")) return "4k dv";
   if (text.includes("hdr")) return "4k hdr";
-  if (text.includes("2160") || text.includes("4k")) return "4k";
-  if (text.includes("1080")) return "1080p";
+  if (text.includes("2160") || text.includes("4k") || text.includes("uhd")) return "4k";
+  if (text.includes("1080") || text.includes("fhd") || text.includes("full hd")) return "1080p";
   if (text.includes("720")) return "720p";
   if (text.includes("480")) return "480p";
   if (

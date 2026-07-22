@@ -128,6 +128,79 @@ func New(profileID string) (*Store, error) {
 	return s, nil
 }
 
+// SnapshotJSON marshals the current activity store for cross-device sync.
+// Safe for concurrent use (holds RLock across marshal).
+func (s *Store) SnapshotJSON() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return json.Marshal(s.db)
+}
+
+// MergeFromJSON merges a remote activity store into the local one using
+// per-bucket max semantics. No timestamp gate — max-merge is idempotent and
+// commutative so always merging converges without double-counting:
+//   - for each remote day: element-wise max into local ByHour, per-key max into ByTitle
+//   - per-key max for LastPos
+//   - Backfilled = local || remote
+//
+// Undercount tradeoff: two devices watching in the same clock-hour of the same
+// day yield max(a,b) not a+b — the larger value wins. This mirrors Backfill's
+// accepted-approximation stance and avoids double-counting on the common
+// single-device case.
+//
+// Writes synchronously (same "synchronous exception" as Backfill) so the
+// merged data reaches disk immediately rather than waiting out the debounce.
+func (s *Store) MergeFromJSON(data []byte) error {
+	var remote diskStore
+	if err := json.Unmarshal(data, &remote); err != nil {
+		return err
+	}
+	if remote.Days == nil {
+		remote.Days = make(map[string]*DayEntry)
+	}
+	if remote.LastPos == nil {
+		remote.LastPos = make(map[string]float64)
+	}
+
+	s.mu.Lock()
+	for dateStr, rd := range remote.Days {
+		if rd == nil {
+			continue
+		}
+		ld := s.db.Days[dateStr]
+		if ld == nil {
+			ld = &DayEntry{ByTitle: make(map[string]int64)}
+			s.db.Days[dateStr] = ld
+		}
+		if ld.ByTitle == nil {
+			ld.ByTitle = make(map[string]int64)
+		}
+		// Element-wise max for ByHour.
+		for h, rv := range rd.ByHour {
+			if rv > ld.ByHour[h] {
+				ld.ByHour[h] = rv
+			}
+		}
+		// Per-key max for ByTitle.
+		for titleKey, rv := range rd.ByTitle {
+			if rv > ld.ByTitle[titleKey] {
+				ld.ByTitle[titleKey] = rv
+			}
+		}
+	}
+	// Per-key max for LastPos.
+	for key, rv := range remote.LastPos {
+		if rv > s.db.LastPos[key] {
+			s.db.LastPos[key] = rv
+		}
+	}
+	s.db.Backfilled = s.db.Backfilled || remote.Backfilled
+
+	err := s.writeNow()
+	s.mu.Unlock()
+	return err
+}
+
 // SetLibrary wires the library lookup used by the stats handler to enrich
 // title/poster data for TitlesWatchedThisYear. Called from main.go after New,
 // before the server starts serving.
@@ -315,7 +388,7 @@ type Stats struct {
 	ByMonthLastYear        [12]int64        `json:"by_month_last_year"`
 	ByDayOfWeek            [7]int64         `json:"by_day_of_week"` // 0 = Sun
 	ByHourOfDay            [24]int64        `json:"by_hour_of_day"`
-	Calendar               map[string]int64 `json:"calendar"`                // non-zero days only
+	Calendar               map[string]int64 `json:"calendar"`                 // non-zero days only
 	TitlesWatchedThisYear  []TitleSeconds   `json:"titles_watched_this_year"` // top ~20 by seconds
 }
 

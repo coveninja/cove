@@ -67,6 +67,21 @@ func TestInferQuality(t *testing.T) {
 			stream: Stream{Name: "addon\n1080p\nSome.Movie.mkv"},
 			want:   "1080p",
 		},
+		{
+			name:   "uhd resolves to 4k",
+			stream: Stream{Name: "Some Movie UHD BluRay"},
+			want:   "4k",
+		},
+		{
+			name:   "fhd resolves to 1080p",
+			stream: Stream{Name: "Some Movie FHD WEB-DL"},
+			want:   "1080p",
+		},
+		{
+			name:   "full hd resolves to 1080p",
+			stream: Stream{Name: "Some Movie Full HD"},
+			want:   "1080p",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

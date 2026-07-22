@@ -242,7 +242,7 @@
       {/if}
       {#if controls}
         <media-controls
-          class="absolute inset-0 z-30 flex flex-col justify-end bg-linear-to-t from-black/80 via-black/20 to-transparent p-2 opacity-0 transition-opacity duration-200 data-visible:opacity-100"
+          class="pointer-events-none absolute inset-0 z-30 flex flex-col justify-end bg-linear-to-t from-black/80 via-black/20 to-transparent p-2 opacity-0 transition-opacity duration-200 data-visible:opacity-100"
         >
           <div
             class="pointer-events-auto flex w-full items-center gap-4 text-white"

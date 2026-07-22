@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type LibraryStatus, STATUS_LABELS } from "$lib/api";
+  import { api, type LibraryStatus, STATUS_LABELS, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import { BookmarkIcon, List } from "lucide-svelte";
@@ -88,10 +88,11 @@
           <span class="size-4 shrink-0">
             {#if isActive}
               <span use:animateBookmarkIn>
-                <BookmarkIcon class="size-4" />
+                <BookmarkIcon class="size-4 {STATUS_COLORS[value as LibraryStatus].text}" />
               </span>
             {/if}
           </span>
+          <span class="size-2 shrink-0 rounded-full {STATUS_COLORS[value as LibraryStatus].dot}"></span>
           {label}
         </span>
       </ContextMenu.Item>

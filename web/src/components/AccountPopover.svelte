@@ -36,14 +36,8 @@
 
   async function switchProfile(id: string): Promise<void> {
     try {
-      const profile = await api.profileActivate(id);
-      const profs = await api.profilesList();
-      auth.setProfiles(
-        profs.profiles,
-        profs.profiles.find((p) => p.id === profile.id) ?? profile,
-      );
-      libraryChanged.update((n) => n + 1);
-      open = false;
+      await api.profileActivate(id);
+      window.location.reload();
     } catch (e) {
       console.error("switch profile:", e);
     }
@@ -92,7 +86,7 @@
 <Popover.Root bind:open>
   <Popover.Trigger>
     {#snippet child({ props })}
-      <Button variant="outline" size="icon" {...props}>
+      <Button variant="outline" size="icon" aria-label="Account" {...props}>
         {#if auth.session}
           <span
             class="flex size-full items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground"

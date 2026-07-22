@@ -27,6 +27,12 @@ static QString sentinelPath() {
 // Qt emits aboutToQuit on that path too — but they must not clear the
 // sentinel a live primary instance is relying on.
 static bool s_committed = false;
+// Set by commitState: this launch is at an auto-applied level > 0, so a clean
+// exit should increment the persisted successes counter.
+static bool s_shouldCountSuccess = false;
+// markStartupSuccessful is called from both the 30s timer and aboutToQuit;
+// the successes counter must increment at most once per process.
+static bool s_successCounted = false;
 
 ApplyResult applyBeforeInit(int overrideLevel) {
   ApplyResult result;
@@ -56,6 +62,9 @@ ApplyResult applyBeforeInit(int overrideLevel) {
   ini.beginGroup("GpuWorkaround");
   const int storedLevel = ini.value("level", 0).toInt();
   const QString storedQtVersion = ini.value("qtVersion").toString();
+  int successes = ini.value("successes", 0).toInt();
+  bool probing = ini.value("probing", false).toBool();
+  int failedProbes = ini.value("failedProbes", 0).toInt();
   ini.endGroup();
 
   result.storedLevel = storedLevel;
@@ -66,6 +75,10 @@ ApplyResult applyBeforeInit(int overrideLevel) {
       storedQtVersion != QLatin1String(qVersion())) {
     stale = true;
     result.storedLevel = 0;
+    // Reset recovery counters: the new Qt may have fixed the regression entirely.
+    successes = 0;
+    probing = false;
+    failedProbes = 0;
     qInfo().noquote() << "[gpu] Qt version changed from" << storedQtVersion
                       << "to" << qVersion()
                       << "— resetting GPU workaround level to 0";
@@ -92,6 +105,16 @@ ApplyResult applyBeforeInit(int overrideLevel) {
       // process alive but can corrupt rendering, which the sentinel cannot
       // detect. Auto-recovery must land on the level that is safe by
       // construction; level 1 stays available as a manual pin.
+      if (probing) {
+        // The previous launch was a de-escalation probe and it crashed.
+        ++failedProbes;
+        qWarning().noquote()
+            << "[gpu] GPU probe crashed — re-escalating to level 2 (failed probes:"
+            << failedProbes << ")";
+        probing = false;
+      }
+      // Any crash breaks the healthy-launch streak, probe or not.
+      successes = 0;
       const int escalated = 2;
       if (escalated > effective) {
         result.wasEscalated = true;
@@ -107,13 +130,41 @@ ApplyResult applyBeforeInit(int overrideLevel) {
                                 " already at maximum level 2 (--disable-gpu)";
       }
       effective = escalated;
-    } else if (effective > 0) {
-      qInfo().noquote() << "[gpu] applying persisted GPU workaround level"
-                        << effective;
+    } else {
+      if (probing) {
+        // The previous launch was a probe and it completed without crashing.
+        // commitState already persisted level 0 during that launch, so the
+        // stored level here is already 0 — nothing else to do.
+        probing = false;
+        qInfo().noquote()
+            << "[gpu] GPU probe succeeded — full GPU rendering restored";
+      }
+      // After two consecutive healthy launches at level 2, run one probe at
+      // level 0. A crash will re-escalate automatically. If two probes have
+      // already failed, the machine genuinely needs the workaround; hold at
+      // the stored level until the Qt version changes.
+      if (effective == 2 && successes >= 2 && failedProbes < 2) {
+        const int prevSuccesses = successes;
+        effective = 0;
+        probing = true;
+        successes = 0;
+        qInfo().noquote()
+            << "[gpu]" << prevSuccesses
+            << "consecutive healthy launches at level 2 —"
+               " probing full GPU rendering again"
+               " (crash will re-escalate automatically)";
+      } else if (effective > 0) {
+        qInfo().noquote() << "[gpu] applying persisted GPU workaround level"
+                          << effective;
+      }
     }
 
     result.level = static_cast<Level>(effective);
   }
+
+  result.successes = successes;
+  result.probing = probing;
+  result.failedProbes = failedProbes;
 
   // Apply env vars for the effective level — never clobber user-set values.
   const int level = static_cast<int>(result.level);
@@ -147,9 +198,18 @@ void commitState(const ApplyResult &state) {
     ini.beginGroup("GpuWorkaround");
     ini.setValue("level", static_cast<int>(state.level));
     ini.setValue("qtVersion", QLatin1String(qVersion()));
+    ini.setValue("successes", state.successes);
+    ini.setValue("probing", state.probing);
+    ini.setValue("failedProbes", state.failedProbes);
     ini.endGroup();
     ini.sync();
   }
+
+  // markStartupSuccessful increments the successes counter only for launches
+  // that ran at an auto-applied level > 0 — probes (effective level 0) and
+  // overridden runs must not count.
+  s_shouldCountSuccess =
+      (state.level > Level::Default) && !state.wasOverridden;
 
   // Existence of this file on next launch signals that this launch died
   // before proving healthy (markStartupSuccessful removes it).
@@ -164,6 +224,20 @@ void markStartupSuccessful() {
   if (!s_committed)
     return;
   QFile::remove(sentinelPath());
+
+  // Called from both the 30s timer and aboutToQuit — guard so the counter
+  // increments exactly once even when both fire in the same process.
+  if (s_shouldCountSuccess && !s_successCounted) {
+    s_successCounted = true;
+    QSettings ini(iniPath(), QSettings::IniFormat);
+    ini.beginGroup("GpuWorkaround");
+    const int current = ini.value("successes", 0).toInt();
+    ini.setValue("successes", current + 1);
+    ini.endGroup();
+    ini.sync();
+    qInfo().noquote() << "[gpu] healthy startup at level 2 — successes now"
+                      << current + 1;
+  }
 }
 
 } // namespace GpuWorkaround

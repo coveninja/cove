@@ -62,11 +62,14 @@ func ConfigFromEnv(defaultURL, defaultAnonKey string) *Config {
 // hung upstream can't pin request goroutines indefinitely.
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// jwksCache caches the ECDSA public keys fetched from Supabase's JWKS endpoint.
+type jwksCacheEntry struct {
+	keys    map[string]*ecdsa.PublicKey
+	fetched time.Time
+}
+
 var (
-	jwksMu      sync.RWMutex
-	jwksKeys    map[string]*ecdsa.PublicKey
-	jwksFetched time.Time
+	jwksMu    sync.RWMutex
+	jwksCache = make(map[string]jwksCacheEntry)
 )
 
 // fetchJWKS retrieves and caches EC public keys from the Supabase JWKS
@@ -74,8 +77,9 @@ var (
 // the cached set, which is what key rotation looks like from here.
 func (c *Config) fetchJWKS(force bool) (map[string]*ecdsa.PublicKey, error) {
 	jwksMu.RLock()
-	if !force && time.Since(jwksFetched) < 5*time.Minute && jwksKeys != nil {
-		keys := jwksKeys
+	cached, ok := jwksCache[c.URL]
+	if !force && ok && time.Since(cached.fetched) < 5*time.Minute && cached.keys != nil {
+		keys := cached.keys
 		jwksMu.RUnlock()
 		return keys, nil
 	}
@@ -86,6 +90,10 @@ func (c *Config) fetchJWKS(force bool) (map[string]*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("fetch jwks: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch jwks (%d): %s", resp.StatusCode, data)
+	}
 
 	var raw struct {
 		Keys []struct {
@@ -110,16 +118,22 @@ func (c *Config) fetchJWKS(force bool) (map[string]*ecdsa.PublicKey, error) {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		keys[k.Kid] = &ecdsa.PublicKey{
+		key := &ecdsa.PublicKey{
 			Curve: elliptic.P256(),
 			X:     new(big.Int).SetBytes(xb),
 			Y:     new(big.Int).SetBytes(yb),
 		}
+		if k.Kid == "" || !key.Curve.IsOnCurve(key.X, key.Y) {
+			continue
+		}
+		keys[k.Kid] = key
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("fetch jwks: response contained no usable ES256 keys")
 	}
 
 	jwksMu.Lock()
-	jwksKeys = keys
-	jwksFetched = time.Now()
+	jwksCache[c.URL] = jwksCacheEntry{keys: keys, fetched: time.Now()}
 	jwksMu.Unlock()
 	return keys, nil
 }
@@ -153,7 +167,7 @@ func (c *Config) ValidateJWT(tokenString string) (userID string, err error) {
 		default:
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-	})
+	}, jwt.WithValidMethods([]string{"ES256"}), jwt.WithIssuer(c.URL+"/auth/v1"), jwt.WithAudience("authenticated"))
 	if err != nil {
 		return "", err
 	}
@@ -222,10 +236,7 @@ func (c *Config) authPost(path string, body any) (*authResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Cap auth response reads at 4 MiB — Supabase auth payloads are small
-	// JWTs and error messages; anything larger indicates an unexpected
-	// response or a network error page we should not buffer in full.
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, _ := io.ReadAll(resp.Body)
 
 	var ar authResponse
 	if err := json.Unmarshal(data, &ar); err != nil {
@@ -380,10 +391,7 @@ func (c *Config) restReq(userJWT, method, table string, query string, body any) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// Cap REST response reads at 4 MiB — PostgREST result sets for this app's
-	// sync payloads are small; a larger response almost certainly means an
-	// unexpected error page or a misconfigured endpoint.
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("supabase REST %s %s: %s", method, table, data)

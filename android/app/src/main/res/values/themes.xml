@@ -1,11 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        Framework NoActionBar theme — Compose manages its own Material3 surface
-        hierarchy, so the window must not impose a platform ActionBar.
+        Framework NoActionBar theme — the WebView/mpv UI manages its own
+        appearance, so the window must not impose a platform ActionBar.
         Using android:Theme.* avoids a compile-time dependency on the Material
         Components or AppCompat libraries (neither is in our dependency set).
-        The actual Material3 theming is applied in Kotlin via MaterialTheme {}.
+
+        windowBackground must be dark: the WebView is transparent (mpv renders
+        behind it), so any gap — renderer death, resume repaint — exposes the
+        window background. The Light parent's default white reads as a broken
+        white screen.
     -->
-    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

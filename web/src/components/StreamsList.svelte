@@ -11,19 +11,26 @@
   import type {WatchProgress} from "$lib/types/library";
   import {settings} from "$lib/stores/settings";
   import {
+    compareStreamsBy,
+    formatAutoPickReason,
     formatStreamSummary,
     getSeeders,
     getSizeBytes,
+    isCodecHardDisabled,
     isTorrentStream,
     rankStreams,
+    rankStreamsWithProbe,
+    STREAM_SORT_MODES,
     type StreamSelectionMode,
+    type StreamSortMode,
   } from "$lib/streamSelection";
+  import {codecLabel, langLabel, parseStreamMeta, type ParsedStreamMeta,} from "$lib/streamMeta";
   import {Skeleton} from "$lib/components/ui/skeleton";
   import type {TVEpisode} from "$lib/types/tmdb";
   import EpisodeCard from "./EpisodeCard.svelte";
 
   let loadingStreams = $state(false);
-  let sortMode = $state<"seeders" | "size">("seeders");
+  let sortMode = $state<StreamSortMode>("seeders");
   let qualityFilter = $state("all");
 
   let {
@@ -54,6 +61,23 @@
   let episodes = $state<TVEpisode[]>([]);
   let selectedSeason = $state<number | null>(null);
   let selectedEpisode = $state<TVEpisode | null>(null);
+
+  // Reset TV browsing state when the media prop changes identity (e.g. the
+  // in-player episodes sidebar switches to a different title without unmounting
+  // this component). Without this, selectedSeason from the previous title leaks
+  // into the new title's season fetch, causing it to skip the default-season
+  // logic and sometimes show episodes from the wrong season.
+  let _prevMediaId: number | null = null;
+  $effect(() => {
+    const id = media.id;
+    if (_prevMediaId !== null && id !== _prevMediaId) {
+      selectedSeason = null;
+      selectedEpisode = null;
+      seasons = [];
+      episodes = [];
+    }
+    _prevMediaId = id;
+  });
   let loadingSeasons = $state(false);
   let loadingEpisodes = $state(false);
 
@@ -275,6 +299,12 @@
     seeders: number;
     sizeBytes: number;
     quality: string | null;
+    /** Codec/language details parsed from the release name — drives the
+     * showStreamDetails badges. */
+    meta: ParsedStreamMeta;
+    /** Device probe says this codec can't be hardware-decoded — row renders
+     * greyed/unselectable with a "Play anyway" override. */
+    isHardDisabled: boolean;
   }
 
   const parsedStreams = $derived.by(() => {
@@ -290,25 +320,34 @@
         seeders: getSeeders(s),
         sizeBytes: getSizeBytes(s),
         quality: inferQuality(s),
+        meta: parseStreamMeta(s),
+        isHardDisabled: isCodecHardDisabled(s),
       });
     }
     return result;
   });
+
+  // Preferred audio language with "original" resolved to the title's TMDB
+  // original language — shared by the auto-select ranking and language sort.
+  const effectiveAudioLang = $derived(
+    $settings?.defaultAudioLang === "original"
+      ? (media.original_language ?? "")
+      : ($settings?.defaultAudioLang ?? ""),
+  );
 
   const filteredStreams = $derived.by(() => {
     const filtered = parsedStreams.filter(
       (s) => qualityFilter === "all" || s.quality === qualityFilter,
     );
     const preferred = $settings?.defaultProvider;
+    const compare = compareStreamsBy(sortMode, effectiveAudioLang || undefined);
     return filtered.toSorted((a, b) => {
       if (preferred) {
         const aPref = a.stream.addonName === preferred ? 1 : 0;
         const bPref = b.stream.addonName === preferred ? 1 : 0;
         if (aPref !== bPref) return bPref - aPref;
       }
-      return sortMode === "seeders"
-        ? b.seeders - a.seeders
-        : b.sizeBytes - a.sizeBytes;
+      return compare(a, b);
     });
   });
 
@@ -373,37 +412,48 @@
       !alreadyPlayingThisSelection &&
       streams.length > 0
     ) {
-      const ranked = rankStreams(
-        streams,
-        ($settings.streamSelectionMode as StreamSelectionMode) ?? "balanced",
-        {
-          measuredBandwidthMbps: $settings.measuredBandwidthMbps,
-          preferredProvider: $settings.defaultProvider,
-          sourcePreference: $settings.sourcePreference,
-        },
-      );
-      const best = ranked[0] ?? null;
+      const selectionMode = ($settings.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+      const rankOpts = {
+        measuredBandwidthMbps: $settings.measuredBandwidthMbps,
+        preferredProvider: $settings.defaultProvider,
+        sourcePreference: $settings.sourcePreference,
+        defaultAudioLang: effectiveAudioLang || undefined,
+      };
+      // Synchronous initial ranking — drives the log line and the fallback
+      // used when the probe doesn't land before the 500ms window closes.
+      const initialRanking = rankStreams(streams, selectionMode, rankOpts);
+      const best = initialRanking[0] ?? null;
       if (best) {
         const mode = $settings.streamSelectionMode ?? "balanced";
         console.log(
-          `[stream-select] auto (${mode}): "${best.name}" — ${formatStreamSummary(best)}`,
+          `[stream-select] auto (${mode}): "${best.name}" — ${formatAutoPickReason(best)}`,
           best,
         );
         autoPicking = true;
+        // Background probe: re-rank with dead links demoted and probed
+        // Content-Lengths filling unknown sizes. Fills probedRanking before
+        // the 500ms timer fires if the backend responds in time.
+        let probedRanking: Stream[] | null = null;
+        rankStreamsWithProbe(streams, selectionMode, { ...rankOpts, probeEnabled: $settings.probeStreams ?? true }, signal)
+          .then((ranked) => {
+            if (seq === fetchSeq && !autoPickCancelled) probedRanking = ranked;
+          })
+          .catch(() => {});
         // Small delay so the "Auto-selecting…" message and its cancel
         // button actually get a moment on screen before playback starts.
         autoPickTimer = setTimeout(() => {
           autoPickTimer = null;
           if (seq === fetchSeq && !autoPickCancelled) {
+            const ranking = probedRanking ?? initialRanking;
             // Pass a handful of runner-up candidates so App.svelte's
             // watchdog (B2) can auto-advance to the next one if this pick
             // turns out to be dead, without a full re-fetch.
             onPlayStream(
-              best,
+              ranking[0],
               selectedSeason ?? undefined,
               selectedEpisode?.episode_number,
               selectedEpisode?.name,
-              ranked.slice(0, 5),
+              ranking.slice(0, 5),
             );
           }
         }, 500);
@@ -598,13 +648,14 @@
             <Select.Trigger class="flex w-full">
               <span class="flex flex-row items-center justify-center gap-1">
                 <ListFilter class="size-4" />
-                {sortMode.toUpperCase()}
+                {STREAM_SORT_MODES.find((m) => m.value === sortMode)?.label.toUpperCase()}
               </span>
             </Select.Trigger>
             <Select.Content>
               <Select.Group>
-                <Select.Item value="seeders" label="Seeders" />
-                <Select.Item value="size" label="Size" />
+                {#each STREAM_SORT_MODES as m (m.value)}
+                  <Select.Item value={m.value} label={m.label} />
+                {/each}
               </Select.Group>
             </Select.Content>
           </Select.Root>
@@ -709,6 +760,75 @@
             <div class="flex flex-col gap-3">
               {#each filteredStreams as item (item.key)}
                 {@const stream = item.stream}
+                {#if item.isHardDisabled}
+                  <!-- Codec the device provably can't hardware-decode: the row
+                       is inert, with a small "Play anyway" escape hatch (mpv
+                       will software-decode, usually too slowly to watch). -->
+                  <div
+                    aria-disabled="true"
+                    class="flex w-full cursor-not-allowed flex-col gap-1 rounded-lg border border-border/30 bg-secondary/20 p-3 text-left opacity-60"
+                  >
+                    <span class="flex items-center justify-between gap-2">
+                      <span class="text-sm font-medium text-foreground"
+                        >{stream.name}</span
+                      >
+                      <span
+                        class="shrink-0 rounded bg-destructive/20 px-1.5 py-0.5 text-[10px] font-medium text-destructive"
+                      >
+                        Unsupported
+                      </span>
+                    </span>
+
+                    <span
+                      class="line-clamp-2 text-xs whitespace-pre-line text-muted-foreground"
+                    >
+                      {stream.title}
+                    </span>
+
+                    <span
+                      class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground"
+                    >
+                      {#if $settings?.showStreamDetails ?? true}
+                        {#if isTorrentStream(stream)}
+                          <span class="rounded bg-background/70 px-1.5 py-0.5">
+                            👤 {item.seeders}
+                          </span>
+                        {/if}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          {item.quality}
+                        </span>
+                      {/if}
+                      <!-- Always shown — it's why the row is unsupported. -->
+                      {#if codecLabel(item.meta)}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          {codecLabel(item.meta)}
+                        </span>
+                      {/if}
+                      {#if stream.addonName}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          {stream.addonName}
+                        </span>
+                      {/if}
+                      <button
+                        class="ml-auto cursor-pointer rounded px-1.5 py-0.5 underline hover:text-foreground"
+                        onclick={() => {
+                          console.log(
+                            `[stream-select] play-anyway: "${stream.name}" — ${formatStreamSummary(stream)}`,
+                            stream,
+                          );
+                          onPlayStream(
+                            stream,
+                            selectedSeason ?? undefined,
+                            selectedEpisode?.episode_number,
+                            selectedEpisode?.name,
+                          );
+                        }}
+                      >
+                        Play anyway
+                      </button>
+                    </span>
+                  </div>
+                {:else}
                 <button
                   class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
                   onclick={() => {
@@ -742,19 +862,49 @@
                   <span
                     class="mt-1 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"
                   >
-                    {#if isTorrentStream(stream)}
+                    {#if $settings?.showStreamDetails ?? true}
+                      {#if isTorrentStream(stream)}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          👤 {item.seeders}
+                        </span>
+                      {/if}
+                      {#if item.sizeBytes > 0}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          💾 {item.sizeBytes / 1024 ** 3 >= 1
+                            ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
+                            : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
+                        </span>
+                      {/if}
                       <span class="rounded bg-background/70 px-1.5 py-0.5">
-                        👤 {item.seeders}
+                        {item.quality}
                       </span>
-                      <span class="rounded bg-background/70 px-1.5 py-0.5">
-                        💾 {item.sizeBytes / 1024 ** 3 >= 1
-                          ? `${(item.sizeBytes / 1024 ** 3).toFixed(2)} GB`
-                          : `${(item.sizeBytes / 1024 ** 2).toFixed(0)} MB`}
-                      </span>
+                      {#if codecLabel(item.meta)}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          {codecLabel(item.meta)}
+                        </span>
+                      {/if}
+                      <!-- The quality tier already says "4k dv"/"4k hdr" — only
+                           badge DV/HDR when the tier doesn't carry it. -->
+                      {#if item.meta.isDolbyVision && !item.quality?.includes("dv")}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">DV</span>
+                      {:else if item.meta.isHDR && !item.quality?.includes("hdr")}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">HDR</span>
+                      {/if}
+                      {#if langLabel(item.meta)}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          {langLabel(item.meta)}
+                        </span>
+                      {/if}
+                      {#if stream.cached}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          ⚡ {stream.debrid || "Cached"}
+                        </span>
+                      {:else if stream.debrid}
+                        <span class="rounded bg-background/70 px-1.5 py-0.5">
+                          {stream.debrid}
+                        </span>
+                      {/if}
                     {/if}
-                    <span class="rounded bg-background/70 px-1.5 py-0.5">
-                      {item.quality}
-                    </span>
                     {#if stream.addonName}
                       <span
                         class="rounded px-1.5 py-0.5 {stream.addonName ===
@@ -767,6 +917,7 @@
                     {/if}
                   </span>
                 </button>
+                {/if}
               {/each}
             </div>
           {/if}

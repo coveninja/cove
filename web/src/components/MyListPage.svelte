@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
+  import { api, STATUS_LABELS, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
@@ -10,9 +10,7 @@
   import { libraryChanged } from "$lib/stores/library";
   import { flip } from "svelte/animate";
   import { cubicOut } from "svelte/easing";
-  import Upcoming from "./Upcoming.svelte";
-  import ReadyToWatch from "./cards/ReadyToWatch.svelte";
-  import ComingSoon from "./ComingSoon.svelte";
+  import CalendarAgenda from "./CalendarAgenda.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -453,6 +451,7 @@
                       ? 'bg-foreground text-background'
                       : 'bg-secondary text-muted-foreground hover:bg-secondary/70 hover:text-foreground'}"
                   >
+                    {#if tab !== "all"}<span class="size-1.5 shrink-0 rounded-full {STATUS_COLORS[tab as LibraryStatus].dot}"></span>{/if}
                     {TAB_LABELS[tab]}
                     <span
                       class="tabular-nums {activeStatus === tab
@@ -534,15 +533,9 @@
     <!-- ── Content ────────────────────────────────────────────────────────────── -->
   {:else}
     <ScrollArea class="h-full">
-      <div class="mt-28 flex flex-col gap-4 p-4">
-        <div class="rounded-2xl border p-4">
-          <ComingSoon {onSelectMedia} />
-        </div>
-        <div class="rounded-2xl border p-4">
-          <Upcoming {onSelectMedia} />
-        </div>
-        <div class="rounded-2xl border p-4">
-          <ReadyToWatch {onSelectMedia} />
+      <div class="mt-28 flex flex-col">
+        <div>
+          <CalendarAgenda {onSelectMedia} />
         </div>
       </div>
 
@@ -567,6 +560,7 @@
           <section class="mt-8 first:mt-5">
             <!-- List header -->
             <div class="mb-3 flex items-baseline gap-2 pr-4">
+              <span class="size-2.5 shrink-0 self-center rounded-full {STATUS_COLORS[section.status].dot}"></span>
               <h2 class="text-lg font-semibold">{section.label}</h2>
               <span class="text-sm text-muted-foreground tabular-nums">
                 {section.entries.length}

@@ -69,6 +69,15 @@ export interface Dismissal {
   dismissed_at: string;
 }
 /**
+ * Removal is a tombstone recording that a title was intentionally removed
+ * from the library, so a sync pull cannot resurrect it. Synced like Dismissal.
+ */
+export interface Removal {
+  tmdb_id: number /* int */;
+  media_type: string;
+  removed_at: string;
+}
+/**
  * TasteSignal is the minimal per-title signal the discover package needs,
  * without exposing the library's internals.
  */
@@ -109,6 +118,18 @@ export interface ProgressSaveEvent {
   Duration: number /* float64 */;
   Completed: boolean;
   At: string;
+}
+/**
+ * RemoteRowID identifies a remote Supabase row by its natural key and UUID,
+ * used by AdoptRemoteIDs. Season and Episode are only meaningful for progress
+ * rows; nil means the column is NULL in Supabase (movies have no season/episode).
+ */
+export interface RemoteRowID {
+  ID: string;
+  TmdbID: number /* int */;
+  MediaType: string;
+  Season?: number /* int */;
+  Episode?: number /* int */;
 }
 export interface Stats {
   total: number /* int */; // library entries (dismissals excluded)

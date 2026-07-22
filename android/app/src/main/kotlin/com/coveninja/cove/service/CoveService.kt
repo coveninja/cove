@@ -7,10 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.coveninja.cove.BuildConfig
-import com.coveninja.cove.MainActivity
+import com.coveninja.cove.WebViewActivity
 import java.io.File
 
 /**
@@ -36,11 +37,16 @@ class CoveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Post the notification immediately — must happen before mobile.Mobile.start()
         // (which blocks until the HTTP server is up) to stay within the 5 s window.
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+            )
+        } else {
+            // foregroundServiceType is only enforced from API 34; 2-arg call is fine on API 28.
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
 
         // Guard double-start — isRunning() is safe to call from any thread.
         if (!mobile.Mobile.isRunning()) {
@@ -50,14 +56,16 @@ class CoveService : Service() {
                     // purge a partially-downloaded torrent piece mid-stream.
                     val torrentDir = File(filesDir, "torrents").absolutePath
                     mobile.Mobile.start(
-                        /* bindAddr        */ "127.0.0.1:6969",
-                        /* dataDir         */ filesDir.absolutePath,
-                        /* cacheDir        */ cacheDir.absolutePath,
-                        /* torrentDir      */ torrentDir,
-                        /* tmdbAPIKey      */ BuildConfig.TMDB_API_KEY,
-                        /* supabaseURL     */ BuildConfig.SUPABASE_URL,
-                        /* supabaseAnonKey */ BuildConfig.SUPABASE_ANON_KEY,
-                        /* version         */ BuildConfig.VERSION_NAME,
+                        /* bindAddr          */ "127.0.0.1:6969",
+                        /* dataDir           */ filesDir.absolutePath,
+                        /* cacheDir          */ cacheDir.absolutePath,
+                        /* torrentDir        */ torrentDir,
+                        /* tmdbAPIKey        */ BuildConfig.TMDB_API_KEY,
+                        /* supabaseURL       */ BuildConfig.SUPABASE_URL,
+                        /* supabaseAnonKey   */ BuildConfig.SUPABASE_ANON_KEY,
+                        /* traktClientID     */ BuildConfig.TRAKT_CLIENT_ID,
+                        /* traktClientSecret */ BuildConfig.TRAKT_CLIENT_SECRET,
+                        /* version           */ BuildConfig.VERSION_NAME,
                     )
                     Log.i(TAG, "Go backend started on 127.0.0.1:6969")
                 } catch (e: Exception) {
@@ -73,12 +81,22 @@ class CoveService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            mobile.Mobile.stop()
-            Log.i(TAG, "Go backend stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Go backend stop error: ${e.message}", e)
-        }
+        // mobile.Mobile.stop() flushes stores and waits up to ~3 s for the HTTP
+        // server to drain — running it on the main thread risks an ANR (5 s budget).
+        // Use a CountDownLatch so onDestroy blocks at most 4 s while the background
+        // thread does the work, staying inside Android's ANR window.
+        val latch = java.util.concurrent.CountDownLatch(1)
+        Thread {
+            try {
+                mobile.Mobile.stop()
+                Log.i(TAG, "Go backend stopped")
+            } catch (e: Exception) {
+                Log.e(TAG, "Go backend stop error: ${e.message}", e)
+            } finally {
+                latch.countDown()
+            }
+        }.start()
+        latch.await(4, java.util.concurrent.TimeUnit.SECONDS)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -99,7 +117,7 @@ class CoveService : Service() {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java),
+            Intent(this, WebViewActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL_ID)

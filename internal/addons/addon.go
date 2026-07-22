@@ -158,6 +158,7 @@ type StremioMeta struct {
 type CatalogRef struct {
 	AddonID     string `json:"addonId"`
 	AddonName   string `json:"addonName"`
+	AddonURL    string `json:"addonUrl"`
 	CatalogType string `json:"catalogType"`
 	CatalogID   string `json:"catalogId"`
 	Name        string `json:"name"`
@@ -167,6 +168,19 @@ type Subtitle struct {
 	ID   string `json:"id"`
 	URL  string `json:"url"`
 	Lang string `json:"lang"`
+}
+
+// StreamBehaviorHints is the subset of Stremio's behaviorHints object we
+// retain. VideoSize, when present, is a structured byte size — more reliable
+// than parsing the free-text title — and is promoted into Stream.SizeBytes
+// by classifyStream when SizeBytes is unset. Filename is the addon-suggested
+// file name (e.g. "Show.S01E02.mkv") — captured for future use; not yet
+// wired into file selection.
+type StreamBehaviorHints struct {
+	NotWebReady bool   `json:"notWebReady,omitempty"`
+	BingeGroup  string `json:"bingeGroup,omitempty"`
+	VideoSize   int64  `json:"videoSize,omitempty"`
+	Filename    string `json:"filename,omitempty"`
 }
 
 type Stream struct {
@@ -186,6 +200,24 @@ type Stream struct {
 	// /api/play proxies the request instead of redirecting, since a bare
 	// redirect can't carry them to the origin.
 	Headers map[string]string `json:"headers,omitempty"`
+	// BehaviorHints is the raw hints object from the addon response. They were
+	// previously dropped at decode because the field didn't exist; adding it
+	// lets encoding/json pick them up. classifyStream promotes VideoSize into
+	// SizeBytes when the latter is unset.
+	BehaviorHints *StreamBehaviorHints `json:"behaviorHints,omitempty"`
+	// FileIdx is the 0-based index into the torrent's raw file list (t.Files()
+	// order, not the filtered video subset) identifying the exact file to play.
+	// Populated by Stremio addons like Torrentio for season-pack torrents.
+	// Pointer so that absent and 0 are distinguishable.
+	FileIdx *int `json:"fileIdx,omitempty"`
+	// Cached is true when confirmed debrid-cached (instant retrieval).
+	// Classifier is conservative, prefers false-negatives.
+	Cached bool `json:"cached,omitempty"`
+	// Debrid is the detected debrid service ("RealDebrid", "AllDebrid",
+	// "Premiumize", "TorBox", "Offcloud", "Debrid-Link", or generic "Debrid");
+	// set for cached and uncached debrid streams; empty for plain
+	// torrents/unknown direct streams.
+	Debrid string `json:"debrid,omitempty"`
 }
 
 // WatchOption represents a streaming service availability entry from JustWatch.
@@ -359,6 +391,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				URL string `json:"url"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
 				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
 				return
@@ -383,6 +416,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				Enabled bool `json:"enabled"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return
@@ -469,17 +503,21 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		}
 	}))
 
-	// PATCH /api/addons/catalog?id=<addonID>&catalog=<type/id>
+	// PATCH /api/addons/catalog?id=<addonID>&catalog=<type/id>[&url=<addonURL>]
 	// body: {"enabled":bool} — toggle a specific catalog on or off (204 on success).
+	// When ?url= is supplied, matching is by URL only (required for addons with
+	// duplicate manifest IDs); otherwise matching falls back to ?id=.
+	// Either ?id= or ?url= must be present; ?catalog= is always required.
 	mux.HandleFunc("/api/addons/catalog", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		addonID := r.URL.Query().Get("id")
+		addonURL := r.URL.Query().Get("url")
 		catalogKey := r.URL.Query().Get("catalog")
-		if addonID == "" || catalogKey == "" {
-			http.Error(w, "missing ?id= or ?catalog=", http.StatusBadRequest)
+		if (addonID == "" && addonURL == "") || catalogKey == "" {
+			http.Error(w, "missing ?id= or ?url=, and ?catalog=", http.StatusBadRequest)
 			return
 		}
 		var body struct {
@@ -489,7 +527,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		if err := m.SetCatalogEnabled(addonID, catalogKey, body.Enabled); err != nil {
+		if err := m.SetCatalogEnabled(addonID, addonURL, catalogKey, body.Enabled); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}

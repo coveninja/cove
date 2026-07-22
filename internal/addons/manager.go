@@ -26,6 +26,7 @@ type Manager struct {
 	mu              sync.RWMutex
 	stremioAddons   []AddonEntry
 	officialEnabled map[string]bool // persisted enabled-state overrides for official addons
+	updatedAt       time.Time       // last local mutation time; used for LWW sync resolution
 	client          *http.Client
 	storePath       string
 	imdbLookup      func(tmdbID int) string // returns IMDB ID for a TV show, or "" on failure
@@ -118,6 +119,7 @@ func New(profileID string, imdbLookup func(tmdbID int) string) *Manager {
 	if store.OfficialEnabled != nil {
 		m.officialEnabled = store.OfficialEnabled
 	}
+	m.updatedAt = store.UpdatedAt
 	return m
 }
 
@@ -139,6 +141,7 @@ func (m *Manager) SetProfile(profileID string) error {
 	} else {
 		m.officialEnabled = make(map[string]bool)
 	}
+	m.updatedAt = store.UpdatedAt
 	m.mu.Unlock()
 	return nil
 }
@@ -160,9 +163,11 @@ func (m *Manager) GetEntries() []AddonEntry {
 }
 
 // AddStremioAddon fetches the manifest at url, classifies it as provider or
-// subtitle addon, persists it, and returns the new entry. If an addon with the
-// same ID already exists it is updated in place. The URL is normalized so users
-// can paste either the base URL or the full manifest URL.
+// subtitle addon, persists it, and returns the new entry. If an addon at the
+// same normalized URL already exists it is updated in place; a same-ID/
+// different-URL install (e.g. the same addon configured with two different
+// debrid API keys) is appended as a separate entry. The URL is normalized so
+// users can paste either the base URL or the full manifest URL.
 func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, error) {
 	url = normalizeAddonURL(url)
 	manifest, err := m.FetchManifest(ctx, url)
@@ -183,7 +188,7 @@ func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, 
 	defer m.mu.Unlock()
 
 	for i, a := range m.stremioAddons {
-		if a.ID == entry.ID {
+		if a.URL == entry.URL {
 			m.stremioAddons[i] = entry
 			return entry, m.saveL()
 		}
@@ -192,9 +197,11 @@ func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, 
 	return entry, m.saveL()
 }
 
-// RemoveAddon removes a user-added (stremio) addon by ID or URL. Matching by
-// URL lets callers clean up entries that were stored with an empty ID due to a
-// bad manifest fetch. Returns an error for official addons or if nothing matches.
+// RemoveAddon removes a user-added (stremio) addon by ID or URL. When addonURL
+// is non-empty, matching is by URL only — this is required when duplicate
+// manifest IDs exist (same addon, different config URLs) so the correct entry
+// is removed rather than the first ID match. When addonURL is empty, matching
+// falls back to ID. Returns an error for official addons or if nothing matches.
 func (m *Manager) RemoveAddon(id, addonURL string) error {
 	for _, a := range officialAddons {
 		if a.ID == id {
@@ -204,7 +211,7 @@ func (m *Manager) RemoveAddon(id, addonURL string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, a := range m.stremioAddons {
-		if (id != "" && a.ID == id) || (addonURL != "" && a.URL == addonURL) {
+		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
 			m.stremioAddons = append(m.stremioAddons[:i], m.stremioAddons[i+1:]...)
 			return m.saveL()
 		}
@@ -212,8 +219,10 @@ func (m *Manager) RemoveAddon(id, addonURL string) error {
 	return fmt.Errorf("addon not found")
 }
 
-// SetEnabled toggles an addon on or off. Matches by id or url (url fallback
-// handles entries that were stored with an empty id).
+// SetEnabled toggles an addon on or off. Official addons are always matched by
+// id. For stremio addons: when addonURL is non-empty, matching is by URL only
+// (required when duplicate manifest IDs exist); when addonURL is empty,
+// matching falls back to ID.
 func (m *Manager) SetEnabled(id, addonURL string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -225,7 +234,7 @@ func (m *Manager) SetEnabled(id, addonURL string, enabled bool) error {
 		}
 	}
 	for i, a := range m.stremioAddons {
-		if (id != "" && a.ID == id) || (addonURL != "" && a.URL == addonURL) {
+		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
 			m.stremioAddons[i].Enabled = enabled
 			return m.saveL()
 		}
@@ -287,6 +296,7 @@ func (m *Manager) getAllStreams(ctx context.Context, mediaType string, stremioID
 			tagged := make([]Stream, len(streams))
 			for j, s := range streams {
 				s.AddonName = addon.Manifest.Name
+				classifyStream(&s, addon.Manifest.Name, addon.URL)
 				tagged[j] = s
 			}
 			results[i] = tagged
@@ -486,6 +496,7 @@ func (m *Manager) GetEnabledCatalogs() []CatalogRef {
 			refs = append(refs, CatalogRef{
 				AddonID:     addon.ID,
 				AddonName:   addon.Manifest.Name,
+				AddonURL:    addon.URL,
 				CatalogType: cat.Type,
 				CatalogID:   cat.ID,
 				Name:        cat.Name,
@@ -497,13 +508,19 @@ func (m *Manager) GetEnabledCatalogs() []CatalogRef {
 
 // SetCatalogEnabled enables or disables a specific catalog for an addon.
 // An absent DisabledCatalogs entry means enabled (default-on); disabling
-// stores true, re-enabling removes the entry.
-func (m *Manager) SetCatalogEnabled(addonID, catalogKey string, enabled bool) error {
+// stores true, re-enabling removes the entry. When addonURL is non-empty,
+// matching is by URL only (required when duplicate manifest IDs exist);
+// when addonURL is empty, matching falls back to ID.
+func (m *Manager) SetCatalogEnabled(addonID, addonURL, catalogKey string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for i, a := range m.stremioAddons {
-		if a.ID != addonID {
+		if addonURL != "" {
+			if a.URL != addonURL {
+				continue
+			}
+		} else if a.ID != addonID {
 			continue
 		}
 		if !enabled {
@@ -532,15 +549,82 @@ func (m *Manager) FindAddonURL(addonID string) (string, bool) {
 	return "", false
 }
 
-// saveL persists the current state. Must be called with m.mu write-locked.
+// HasAddonURL reports whether a stremio addon at the given URL is currently
+// configured. Used by /api/catalog to validate a caller-supplied addonUrl
+// before using it directly, guarding against SSRF via caller-controlled URLs.
+func (m *Manager) HasAddonURL(url string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, a := range m.stremioAddons {
+		if a.URL == url {
+			return true
+		}
+	}
+	return false
+}
+
+// saveL persists the current state and stamps updatedAt to now. Must be
+// called with m.mu write-locked.
 func (m *Manager) saveL() error {
 	if m.storePath == "" {
 		return nil
 	}
+	m.updatedAt = time.Now().UTC()
 	return saveStore(m.storePath, addonStore{
 		StremioAddons:   m.stremioAddons,
 		OfficialEnabled: m.officialEnabled,
+		UpdatedAt:       m.updatedAt,
 	})
+}
+
+// UpdatedAt returns the timestamp of the last local mutation to this store.
+// Used by sync to send a data-mutation timestamp to Supabase instead of
+// wall-clock time, keeping last-write-wins convergent across devices.
+func (m *Manager) UpdatedAt() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.updatedAt
+}
+
+// MergeFrom applies a remote addon configuration using whole-store
+// last-write-wins: a no-op when remoteUpdatedAt is not strictly after the
+// local updatedAt. When the remote wins, stremio-source entries replace the
+// local stremio list and official-source entries update the officialEnabled map
+// (and carry DisabledCatalogs where applicable). The store is persisted with
+// UpdatedAt = remoteUpdatedAt (NOT time.Now()) so LWW converges across devices.
+//
+// Guard: an account that has never pushed addons will have no remote row; the
+// caller must distinguish "no remote row" from "remote row with empty list" and
+// pass entries = nil / call this method only when a remote row is present.
+func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !remoteUpdatedAt.After(m.updatedAt) {
+		return
+	}
+	// Rebuild from the pulled entries.
+	var stremio []AddonEntry
+	for _, e := range entries {
+		switch e.Source {
+		case SourceStremio:
+			stremio = append(stremio, e)
+		case SourceOfficial:
+			m.officialEnabled[e.ID] = e.Enabled
+		}
+	}
+	m.stremioAddons = stremio
+	m.updatedAt = remoteUpdatedAt
+	// Save directly with remoteUpdatedAt so the on-disk timestamp reflects the
+	// data mutation time, not the moment this merge ran.
+	if m.storePath != "" {
+		if err := saveStore(m.storePath, addonStore{
+			StremioAddons:   m.stremioAddons,
+			OfficialEnabled: m.officialEnabled,
+			UpdatedAt:       remoteUpdatedAt,
+		}); err != nil {
+			log.Println("addons: MergeFrom persist:", err)
+		}
+	}
 }
 
 // detectKind classifies an addon as a stream provider or subtitle provider based

@@ -19,6 +19,7 @@ import (
 
 	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/calendar"
 	"github.com/coveninja/cove/internal/clientsession"
 	"github.com/coveninja/cove/internal/discover"
 	"github.com/coveninja/cove/internal/imgcache"
@@ -30,8 +31,10 @@ import (
 	"github.com/coveninja/cove/internal/settings"
 	supapkg "github.com/coveninja/cove/internal/supabase"
 	"github.com/coveninja/cove/internal/tmdb"
+	traktpkg "github.com/coveninja/cove/internal/trakt"
 	"github.com/coveninja/cove/internal/updater"
 	"github.com/coveninja/cove/internal/utils"
+	"github.com/coveninja/cove/internal/webstatic"
 )
 
 // Config holds all startup parameters for the Cove backend. Every field is a
@@ -76,6 +79,11 @@ type Config struct {
 	// SupabaseAnonKey is the publishable Supabase anon key. Empty disables
 	// Supabase auth/sync.
 	SupabaseAnonKey string
+
+	// TraktClientID and TraktClientSecret are the Trakt API application
+	// credentials. When either is empty all /api/trakt/* endpoints return 503.
+	TraktClientID     string
+	TraktClientSecret string
 
 	// Version is the current build version string (injected via ldflags).
 	// Used by the updater to decide whether a newer release is available.
@@ -173,6 +181,9 @@ func (h *Handle) startLAN(addr string, handler http.Handler) {
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds request reads only; long-lived streaming responses
+		// (SSE, /api/play) are unaffected.
+		ReadTimeout: 30 * time.Second,
 		// Don't set WriteTimeout — torrent streaming is long-lived.
 	}
 	h.lanSrv = srv
@@ -246,6 +257,10 @@ func Start(cfg Config) (*Handle, error) {
 	if cfg.BindAddr == "" {
 		cfg.BindAddr = "127.0.0.1:6969"
 	}
+	// Record the bind address so image-proxy URL builders (tmdb.imgURL,
+	// library.rewritePosterURL) produce correct absolute URLs even when
+	// COVE_BIND_ADDR differs from the default.
+	utils.SetLocalAddr(cfg.BindAddr)
 
 	if cfg.TMDBAPIKey == "" {
 		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
@@ -257,6 +272,7 @@ func Start(cfg Config) (*Handle, error) {
 	var st *settings.Store
 	var lib *library.Library
 	var act *activity.Store
+	var traktSrv *traktpkg.Server
 
 	profileStore, err := profiles.New(func(profileID string) {
 		// Reload all data stores when the active profile switches.
@@ -274,6 +290,11 @@ func Start(cfg Config) (*Handle, error) {
 		}
 		if err := act.SetProfile(profileID); err != nil {
 			log.Println("profile switch: reload activity:", err)
+		}
+		if traktSrv != nil {
+			if err := traktSrv.SetProfile(profileID); err != nil {
+				log.Println("profile switch: reload trakt:", err)
+			}
 		}
 	})
 	if err != nil {
@@ -315,7 +336,7 @@ func Start(cfg Config) (*Handle, error) {
 
 	// The torrent client is core functionality — if it can't start, there's
 	// nothing to stream, so a New failure is fatal.
-	p, err := player.New(tmdbClient, addonMgr, nuvioMgr, cfg.TorrentDir)
+	p, err := player.New(tmdbClient, addonMgr, nuvioMgr, cfg.TorrentDir, st)
 	if err != nil {
 		return nil, fmt.Errorf("could not init torrent client: %w", err)
 	}
@@ -338,6 +359,7 @@ func Start(cfg Config) (*Handle, error) {
 	p.SetupHandlers(mux)
 	st.SetupHandlers(mux)
 	lib.SetupHandlers(mux)
+	calendar.New(lib, tmdbClient).SetupHandlers(mux)
 	act.SetupHandlers(mux)
 	profileStore.SetupHandlers(mux)
 	updater.SetupHandlers(mux, cfg.Version)
@@ -349,7 +371,7 @@ func Start(cfg Config) (*Handle, error) {
 	// Env vars take precedence; compiled-in ldflags values are the fallback for
 	// release builds where no .env file is present.
 	supaCfg := supapkg.ConfigFromEnv(cfg.SupabaseURL, cfg.SupabaseAnonKey)
-	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
+	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr, nuvioMgr, act)
 	supaServer.SetupHandlers(mux)
 	profileStore.SetOnDelete(func(profileID string, uid *string, jwt string) {
 		if err := supaServer.CleanupDeletedProfile(jwt, profileID, uid); err != nil {
@@ -357,10 +379,21 @@ func Start(cfg Config) (*Handle, error) {
 		}
 	})
 
+	// Trakt.tv integration (no build tag — always compiled). Endpoints return
+	// 503 when TraktClientID is not set, mirroring the Supabase noop pattern.
+	// RunSync is launched below after ctx is created.
+	traktCfg := traktpkg.Config{
+		ClientID:     cfg.TraktClientID,
+		ClientSecret: cfg.TraktClientSecret,
+	}
+	traktSrv = traktpkg.New(traktCfg, activeID, lib, st, tmdbClient)
+	traktSrv.SetupHandlers(mux)
+
 	disc := discover.New(tmdbClient, lib, st)
 	disc.SetupHandlers(mux)
 
 	clientsession.SetupHandlers(mux)
+	webstatic.Mount(mux)
 
 	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
@@ -378,6 +411,10 @@ func Start(cfg Config) (*Handle, error) {
 	lib.SetOnNearComplete(prefetchWorker.Notify)
 	lib.SetOnProgressSave(act.OnProgressSave)
 	go prefetchWorker.Run(ctx)
+
+	// Trakt background sync — runs after ctx exists so RunSync can select on
+	// ctx.Done(). The worker respects TraktSyncEnabled each cycle.
+	go traktSrv.RunSync(ctx)
 
 	// Reap idle torrents every 5 minutes. The ticker is context-aware so
 	// Stop() cancels the loop immediately rather than waiting up to 5 minutes
@@ -415,6 +452,9 @@ func Start(cfg Config) (*Handle, error) {
 		Addr:              cfg.BindAddr,
 		Handler:           mux, // no gate — loopback is trusted
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds request reads only; long-lived streaming responses
+		// (SSE /api/progress/stream, video via /api/play) are unaffected.
+		ReadTimeout: 30 * time.Second,
 		// Don't set WriteTimeout — torrent streaming is long-lived.
 	}
 

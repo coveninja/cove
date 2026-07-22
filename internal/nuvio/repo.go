@@ -1,6 +1,7 @@
 package nuvio
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -40,9 +41,9 @@ func parseRawGithubUsercontentURL(raw string) (owner, name, branch, path string,
 	return m[1], m[2], m[3], m[4], true
 }
 
-func (m *Manager) fetchRaw(owner, name, branch, path string) ([]byte, error) {
+func (m *Manager) fetchRaw(ctx context.Context, owner, name, branch, path string) ([]byte, error) {
 	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, name, branch, path)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -64,14 +65,14 @@ func (m *Manager) fetchRaw(owner, name, branch, path string) ([]byte, error) {
 
 // resolveBranchAndManifest tries the given branch (if any), falling back to
 // main then master, and returns whichever branch actually had a manifest.json.
-func (m *Manager) resolveBranchAndManifest(owner, name, branch string) (string, []byte, error) {
+func (m *Manager) resolveBranchAndManifest(ctx context.Context, owner, name, branch string) (string, []byte, error) {
 	candidates := []string{branch}
 	if branch == "" {
 		candidates = []string{"main", "master"}
 	}
 	var lastErr error
 	for _, b := range candidates {
-		data, err := m.fetchRaw(owner, name, b, "manifest.json")
+		data, err := m.fetchRaw(ctx, owner, name, b, "manifest.json")
 		if err == nil {
 			return b, data, nil
 		}
@@ -85,14 +86,14 @@ func (m *Manager) resolveBranchAndManifest(owner, name, branch string) (string, 
 // opts in per-scraper. Accepts either a github.com/owner/repo URL or a direct
 // raw.githubusercontent.com link to the manifest file itself (the form some
 // community plugin directories hand users via a "copy" button).
-func (m *Manager) AddRepo(rawURL string) (Repo, error) {
+func (m *Manager) AddRepo(ctx context.Context, rawURL string) (Repo, error) {
 	var owner, name, resolvedBranch string
 	var data []byte
 
 	if o, n, b, path, ok := parseRawGithubUsercontentURL(rawURL); ok {
 		owner, name, resolvedBranch = o, n, b
 		var err error
-		data, err = m.fetchRaw(owner, name, resolvedBranch, path)
+		data, err = m.fetchRaw(ctx, owner, name, resolvedBranch, path)
 		if err != nil {
 			return Repo{}, fmt.Errorf("could not fetch manifest: %w", err)
 		}
@@ -103,7 +104,7 @@ func (m *Manager) AddRepo(rawURL string) (Repo, error) {
 		if err != nil {
 			return Repo{}, fmt.Errorf("not a github.com/owner/repo URL or a raw.githubusercontent.com manifest link")
 		}
-		resolvedBranch, data, err = m.resolveBranchAndManifest(owner, name, branch)
+		resolvedBranch, data, err = m.resolveBranchAndManifest(ctx, owner, name, branch)
 		if err != nil {
 			return Repo{}, fmt.Errorf("could not fetch manifest.json: %w", err)
 		}
@@ -175,7 +176,7 @@ func (m *Manager) SetRepoEnabled(id string, enabled bool) error {
 // lazily fetches and caches the scraper's JS; a fetch/parse failure is stored
 // in CodeErr and the scraper is refused enable rather than silently switched
 // on with no code behind it.
-func (m *Manager) SetScraperEnabled(repoID, scraperID string, enabled bool) error {
+func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID string, enabled bool) error {
 	m.mu.Lock()
 	var repoIdx, scraperIdx = -1, -1
 	for i, r := range m.repos {
@@ -209,7 +210,7 @@ func (m *Manager) SetScraperEnabled(repoID, scraperID string, enabled bool) erro
 	m.mu.Unlock()
 
 	if needsFetch {
-		code, fetchErr := m.fetchRaw(repo.Owner, repo.Name, repo.Branch, scraper.Filename)
+		code, fetchErr := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, scraper.Filename)
 
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -245,7 +246,7 @@ func (m *Manager) SetScraperEnabled(repoID, scraperID string, enabled bool) erro
 
 // RefreshRepo refetches manifest.json and, for any currently-enabled scraper,
 // its JS too — matching Nuvio's own repo-refresh semantics.
-func (m *Manager) RefreshRepo(id string) error {
+func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 	m.mu.RLock()
 	var repo Repo
 	found := false
@@ -261,7 +262,7 @@ func (m *Manager) RefreshRepo(id string) error {
 		return fmt.Errorf("repo not found")
 	}
 
-	data, err := m.fetchRaw(repo.Owner, repo.Name, repo.Branch, "manifest.json")
+	data, err := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, "manifest.json")
 	if err != nil {
 		m.mu.Lock()
 		for i, r := range m.repos {
@@ -287,7 +288,7 @@ func (m *Manager) RefreshRepo(id string) error {
 	for _, e := range entries {
 		s := newScraper(e)
 		if prev, ok := prevByID[e.ID]; ok && prev.Enabled {
-			code, fetchErr := m.fetchRaw(repo.Owner, repo.Name, repo.Branch, e.Filename)
+			code, fetchErr := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, e.Filename)
 			if fetchErr != nil {
 				s.CodeErr = fetchErr.Error()
 				s.Enabled = false

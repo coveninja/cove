@@ -22,6 +22,10 @@ func inferQuality(s Stream) string {
 		return "4k hdr"
 	case strings.Contains(text, "2160"), strings.Contains(text, "4k"):
 		return "4k"
+	case strings.Contains(text, "uhd"):
+		return "4k"
+	case strings.Contains(text, "fhd"), strings.Contains(text, "full hd"):
+		return "1080p"
 	case strings.Contains(text, "1080"):
 		return "1080p"
 	case strings.Contains(text, "720"):

@@ -77,19 +77,59 @@ export interface Settings {
    */
   prefetchNextEpisode: boolean;
   /**
-   * Remote access (Phase 5) — exposes the backend on 0.0.0.0 so LAN devices
-   * (e.g. the Android app in thin-client mode) can reach it. Settings are
-   * per-profile; remote access follows whichever profile is currently active.
-   * RemoteAccessEnabled: when true the server listens on 0.0.0.0:<port> in
-   * addition to the always-on loopback listener. The loopback listener is
-   * never restarted.
+   * AllowUploading enables uploading pieces to peers while streaming (capped
+   * at 1 MiB/s in the player). Improves download speed via BitTorrent
+   * reciprocity — tit-for-tat peers unchoke us faster when we reciprocate.
+   * Off means never upload. Default true.
+   */
+  allowUploading: boolean;
+  /**
+   * ProbeStreams enables the pre-playback liveness probe: before auto-select
+   * commits to a stream, the top direct-URL candidates are HEAD-checked so
+   * dead scraper links get demoted instead of failing at playback. Costs
+   * ~700ms of auto-select latency; some CDNs refuse HEAD, in which case the
+   * probe falls back to a 1-byte Range GET.
+   */
+  probeStreams: boolean;
+  /**
+   * Remote access (Phase 5) — opens a separate LAN listener so other devices
+   * (e.g. the Android app in thin-client mode) can reach this backend over the
+   * local network. Settings are per-profile; remote access follows whichever
+   * profile is currently active.
+   * RemoteAccessEnabled: when true the server opens a separate TCP listener on
+   * 0.0.0.0:<main-port+1> (default 0.0.0.0:6970). The main loopback listener
+   * (127.0.0.1:6969) is never touched. When false, the LAN port is simply
+   * closed — a port scan gets connection-refused, not a 403.
    * RemoteAccessToken: a 32-byte hex string generated once (crypto/rand) the
    * first time RemoteAccessEnabled is set to true, then persisted and never
    * auto-rotated. Every request arriving on the LAN listener must supply this
    * token via X-Cove-Token header or ?token= query param.
+   * NOTE: these two fields are intentionally excluded from Supabase sync
+   * (see MergeFrom). They are device-local security config and must not
+   * propagate to other devices.
    */
   remoteAccessEnabled: boolean;
   remoteAccessToken: string;
+  /**
+   * AllowLanStreamSources permits /api/play to proxy stream URLs that resolve
+   * to LAN or loopback addresses. Off by default (SSRF hardening); enable only
+   * when streaming from a local media server on the same network (e.g. Jellyfin,
+   * Plex). Per-device config — not synced via Supabase.
+   */
+  allowLanStreamSources: boolean;
+  /**
+   * Trakt.tv integration — both fields are roaming (synced via Supabase
+   * MergeFrom like all other preference fields; no exclusion needed).
+   * TraktScrobbleEnabled sends start/pause/stop events to Trakt as the user
+   * watches. Default true so scrobbling is active immediately after linking;
+   * the handler is a no-op when the account isn't connected.
+   */
+  traktScrobbleEnabled: boolean;
+  /**
+   * TraktSyncEnabled enables the background two-way history and watchlist
+   * sync (Phase 2). Default false — opt-in because it modifies the library.
+   */
+  traktSyncEnabled: boolean;
   /**
    * Sync bookkeeping — stamped server-side on every local write, used to resolve
    * Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.

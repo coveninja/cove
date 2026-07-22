@@ -27,6 +27,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTextStream>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QUrl>
 #include <QtWebEngineQuick/QtWebEngineQuick>
@@ -424,13 +425,15 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
   html += "<script>" + bootstrap + "</script>";
   html += "</body></html>";
 
-  const QString path = QDir::temp().filePath("cove_overlay.html");
-  QFile f(path);
-  if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-    f.write(html.toUtf8());
-    f.close();
+  // QTemporaryFile uses O_EXCL, preventing a symlink-substitution attack on
+  // the predictable path a fixed /tmp name would create.
+  QTemporaryFile overlayFile(QDir::temp().filePath("cove_overlay_XXXXXX.html"));
+  overlayFile.setAutoRemove(false); // must outlive this function; OS tmp cleanup handles removal
+  if (overlayFile.open()) {
+    overlayFile.write(html.toUtf8());
+    overlayFile.close();
   }
-  return QUrl::fromLocalFile(path).toString();
+  return QUrl::fromLocalFile(overlayFile.fileName()).toString();
 }
 
 int main(int argc, char *argv[]) {
@@ -469,8 +472,24 @@ int main(int argc, char *argv[]) {
   // (exit 64000). Under XWayland (xcb) the same buffer pool is bounded and was
   // measured flat for over an hour. Default to xcb until the upstream bug is fixed;
   // an explicitly-set QT_QPA_PLATFORM still wins (e.g. a user testing a patched Qt).
-  if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+  //
+  // Skip both workarounds inside Flatpak: the manifest only grants
+  // fallback-x11, so in a Wayland session there is no X socket and forcing
+  // xcb aborts startup ("no Qt platform plugin could be initialized"). The
+  // sandbox pins QtWebEngine 6.9 (BaseApp), which predates the 6.11 leak, so
+  // native Wayland is safe there. Revisit if the BaseApp moves to an
+  // affected Qt.
+  const bool inFlatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID");
+  if (!inFlatpak && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
     qputenv("QT_QPA_PLATFORM", "xcb");
+
+  // Under XWayland, Hyprland unmaps windows on workspace switch and the
+  // threaded render loop can stall ~15 s on the unmapped surface, leaving the
+  // window black. The basic render loop is not affected; the heavy
+  // rendering (Chromium compositor, mpv) happens outside the Quick scene graph
+  // either way, so the single-threaded loop costs nothing here.
+  if (!inFlatpak && qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
+    qputenv("QSG_RENDER_LOOP", "basic");
 #endif
 
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
@@ -499,7 +518,14 @@ int main(int argc, char *argv[]) {
   // Single-instance guard. QLockFile detects stale locks from crashed
   // processes (it records the holder's PID), so a crash never wedges future
   // launches the way the old "did port 5174 bind?" heuristic could.
-  QLockFile instanceLock(QDir::temp().filePath("cove_shell.lock"));
+  // RuntimeLocation (/run/user/<uid>) is per-user, avoiding collisions on
+  // shared machines; fall back to /tmp when the platform doesn't provide it.
+  const QString runtimeDir =
+      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+  const QString lockDir = runtimeDir.isEmpty() ? QDir::temp().absolutePath() : runtimeDir;
+  if (!runtimeDir.isEmpty())
+    QDir().mkpath(lockDir);
+  QLockFile instanceLock(QDir(lockDir).filePath("cove_shell.lock"));
   if (!instanceLock.tryLock(0)) {
     reportStartupFailure(
         QStringLiteral("Cove is already running (another instance holds the "
@@ -523,6 +549,7 @@ int main(int argc, char *argv[]) {
       "play", "Compositing test: play this media file behind a test overlay.",
       "file");
   QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
+  QCommandLineOption tvOpt("tv", "Launch with the TV (D-pad) interface.");
   QCommandLineOption gpuWorkaroundOpt(
       "gpu-workaround",
       "GPU workaround level: 0=off, 1=QTWEBENGINE_FORCE_USE_GBM=0 (Vulkan fallback; may render incorrectly on some drivers), 2=level 1 + --disable-gpu (software raster, auto-recovery target). Pins the level for this run; overrides COVE_GPU_WORKAROUND and disables auto-escalation.",
@@ -531,6 +558,7 @@ int main(int argc, char *argv[]) {
   parser.addOption(webrootOpt);
   parser.addOption(playOpt);
   parser.addOption(devOpt);
+  parser.addOption(tvOpt);
   parser.addOption(gpuWorkaroundOpt);
   parser.process(app);
 
@@ -551,6 +579,7 @@ int main(int argc, char *argv[]) {
           ? QFileInfo(parser.value(playOpt)).absoluteFilePath()
           : QString();
   const bool isDev = parser.isSet(devOpt);
+  const bool isTv = parser.isSet(tvOpt);
 
   QQmlApplicationEngine engine;
 
@@ -575,6 +604,11 @@ int main(int argc, char *argv[]) {
   auto loadScene = [&](const QString &url, const QString &mpvFile) {
     engine.rootContext()->setContextProperty("launchUrl", url);
     engine.rootContext()->setContextProperty("mpvTestFile", mpvFile);
+    // isTv is captured by reference via [&]; it is declared above and outlives
+    // all loadScene calls (stack frame is main()). This lets the QML side zoom
+    // the WebEngineView from first paint rather than waiting for the WebChannel
+    // handshake — acceptable for the --tv flag path.
+    engine.rootContext()->setContextProperty("launchTvZoom", isTv);
     engine.load(QUrl("qrc:/qml/main.qml"));
   };
 
@@ -641,7 +675,7 @@ int main(int argc, char *argv[]) {
     // lambda) so the `finished` handler can invoke it again on a later
     // crash — a lambda can't capture itself directly.
     auto launchBackend = std::make_shared<std::function<void(bool)>>();
-    *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, apiPort,
+    *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, isTv, apiPort,
                        shuttingDown, currentBackend, restartCount, restartWindow,
                        launchBackend](bool first) {
       QProcess *backend = startBackend(backendPath, &app);
@@ -722,16 +756,22 @@ int main(int argc, char *argv[]) {
 
       waitForBackend(
           apiPort, 20000,
-          [loadScene, baseUrl, isDev, settled, first]() {
+          [loadScene, baseUrl, isDev, isTv, settled, first]() {
             if (*settled)
               return;
             *settled = true;
             if (first) {
               qInfo().noquote() << "[shell] backend up — loading UI";
               if (isDev) {
-                loadScene(QStringLiteral("http://localhost:5173"), QString());
+                const QString devUrl = isTv
+                    ? QStringLiteral("http://localhost:5173?tvui=1")
+                    : QStringLiteral("http://localhost:5173");
+                loadScene(devUrl, QString());
               } else {
-                loadScene(baseUrl.toString(), QString());
+                const QString prodUrl = isTv
+                    ? baseUrl.toString() + QStringLiteral("?tvui=1")
+                    : baseUrl.toString();
+                loadScene(prodUrl, QString());
               }
               // The GPU abort strikes within seconds of the first WebEngineView load.
               QTimer::singleShot(30000, qApp,

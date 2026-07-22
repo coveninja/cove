@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // Load developer secrets from local.properties (gitignored).
 // TMDB_API_KEY is passed into BuildConfig so CoveApplication can forward it
@@ -12,21 +13,18 @@ val localProps = Properties().also { props ->
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    // Kotlin 2.x Compose compiler plugin — replaces the old composeOptions block.
-    id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
     namespace = "com.coveninja.cove"
-    // 36: required by androidyoutubeplayer 13.x (AAR metadata). targetSdk
-    // stays 35 — compileSdk only raises the API surface we build against.
     compileSdk = 36
 
     defaultConfig {
         applicationId = "com.coveninja.cove"
-        minSdk = 29
+        minSdk = 28
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // CI passes the release tag via COVE_VERSION (e.g. "v1.2.3"); local
         // builds fall back to the dev placeholder. versionCode is derived as
         // major*10000 + minor*100 + patch so Play/package-manager upgrade
@@ -48,11 +46,24 @@ android {
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         val backendUrl = localProps.getProperty("BACKEND_URL", "http://127.0.0.1:6969/api")
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
+        val webUrl = localProps.getProperty("WEB_URL", "http://127.0.0.1:6969")
+        buildConfigField("String", "WEB_URL", "\"$webUrl\"")
         // Supabase auth — publishable anon key only; service key must never enter BuildConfig.
         val supabaseUrl = localProps.getProperty("SUPABASE_URL", "")
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY", "")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        // Trakt API credentials — used by the Go backend for watch-history sync.
+        // Defaults to empty string so builds without local.properties still compile.
+        val traktClientID = localProps.getProperty("TRAKT_CLIENT_ID", "")
+        buildConfigField("String", "TRAKT_CLIENT_ID", "\"$traktClientID\"")
+        val traktClientSecret = localProps.getProperty("TRAKT_CLIENT_SECRET", "")
+        buildConfigField("String", "TRAKT_CLIENT_SECRET", "\"$traktClientSecret\"")
+        // UPDATE_BASE_URL overrides the GitHub API endpoint for local end-to-end
+        // update testing (e.g. "http://10.0.2.2:8000" pointing at python -m http.server).
+        // Empty string (the default) means use the real api.github.com endpoint.
+        val updateBaseUrl = localProps.getProperty("UPDATE_BASE_URL", "")
+        buildConfigField("String", "UPDATE_BASE_URL", "\"$updateBaseUrl\"")
     }
 
     // Release signing — CI-only. The keystore never lives in the repo: the
@@ -80,16 +91,17 @@ android {
         // AGP 8 defaults buildConfig generation to false; we use BuildConfig for
         // TMDB_API_KEY and VERSION_NAME so this must be explicitly enabled.
         buildConfig = true
-        compose = true
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
 
-    kotlinOptions {
-        jvmTarget = "17"
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 
@@ -98,50 +110,46 @@ dependencies {
     // Built by `make android-aar`; see android/README.md for prerequisites.
     implementation(files("libs/cove.aar"))
 
-    // Jetpack Compose — BOM pins all compose artifacts to a single tested set.
-    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
-    implementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    // activity-compose bridges ComponentActivity.setContent with Compose.
-    implementation("androidx.activity:activity-compose:1.9.3")
+    // ComponentActivity (base for WebViewActivity) + onBackPressedDispatcher.addCallback
+    // extension. Previously pulled in transitively by activity-compose.
+    implementation("androidx.activity:activity-ktx:1.13.0")
 
-    // OkHttp — health-check polls to /api/ping from MainActivity; kept here
-    // for future backend API communication from the Compose layer.
+    // lifecycleScope extension on LifecycleOwner. Previously pulled in
+    // transitively by lifecycle-runtime-compose.
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+
+    // OkHttp — health-check polls to /api/ping from WebViewActivity and
+    // provides HTTP for CoveApiClient (sync, auth).
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // kotlinx-serialization JSON — on hand for parsing backend responses
-    // once the full Compose UI (Phase 4) starts consuming typed API payloads.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    // kotlinx-serialization JSON — parsing backend responses in CoveApiClient
+    // and SyncCoordinator.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
-    // Coil for async image loading in Compose.
-    implementation("io.coil-kt:coil-compose:2.7.0")
-    // ViewModel + lifecycle integration for Compose.
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     // ProcessLifecycleOwner — fires ON_START/ON_STOP for whole-app foreground events.
     // Used by SyncCoordinator.syncOnResume() to mirror the desktop window-focus sync.
-    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
-    // Extended material icons (FavoriteBorder, List, etc. not in core set).
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.lifecycle:lifecycle-process:2.11.0")
 
     // Keystore-backed encrypted storage for the Supabase JWT + refresh token.
-    // 1.0.0 is the stable release; works correctly on minSdk 23+ (our minSdk is 29).
-    implementation("androidx.security:security-crypto:1.0.0")
+    // 1.0.0 is the stable release; works correctly on minSdk 23+ (our minSdk is 28).
+    implementation("androidx.security:security-crypto:1.1.0")
 
     // libmpv — Findroid's prebuilt mpv for Android. Ships all 4 ABIs:
     // arm64-v8a, armeabi-v7a, x86, x86_64 (confirmed via unzip -l inspection).
     // 0.5.1 uses the classic static API (MPVLib.create/init/etc.) and has
     // minCompileSdk=1, compatible with our compileSdk=35.
-    // 1.0.0 requires compileSdk 36 (AAR metadata enforcement) — skip for now.
     implementation("dev.jdtech.mpv:libmpv:0.5.1")
 
-    // YouTube player for trailer embeds in the media detail sheet.
-    // 13.x is required since YouTube's late-2025 embed enforcement: it sends
-    // the app package as the embed origin/Referer; 12.x gets "video
-    // unavailable" (error 152) on every video.
-    implementation("com.pierfrancescosoffritti.androidyoutubeplayer:core:13.0.0")
+    // MediaSessionCompat — lock-screen / headset transport controls wired in
+    // WebViewActivity for audio-focus and lock-screen media controls.
+    implementation("androidx.media:media:1.8.0")
 
-    // MediaSessionCompat — lock-screen / headset transport controls for PlayerActivity.
-    implementation("androidx.media:media:1.7.0")
+    // WebKit extensions — required for WebViewCompat / addDocumentStartJavaScript
+    // in MpvBridge and WebViewActivity.
+    implementation("androidx.webkit:webkit:1.16.0")
+
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }

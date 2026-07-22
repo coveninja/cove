@@ -8,13 +8,17 @@ package supabase
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/coveninja/cove/internal/activity"
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/library"
+	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/utils"
@@ -22,22 +26,45 @@ import (
 
 // Server wires together all the auth + sync HTTP handlers.
 type Server struct {
-	cfg          *Config
-	profileStore *profiles.Store
-	lib          *library.Library
-	st           *settings.Store
-	addonMgr     *addons.Manager
+	cfg           *Config
+	profileStore  *profiles.Store
+	lib           *library.Library
+	st            *settings.Store
+	addonMgr      *addons.Manager
+	nuvioMgr      *nuvio.Manager
+	activityStore *activity.Store
 
 	// pushMu serializes background pushes; pushQueued coalesces bursts so
 	// rapid sync calls queue at most one extra push run instead of spawning
 	// an unbounded pile of overlapping goroutines.
 	pushMu     sync.Mutex
 	pushQueued atomic.Bool
+
+	// pushErrMu guards lastPushErr and lastPushAt, which are written by the
+	// push goroutine and read by handleSync. lastPushErr holds a joined
+	// summary of all push errors from the most-recently-completed push run,
+	// or "" on full success. Note that handleSync reports the PREVIOUS
+	// completed push — the current one triggered by the sync call is async.
+	pushErrMu   sync.Mutex
+	lastPushErr string
+	lastPushAt  time.Time
+
+	// The following fields are guarded by pushMu (the push goroutine is the
+	// only writer; they are read only while holding pushMu as well).
+	// lastPushedGen / lastPushedGenOK / lastPushedProfile track the library
+	// generation and profile that were successfully uploaded on the last push,
+	// so that redundant full-library upserts can be skipped when nothing
+	// changed — important now that the frontend polls every 60 s.
+	lastPushedGen     uint64
+	lastPushedGenOK   bool
+	lastPushedProfile string
 }
 
-// pushAsync uploads the profile's library/settings/addons in the background.
-// A push already queued behind a running one will observe this call's data
-// too, so additional requests are dropped rather than stacked.
+// pushAsync uploads the profile's library/settings/addons/nuvio/activity in
+// the background. A push already queued behind a running one will observe
+// this call's data too, so additional requests are dropped rather than stacked.
+// After the push completes (success or partial failure), lastPushErr and
+// lastPushAt are updated so the next handleSync response can surface them.
 func (s *Server) pushAsync(userJWT, profileID, context string) {
 	if !s.pushQueued.CompareAndSwap(false, true) {
 		return
@@ -46,15 +73,73 @@ func (s *Server) pushAsync(userJWT, profileID, context string) {
 		s.pushMu.Lock()
 		defer s.pushMu.Unlock()
 		s.pushQueued.Store(false)
-		if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
+
+		var pushErrs []string
+
+		// Read the library generation before PushLibrary reads entries: if a
+		// mutation lands mid-push the counter will be bumped again, ensuring
+		// the next cycle re-pushes — the safe direction.
+		// Skip the full-library upsert when nothing has changed since the last
+		// successful push. With 60 s frontend polling this avoids an otherwise
+		// constant stream of full-library upserts on an idle desktop.
+		gen := s.lib.Generation()
+		if s.lastPushedGenOK && gen == s.lastPushedGen && profileID == s.lastPushedProfile {
+			// library unchanged; skip PushLibrary this cycle
+		} else if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
 			log.Println(context+": push library:", err)
+			pushErrs = append(pushErrs, "library: "+err.Error())
+		} else {
+			s.lastPushedGen = gen
+			s.lastPushedGenOK = true
+			s.lastPushedProfile = profileID
 		}
 		if err := s.cfg.PushSettings(userJWT, profileID, s.st); err != nil {
 			log.Println(context+": push settings:", err)
+			pushErrs = append(pushErrs, "settings: "+err.Error())
 		}
 		if err := s.cfg.PushAddons(userJWT, profileID, s.addonMgr); err != nil {
 			log.Println(context+": push addons:", err)
+			pushErrs = append(pushErrs, "addons: "+err.Error())
 		}
+		if s.nuvioMgr != nil {
+			if err := s.cfg.PushNuvio(userJWT, profileID, s.nuvioMgr); err != nil {
+				log.Println(context+": push nuvio:", err)
+				pushErrs = append(pushErrs, "nuvio: "+err.Error())
+			}
+		}
+		if s.activityStore != nil {
+			if err := s.cfg.PushActivity(userJWT, profileID, s.activityStore); err != nil {
+				log.Println(context+": push activity:", err)
+				pushErrs = append(pushErrs, "activity: "+err.Error())
+			}
+		}
+
+		active := s.profileStore.ActiveProfile()
+		if active.SupabaseUID != nil {
+			nameTS := active.NameUpdatedAt
+			if nameTS.IsZero() {
+				nameTS = time.Now()
+			}
+			if err := s.cfg.EnsureProfile(userJWT, active.ID, *active.SupabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
+				log.Println(context+": push profile name:", err)
+				pushErrs = append(pushErrs, "profile: "+err.Error())
+			}
+		}
+
+		var joined string
+		if len(pushErrs) > 0 {
+			for i, e := range pushErrs {
+				if i > 0 {
+					joined += "; "
+				}
+				joined += e
+			}
+		}
+
+		s.pushErrMu.Lock()
+		s.lastPushErr = joined
+		s.lastPushAt = time.Now()
+		s.pushErrMu.Unlock()
 	}()
 }
 
@@ -66,8 +151,18 @@ func NewServer(
 	lib *library.Library,
 	st *settings.Store,
 	mgr *addons.Manager,
+	nuvioMgr *nuvio.Manager,
+	activityStore *activity.Store,
 ) *Server {
-	return &Server{cfg: cfg, profileStore: ps, lib: lib, st: st, addonMgr: mgr}
+	return &Server{
+		cfg:           cfg,
+		profileStore:  ps,
+		lib:           lib,
+		st:            st,
+		addonMgr:      mgr,
+		nuvioMgr:      nuvioMgr,
+		activityStore: activityStore,
+	}
 }
 
 // SetupHandlers registers all /api/auth/* endpoints on mux.
@@ -180,7 +275,7 @@ func (s *Server) finishRegistration(w http.ResponseWriter, userID, accessToken, 
 	if err := s.profileStore.LinkSupabase(activeProfile.ID, userID); err != nil {
 		log.Println("supabase register: link profile:", err)
 	}
-	if err := s.cfg.EnsureProfile(accessToken, activeProfile.ID, userID, profileName, activeProfile.IsPrimary); err != nil {
+	if err := s.cfg.EnsureProfile(accessToken, activeProfile.ID, userID, profileName, activeProfile.IsPrimary, time.Now()); err != nil {
 		http.Error(w, "could not create remote profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -221,7 +316,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mergeRemote(userID, accessToken)
+	if err := s.mergeRemote(userID, accessToken); err != nil {
+		http.Error(w, "signed in but initial sync failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -284,7 +382,10 @@ func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mergeRemote(userID, accessToken)
+	if err := s.mergeRemote(userID, accessToken); err != nil {
+		http.Error(w, "signed in but initial sync failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -300,8 +401,9 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Clear the supabase link on the active profile by linking to empty string...
-	// actually just return OK; the frontend clears its session via supabase-js.
+	if err := s.profileStore.UnlinkSupabase(s.profileStore.ActiveProfile().ID); err != nil {
+		log.Println("supabase logout: unlink:", err)
+	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -342,10 +444,20 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pull remote → merge locally.
-	s.mergeRemote(userID, token)
+	if err := s.mergeRemote(userID, token); err != nil {
+		http.Error(w, "sync pull failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 
 	// Push local → remote (catches any records that failed during initial push).
 	s.pushAsync(token, s.profileStore.ActiveProfile().ID, "supabase sync")
+
+	// Snapshot the last completed push error before responding.
+	// Note: this reflects the PREVIOUS completed push; the push triggered
+	// above is async and its result will be visible on the next sync call.
+	s.pushErrMu.Lock()
+	lastErr := s.lastPushErr
+	s.pushErrMu.Unlock()
 
 	// library_generation lets the frontend tell whether the merge actually
 	// changed anything, so an idle focus-triggered sync doesn't force a full
@@ -353,6 +465,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{
 		"status":             "ok",
 		"library_generation": s.lib.Generation(),
+		"push_error":         lastErr,
 	})
 }
 
@@ -367,25 +480,34 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 // Without this, a device that didn't perform the original registration
 // pushes rows whose profile_id has no owner in `profiles` — which RLS
 // rejects with 42501 — and pulls a profile ID that has no remote data.
-func (s *Server) reconcileProfile(supabaseUID, userJWT string) profiles.Profile {
+func (s *Server) reconcileProfile(supabaseUID, userJWT string) (profiles.Profile, error) {
 	active := s.profileStore.ActiveProfile()
 
 	remotes, err := s.cfg.RemoteProfilesForUser(userJWT, supabaseUID)
 	if err != nil {
-		log.Println("supabase: list remote profiles:", err)
-		return active
+		return active, fmt.Errorf("list remote profiles: %w", err)
 	}
 	for _, r := range remotes {
 		if r.ID == active.ID {
-			return active
+			if r.Name != "" && r.Name != active.Name && r.UpdatedAt.After(active.NameUpdatedAt) {
+				if err := s.profileStore.RenameFromRemote(active.ID, r.Name, r.UpdatedAt); err != nil {
+					return active, fmt.Errorf("reconcile profile name: %w", err)
+				}
+				return s.profileStore.ActiveProfile(), nil
+			}
+			return active, nil
 		}
 	}
 
 	if len(remotes) == 0 {
-		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary); err != nil {
-			log.Println("supabase: create remote profile:", err)
+		nameTS := active.NameUpdatedAt
+		if nameTS.IsZero() {
+			nameTS = time.Now()
 		}
-		return active
+		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
+			return active, fmt.Errorf("create remote profile: %w", err)
+		}
+		return active, nil
 	}
 
 	target := remotes[0]
@@ -401,18 +523,22 @@ func (s *Server) reconcileProfile(supabaseUID, userJWT string) profiles.Profile 
 		// pushes stop violating RLS; it becomes another profile of the
 		// same account.
 		log.Println("supabase: adopt remote profile:", err)
-		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary); err != nil {
-			log.Println("supabase: create remote profile:", err)
+		nameTS := active.NameUpdatedAt
+		if nameTS.IsZero() {
+			nameTS = time.Now()
 		}
-		return active
+		if err := s.cfg.EnsureProfile(userJWT, active.ID, supabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
+			return active, fmt.Errorf("create remote profile after adoption failed: %w", err)
+		}
+		return active, nil
 	}
 	if target.Name != "" && target.Name != active.Name {
-		if err := s.profileStore.Rename(target.ID, target.Name); err != nil {
+		if err := s.profileStore.RenameFromRemote(target.ID, target.Name, target.UpdatedAt); err != nil {
 			log.Println("supabase: rename adopted profile:", err)
 		}
 	}
 	log.Printf("supabase: local profile adopted remote profile %s (%q)", target.ID, target.Name)
-	return s.profileStore.ActiveProfile()
+	return s.profileStore.ActiveProfile(), nil
 }
 
 // CleanupDeletedProfile removes all remote Supabase data for a deleted profile.
@@ -426,25 +552,48 @@ func (s *Server) CleanupDeletedProfile(userJWT, profileID string, supabaseUID *s
 }
 
 // mergeRemote pulls all Supabase data for a user and merges it into the active profile.
-func (s *Server) mergeRemote(supabaseUID, userJWT string) {
-	active := s.reconcileProfile(supabaseUID, userJWT)
+func (s *Server) mergeRemote(supabaseUID, userJWT string) error {
+	active, err := s.reconcileProfile(supabaseUID, userJWT)
+	if err != nil {
+		return err
+	}
 
 	// Link UID to profile if not already set.
 	if active.SupabaseUID == nil {
 		if err := s.profileStore.LinkSupabase(active.ID, supabaseUID); err != nil {
-			log.Println("supabase: link profile:", err)
+			return fmt.Errorf("link profile: %w", err)
 		}
 	}
 
 	pulled, err := s.cfg.PullAll(userJWT, active.ID)
 	if err != nil {
-		log.Println("supabase: pull:", err)
-		return
+		return fmt.Errorf("pull remote data: %w", err)
 	}
 
-	s.lib.MergeFrom(pulled.Entries, pulled.Progress, pulled.Dismissals)
+	s.lib.MergeFrom(pulled.Entries, pulled.Progress, pulled.Dismissals, pulled.Removals)
 
 	if pulled.Settings != nil {
 		s.st.MergeFrom(*pulled.Settings)
 	}
+
+	// Addons: guard against no-remote-row so an account that never pushed
+	// addons doesn't wipe locally configured ones.
+	if pulled.AddonsPresent {
+		s.addonMgr.MergeFrom(pulled.Addons, pulled.AddonsUpdatedAt)
+	}
+
+	// Nuvio: guard against no-remote-row.
+	if pulled.NuvioPresent && s.nuvioMgr != nil && len(pulled.NuvioData) > 0 {
+		if err := s.nuvioMgr.MergeFromJSON(pulled.NuvioData, pulled.NuvioUpdatedAt); err != nil {
+			log.Println("supabase: merge nuvio:", err)
+		}
+	}
+
+	// Activity: guard against no-remote-row.
+	if pulled.ActivityPresent && s.activityStore != nil && len(pulled.ActivityData) > 0 {
+		if err := s.activityStore.MergeFromJSON(pulled.ActivityData); err != nil {
+			log.Println("supabase: merge activity:", err)
+		}
+	}
+	return nil
 }

@@ -47,6 +47,11 @@ public slots:
                    const QString &lang = QString()); // external (e.g. OpenSubtitles)
   void setVolume(double volume);     // 0–100
 
+  // Reload <configDir>/mpv/mpv.conf at runtime, then re-pin vo=libmpv.
+  // Called by the web UI after the user saves the config in Settings for
+  // best-effort live apply (no restart required for most options).
+  void reloadMpvConf();
+
   // Request the shell window to enter or leave fullscreen. The slot emits
   // fullscreenRequested(), which QML catches and forwards to win.showFullScreen()
   // / win.showNormal(). Roundtripping via a signal keeps C++ decoupled from QML.

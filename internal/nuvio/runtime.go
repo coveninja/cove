@@ -151,6 +151,9 @@ func runScraper(parent context.Context, scraperID, code string, timeout time.Dur
 			case <-finished:
 			}
 		case <-finished:
+		case <-ctx.Done():
+			// Invocation ctx expired before the event loop queued vmReady.
+			// Without this arm the goroutine would block forever on vmReady.
 		}
 	}()
 

@@ -35,6 +35,11 @@ export class ProgressSaver {
   // firing right after the "ended" effect already marked it done) flipping
   // the record back to not-completed.
   #completedSaved = false;
+  // Monotonically increasing sequence number for load() calls. reset()
+  // increments it to invalidate any in-flight progressGet response, preventing
+  // a stale episode's response from setting savedPosition after the new
+  // episode has already called reset().
+  #loadSeq = 0;
 
   /** Clear state — call when the source changes. */
   reset(): void {
@@ -42,6 +47,7 @@ export class ProgressSaver {
     this.hasSeekedToSaved = false;
     this.#lastSaveMs = 0;
     this.#completedSaved = false;
+    this.#loadSeq++; // invalidate any in-flight load()
   }
 
   /** Fetch the saved position; only restores a meaningful, not-yet-finished one. */
@@ -51,8 +57,10 @@ export class ProgressSaver {
     season: number | null,
     episode: number | null,
   ): Promise<void> {
+    const seq = ++this.#loadSeq;
     try {
       const prog = await api.progressGet(tmdbId, mediaType, season, episode);
+      if (seq !== this.#loadSeq) return; // superseded by a later reset() or load()
       if (prog && !prog.completed && prog.position_seconds > 10) {
         this.savedPosition = prog.position_seconds;
       }
@@ -72,26 +80,35 @@ export class ProgressSaver {
   /**
    * Throttled save (at most every 10s) from the live position/duration. Call on
    * position changes while playing. Auto-detects completion past 90%.
+   *
+   * Returns a promise that resolves once the record has landed server-side
+   * (or immediately if the throttle suppressed the save).
    */
   maybeSave(
     position: number,
     duration: number,
     getCtx: () => ProgressContext,
-  ): void {
+  ): Promise<void> {
     const now = Date.now();
-    if (now - this.#lastSaveMs < 10_000) return;
+    if (now - this.#lastSaveMs < 10_000) return Promise.resolve();
     this.#lastSaveMs = now;
     const dur = duration || getCtx().probedDuration || 0;
-    this.#save(position, dur, getCtx, dur > 0 && position / dur >= 0.9);
+    return this.#save(position, dur, getCtx, dur > 0 && position / dur >= 0.9);
   }
 
-  /** Immediate save — e.g. on end-of-file or when the player unmounts. */
+  /**
+   * Immediate save — e.g. on end-of-file or when the player unmounts.
+   *
+   * Returns a promise that resolves once the record has landed server-side.
+   * Callers can await it to ensure the refetch they trigger afterward can't
+   * race the POST and read pre-save state.
+   */
   saveNow(
     position: number,
     duration: number,
     getCtx: () => ProgressContext,
     completed: boolean,
-  ): void {
+  ): Promise<void> {
     const dur = duration || getCtx().probedDuration || 0;
     // Auto-upgrade to completed past the same 90% threshold maybeSave uses —
     // e.g. closing the player right before the credits roll should still
@@ -99,9 +116,9 @@ export class ProgressSaver {
     const isCompleted = completed || (dur > 0 && position / dur >= 0.9);
     // Never let an incomplete save downgrade a title that's already been
     // recorded as completed.
-    if (this.#completedSaved && !isCompleted) return;
+    if (this.#completedSaved && !isCompleted) return Promise.resolve();
     this.#lastSaveMs = Date.now();
-    this.#save(position, dur, getCtx, isCompleted);
+    return this.#save(position, dur, getCtx, isCompleted);
   }
 
   #save(
@@ -109,11 +126,11 @@ export class ProgressSaver {
     dur: number,
     getCtx: () => ProgressContext,
     completed: boolean,
-  ): void {
-    if (!dur || position < 5) return; // skip the very start
+  ): Promise<void> {
+    if (!dur || position < 5) return Promise.resolve(); // skip the very start
     if (completed) this.#completedSaved = true;
     const c = getCtx();
-    api
+    return api
       .progressSave({
         tmdb_id: c.tmdbId,
         media_type: c.mediaType,
@@ -127,6 +144,6 @@ export class ProgressSaver {
         duration_seconds: dur,
         completed,
       })
-      .catch(console.error);
+      .then(() => {}, console.error);
   }
 }

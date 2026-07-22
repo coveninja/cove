@@ -8,6 +8,8 @@
 // In a plain browser (e.g. `vite dev` outside the shell) neither global exists;
 // `available` stays false and every control is a no-op, so UI can branch on it.
 
+import { isDesktopTvMode } from "$lib/platform";
+
 export interface MpvTrack {
   id: number;
   type: "video" | "audio" | "sub";
@@ -15,6 +17,22 @@ export interface MpvTrack {
   lang: string;
   selected: boolean;
 }
+
+// How the video frame is fit to the display. Cycled by the player's aspect
+// button. Each maps to a fixed combination of mpv props (see setAspectMode):
+//   fit     — whole frame, letterboxed (mpv default)
+//   fill    — crop edges to fill the screen, aspect preserved (panscan)
+//   stretch — distort to fill the screen (keepaspect=no)
+//   zoom    — ~1.2× punch-in on top of fit (video-zoom)
+export type AspectMode = "fit" | "fill" | "stretch" | "zoom";
+
+// Cycle order for the aspect button.
+export const ASPECT_MODES: readonly AspectMode[] = [
+  "fit",
+  "fill",
+  "stretch",
+  "zoom",
+];
 
 // The injected globals have no shipped types; describe just what we touch.
 interface QtSignal<A extends unknown[]> {
@@ -45,15 +63,23 @@ interface MpvBridge {
   addSubtitle(url: string, title: string, lang: string): void;
   setVolume(volume: number): void;
   setFullscreen(fullscreen: boolean): void;
+  setMpvProperty(name: string, value: string): void;
   requestState(): void;
+  reloadMpvConf?(): void;
+}
+
+// Shell bridge: object registered on the WebChannel by the Qt side.
+// Currently exposes setTvZoom so the web layer can drive WebEngineView.zoomFactor.
+interface ShellBridge {
+  setTvZoom(enabled: boolean): void;
 }
 
 declare global {
   interface Window {
     qt?: { webChannelTransport: unknown };
     QWebChannel?: new (
-        transport: unknown,
-        cb: (channel: { objects: { mpv: MpvBridge } }) => void,
+      transport: unknown,
+      cb: (channel: { objects: { mpv: MpvBridge; shell?: ShellBridge } }) => void,
     ) => void;
   }
 }
@@ -70,6 +96,8 @@ class MpvPlayer {
   volume = $state(100); // 0–100
   ended = $state(false);
   isFullscreen = $state(false);
+  playbackSpeed = $state(1);
+  aspectMode = $state<AspectMode>("fit");
 
   audioTracks = $state<MpvTrack[]>([]);
   subtitleTracks = $state<MpvTrack[]>([]);
@@ -98,10 +126,23 @@ class MpvPlayer {
     this.available = true;
 
     new Channel(transport, (channel) => {
+      // Report the desktop TV-mode preference to the shell every boot: true
+      // applies the page zoom that matches Android TV's density scaling, false
+      // resets it (a reload reuses the same WebEngineView, so stale zoom from a
+      // previous TV-mode session must be cleared explicitly).
+      // This runs before the mpv presence/validity checks so zoom works even if
+      // mpv failed to initialize.
+      channel.objects.shell?.setTvZoom?.(isDesktopTvMode());
+
       const mpv = channel.objects.mpv;
-      if (!mpv) { console.error('[player] mpv missing from channel'); return; }
+      if (!mpv) {
+        console.error("[player] mpv missing from channel");
+        return;
+      }
       if (mpv.valid === false) {
-        console.warn('[player] mpv failed to initialize in the shell — playback unavailable');
+        console.warn(
+          "[player] mpv failed to initialize in the shell — playback unavailable",
+        );
         this.available = false;
         return;
       }
@@ -117,10 +158,14 @@ class MpvPlayer {
         }
         this.position = s;
       });
-      mpv.durationChanged.connect((s) => { this.duration = s; });
+      mpv.durationChanged.connect((s) => {
+        this.duration = s;
+      });
       mpv.pausedChanged.connect((p) => (this.paused = p));
       mpv.volumeChanged.connect((v) => (this.volume = v));
-      mpv.fileLoaded.connect(() => { this.ended = false; });
+      mpv.fileLoaded.connect(() => {
+        this.ended = false;
+      });
       mpv.endReached.connect(() => (this.ended = true));
       mpv.tracksChanged.connect((tracks) => this.#applyTracks(tracks));
 
@@ -165,7 +210,72 @@ class MpvPlayer {
     // showing (and autoplay-advancing past) the next episode's up-next
     // overlay within moments of it starting.
     this.#seekLockUntil = Date.now() + 500;
+    // mpv keeps `speed` across loadfile on the same instance; a 2× pick from a
+    // previous session must not leak into the next one. Reset unconditionally
+    // instead of guarding on the current value: play() runs inside the shells'
+    // playback $effect, and READING this.playbackSpeed here would register it
+    // as a dependency — making every speed change restart the stream.
+    this.playbackSpeed = 1;
+    this.#mpv?.setMpvProperty("speed", "1");
     this.#mpv?.play(url);
+  }
+
+  setPlaybackSpeed(speed: number): void {
+    this.playbackSpeed = speed;
+    this.#mpv?.setMpvProperty("speed", String(speed));
+  }
+
+  /** Apply an aspect-fit mode. All three props are set every time so switching
+   *  modes fully undoes the previous mode's effect. video-zoom is log2, so
+   *  0.263 ≈ 2^0.263 ≈ 1.2× for the "zoom" punch-in. Not reset in play(): the
+   *  player components re-apply the per-media saved mode on every src change
+   *  (reading aspectMode here would make it a play() dependency and restart the
+   *  stream on each aspect change — same hazard the speed reset avoids). */
+  setAspectMode(mode: AspectMode): void {
+    this.aspectMode = mode;
+    const panscan = mode === "fill" ? "1.0" : "0";
+    const keepaspect = mode === "stretch" ? "no" : "yes";
+    const zoom = mode === "zoom" ? "0.263" : "0";
+    // "fill" (panscan) and "zoom" (video-zoom) scale the video past the window
+    // and crop the overflow. mpv otherwise anchors subtitles to that oversized
+    // video rectangle, so bottom subs land in the cropped-off region and vanish
+    // off-screen. Forcing margins clamps subs to the visible window instead;
+    // reset to mpv's defaults (force-margins off) for the non-cropping modes.
+    const forceMargins = mode === "fill" || mode === "zoom" ? "yes" : "no";
+    this.#mpv?.setMpvProperty("panscan", panscan);
+    this.#mpv?.setMpvProperty("keepaspect", keepaspect);
+    this.#mpv?.setMpvProperty("video-zoom", zoom);
+    this.#mpv?.setMpvProperty("sub-use-margins", "yes");
+    this.#mpv?.setMpvProperty("sub-ass-force-margins", forceMargins);
+  }
+
+  /** Apply the user's subtitle-style preferences to mpv. All three apply live
+   *  and persist across loadfile on this instance, so callers re-run this only
+   *  when the settings change or the bridge becomes ready.
+   *    sizePct        — 50–200, percentage (maps to sub-scale, 1.0 = normal)
+   *    posFromBottom  — 2–90, percent up from the bottom edge (sub-pos counts
+   *                     from the top where 100 = bottom, so invert)
+   *    background     — draw an opaque box behind the text */
+  setSubtitleStyle(
+    sizePct: number,
+    posFromBottom: number,
+    background: boolean,
+  ): void {
+    this.#mpv?.setMpvProperty("sub-scale", String(sizePct / 100));
+    this.#mpv?.setMpvProperty("sub-pos", String(100 - posFromBottom));
+    this.#mpv?.setMpvProperty(
+      "sub-border-style",
+      background ? "opaque-box" : "outline-and-shadow",
+    );
+  }
+
+  /** Advance to the next aspect mode in ASPECT_MODES and return it (so callers
+   *  can persist the choice). */
+  cycleAspectMode(): AspectMode {
+    const i = ASPECT_MODES.indexOf(this.aspectMode);
+    const next = ASPECT_MODES[(i + 1) % ASPECT_MODES.length];
+    this.setAspectMode(next);
+    return next;
   }
 
   pause(): void {
@@ -191,8 +301,8 @@ class MpvPlayer {
 
   seek(seconds: number): void {
     const clamped = this.duration
-        ? Math.max(0, Math.min(seconds, this.duration))
-        : Math.max(0, seconds);
+      ? Math.max(0, Math.min(seconds, this.duration))
+      : Math.max(0, seconds);
     this.position = clamped; // optimistic; positionChanged confirms
     this.#seekLockUntil = Date.now() + 500; // suppress stale pre-seek events
     this.#mpv?.seek(clamped);
@@ -227,6 +337,13 @@ class MpvPlayer {
 
   toggleFullscreen(): void {
     this.setFullscreen(!this.isFullscreen);
+  }
+
+  /** Re-reads mpv.conf on disk and applies it without a full restart.
+   *  Delegates to the shell's reloadMpvConf slot; no-op outside the shell or
+   *  on older builds that don't expose the slot yet. */
+  reloadMpvConf(): void {
+    this.#mpv?.reloadMpvConf?.();
   }
 }
 

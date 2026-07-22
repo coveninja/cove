@@ -35,14 +35,14 @@ export default tseslint.config(
       '@typescript-eslint/no-empty-object-type': 'off',
       // SvelteDate/SvelteMap/SvelteSet migration is nice-to-have, not a blocker.
       'svelte/prefer-svelte-reactivity': 'warn',
-      // Stale svelte-ignore comments — warn rather than block CI.
-      'svelte/no-unused-svelte-ignore': 'warn',
+      // Stale suppressions hide whether the underlying accessibility issue still exists.
+      'svelte/no-unused-svelte-ignore': 'error',
       // {#each} key expressions are good practice but enforcing on existing code
       // would require auditing all callers; address in a dedicated cleanup pass.
       'svelte/require-each-key': 'off',
     },
   },
   {
-    ignores: ['dist/**', 'node_modules/**'],
+    ignores: ['dist/**', 'coverage/**', 'playwright-report/**', 'test-results/**', 'node_modules/**'],
   },
 );

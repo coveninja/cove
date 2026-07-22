@@ -19,9 +19,11 @@
   let {
     onWatch,
     onSelectMedia,
+    navEnabled = false,
   }: {
     onWatch?: (m: Media, season?: number, episode?: number) => void;
     onSelectMedia: (m: Media) => void;
+    navEnabled: boolean;
   } = $props();
 
   let items = $state<ContinueItem[]>([]);
@@ -240,14 +242,17 @@
     </div>
 
     <div class="flex items-center justify-between gap-2 overflow-hidden">
-      <Button
-        onclick={() => scrollByCards(-1)}
-        variant="outline"
-        size="icon"
-        aria-label="Scroll left"
-      >
-        <ChevronLeft class="size-4" />
-      </Button>
+      {#if navEnabled}
+        <Button
+                onclick={() => scrollByCards(-1)}
+                variant="outline"
+                size="icon"
+                aria-label="Scroll left"
+        >
+          <ChevronLeft class="size-4" />
+        </Button>
+      {/if}
+
 
       <div
         bind:this={trackEl}
@@ -263,7 +268,7 @@
           {/each}
         {/if}
       </div>
-
+      {#if navEnabled}
       <Button
         onclick={() => scrollByCards(1)}
         variant="outline"
@@ -272,6 +277,7 @@
       >
         <ChevronRight class="size-4" />
       </Button>
+      {/if}
     </div>
   </div>
 {/if}

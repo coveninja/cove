@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -73,6 +74,19 @@ type Settings struct {
 	// playback of the next episode starts near-instantly. Default true.
 	PrefetchNextEpisode bool `json:"prefetchNextEpisode"`
 
+	// AllowUploading enables uploading pieces to peers while streaming (capped
+	// at 1 MiB/s in the player). Improves download speed via BitTorrent
+	// reciprocity — tit-for-tat peers unchoke us faster when we reciprocate.
+	// Off means never upload. Default true.
+	AllowUploading bool `json:"allowUploading"`
+
+	// ProbeStreams enables the pre-playback liveness probe: before auto-select
+	// commits to a stream, the top direct-URL candidates are HEAD-checked so
+	// dead scraper links get demoted instead of failing at playback. Costs
+	// ~700ms of auto-select latency; some CDNs refuse HEAD, in which case the
+	// probe falls back to a 1-byte Range GET.
+	ProbeStreams bool `json:"probeStreams"`
+
 	// Remote access (Phase 5) — opens a separate LAN listener so other devices
 	// (e.g. the Android app in thin-client mode) can reach this backend over the
 	// local network. Settings are per-profile; remote access follows whichever
@@ -93,6 +107,24 @@ type Settings struct {
 	// propagate to other devices.
 	RemoteAccessEnabled bool   `json:"remoteAccessEnabled"`
 	RemoteAccessToken   string `json:"remoteAccessToken"`
+
+	// AllowLanStreamSources permits /api/play to proxy stream URLs that resolve
+	// to LAN or loopback addresses. Off by default (SSRF hardening); enable only
+	// when streaming from a local media server on the same network (e.g. Jellyfin,
+	// Plex). Per-device config — not synced via Supabase.
+	AllowLanStreamSources bool `json:"allowLanStreamSources"`
+
+	// Trakt.tv integration — both fields are roaming (synced via Supabase
+	// MergeFrom like all other preference fields; no exclusion needed).
+	//
+	// TraktScrobbleEnabled sends start/pause/stop events to Trakt as the user
+	// watches. Default true so scrobbling is active immediately after linking;
+	// the handler is a no-op when the account isn't connected.
+	TraktScrobbleEnabled bool `json:"traktScrobbleEnabled"`
+
+	// TraktSyncEnabled enables the background two-way history and watchlist
+	// sync (Phase 2). Default false — opt-in because it modifies the library.
+	TraktSyncEnabled bool `json:"traktSyncEnabled"`
 
 	// Sync bookkeeping — stamped server-side on every local write, used to resolve
 	// Supabase merge conflicts (see MergeFrom). Never trust a client-supplied value.
@@ -124,8 +156,13 @@ var defaultSettings = Settings{
 	PrefetchStreams:       true,
 	SourcePreference:      "",
 	PrefetchNextEpisode:   true,
+	AllowUploading:        true,
+	ProbeStreams:          true,
 	RemoteAccessEnabled:   false,
 	RemoteAccessToken:     "",
+	AllowLanStreamSources: false,
+	TraktScrobbleEnabled:  true,
+	TraktSyncEnabled:      false,
 }
 
 // Store owns the package's mutable state. Fields are unexported, so tygo emits
@@ -234,11 +271,19 @@ func (s *Store) Set(incoming Settings) error {
 //   - If remote access is disabled, leave the token untouched (so it's still
 //     there when the user re-enables it without needing to re-pair).
 func (s *Store) applyTokenPolicy(incoming Settings) Settings {
+	// GET /api/settings masks the real token as "***". A subsequent PUT that
+	// round-trips the blob would overwrite the stored token with that sentinel
+	// unless we map it back to the stored value — and this must happen before
+	// the disabled early-return below, or disabling remote access would store
+	// the literal "***" as the token.
+	if incoming.RemoteAccessToken == "***" {
+		incoming.RemoteAccessToken = s.cached.RemoteAccessToken
+	}
 	if !incoming.RemoteAccessEnabled {
 		return incoming
 	}
 	if incoming.RemoteAccessToken != "" {
-		// Client supplied a token explicitly — respect it.
+		// Client supplied a real token explicitly — respect it.
 		return incoming
 	}
 	if s.cached.RemoteAccessToken != "" {
@@ -269,6 +314,10 @@ func (s *Store) applyTokenPolicy(incoming Settings) Settings {
 // on every synced device (e.g. the phone's embedded backend), which is both a
 // security concern and a functional bug. This mirrors the nuvio-config exclusion
 // precedent — per-device runtime configuration must not roam across devices.
+//
+// OnboardingDone is a monotonic flag: once true it must never be reset. There is
+// no redo-onboarding feature, so a fresh-device pull must not clobber a flag that
+// was set on another device.
 func (s *Store) MergeFrom(incoming Settings) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,6 +327,8 @@ func (s *Store) MergeFrom(incoming Settings) {
 	// Always preserve device-local remote-access config (see comment above).
 	incoming.RemoteAccessEnabled = s.cached.RemoteAccessEnabled
 	incoming.RemoteAccessToken = s.cached.RemoteAccessToken
+	// Ratchet: onboarding completion is irreversible — once true, never reset.
+	incoming.OnboardingDone = incoming.OnboardingDone || s.cached.OnboardingDone
 	s.cached = incoming
 	if err := s.write(); err != nil {
 		log.Println("settings: merge write:", err)
@@ -307,17 +358,23 @@ func (s *Store) SetProfile(profileID string) error {
 	return nil
 }
 
-// SetupHandlers registers GET/PUT /api/settings on mux.
+// SetupHandlers registers GET/PUT /api/settings and POST /api/settings/reveal-token on mux.
 func (s *Store) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		// GET /api/settings — return current settings
+		// GET /api/settings — return current settings with token masked
 		if r.Method == http.MethodGet {
 			s.mu.RLock()
-			current := s.cached
+			out := s.cached
 			s.mu.RUnlock()
 
+			// Never send the real token over the wire on a GET. Callers that
+			// need the token (e.g. to display it for manual pairing) must POST
+			// /api/settings/reveal-token instead.
+			if out.RemoteAccessToken != "" {
+				out.RemoteAccessToken = "***"
+			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(current); err != nil {
+			if err := json.NewEncoder(w).Encode(out); err != nil {
 				log.Println("settings encode:", err)
 			}
 			return
@@ -326,6 +383,7 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 		// PUT /api/settings — validate, apply token policy, persist
 		if r.Method == http.MethodPut {
 			var incoming Settings
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 				http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 				return
@@ -334,6 +392,11 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			s.mu.Lock()
 			incoming = s.applyTokenPolicy(incoming)
 			incoming.UpdatedAt = time.Now().UTC()
+			// Stale frontend stores PUT full blobs; once onboarding is done it
+			// must not be reset by a store that loaded before completion was persisted.
+			if s.cached.OnboardingDone {
+				incoming.OnboardingDone = true
+			}
 			s.cached = incoming
 			err := s.write()
 			s.mu.Unlock()
@@ -344,13 +407,91 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
+			// Return the masked form so the response matches GET.
 			s.mu.RLock()
-			_ = json.NewEncoder(w).Encode(s.cached)
+			out := s.cached
 			s.mu.RUnlock()
+			if out.RemoteAccessToken != "" {
+				out.RemoteAccessToken = "***"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(out)
 			return
 		}
 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}))
+
+	// GET /PUT /api/settings/mpv-conf — read/write the device-global mpv.conf.
+	// The file is not per-profile; it lives in <configDir>/mpv/mpv.conf.
+	// GET responds with the file content as a JSON-encoded string (empty string
+	// when the file doesn't exist yet). PUT accepts a JSON-encoded string body
+	// (max 1 MiB) and writes it atomically, creating the mpv/ subdir as needed.
+	mux.HandleFunc("/api/settings/mpv-conf", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		path, err := utils.ConfigPath("mpv/mpv.conf")
+		if err != nil {
+			http.Error(w, "could not resolve config path: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if r.Method == http.MethodGet {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`""`))
+					return
+				}
+				http.Error(w, "could not read mpv.conf: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(string(data)); err != nil {
+				log.Println("settings mpv-conf encode:", err)
+			}
+			return
+		}
+
+		if r.Method == http.MethodPut {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			var content string
+			if err := json.NewDecoder(r.Body).Decode(&content); err != nil {
+				if err.Error() == "http: request body too large" {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				} else {
+					http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+				}
+				return
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				http.Error(w, "could not create mpv dir: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if err := utils.AtomicWriteFile(path, []byte(content), 0o644); err != nil {
+				http.Error(w, "could not write mpv.conf: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}))
+
+	// POST /api/settings/reveal-token — returns the real RemoteAccessToken.
+	// Kept behind a separate intentional endpoint so the token isn't leaked by
+	// a routine GET /api/settings (e.g. a log scraper or devtools screenshot).
+	mux.HandleFunc("/api/settings/reveal-token", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.mu.RLock()
+		token := s.cached.RemoteAccessToken
+		s.mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"token": token}); err != nil {
+			log.Println("settings reveal-token:", err)
+		}
 	}))
 }

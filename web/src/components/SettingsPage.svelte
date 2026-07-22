@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { settings } from "$lib/stores/settings";
   import type { Settings } from "$lib/types/settings";
   import { Button } from "$lib/components/ui/button";
@@ -9,9 +9,15 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
-  import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
+  import { isAndroid, isAndroidTV, tvSwitchVisible, setTvSwitchVisible } from "$lib/platform";
+  import {
+    STREAM_SELECTION_MODES,
+    SOURCE_PREFERENCES,
+  } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
-  import { api } from "$lib/api";
+  import { api, type TraktStatus, type TraktDeviceCode } from "$lib/api";
+  import { Textarea } from "$lib/components/ui/textarea/index.js";
+  import { Player } from "$lib/player/player.svelte";
   import type { AddonEntry } from "$lib/types/addons";
   import {
     KindProvider,
@@ -21,7 +27,16 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-  import { Trash2, Plus, RefreshCw, TriangleAlert } from "lucide-svelte";
+  import {
+    Trash2,
+    Plus,
+    RefreshCw,
+    TriangleAlert,
+    Eye,
+    EyeOff,
+    Copy,
+    Check as CheckIcon,
+  } from "lucide-svelte";
   import type {
     Repo as NuvioRepo,
     Scraper as NuvioScraper,
@@ -31,6 +46,10 @@
   let saved = $state(false);
   let saveTimer: ReturnType<typeof setTimeout>;
 
+  // Auto-update toggle — native pref, lives outside the Go settings store so
+  // it is readable before the backend is up. Only rendered on Android / Android TV.
+  let autoUpdateEnabled = $state(true);
+
   onMount(async () => {
     await settings.load();
     const unsub = settings.subscribe((v) => {
@@ -39,6 +58,12 @@
     unsub();
     loadAddons();
     loadNuvioRepos();
+    loadTraktStatus();
+    loadMpvConf();
+    // Read the native auto-update preference. The method is optional — absent
+    // on desktop where __coveApp is undefined.
+    const nativeVal = window.__coveApp?.getAutoUpdateEnabled?.();
+    if (typeof nativeVal === "boolean") autoUpdateEnabled = nativeVal;
   });
 
   function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
@@ -46,12 +71,26 @@
     draft = { ...draft, [key]: value };
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!draft) return;
-    settings.save(draft);
     saved = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => (saved = false), 2000);
+    await settings.save(draft);
+    // Pull server-generated fields back into the draft — enabling remote
+    // access makes the backend mint a token that only exists in the PUT
+    // response (masked as "***"); without this the draft keeps its stale ""
+    // and the token row never appears until a reload.
+    const unsub = settings.subscribe((v) => {
+      if (draft) {
+        draft = {
+          ...draft,
+          remoteAccessToken: v.remoteAccessToken,
+          updatedAt: v.updatedAt,
+        };
+      }
+    });
+    unsub();
   }
 
   function handleReset() {
@@ -71,7 +110,11 @@
   let addAddonLoading = $state(false);
 
   async function loadAddons() {
-    addons = await api.getAddons();
+    try {
+      addons = await api.getAddons();
+    } catch {
+      addons = [];
+    }
   }
 
   const providerAddons = $derived(
@@ -107,12 +150,22 @@
     addons = addons.filter((a) => !(a.id === addon.id && a.url === addon.url));
   }
 
-  async function handleToggleCatalog(addon: AddonEntry, key: string, enabled: boolean) {
+  async function handleToggleCatalog(
+    addon: AddonEntry,
+    key: string,
+    enabled: boolean,
+  ) {
     try {
-      await api.toggleCatalog(addon.id, key, enabled);
+      await api.toggleCatalog(addon.id, key, enabled, addon.url);
       addons = addons.map((a) =>
-        a.id === addon.id
-          ? { ...a, disabledCatalogs: { ...(a.disabledCatalogs ?? {}), [key]: !enabled } }
+        (addon.url ? a.url === addon.url : a.id === addon.id)
+          ? {
+              ...a,
+              disabledCatalogs: {
+                ...(a.disabledCatalogs ?? {}),
+                [key]: !enabled,
+              },
+            }
           : a,
       );
     } catch (e) {
@@ -133,7 +186,11 @@
   );
 
   async function loadNuvioRepos() {
-    nuvioRepos = await api.getNuvioRepos();
+    try {
+      nuvioRepos = await api.getNuvioRepos();
+    } catch {
+      nuvioRepos = [];
+    }
   }
 
   // Nuvio scraper streams carry AddonName = "Nuvio: <scraper name>" (see
@@ -277,6 +334,192 @@
   let testingSpeed = $state(false);
   let speedTestError = $state<string | null>(null);
 
+  // ── Remote access token reveal ────────────────────────────────────────────────
+  // The backend returns "***" for the token when set; we only fetch the real
+  // value when the user explicitly clicks Show or Copy.
+  let revealedToken = $state<string | null>(null);
+  let tokenVisible = $state(false);
+  let revealingToken = $state(false);
+  let tokenCopied = $state(false);
+  let tokenCopyTimer: ReturnType<typeof setTimeout>;
+
+  async function handleRevealToken(): Promise<void> {
+    if (revealedToken !== null) {
+      tokenVisible = !tokenVisible;
+      return;
+    }
+    revealingToken = true;
+    try {
+      revealedToken = await api.revealRemoteAccessToken();
+      tokenVisible = true;
+    } catch (e) {
+      console.error("revealRemoteAccessToken:", e);
+    } finally {
+      revealingToken = false;
+    }
+  }
+
+  async function handleCopyToken(): Promise<void> {
+    let token = revealedToken;
+    if (!token) {
+      revealingToken = true;
+      try {
+        token = await api.revealRemoteAccessToken();
+        revealedToken = token;
+        tokenVisible = true;
+      } catch (e) {
+        console.error("revealRemoteAccessToken:", e);
+        return;
+      } finally {
+        revealingToken = false;
+      }
+    }
+    await navigator.clipboard.writeText(token);
+    tokenCopied = true;
+    clearTimeout(tokenCopyTimer);
+    tokenCopyTimer = setTimeout(() => (tokenCopied = false), 2000);
+  }
+
+  // Clear the revealed token whenever settings are reloaded (e.g. the "***"
+  // sentinel from a fresh getSettings() should not clobber a local reveal).
+  $effect(() => {
+    if (draft?.remoteAccessToken === "") {
+      // Token was cleared server-side (regenerated or disabled); forget local reveal.
+      revealedToken = null;
+      tokenVisible = false;
+    }
+  });
+
+  // ── Trakt.tv ─────────────────────────────────────────────────────────────────
+  // undefined = still loading, null = not configured (503), object = loaded.
+  let traktStatus = $state<TraktStatus | null | undefined>(undefined);
+  let traktFlow = $state<TraktDeviceCode | null>(null);
+  // 'idle': show connect button; 'polling': device flow in progress;
+  // 'expired'/'denied': flow ended without auth.
+  let traktFlowState = $state<"idle" | "polling" | "expired" | "denied">(
+    "idle",
+  );
+  let traktConnectError = $state<string | null>(null);
+  let traktSyncLoading = $state(false);
+  let traktUnlinkLoading = $state(false);
+  let traktPollInterval: ReturnType<typeof setInterval> | null = null;
+  let traktFlowTimeout: ReturnType<typeof setTimeout> | null = null;
+  let traktPollIntervalMs = 0;
+
+  let traktCodeCopied = $state(false);
+  let traktCodeCopyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function handleCopyTraktCode() {
+    const code = traktFlow?.user_code;
+    if (!code) return;
+    await navigator.clipboard.writeText(code);
+    traktCodeCopied = true;
+    clearTimeout(traktCodeCopyTimer);
+    traktCodeCopyTimer = setTimeout(() => (traktCodeCopied = false), 2000);
+  }
+
+  async function loadTraktStatus() {
+    try {
+      traktStatus = await api.traktStatus(); // null on 503 (not configured)
+    } catch {
+      traktStatus = null;
+    }
+  }
+
+  function clearTraktPoll() {
+    if (traktPollInterval) {
+      clearInterval(traktPollInterval);
+      traktPollInterval = null;
+    }
+    if (traktFlowTimeout) {
+      clearTimeout(traktFlowTimeout);
+      traktFlowTimeout = null;
+    }
+  }
+
+  async function pollTraktOnce() {
+    if (!traktFlow) return;
+    let result: Awaited<ReturnType<typeof api.traktPoll>>;
+    try {
+      result = await api.traktPoll(traktFlow.device_code);
+    } catch {
+      return; // transient error — keep polling
+    }
+    switch (result.status) {
+      case "authorized":
+        clearTraktPoll();
+        traktFlow = null;
+        traktFlowState = "idle";
+        await loadTraktStatus();
+        break;
+      case "slow_down":
+        // Widen the interval as Trakt requests, then restart the timer.
+        traktPollIntervalMs = Math.min(traktPollIntervalMs + 5000, 30_000);
+        startTraktPoll();
+        break;
+      case "expired":
+        clearTraktPoll();
+        traktFlow = null;
+        traktFlowState = "expired";
+        break;
+      case "denied":
+      case "invalid":
+        clearTraktPoll();
+        traktFlow = null;
+        traktFlowState = "denied";
+        break;
+      // 'pending': do nothing, keep polling on the existing interval
+    }
+  }
+
+  function startTraktPoll() {
+    if (traktPollInterval) clearInterval(traktPollInterval);
+    traktPollInterval = setInterval(pollTraktOnce, traktPollIntervalMs);
+  }
+
+  async function handleTraktConnect() {
+    clearTraktPoll();
+    traktFlow = null;
+    traktFlowState = "idle";
+    traktConnectError = null;
+    try {
+      const flow = await api.traktStartDeviceFlow();
+      traktFlow = flow;
+      traktFlowState = "polling";
+      traktPollIntervalMs = (flow.interval + 1) * 1000;
+      // Expire the UI after the flow's lifetime so the user knows to retry.
+      traktFlowTimeout = setTimeout(() => {
+        clearTraktPoll();
+        traktFlowState = "expired";
+      }, flow.expires_in * 1000);
+      startTraktPoll();
+    } catch (e) {
+      traktConnectError =
+        e instanceof Error ? e.message : "Failed to start authorization";
+    }
+  }
+
+  async function handleTraktDisconnect() {
+    traktUnlinkLoading = true;
+    try {
+      await api.traktUnlink();
+      await loadTraktStatus();
+    } finally {
+      traktUnlinkLoading = false;
+    }
+  }
+
+  async function handleTraktSync() {
+    traktSyncLoading = true;
+    try {
+      await api.traktSyncNow();
+    } finally {
+      traktSyncLoading = false;
+    }
+  }
+
+  onDestroy(() => clearTraktPoll());
+
   async function runSpeedTest() {
     if (!draft) return;
     testingSpeed = true;
@@ -296,10 +539,52 @@
       testingSpeed = false;
     }
   }
+
+  // ── Advanced / mpv.conf ──────────────────────────────────────────────────────
+  // Draft and saved state for the device-global mpv.conf file.
+  let mpvConfDraft = $state("");
+  let mpvConfSaved = $state("");
+  let mpvConfSaving = $state(false);
+  let mpvConfSaveOk = $state(false);
+  let mpvConfError = $state<string | null>(null);
+  let mpvConfSaveTimer: ReturnType<typeof setTimeout>;
+
+  // dirty = draft differs from the last persisted value
+  let mpvConfDirty = $derived(mpvConfDraft !== mpvConfSaved);
+
+  async function loadMpvConf() {
+    try {
+      const val = await api.getMpvConf();
+      mpvConfDraft = val;
+      mpvConfSaved = val;
+    } catch (e) {
+      mpvConfError = e instanceof Error ? e.message : "Failed to load mpv.conf";
+    }
+  }
+
+  async function handleMpvConfSave() {
+    if (!mpvConfDirty || mpvConfSaving) return;
+    mpvConfSaving = true;
+    mpvConfError = null;
+    try {
+      await api.setMpvConf(mpvConfDraft);
+      mpvConfSaved = mpvConfDraft;
+      mpvConfSaveOk = true;
+      clearTimeout(mpvConfSaveTimer);
+      mpvConfSaveTimer = setTimeout(() => (mpvConfSaveOk = false), 2000);
+      // Best-effort live apply — only works inside the Qt shell and only on
+      // shell builds that expose the reloadMpvConf slot.
+      Player.reloadMpvConf();
+    } catch (e) {
+      mpvConfError = e instanceof Error ? e.message : "Failed to save mpv.conf";
+    } finally {
+      mpvConfSaving = false;
+    }
+  }
 </script>
 
 <ScrollArea class="h-full w-full">
-  <div class="mx-auto max-w-2xl space-y-6 p-6 pt-18 pb-16">
+  <div class="mx-auto max-w-3xl space-y-6 p-6 pt-18 pb-16">
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
       <div class="flex gap-2">
@@ -310,14 +595,21 @@
 
     {#if draft}
       <Tabs.Root value="playback">
-        <Tabs.List class="w-full">
-          <Tabs.Trigger value="playback">Playback</Tabs.Trigger>
-          <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
-          <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
-          <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
-          <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
-          <Tabs.Trigger value="plugins">Plugins</Tabs.Trigger>
-        </Tabs.List>
+        <!-- Scroll wrapper: the triggers can't shrink (nowrap), so on narrow
+             windows the list overflows sideways instead of spilling past its
+             pill background — w-max keeps the background behind every tab. -->
+        <ScrollArea orientation="horizontal" class="w-full">
+          <Tabs.List class="mb-2.5 w-max min-w-full">
+            <Tabs.Trigger value="playback">Playback</Tabs.Trigger>
+            <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
+            <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
+            <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
+            <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
+            <Tabs.Trigger value="plugins">Plugins</Tabs.Trigger>
+            <Tabs.Trigger value="trakt">Trakt</Tabs.Trigger>
+            <Tabs.Trigger value="advanced">Advanced</Tabs.Trigger>
+          </Tabs.List>
+        </ScrollArea>
 
         <!-- ── Playback ── -->
         <Tabs.Content value="playback" class="mt-4 space-y-1">
@@ -490,8 +782,8 @@
                 >Pre-download next episode</Label
               >
               <p class="text-xs text-muted-foreground">
-                When an episode finishes downloading, quietly download the
-                next one so it starts instantly.
+                When an episode finishes downloading, quietly download the next
+                one so it starts instantly.
               </p>
             </div>
             <Switch
@@ -499,6 +791,133 @@
               checked={draft.prefetchNextEpisode}
               onCheckedChange={(v) => patch("prefetchNextEpisode", v)}
             />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="allow-uploading" class="text-sm font-medium"
+                >Upload while streaming</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Share downloaded pieces back to peers (max 1 MiB/s). Improves
+                download speed; turn off to never upload.
+              </p>
+            </div>
+            <Switch
+              id="allow-uploading"
+              checked={draft.allowUploading}
+              onCheckedChange={(v) => patch("allowUploading", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="probe-streams" class="text-sm font-medium"
+                >Verify streams before auto-selecting</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Checks that top candidates are reachable before playback starts.
+                Adds a brief delay but avoids picking dead links.
+              </p>
+            </div>
+            <Switch
+              id="probe-streams"
+              checked={draft.probeStreams}
+              onCheckedChange={(v) => patch("probeStreams", v)}
+            />
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="allow-lan-sources" class="text-sm font-medium"
+                >Allow LAN stream sources</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Lets streams play from private/LAN addresses. Only enable if you
+                run a stream source on your own network — this weakens
+                protection against malicious addons probing your network.
+              </p>
+            </div>
+            <Switch
+              id="allow-lan-sources"
+              checked={draft.allowLanStreamSources}
+              onCheckedChange={(v) => patch("allowLanStreamSources", v)}
+            />
+          </div>
+          <Separator />
+
+          <!-- Remote access -->
+          <div class="py-3 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <Label for="remote-access" class="text-sm font-medium"
+                  >Remote access</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Opens a LAN port (6970) so the mobile app or other devices on
+                  your network can connect to this backend.
+                </p>
+              </div>
+              <Switch
+                id="remote-access"
+                checked={draft.remoteAccessEnabled}
+                onCheckedChange={(v) => patch("remoteAccessEnabled", v)}
+              />
+            </div>
+
+            {#if draft.remoteAccessEnabled}
+              <div class="rounded-lg border border-border p-3 space-y-2">
+                <Label class="text-xs font-medium text-muted-foreground"
+                  >Access token</Label
+                >
+                {#if draft.remoteAccessToken === ""}
+                  <p class="text-xs text-muted-foreground">
+                    No token set — save settings to generate one.
+                  </p>
+                {:else}
+                  <div class="flex items-center gap-2">
+                    <code
+                      class="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono"
+                    >
+                      {tokenVisible && revealedToken
+                        ? revealedToken
+                        : "•".repeat(32)}
+                    </code>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      class="shrink-0"
+                      onclick={handleRevealToken}
+                      disabled={revealingToken}
+                      title={tokenVisible ? "Hide token" : "Show token"}
+                    >
+                      {#if tokenVisible}
+                        <EyeOff class="size-4" />
+                      {:else}
+                        <Eye class="size-4" />
+                      {/if}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      class="shrink-0"
+                      onclick={handleCopyToken}
+                      disabled={revealingToken}
+                      title="Copy token"
+                    >
+                      {#if tokenCopied}
+                        <CheckIcon class="size-4 text-green-500" />
+                      {:else}
+                        <Copy class="size-4" />
+                      {/if}
+                    </Button>
+                  </div>
+                {/if}
+              </div>
+            {/if}
           </div>
           <Separator />
 
@@ -572,7 +991,7 @@
               </Select.Trigger>
               <Select.Content>
                 <Select.Item value="">No preference</Select.Item>
-                {#each providerAddons as a (a.id)}
+                {#each providerAddons as a (a.url || a.id)}
                   <Select.Item value={a.manifest.name}
                     >{a.manifest.name}</Select.Item
                   >
@@ -652,6 +1071,75 @@
                 {/each}
               </Select.Content>
             </Select.Root>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label class="text-sm font-medium">Subtitle size</Label>
+              <p class="text-xs text-muted-foreground">
+                Text size relative to normal.
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <Slider
+                type="multiple"
+                value={[draft.subtitleSize]}
+                min={50}
+                max={200}
+                step={10}
+                class="w-32"
+                onValueChange={([v]) => patch("subtitleSize", v)}
+              />
+              <span
+                class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+              >
+                {Math.round(draft.subtitleSize)}%
+              </span>
+            </div>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label class="text-sm font-medium">Subtitle position</Label>
+              <p class="text-xs text-muted-foreground">
+                Distance up from the bottom of the screen.
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <Slider
+                type="multiple"
+                value={[draft.subtitlePosition]}
+                min={2}
+                max={90}
+                step={1}
+                class="w-32"
+                onValueChange={([v]) => patch("subtitlePosition", v)}
+              />
+              <span
+                class="w-9 text-right text-sm text-muted-foreground tabular-nums"
+              >
+                {Math.round(draft.subtitlePosition)}%
+              </span>
+            </div>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
+            <div>
+              <Label for="subs-background" class="text-sm font-medium"
+                >Subtitle background</Label
+              >
+              <p class="text-xs text-muted-foreground">
+                Draw a dark box behind the text for readability.
+              </p>
+            </div>
+            <Switch
+              id="subs-background"
+              checked={draft.subtitleBackground}
+              onCheckedChange={(v) => patch("subtitleBackground", v)}
+            />
           </div>
           <Separator />
 
@@ -775,6 +1263,47 @@
               {/if}
             </div>
           {/if}
+
+          {#if isAndroid() || isAndroidTV()}
+            <Separator class="my-2" />
+            <div class="flex items-center justify-between py-3">
+              <div>
+                <Label for="auto-update" class="text-sm font-medium"
+                  >Auto-update</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Automatically download and install updates on launch.
+                </p>
+              </div>
+              <Switch
+                id="auto-update"
+                checked={autoUpdateEnabled}
+                onCheckedChange={(v) => {
+                  autoUpdateEnabled = v;
+                  window.__coveApp?.setAutoUpdateEnabled?.(v);
+                }}
+              />
+            </div>
+          {/if}
+
+          {#if !isAndroid() && !isAndroidTV()}
+            <Separator class="my-2" />
+            <div class="flex items-center justify-between py-3">
+              <div>
+                <Label for="tv-switch-visible" class="text-sm font-medium"
+                  >TV interface switch</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Show a button in the top bar to switch to the remote-friendly TV interface.
+                </p>
+              </div>
+              <Switch
+                id="tv-switch-visible"
+                checked={$tvSwitchVisible}
+                onCheckedChange={(v) => setTvSwitchVisible(v)}
+              />
+            </div>
+          {/if}
         </Tabs.Content>
 
         <!-- ── Addons ── -->
@@ -811,7 +1340,7 @@
 
           <!-- Addon list -->
           <div class="space-y-2">
-            {#each addons as addon (addon.id)}
+            {#each addons as addon (addon.url || addon.id)}
               <div class="rounded-lg border border-border bg-secondary/30 p-3">
                 <div class="flex items-center gap-3">
                   <div class="min-w-0 flex-1">
@@ -880,12 +1409,15 @@
                       <div class="flex items-center gap-3 py-1">
                         <div class="min-w-0 flex-1">
                           <span class="text-xs font-medium">{cat.name}</span>
-                          <span class="ml-1.5 text-xs text-muted-foreground">({cat.type})</span>
+                          <span class="ml-1.5 text-xs text-muted-foreground"
+                            >({cat.type})</span
+                          >
                         </div>
                         <Switch
                           checked={!addon.disabledCatalogs?.[key]}
                           disabled={!addon.enabled}
-                          onCheckedChange={(v) => handleToggleCatalog(addon, key, v)}
+                          onCheckedChange={(v) =>
+                            handleToggleCatalog(addon, key, v)}
                           class="shrink-0"
                         />
                       </div>
@@ -908,10 +1440,10 @@
           >
             <TriangleAlert class="mt-0.5 size-4 shrink-0" />
             <p>
-              Plugins are community-maintained JavaScript stream scrapers. Cove runs this code on your device to find streams
-              — it has not been reviewed by Cove and its safety and quality vary
-              by repository. Nothing runs until you explicitly enable a scraper
-              below.
+              Plugins are community-maintained JavaScript stream scrapers. Cove
+              runs this code on your device to find streams — it has not been
+              reviewed by Cove and its safety and quality vary by repository.
+              Nothing runs until you explicitly enable a scraper below.
             </p>
           </div>
 
@@ -1058,6 +1590,207 @@
                 No plugin repositories yet. Add one above.
               </p>
             {/each}
+          </div>
+        </Tabs.Content>
+        <!-- ── Trakt.tv ── -->
+        <Tabs.Content value="trakt" class="mt-4 space-y-4">
+          {#if traktStatus === undefined}
+            <p class="text-sm text-muted-foreground">Loading…</p>
+          {:else if traktStatus === null}
+            <p class="text-sm text-muted-foreground">
+              Trakt is not configured in this build.
+            </p>
+          {:else if traktStatus.connected}
+            <!-- Connected state -->
+            <div
+              class="rounded-lg border border-border bg-secondary/30 p-4 space-y-4"
+            >
+              <p class="text-sm font-medium">
+                Connected as <span class="text-primary"
+                  >{traktStatus.username}</span
+                >
+              </p>
+
+              <Separator />
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <Label for="trakt-scrobble" class="text-sm font-medium"
+                    >Scrobble</Label
+                  >
+                  <p class="text-xs text-muted-foreground">
+                    Send watch events to Trakt as you watch.
+                  </p>
+                </div>
+                <Switch
+                  id="trakt-scrobble"
+                  checked={draft.traktScrobbleEnabled}
+                  onCheckedChange={(v) => patch("traktScrobbleEnabled", v)}
+                />
+              </div>
+
+              <div class="flex items-center justify-between">
+                <div>
+                  <Label for="trakt-sync" class="text-sm font-medium"
+                    >Two-way sync</Label
+                  >
+                  <p class="text-xs text-muted-foreground">
+                    Sync watch history and watchlist with Trakt.
+                  </p>
+                </div>
+                <Switch
+                  id="trakt-sync"
+                  checked={draft.traktSyncEnabled}
+                  onCheckedChange={(v) => patch("traktSyncEnabled", v)}
+                />
+              </div>
+
+              {#if draft.traktSyncEnabled}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={handleTraktSync}
+                  disabled={traktSyncLoading}
+                >
+                  {traktSyncLoading ? "Syncing…" : "Sync now"}
+                </Button>
+              {/if}
+
+              <Separator />
+
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={handleTraktDisconnect}
+                disabled={traktUnlinkLoading}
+              >
+                {traktUnlinkLoading ? "Disconnecting…" : "Disconnect"}
+              </Button>
+            </div>
+          {:else}
+            <!-- Not connected state -->
+            {#if traktFlowState === "idle"}
+              <div class="rounded-lg border border-border p-4 space-y-3">
+                <Label class="text-sm font-medium"
+                  >Connect your Trakt account</Label
+                >
+                <p class="text-xs text-muted-foreground">
+                  Trakt tracks your watch history and watchlist across apps and
+                  devices. Scrobbling sends watch events as you play.
+                </p>
+                {#if traktConnectError}
+                  <p class="text-xs text-red-500">{traktConnectError}</p>
+                {/if}
+                <Button size="sm" onclick={handleTraktConnect}>
+                  Connect Trakt account
+                </Button>
+              </div>
+            {:else if traktFlowState === "polling"}
+              <!-- Device flow: show code + URL while polling -->
+              <div class="rounded-lg border border-border p-4 space-y-4">
+                <Label class="text-sm font-medium"
+                  >Authorize Cove on Trakt</Label
+                >
+                <div class="space-y-2">
+                  <p class="text-xs text-muted-foreground">
+                    1. Open this URL in a browser:
+                  </p>
+                  <a
+                    href={traktFlow?.verification_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-sm font-medium text-primary hover:underline break-all"
+                    >{traktFlow?.verification_url}</a
+                  >
+                  <p class="text-xs text-muted-foreground">
+                    2. Enter this code:
+                  </p>
+                  <div class="flex items-center gap-2">
+                    <code
+                      class="flex-1 rounded bg-muted px-4 py-3 text-center text-2xl font-mono tracking-widest font-semibold"
+                      >{traktFlow?.user_code}</code
+                    >
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      class="shrink-0"
+                      onclick={handleCopyTraktCode}
+                      title="Copy code"
+                    >
+                      {#if traktCodeCopied}
+                        <CheckIcon class="size-4 text-green-500" />
+                      {:else}
+                        <Copy class="size-4" />
+                      {/if}
+                    </Button>
+                  </div>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Waiting for authorization…
+                </p>
+              </div>
+            {:else if traktFlowState === "expired"}
+              <div class="rounded-lg border border-border p-4 space-y-3">
+                <p class="text-sm text-muted-foreground">
+                  The authorization request expired. Start a new one to try
+                  again.
+                </p>
+                <Button size="sm" onclick={handleTraktConnect}>Try again</Button
+                >
+              </div>
+            {:else if traktFlowState === "denied"}
+              <div class="rounded-lg border border-border p-4 space-y-3">
+                <p class="text-sm text-muted-foreground">
+                  Authorization was denied or is invalid. Start a new request to
+                  try again.
+                </p>
+                <Button size="sm" onclick={handleTraktConnect}>Try again</Button
+                >
+              </div>
+            {/if}
+          {/if}
+        </Tabs.Content>
+
+        <!-- ── Advanced ── -->
+        <Tabs.Content value="advanced" class="mt-4 space-y-4">
+          <div>
+            <Label class="text-sm font-medium">MPV configuration</Label>
+            <p class="mt-1 text-xs text-muted-foreground">
+              Options written here are applied on top of Cove's defaults. Some
+              take effect immediately after saving; others require a playback
+              restart or app restart. On Android, you can override
+              <code class="font-mono">hwdec</code> here (e.g.
+              <code class="font-mono">hwdec=no</code> on devices with broken
+              hardware decoding). See the
+              <a
+                href="https://mpv.io/manual/stable/#configuration-files"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline"
+                >mpv configuration reference</a
+              > for all available options.
+            </p>
+          </div>
+
+          <Textarea
+            class="min-h-64 font-mono text-xs"
+            spellcheck={false}
+            placeholder="# hwdec=auto&#10;# volume=80"
+            bind:value={mpvConfDraft}
+          />
+
+          {#if mpvConfError}
+            <p class="text-xs text-red-500">{mpvConfError}</p>
+          {/if}
+
+          <div class="flex items-center gap-3">
+            <Button
+              size="sm"
+              onclick={handleMpvConfSave}
+              disabled={mpvConfSaving || !mpvConfDirty}
+            >
+              {mpvConfSaving ? "Saving…" : mpvConfSaveOk ? "Saved ✓" : "Save"}
+            </Button>
           </div>
         </Tabs.Content>
       </Tabs.Root>

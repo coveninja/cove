@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,11 +83,20 @@ type Dismissal struct {
 	DismissedAt time.Time `json:"dismissed_at"`
 }
 
+// Removal is a tombstone recording that a title was intentionally removed
+// from the library, so a sync pull cannot resurrect it. Synced like Dismissal.
+type Removal struct {
+	TmdbID    int       `json:"tmdb_id"`
+	MediaType string    `json:"media_type"`
+	RemovedAt time.Time `json:"removed_at"`
+}
+
 // diskStore is the on-disk JSON format.
 type diskStore struct {
 	Entries   map[string]*LibraryEntry  `json:"entries"`   // key: entryKey()
 	Progress  map[string]*WatchProgress `json:"progress"`  // key: progressKey()
 	Dismissed map[string]*Dismissal     `json:"dismissed"` // key: entryKey()
+	Removed   map[string]*Removal       `json:"removed"`   // key: entryKey()
 }
 
 // TasteSignal is the minimal per-title signal the discover package needs,
@@ -116,7 +126,7 @@ type TasteSignal struct {
 // successful POST to /api/library/progress. It carries enough context for an
 // activity log to credit watch-time deltas without knowing library internals.
 type ProgressSaveEvent struct {
-	ProgressKey string    // library's progressKey() value for this record
+	ProgressKey string // library's progressKey() value for this record
 	TmdbID      int
 	MediaType   string
 	Position    float64
@@ -161,22 +171,117 @@ func (l *Library) AllDismissals() []*Dismissal {
 	return out
 }
 
+// AllRemovals returns a snapshot of all removal tombstone records. Used for sync.
+func (l *Library) AllRemovals() []*Removal {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*Removal, 0, len(l.db.Removed))
+	for _, r := range l.db.Removed {
+		cp := *r
+		out = append(out, &cp)
+	}
+	return out
+}
+
 // MergeFrom merges remote data (pulled from Supabase) into the local store.
-// Remote entries replace local ones for the same (tmdb_id, media_type) key.
-// Watch progress takes the most recent write (WatchedAt). Dismissals are
-// unioned.
-func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal) {
+// Remote entries replace local ones for the same (tmdb_id, media_type) key
+// using last-write-wins semantics. Watch progress uses most-recent-write-wins.
+// Dismissals are unioned. Removal tombstones are LWW: a tombstone beats an
+// entry if the removal timestamp is >= the entry's UpdatedAt (removal wins
+// ties), and a re-added entry beats a tombstone only if its UpdatedAt is
+// strictly after the removal. Remote removals are applied to local entries and
+// both sides' tombstone maps are kept consistent.
+func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal, removals []*Removal) {
 	l.mu.Lock()
+	changed := false
+
+	// Build a map of incoming removals for O(1) lookup in the entries loop.
+	incomingRemovals := make(map[string]*Removal, len(removals))
+	for _, r := range removals {
+		key := entryKey(r.TmdbID, r.MediaType)
+		incomingRemovals[key] = r
+	}
+
+	// Merge remote entries with tombstone-aware last-write-wins.
 	for _, e := range entries {
 		key := entryKey(e.TmdbID, e.MediaType)
+
+		// Determine effective tombstone: the later of local and incoming.
+		localRemoval := l.db.Removed[key]
+		incomingRemoval := incomingRemovals[key]
+		var effectiveTombstone *Removal
+		if localRemoval != nil && incomingRemoval != nil {
+			if localRemoval.RemovedAt.After(incomingRemoval.RemovedAt) {
+				effectiveTombstone = localRemoval
+			} else {
+				effectiveTombstone = incomingRemoval
+			}
+		} else if localRemoval != nil {
+			effectiveTombstone = localRemoval
+		} else if incomingRemoval != nil {
+			effectiveTombstone = incomingRemoval
+		}
+
+		if effectiveTombstone != nil && !e.UpdatedAt.After(effectiveTombstone.RemovedAt) {
+			// Removal is at least as recent as the entry — removal wins; skip.
+			continue
+		}
+
+		// Entry is strictly newer than the tombstone (or there is no tombstone).
+		if effectiveTombstone != nil {
+			// Re-add wins: the entry was added back after the deletion.
+			// Clear the stale local tombstone so it does not block future merges.
+			if _, ok := l.db.Removed[key]; ok {
+				delete(l.db.Removed, key)
+				changed = true
+			}
+		}
+
 		if local, ok := l.db.Entries[key]; ok {
 			if e.UpdatedAt.After(local.UpdatedAt) {
-				l.db.Entries[key] = e
+				if !reflect.DeepEqual(local, e) {
+					l.db.Entries[key] = e
+					changed = true
+				}
 			}
 		} else {
 			l.db.Entries[key] = e
+			changed = true
 		}
 	}
+
+	// Apply remote removals to local entries and merge tombstones.
+	// This loop agrees with the entries loop: an entry survives only if its
+	// UpdatedAt is strictly after the removal timestamp.
+	for _, r := range removals {
+		key := entryKey(r.TmdbID, r.MediaType)
+		if local, ok := l.db.Entries[key]; ok {
+			if !local.UpdatedAt.After(r.RemovedAt) {
+				// Remote removal is at least as recent as the local entry — delete it.
+				delete(l.db.Entries, key)
+				changed = true
+				// Merge tombstone, keeping the later RemovedAt.
+				if existing := l.db.Removed[key]; existing == nil || r.RemovedAt.After(existing.RemovedAt) {
+					l.db.Removed[key] = r
+					changed = true
+				}
+			} else {
+				// Local entry is strictly newer (re-add wins) — do not keep the tombstone.
+				if _, ok := l.db.Removed[key]; ok {
+					delete(l.db.Removed, key)
+					changed = true
+				}
+			}
+		} else {
+			// No local entry. Merge the tombstone, keeping the later RemovedAt.
+			if existing := l.db.Removed[key]; existing == nil || r.RemovedAt.After(existing.RemovedAt) {
+				l.db.Removed[key] = r
+				changed = true
+			}
+		}
+	}
+
+	// Merge watch progress: most-recent-write wins.
 	for _, p := range progress {
 		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
 		if local, ok := l.db.Progress[key]; ok {
@@ -188,29 +293,150 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 			// silently reverted the change, and the push that follows a pull
 			// then uploaded the reverted record, cementing it.
 			if p.WatchedAt.After(local.WatchedAt) {
-				l.db.Progress[key] = p
+				if !reflect.DeepEqual(local, p) {
+					l.db.Progress[key] = p
+					changed = true
+				}
 			}
 		} else {
 			l.db.Progress[key] = p
+			changed = true
 		}
 	}
+
+	// Union dismissals.
 	for _, d := range dismissals {
 		key := entryKey(d.TmdbID, d.MediaType)
 		if _, ok := l.db.Dismissed[key]; !ok {
 			l.db.Dismissed[key] = d
+			changed = true
 		}
 	}
+
 	// Synchronous, not debounced (D3) — this is external data pulled from
 	// Supabase sync, not a local UI mutation, so it should hit disk right
 	// away rather than wait out persistDebounce.
+	if changed {
+		if err := l.writeNow(); err != nil {
+			log.Println("library persist:", err)
+		}
+		l.gen.Add(1)
+	}
+	l.mu.Unlock()
+	// tasteGen is a distinct counter (D2): MergeFrom pulls in
+	// entries/progress/dismissals/removals wholesale, all taste-relevant.
+	if changed {
+		l.tasteGen.Add(1)
+	}
+}
+
+// RemoteRowID identifies a remote Supabase row by its natural key and UUID,
+// used by AdoptRemoteIDs. Season and Episode are only meaningful for progress
+// rows; nil means the column is NULL in Supabase (movies have no season/episode).
+type RemoteRowID struct {
+	ID        string
+	TmdbID    int
+	MediaType string
+	Season    *int
+	Episode   *int
+}
+
+// AdoptRemoteIDs replaces local UUIDs with the corresponding remote UUIDs for
+// every row that matches on natural key but carries a divergent local ID. This
+// resolves Supabase 23505 unique-violation errors that occur when the same
+// media title exists locally and remotely under different UUIDs — for example,
+// after adding a title independently on two devices or re-adding it after a
+// local reset. Once the local IDs match the remote ones, the next PK-resolved
+// upsert updates in place rather than attempting a duplicate insert.
+//
+// When an entry ID is adopted, progress rows whose LibraryEntryID referenced
+// the old local ID are patched to the adopted remote ID. Persists synchronously
+// and bumps the library generation.
+func (l *Library) AdoptRemoteIDs(remoteEntries, remoteProgress []RemoteRowID) {
+	l.mu.Lock()
+	// remap: old local entry ID → adopted remote entry ID, for patching progress.
+	remap := make(map[string]string)
+	for _, r := range remoteEntries {
+		key := entryKey(r.TmdbID, r.MediaType)
+		e, ok := l.db.Entries[key]
+		if !ok || e.ID == r.ID {
+			continue
+		}
+		oldID := e.ID
+		e.ID = r.ID
+		l.db.Entries[key] = e
+		remap[oldID] = r.ID
+	}
+	// Index remote progress by natural key for O(1) lookup below.
+	remoteByKey := make(map[string]string, len(remoteProgress))
+	for _, r := range remoteProgress {
+		remoteByKey[progressKey(r.TmdbID, r.MediaType, r.Season, r.Episode)] = r.ID
+	}
+	for key, p := range l.db.Progress {
+		changed := false
+		// Patch LibraryEntryID if the parent entry was adopted.
+		if newID, ok := remap[p.LibraryEntryID]; ok {
+			p.LibraryEntryID = newID
+			changed = true
+		}
+		// Adopt remote progress ID if natural key matches and ID differs.
+		if remoteID, ok := remoteByKey[key]; ok && p.ID != remoteID {
+			p.ID = remoteID
+			changed = true
+		}
+		if changed {
+			l.db.Progress[key] = p
+		}
+	}
 	if err := l.writeNow(); err != nil {
-		log.Println("library persist:", err)
+		log.Println("library: AdoptRemoteIDs persist:", err)
 	}
 	l.gen.Add(1)
 	l.mu.Unlock()
-	// tasteGen is a distinct counter (D2): MergeFrom pulls in
-	// entries/progress/dismissals wholesale, all taste-relevant.
-	l.tasteGen.Add(1)
+}
+
+// RegenerateIDsNotIn reassigns new UUIDs to every entry and progress row whose
+// ID is non-empty and NOT present in the corresponding owned set. This is called
+// after a Supabase RLS 42501 rejection to repair cross-user row-ID contamination
+// (rows whose ID collides with a row owned by a different user) before retrying
+// the upsert.
+//
+// When an entry ID changes, all progress rows whose LibraryEntryID referenced
+// the old ID are updated to the new ID. Persists synchronously and bumps the
+// library generation.
+func (l *Library) RegenerateIDsNotIn(ownedEntryIDs, ownedProgressIDs map[string]bool) {
+	l.mu.Lock()
+	// remap: old entry ID → new entry ID, for patching progress rows.
+	remap := make(map[string]string)
+	for key, e := range l.db.Entries {
+		if e.ID == "" || ownedEntryIDs[e.ID] {
+			continue
+		}
+		oldID := e.ID
+		e.ID = newUUID()
+		l.db.Entries[key] = e
+		remap[oldID] = e.ID
+	}
+	for key, p := range l.db.Progress {
+		// Remap LibraryEntryID if the parent entry was regenerated.
+		if newID, ok := remap[p.LibraryEntryID]; ok {
+			p.LibraryEntryID = newID
+		}
+		if p.ID == "" || ownedProgressIDs[p.ID] {
+			if remap[p.LibraryEntryID] != "" {
+				// LibraryEntryID changed even if progress ID is fine — persist.
+				l.db.Progress[key] = p
+			}
+			continue
+		}
+		p.ID = newUUID()
+		l.db.Progress[key] = p
+	}
+	if err := l.writeNow(); err != nil {
+		log.Println("library: RegenerateIDsNotIn persist:", err)
+	}
+	l.gen.Add(1)
+	l.mu.Unlock()
 }
 
 // TasteSignals returns one signal per title the user has any history with —
@@ -494,6 +720,7 @@ func New(profileID string) (*Library, error) {
 			Entries:   make(map[string]*LibraryEntry),
 			Progress:  make(map[string]*WatchProgress),
 			Dismissed: make(map[string]*Dismissal),
+			Removed:   make(map[string]*Removal),
 		},
 	}
 
@@ -520,6 +747,10 @@ func New(profileID string) (*Library, error) {
 	if err := json.Unmarshal(raw, &l.db); err != nil {
 		return l, err
 	}
+	// Nil guard for on-disk files predating the "removed" field.
+	if l.db.Removed == nil {
+		l.db.Removed = make(map[string]*Removal)
+	}
 	return l, nil
 }
 
@@ -540,6 +771,7 @@ func (l *Library) SetProfile(profileID string) error {
 		Entries:   make(map[string]*LibraryEntry),
 		Progress:  make(map[string]*WatchProgress),
 		Dismissed: make(map[string]*Dismissal),
+		Removed:   make(map[string]*Removal),
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -549,13 +781,12 @@ func (l *Library) SetProfile(profileID string) error {
 		if err := json.Unmarshal(raw, &newDB); err != nil {
 			return err
 		}
+		// Nil guard for on-disk files predating the "removed" field.
+		if newDB.Removed == nil {
+			newDB.Removed = make(map[string]*Removal)
+		}
 	}
 
-	// Synchronous exception (D3): flush any pending debounced write for the
-	// OLD profile before swapping l.db/l.path out from under it — otherwise
-	// a mutation made just before switching profiles could be lost (its
-	// debounced write would fire ~1s later against whatever l.path has
-	// become by then).
 	l.Flush()
 
 	l.mu.Lock()
@@ -563,7 +794,114 @@ func (l *Library) SetProfile(profileID string) error {
 	l.path = path
 	l.mu.Unlock()
 	l.gen.Add(1)
+	l.tasteGen.Add(1)
 	return nil
+}
+
+// ── External sync helpers ─────────────────────────────────────────────────────
+
+// MarkExternallyWatched creates or updates a WatchProgress record as Completed
+// for the given item, sourced from an external service (Trakt). If no library
+// entry exists yet it is auto-created as StatusWatching (user controls status
+// changes; Cove never auto-flips to Finished on external completion).
+//
+// title and posterPath are used only when creating a brand-new library entry;
+// they may be empty when the entry already exists. watchedAt is set as the
+// WatchedAt timestamp on the progress record. Additive only — an already-
+// completed record is not overwritten unless the new watchedAt is more recent.
+func (l *Library) MarkExternallyWatched(
+	tmdbID int,
+	mediaType string,
+	season, episode *int,
+	title, posterPath string,
+	watchedAt time.Time,
+) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	eKey := entryKey(tmdbID, mediaType)
+	entry, exists := l.db.Entries[eKey]
+	if !exists {
+		entry = &LibraryEntry{
+			ID:         newUUID(),
+			TmdbID:     tmdbID,
+			MediaType:  mediaType,
+			Title:      title,
+			PosterPath: posterPath,
+			Status:     StatusWatching,
+			AddedAt:    now,
+			UpdatedAt:  now,
+		}
+		l.db.Entries[eKey] = entry
+		delete(l.db.Removed, eKey)
+	}
+
+	pKey := progressKey(tmdbID, mediaType, season, episode)
+	prog, progExists := l.db.Progress[pKey]
+	if progExists && prog.Completed && !watchedAt.After(prog.WatchedAt) {
+		// Already completed at the same or later time — nothing to do.
+		return
+	}
+	if !progExists {
+		prog = &WatchProgress{
+			ID:             newUUID(),
+			LibraryEntryID: entry.ID,
+			TmdbID:         tmdbID,
+			MediaType:      mediaType,
+			Season:         season,
+			Episode:        episode,
+		}
+		l.db.Progress[pKey] = prog
+	}
+	prog.Completed = true
+	prog.WatchedAt = watchedAt
+
+	entry.LastWatchedAt = &watchedAt
+	if season != nil {
+		entry.LastWatchedSeason = season
+	}
+	if episode != nil {
+		entry.LastWatchedEpisode = episode
+	}
+
+	l.gen.Add(1)
+	l.markDirty()
+}
+
+// AddWatchLater adds a new library entry with StatusWatchLater if and only if
+// the (tmdbID, mediaType) pair does not already exist in the library under any
+// status. If an entry already exists, this is a no-op (additive, never
+// overwrites). Designed for Trakt watchlist pull.
+func (l *Library) AddWatchLater(
+	tmdbID int,
+	mediaType string,
+	title, posterPath string,
+	addedAt time.Time,
+) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	eKey := entryKey(tmdbID, mediaType)
+	if _, exists := l.db.Entries[eKey]; exists {
+		return // already present under some status — additive only, never overwrite
+	}
+
+	now := time.Now()
+	entry := &LibraryEntry{
+		ID:         newUUID(),
+		TmdbID:     tmdbID,
+		MediaType:  mediaType,
+		Title:      title,
+		PosterPath: posterPath,
+		Status:     StatusWatchLater,
+		AddedAt:    addedAt,
+		UpdatedAt:  now,
+	}
+	l.db.Entries[eKey] = entry
+	delete(l.db.Removed, eKey)
+	l.gen.Add(1)
+	l.markDirty()
 }
 
 // ── Key helpers ───────────────────────────────────────────────────────────────
@@ -638,6 +976,7 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 			LastAiredSeason  *int    `json:"last_aired_season"`
 			LastAiredEpisode *int    `json:"last_aired_episode"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -653,6 +992,7 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 		if !exists {
 			entry = &LibraryEntry{ID: newUUID(), AddedAt: now}
 			l.db.Entries[key] = entry
+			delete(l.db.Removed, key)
 		}
 		entry.TmdbID = body.TmdbID
 		entry.MediaType = body.MediaType
@@ -727,9 +1067,16 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		pKey := progressKey(tmdbID, mediaType, season, episode)
 		l.mu.RLock()
 		p := l.db.Progress[pKey]
+		// Copy under the lock before unlocking — concurrent POSTs can mutate the
+		// pointed-to struct while json.Encode runs, causing a data race.
+		var pOut *WatchProgress
+		if p != nil {
+			cp := *p
+			pOut = &cp
+		}
 		l.mu.RUnlock()
 		// Return null JSON if not found (not a 404 — absence is normal)
-		jsonOK(w, p)
+		jsonOK(w, pOut)
 
 	case http.MethodPost:
 		var body struct {
@@ -747,6 +1094,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			DurationSeconds  float64 `json:"duration_seconds"`
 			Completed        bool    `json:"completed"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -899,7 +1247,10 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var progList []*WatchProgress
 		for _, p := range l.db.Progress {
 			if p.TmdbID == tmdbID && p.MediaType == mediaType {
-				progList = append(progList, p)
+				// Copy under the lock — concurrent POSTs can mutate shared structs
+				// while json.Encode runs outside the lock (same pattern as AllProgress).
+				cp := *p
+				progList = append(progList, &cp)
 			}
 		}
 		l.mu.RUnlock()
@@ -926,6 +1277,8 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "" && r.Method == http.MethodDelete:
 		l.mu.Lock()
 		delete(l.db.Entries, key)
+		// Record a removal tombstone so a sync pull cannot resurrect this entry.
+		l.db.Removed[key] = &Removal{TmdbID: tmdbID, MediaType: mediaType, RemovedAt: time.Now()}
 		// Deliberately do NOT delete WatchProgress records. The user is only
 		// removing the title from their list, not erasing their watch history.
 		// Progress records are keyed by (tmdb_id, media_type, season, episode)
@@ -941,6 +1294,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Status Status `json:"status"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -967,6 +1321,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Rating *float64 `json:"rating"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -1009,6 +1364,7 @@ func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
 			TmdbID    int    `json:"tmdb_id"`
 			MediaType string `json:"media_type"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -1071,7 +1427,7 @@ func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
 // rewrite that only makes sense pointed at this machine's own backend.
 func rewritePosterURL(s string) string {
 	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
-		return "http://127.0.0.1:6969/api/img/" + rest
+		return "http://" + utils.LocalAddr() + "/api/img/" + rest
 	}
 	return s
 }

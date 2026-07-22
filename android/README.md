@@ -1,12 +1,13 @@
 # Cove Android
 
-Native Android client for Cove, written in Kotlin/Jetpack Compose. The full Go
-backend is embedded in the app as a gomobile AAR and runs inside a foreground
-service, so the app is completely standalone — same TMDB metadata, addon
-streams, torrent engine, library, and Supabase auth/sync as the desktop app.
-Playback uses libmpv (same player core as desktop) with subtitle/audio track
-selection, external subtitles, intro/recap/credits skip, and up-next
-auto-advance.
+Native Android shell for Cove, written in Kotlin. The full Go backend and built
+Svelte frontend are embedded in a gomobile AAR; the backend runs inside a
+foreground service and the UI runs in `WebViewActivity`, so the app is
+completely standalone. It exposes the same TMDB metadata, addon streams,
+torrent engine, library, profiles, and Supabase auth/sync as desktop. Playback
+uses native libmpv through `MpvBridge`/`MpvPlayerView`, with subtitle/audio
+track selection, external subtitles, intro/recap/credits skip, MediaSession,
+audio focus, and up-next auto-advance.
 
 Alternatively, **Remote mode** (Settings → Server) points the app at a desktop
 Cove on your LAN instead of the embedded server — pair with the token from the
@@ -87,13 +88,13 @@ From the repo root:
 make android
 
 # Or step-by-step
-make android-aar               # outputs android/app/libs/cove.aar (arm64 + amd64)
+make android-aar               # outputs android/app/libs/cove.aar (all four Android ABIs)
 cd android && ./gradlew assembleDebug
 ```
 
 The debug APK is at `android/app/build/outputs/apk/debug/app-debug.apk`.
 
-**Fast UI-only loop** (skips AAR rebuild — use when only Kotlin/Compose changed):
+**Fast native-only loop** (skips AAR rebuild — use when only Kotlin changed):
 ```sh
 cd android && ./gradlew installDebug
 ```
@@ -103,33 +104,56 @@ cd android && ./gradlew installDebug
 make android-install
 ```
 
-> Note: Compose Live Edit requires Android Studio with the Compose plugin. For
-> hot-reload in the CLI workflow, `./gradlew installDebug` is the fastest path.
+For Svelte HMR on a device, run `npm run dev` in `web/`, reverse port 5173
+with `adb reverse tcp:5173 tcp:5173`, set
+`WEB_URL=http://127.0.0.1:5173` in `android/local.properties`, and reinstall
+once. Remove `WEB_URL` to return to the frontend embedded in the AAR.
+
+## Tests
+
+The fast checks do not require an emulator:
+
+```sh
+cd android
+./gradlew lintDebug testDebugUnitTest assembleDebugAndroidTest
+```
+
+`testDebugUnitTest` covers JSON contracts used by auth/sync. The instrumentation
+APK contains a launch smoke test for `WebViewActivity`. With the API 35 `cove`
+AVD running:
+
+```sh
+./gradlew connectedDebugAndroidTest
+```
+
+GitHub Actions builds a fresh gomobile AAR, runs lint and JVM tests, then runs
+the activity smoke test on an API 35 x86_64 emulator. Reports are retained as
+workflow artifacts.
 
 ## Gradle wrapper jar
 
-`gradle-wrapper.jar` is not committed. Generate it once with a locally installed
-Gradle 8.11+:
-```sh
-cd android
-~/Android/gradle-8.11.1/bin/gradle wrapper --gradle-version 8.11.1
-```
-After that `./gradlew` works without a system Gradle installation.
+The complete Gradle wrapper, including `gradle-wrapper.jar`, is committed so a
+fresh checkout can run `./gradlew` without a system Gradle installation. When
+upgrading Gradle, regenerate and commit all wrapper files together.
 
 ## App structure
 
-Single-Activity Compose app (`MainActivity` hosts a bottom-nav shell mirroring
-the desktop's top bar: Home / My List / Explore / Search / Settings), plus a
-separate landscape `PlayerActivity`. Packages under
-`app/src/main/kotlin/com/coveninja/cove/`:
+`WebViewActivity` is the single launcher for phone and TV. It selects the
+responsive Svelte entry point, coordinates the WebView/native bridge, and
+switches to `MpvPlayerView` for playback. Code under
+`app/src/main/kotlin/com/coveninja/cove/` is split as follows:
 
 | Package | Contents |
 |---|---|
-| `ui/` | Screens + colocated ViewModels (Home hero pager & rows, Explore genre rows, Search, My List with status/type/sort filters), `MediaDetailSheet` (trailer, cast, similar, seasons/episodes with progress), `StreamsSheet` (ranked stream picker, `StreamRanking.kt` ports the desktop's selection logic) |
-| `player/` | `PlayerActivity` + `MpvPlayerView` (libmpv via `dev.jdtech.mpv:libmpv`): track pickers, external subtitles, IntroDB segment skip, up-next auto-advance, resume, MediaSession/audio focus |
+| root | `CoveApplication` initialization and `WebViewActivity` lifecycle/UI bridge |
+| `player/` | `MpvBridge` + `MpvPlayerView` (libmpv via `dev.jdtech.mpv:libmpv`): playback commands, state callbacks, track selection, and hardware diagnostics |
 | `api/` | `CoveApiClient` (OkHttp singleton, base-URL + auth-token handling for Local/Remote modes), kotlinx-serialization DTOs mirroring the Go types |
-| `auth/`, `sync/` | Supabase login/register/OTP, encrypted token store, `SyncCoordinator` (foreground-resume + post-mutation sync mirroring the desktop) |
+| `auth/`, `sync/` | Encrypted token storage and `SyncCoordinator` (foreground-resume + debounced post-mutation sync) |
 | `service/` | `CoveService` — foreground service that owns the embedded Go server |
+| `updater/` | In-app APK update checks, verified downloads, install callbacks, and post-update restart handling |
+
+Phone and TV page components live in `web/src/mobile/` and `web/src/tv/`; they
+share the API/auth/sync stores with the desktop entry point.
 
 **Server modes:** Local (default) runs the embedded backend on
 `127.0.0.1:6969`; Remote connects to a desktop Cove's LAN listener

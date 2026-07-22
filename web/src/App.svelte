@@ -1,14 +1,13 @@
 <script lang="ts">
   import TopBar from "./components/TopBar.svelte";
-  import { Player } from "$lib/player/player.svelte";
+  import { playback } from "$lib/playback.svelte";
   import { ModeWatcher } from "mode-watcher";
   import MediaExpandedModal from "./components/MediaExpandedModal.svelte";
   import PersonExpandedModal from "./components/modals/PersonExpandedModal.svelte";
   import ProviderExpandedModal from "./components/modals/ProviderExpandedModal.svelte";
   import type { Media } from "$lib/types/tmdb";
   import type { Person, Provider } from "$lib/api";
-  import type { Stream } from "$lib/types/addons";
-  import PlayerComponent from "./components/Player.svelte";
+  import PlayerComponent from "./components/player/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { setMode } from "mode-watcher";
 
@@ -21,7 +20,6 @@
   import { onMount, setContext } from "svelte";
   import { scale, fade } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { api, type UpdateCheckResult, setTokenSource } from "$lib/api";
   import MyAccountPage from "./components/MyAccountPage.svelte";
   import ExplorePage from "./components/ExplorePage.svelte";
@@ -30,8 +28,9 @@
   import OnboardingPage from "./components/OnboardingPage.svelte";
   import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
-  import { libraryChanged } from "$lib/stores/library";
+  import { startAutoSync } from "$lib/sync";
   import { Spinner } from "$lib/components/ui/spinner";
+  import { X } from "lucide-svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
   // avoiding any $effect timing gap between auth state changing and the token
@@ -55,81 +54,54 @@
   let selectedProvider: Provider | null = $state(null);
 
   let loading = $state(false);
+  // Displayed when a push sync error is detected; auto-clears after 5 s.
+  let syncErrorToast = $state<string | null>(null);
+  let syncErrorTimer: ReturnType<typeof setTimeout> | undefined;
+  function showSyncError(msg: string) {
+    syncErrorToast = msg;
+    clearTimeout(syncErrorTimer);
+    syncErrorTimer = setTimeout(() => (syncErrorToast = null), 5000);
+  }
 
   let currentPage = $state<Page>({ type: "home" });
   let pageHistory = $state<Page[]>([]);
 
-  // ─── Player state (lifted out of MediaPage so it survives navigation) ──────
-  // A stream started from a MediaPage is tracked here instead of inside
-  // MediaPage itself, so switching pages/tabs no longer unmounts <Player> —
-  // it just changes how it's displayed (full vs. floating "PiP").
-  type PlayerSession = {
-    media: Media;
-    stream: Stream;
-    season?: number;
-    episode?: number;
-    episodeName?: string;
-    subtitles: { id: string; url: string; lang: string }[];
-    // B2: runner-up streams (ranked, best-first) to fall back to if `stream`
-    // never actually starts — see handlePlaybackFailed. Session-local only;
-    // no Go/tygo type carries this. Manual stream-list picks carry no
-    // candidates (undefined) — an explicit user pick is never silently
-    // swapped for another stream, it just gets the watchdog UI.
-    candidates?: Stream[];
-    // How many candidates have already failed for this playback attempt —
-    // caps the auto-advance chain (see handlePlaybackFailed).
-    attempt?: number;
-  };
-
-  let playerSession = $state<PlayerSession | null>(null);
-  let playerMode = $state<"full" | null>(null);
-
-  // Covers the gap between a "Watch" click and playerSession being set — the
-  // fetchStreamsWithRetry/rankStreams/tvEpisodes work in quickPlay, none of
-  // which shows anything today.
-  let quickPlayPending = $state<{ media: Media; message: string } | null>(null);
-
-  // Not $state — bumped on every quickPlay call so a stale call (superseded
-  // by a newer "Watch" click before the first one resolved) can detect it's
-  // stale and skip touching quickPlayPending/playerSession.
-  let quickPlayToken = 0;
-
-  const canGoBack = $derived(playerMode === "full" || pageHistory.length > 0);
+  const canGoBack = $derived(playback.playerMode === "full" || pageHistory.length > 0 || !!playback.quickPlayPending);
 
   // Whether the active/floating stream belongs to the media page currently
   // on screen — used to stop the trailer from playing underneath it, and to
   // stop StreamsList from re-triggering auto-select for the same episode.
   const streamActiveForSelectedMedia = $derived(
-    !!playerSession &&
+    !!playback.playerSession &&
       !!selectedMedia &&
-      playerSession.media.id === selectedMedia.id &&
-      playerSession.media.media_type === selectedMedia.media_type,
+      playback.playerSession.media.id === selectedMedia.id &&
+      playback.playerSession.media.media_type === selectedMedia.media_type,
   );
 
   const activePlaybackSeason = $derived(
-    streamActiveForSelectedMedia ? playerSession?.season : undefined,
+    streamActiveForSelectedMedia ? playback.playerSession?.season : undefined,
   );
   const activePlaybackEpisode = $derived(
-    streamActiveForSelectedMedia ? playerSession?.episode : undefined,
+    streamActiveForSelectedMedia ? playback.playerSession?.episode : undefined,
   );
 
   // Drives the topbar's "now playing" title while the player is full-size —
   // replaces the logo so there's nothing left in the corner to collide with
   // the player's own controls.
   const fullscreenInfo = $derived(
-    playerMode === "full" && playerSession
+    playback.playerMode === "full" && playback.playerSession
       ? {
           title:
-            playerSession.media.media_type === "tv"
-              ? playerSession.media.name
-              : playerSession.media.title,
+            playback.playerSession.media.media_type === "tv"
+              ? playback.playerSession.media.name
+              : playback.playerSession.media.title,
           subtitle:
-            playerSession.media.media_type === "tv" &&
-            playerSession.season != null &&
-            playerSession.episode != null
-              ? `S${playerSession.season}E${playerSession.episode}${
-                  playerSession.episodeName
-                    ? ` - ${playerSession.episodeName}`
+            playback.playerSession.media.media_type === "tv" &&
+            playback.playerSession.season != null &&
+            playback.playerSession.episode != null
+              ? `S${playback.playerSession.season}E${playback.playerSession.episode}${
+                  playback.playerSession.episodeName
+                    ? ` - ${playback.playerSession.episodeName}`
                     : ""
                 }`
               : undefined,
@@ -137,14 +109,10 @@
       : null,
   );
 
-  // Focus-triggered auth sync bookkeeping (not $state — plain instance vars
-  // read/written only from the onFocus handler below).
-  let lastAuthSyncMs = 0;
-  let lastLibraryGeneration: number | null = null;
-
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
     setMode("dark");
+    let stopAutoSync: (() => void) | null = null;
     // Wait for both settings and auth to resolve before revealing the app.
     Promise.all([settings.load(), auth.init().catch(console.error)]).then(
       () => {
@@ -152,6 +120,7 @@
         if (!$settings.onboardingDone) {
           showOnboarding = true;
         }
+        stopAutoSync = startAutoSync(showSyncError);
       },
     );
 
@@ -198,39 +167,12 @@
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     document.addEventListener("contextmenu", onContextMenu);
 
-    // Pull remote changes on window focus when signed in. Guarded so rapid
-    // focus/blur cycling (alt-tabbing) doesn't trigger a sync — and downstream
-    // refetch storm across every MediaCard + ContinueWatching — on every
-    // single focus.
-    const onFocus = () => {
-      if (auth.isGuest) return;
-      const now = Date.now();
-      if (now - lastAuthSyncMs < 60_000) return;
-      lastAuthSyncMs = now;
-      api
-        .authSync()
-        .then((res) => {
-          // Only bump when the library actually changed remotely. Older
-          // backends / a noop build (503) omit library_generation entirely —
-          // fall back to the old always-bump behavior for those.
-          if (typeof res.library_generation === "number") {
-            if (res.library_generation !== lastLibraryGeneration) {
-              lastLibraryGeneration = res.library_generation;
-              libraryChanged.update((n) => n + 1);
-            }
-          } else {
-            libraryChanged.update((n) => n + 1);
-          }
-        })
-        .catch(() => {});
-    };
-    window.addEventListener("focus", onFocus);
-
     return () => {
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError);
       document.removeEventListener("contextmenu", onContextMenu);
-      window.removeEventListener("focus", onFocus);
+      stopAutoSync?.();
+      clearTimeout(syncErrorTimer);
     };
   });
 
@@ -240,8 +182,8 @@
 
     // Navigating away from a full-screen player closes the stream — there's no
     // PiP to drop it into anymore.
-    if (playerMode === "full") {
-      closePlayer();
+    if (playback.playerMode === "full") {
+      playback.closePlayer();
     }
 
     pageHistory.push(currentPage);
@@ -256,10 +198,16 @@
     // Navigating away dismisses the detail overlay.
     selectedMedia = null;
 
+    // Loading overlay is showing — cancel the in-flight quickPlay.
+    if (playback.quickPlayPending) {
+      playback.cancelQuickPlay();
+      return;
+    }
+
     // While the player is shown full-size, "back" closes the stream and reveals
     // the page underneath (which was only hidden, never left).
-    if (playerMode === "full") {
-      closePlayer();
+    if (playback.playerMode === "full") {
+      playback.closePlayer();
       return;
     }
 
@@ -283,7 +231,14 @@
 
   // Same idea for "play now" (auto-pick best stream), so the hero card's
   // Watch button and similar entry points can start playback directly.
-  setContext("watchMedia", quickPlay);
+  setContext("watchMedia", (m: Media, s?: number, e?: number) =>
+    playback.quickPlay(m, s, e),
+  );
+
+  // Wire up shell callbacks the playback module needs: the start chime
+  // (AudioContext lives here, not in the module) and the detail overlay
+  // (selectedMedia lives here, not in the module).
+  playback.init({ playStartSound, openMediaDetail: selectMedia });
 
   // Short synthesized "thud" played whenever a stream actually starts —
   // the same kind of confirmation chime Netflix plays on play. No audio
@@ -356,216 +311,6 @@
     }
   }
 
-  function startPlayback(
-    media: Media,
-    stream: Stream,
-    season?: number,
-    episode?: number,
-    episodeName?: string,
-    candidates?: Stream[],
-    attempt = 0,
-  ): void {
-    quickPlayPending = null;
-    playStartSound();
-
-    playerSession = {
-      media,
-      stream,
-      season,
-      episode,
-      episodeName,
-      subtitles: [],
-      candidates,
-      attempt,
-    };
-    playerMode = "full";
-
-    api
-      .getSubtitles({
-        id: media.id,
-        type: media.media_type,
-        season: media.media_type === "tv" ? (season ?? undefined) : undefined,
-        episode: media.media_type === "tv" ? (episode ?? undefined) : undefined,
-      })
-      .then((subs) => {
-        // Guard against a newer playStream call having superseded this one
-        // while the fetch was in flight.
-        if (playerSession && playerSession.stream === stream) {
-          playerSession = {
-            ...playerSession,
-            subtitles: Array.isArray(subs) ? subs : [],
-          };
-        }
-      })
-      .catch(() => {});
-  }
-
-  // Streams often come back empty on the first hit while indexers are still
-  // searching — StreamsList handles that by polling every second; quickPlay
-  // does the same here rather than giving up after one empty response.
-  // `signal` short-circuits both the retry loop and the fetch itself once a
-  // newer quickPlay call has superseded this one (see quickPlayAbort below).
-  async function fetchStreamsWithRetry(
-    fetcher: (signal: AbortSignal) => Promise<Stream[]>,
-    signal: AbortSignal,
-  ): Promise<Stream[]> {
-    // 8 attempts at 2s (B4), not 15 at 1s — A3's per-addon negative cache
-    // makes each retry hit-or-miss the same 20s-TTL cache entry either way,
-    // so the tighter interval mostly just burned more requests.
-    for (let attempt = 0; attempt < 8; attempt++) {
-      if (signal.aborted) return [];
-      try {
-        const res = await fetcher(signal);
-        if (Array.isArray(res) && res.length > 0) return res;
-      } catch (e) {
-        if ((e as { name?: string } | null)?.name === "AbortError") return [];
-        console.error("quickPlay: failed to fetch streams", e);
-        return [];
-      }
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-    return [];
-  }
-
-  // Aborts the previous quickPlay's in-flight stream fetch the moment a new
-  // one starts — quickPlayToken alone only prevents a stale response from
-  // being *acted on*, it doesn't stop the superseded request from running to
-  // completion on the wire.
-  let quickPlayAbort: AbortController | null = null;
-
-  // Used by "Watch"/"Continue" buttons on media cards: skip the media page
-  // entirely and go straight to picking a stream and playing it, the same
-  // way StreamsList's auto-select does. season/episode come from the
-  // card's own library data (last_watched_season/episode); undefined for
-  // movies, or for a TV show with no progress yet (in which case we start
-  // from the first episode).
-  async function quickPlay(
-    media: Media,
-    season?: number,
-    episode?: number,
-  ): Promise<void> {
-    const myToken = ++quickPlayToken;
-    quickPlayAbort?.abort();
-    const ctrl = new AbortController();
-    quickPlayAbort = ctrl;
-    quickPlayPending = { media, message: "Finding streams…" };
-
-    const isTV = media.media_type === "tv";
-    const targetSeason = isTV ? (season ?? 1) : undefined;
-    const targetEpisode = isTV ? (episode ?? 1) : undefined;
-
-    const streams = await fetchStreamsWithRetry(
-      (signal) =>
-        api.getStreams(
-          media.id,
-          isTV
-            ? { type: "tv", season: targetSeason, episode: targetEpisode }
-            : {},
-          signal,
-        ),
-      ctrl.signal,
-    );
-    if (myToken !== quickPlayToken) return;
-    if (streams.length === 0) {
-      quickPlayPending = { media, message: "No stream found" };
-      setTimeout(() => {
-        if (myToken === quickPlayToken) quickPlayPending = null;
-      }, 2500);
-      return;
-    }
-
-    const mode =
-      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
-    const ranked = rankStreams(streams, mode, {
-      measuredBandwidthMbps: $settings?.measuredBandwidthMbps,
-      preferredProvider: $settings?.defaultProvider,
-      sourcePreference: $settings?.sourcePreference,
-    });
-    const best = ranked[0] ?? null;
-    if (!best) {
-      quickPlayPending = { media, message: "No stream found" };
-      setTimeout(() => {
-        if (myToken === quickPlayToken) quickPlayPending = null;
-      }, 2500);
-      return;
-    }
-
-    let episodeName: string | undefined;
-    if (isTV) {
-      try {
-        const eps = await api.tvEpisodes(media.id, targetSeason!);
-        episodeName = eps.find((e) => e.episode_number === targetEpisode)?.name;
-      } catch (e) {
-        // Non-critical — just means the topbar's subtitle line won't show
-        // an episode title.
-        console.error("quickPlay: failed to fetch episode name", e);
-      }
-    }
-    if (myToken !== quickPlayToken) return;
-
-    // Runner-up candidates (B2) so the playback watchdog can auto-advance if
-    // `best` turns out to be dead, without a full re-fetch.
-    startPlayback(
-      media,
-      best,
-      targetSeason,
-      targetEpisode,
-      episodeName,
-      ranked.slice(0, 5),
-      0,
-    );
-  }
-
-  // ─── Playback-start watchdog: auto-advance / give up (B2) ──────────────────
-  // Tiny inline toast — there's no toast/notification library in this app, so
-  // this mirrors Player.svelte's own "feedback flash" pattern rather than
-  // pulling one in for two short-lived messages.
-  let playbackToast = $state<string | null>(null);
-  let playbackToastTimer: ReturnType<typeof setTimeout> | undefined;
-  function showPlaybackToast(text: string, ms = 3000): void {
-    playbackToast = text;
-    clearTimeout(playbackToastTimer);
-    playbackToastTimer = setTimeout(() => (playbackToast = null), ms);
-  }
-
-  // Fired by <Player> (via onPlaybackFailed) when the current stream never
-  // actually started — a startup timeout or a stalled/dead torrent. Drops
-  // the dead stream from the candidate list and tries the next one, up to 3
-  // fallback attempts; once exhausted (or there were no candidates to begin
-  // with — a manual stream-list pick), closes the player and reopens the
-  // media detail so the user sees the manual stream list instead of a
-  // frozen loading screen.
-  function handlePlaybackFailed(): void {
-    const session = playerSession;
-    if (!session) return;
-
-    const deadKey = session.stream.url || session.stream.infoHash;
-    const remaining = (session.candidates ?? []).filter(
-      (c) => (c.url || c.infoHash) !== deadKey,
-    );
-    const attempt = session.attempt ?? 0;
-    const next = remaining[0];
-
-    if (next && attempt < 3) {
-      showPlaybackToast("Stream didn't start — trying another…");
-      startPlayback(
-        session.media,
-        next,
-        session.season,
-        session.episode,
-        session.episodeName,
-        remaining.slice(1),
-        attempt + 1,
-      );
-      return;
-    }
-
-    const media = session.media;
-    closePlayer();
-    showPlaybackToast("Couldn't start playback automatically", 4000);
-    selectMedia(media);
-  }
-
   // mpv's surface always fills the whole window behind the web UI. Make the app
   // background transparent (revealing it) ONLY while the player is full-size;
   // otherwise keep the app opaque so the full-window video stays hidden behind
@@ -573,15 +318,17 @@
   $effect(() => {
     document.documentElement.classList.toggle(
       "cove-playing",
-      playerMode === "full",
+      playback.playerMode === "full",
     );
   });
 
-  function closePlayer(): void {
-    Player.setFullscreen(false);
-    playerSession = null;
-    playerMode = null;
-  }
+  // Dismiss onboarding reactively when the flag arrives via sync or login.
+  // Only dismisses — onMount remains the sole entry point.
+  $effect(() => {
+    if ($settings.onboardingDone && showOnboarding) {
+      showOnboarding = false;
+    }
+  });
 </script>
 
 <Tooltip.Provider>
@@ -597,7 +344,7 @@
       {canGoBack}
       onGoBack={goBack}
       {fullscreenInfo}
-      onCloseStream={closePlayer}
+      onCloseStream={() => playback.closePlayer()}
       {currentPage}
     />
   </div>
@@ -607,12 +354,12 @@
         media={selectedMedia}
         onwatch={(season, episode) => {
           const m = selectedMedia;
-          if (m) quickPlay(m, season, episode);
+          if (m) playback.quickPlay(m, season, episode);
         }}
         onplaystream={(stream, season, episode, episodeName, candidates) => {
           const m = selectedMedia;
           if (m)
-            startPlayback(
+            playback.startPlayback(
               m,
               stream,
               season,
@@ -664,11 +411,11 @@
            and page state/scroll survive opening and closing the player. -->
       <div
         class="h-full w-full bg-background"
-        class:invisible={playerMode === "full"}
+        class:invisible={playback.playerMode === "full"}
       >
         <div
           class="h-full w-full bg-background"
-          class:invisible={playerMode === "full"}
+          class:invisible={playback.playerMode === "full"}
         >
           <div class="h-full" class:hidden={currentPage.type !== "settings"}>
             <SettingsPage />
@@ -682,13 +429,13 @@
                 query = name;
                 changePage({ type: "query", query: name });
               }}
-              onWatch={quickPlay}
+              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
               onSelectPerson={(p) => (selectedPerson = p)}
               onSelectProvider={(p) => (selectedProvider = p)}
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
-            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} visible={currentPage.type === "home"} onChangePage={changePage} />
+            <HomePage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} visible={currentPage.type === "home"} onChangePage={changePage} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "account"}>
             <MyAccountPage
@@ -697,10 +444,10 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
-            <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
+            <MyListPage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
-            <ExplorePage onSelectMedia={selectMedia} onWatch={quickPlay} />
+            <ExplorePage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "catalog"}>
             <CatalogGridPage
@@ -708,14 +455,15 @@
               catalogType={currentPage.type === "catalog" ? currentPage.catalogType : ""}
               catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
               name={currentPage.type === "catalog" ? currentPage.name : ""}
+              addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
               onSelectMedia={selectMedia}
-              onWatch={quickPlay}
+              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
             />
           </div>
         </div>
       </div>
 
-      {#if quickPlayPending && !playerSession}
+      {#if playback.quickPlayPending && !playback.playerSession}
         <!--
           Covers the gap between a "Watch" click and playerSession being set,
           i.e. before <PlayerComponent> even mounts (and before its own
@@ -727,18 +475,18 @@
           class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black"
           transition:fade={{ duration: 150 }}
         >
-          {#if quickPlayPending.media.poster_path}
+          {#if playback.quickPlayPending.media.poster_path}
             <div
               class="absolute inset-0 scale-110 bg-cover bg-center"
-              style="background-image: url('{quickPlayPending.media
+              style="background-image: url('{playback.quickPlayPending.media
                 .poster_path}'); filter: blur(5px); opacity: 0.35;"
             ></div>
             <div class="absolute inset-0 bg-black/65"></div>
             <img
-              src={quickPlayPending.media.poster_path}
-              alt={quickPlayPending.media.media_type === "tv"
-                ? quickPlayPending.media.name
-                : quickPlayPending.media.title}
+              src={playback.quickPlayPending.media.poster_path}
+              alt={playback.quickPlayPending.media.media_type === "tv"
+                ? playback.quickPlayPending.media.name
+                : playback.quickPlayPending.media.title}
               class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
             />
           {:else}
@@ -746,19 +494,28 @@
             <span
               class="relative z-10 px-8 text-center text-3xl font-bold text-white"
             >
-              {quickPlayPending.media.media_type === "tv"
-                ? quickPlayPending.media.name
-                : quickPlayPending.media.title}
+              {playback.quickPlayPending.media.media_type === "tv"
+                ? playback.quickPlayPending.media.name
+                : playback.quickPlayPending.media.title}
             </span>
           {/if}
           <Spinner class="relative z-10 mt-6 size-10" />
           <p class="relative z-10 mt-4 text-sm text-white/50">
-            {quickPlayPending.message}
+            {playback.quickPlayPending.message}
           </p>
+          <button
+            type="button"
+            class="relative z-10 mt-6 flex items-center gap-2 rounded-full border border-white/20 px-4 py-2 text-sm text-white/60 transition hover:bg-white/10 hover:text-white"
+            onclick={() => playback.cancelQuickPlay()}
+            aria-label="Cancel"
+          >
+            <X class="size-4" />
+            Cancel
+          </button>
         </div>
       {/if}
 
-      {#if playerSession}
+      {#if playback.playerSession}
         <!--
           One single <Player> instance overlaying the page full-screen. The page
           underneath is only hidden (not unmounted), so its state/scroll survive;
@@ -777,23 +534,25 @@
                through the backend proxy — mpv fetching the raw URL directly
                would drop the Referer/Origin the host requires. -->
           <PlayerComponent
-            src={playerSession.stream.infoHash ||
-              (playerSession.stream.headers
-                ? api.playProxyUrl(playerSession.stream.url)
-                : playerSession.stream.url)}
-            media={playerSession.media}
-            externalSubtitles={playerSession.subtitles}
-            season={playerSession.season}
-            episode={playerSession.episode}
-            onPlaybackFailed={handlePlaybackFailed}
+            src={playback.playerSession.stream.infoHash ||
+              (playback.playerSession.stream.headers
+                ? api.playProxyUrl(playback.playerSession.stream.url)
+                : playback.playerSession.stream.url)}
+            media={playback.playerSession.media}
+            externalSubtitles={playback.playerSession.subtitles}
+            season={playback.playerSession.season}
+            episode={playback.playerSession.episode}
+            fileIdx={playback.playerSession.stream.fileIdx}
+            onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
-              const m = playerSession?.media;
-              if (m) quickPlay(m, s, e);
+              const m = playback.playerSession?.media;
+              if (m) playback.quickPlay(m, s, e);
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
-              const m = playerSession?.media;
-              if (m) startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+              const m = playback.playerSession?.media;
+              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
             }}
+            onclose={() => playback.closePlayer()}
           />
         </div>
       {/if}
@@ -805,7 +564,7 @@
   <UpdateModal info={updateInfo} ondismiss={() => (updateInfo = null)} />
 {/if}
 
-{#if playbackToast}
+{#if playback.playbackToast}
   <div
     class="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center"
     transition:fade={{ duration: 150 }}
@@ -813,7 +572,20 @@
     <div
       class="rounded-full bg-black/80 px-4 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-sm"
     >
-      {playbackToast}
+      {playback.playbackToast}
+    </div>
+  </div>
+{/if}
+
+{#if syncErrorToast}
+  <div
+    class="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center"
+    transition:fade={{ duration: 150 }}
+  >
+    <div
+      class="rounded-full bg-destructive/90 px-4 py-2 text-sm font-medium text-destructive-foreground shadow-lg backdrop-blur-sm"
+    >
+      {syncErrorToast}
     </div>
   </div>
 {/if}

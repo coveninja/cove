@@ -25,6 +25,14 @@ Cove is three processes cooperating over local sockets, not one monolith:
    the (transparent) web layer. It also owns process lifecycle: it spawns the
    Go binary as a child process and serves the built frontend.
 
+The Android/Android TV package replaces the Qt shell rather than adding a
+fourth desktop process. `gomobile` embeds the Go backend in `cove.aar`,
+`CoveService` owns that backend inside a foreground service, and
+`WebViewActivity` hosts the same responsive Svelte bundle in a WebView.
+`MpvBridge`/`MpvPlayerView` provide native libmpv rendering and controls. In
+remote mode the WebView and native bridge point at a paired desktop backend
+instead of starting the embedded one.
+
 At startup, `qt/src/main.cpp` does three things in parallel: starts a small
 built-in static file server for `web/dist` (see below), spawns the Go binary
 as a `QProcess` (`startBackend`, `main.cpp:142-152`, stdout/stderr merged and
@@ -250,28 +258,56 @@ build tags:
 | Package | OSS default (`noop.go`, no tag) | Proprietary (`-tags discover`/`supabase`) |
 |---|---|---|
 | `internal/discover` | `//go:build !discover`. Personalization rows return `[]`/`{}` unless a custom algorithm URL is configured in Settings (see below); `/api/genres` still works (plain TMDB proxy). | `//go:build discover`, source lives in the `_private/cove-discover` git submodule. Real taste-profile-driven recommendations: genre/keyword/cast-crew scoring with recency decay, re-ranking, and the pluggable custom-algorithm system. |
-| `internal/supabase` | `//go:build !supabase`. Every `/api/auth/*` route returns `503`. | `//go:build supabase`, source in `_private/cove-auth`. Real account creation, login, cross-device library sync. |
+| `internal/supabase` | `//go:build !supabase`. Every `/api/auth/*` route returns `503`. | `//go:build supabase`, mirrored in `internal/supabase` and verified against `_private/cove-auth`. Real account creation, login, profile reconciliation, and cross-device sync. |
 
-The proprietary sources are pulled in via `make inject-private`
-(`Makefile:100-104`): `git submodule update --init`, then a plain `cp` of
+The private sources are refreshed via `make inject-private`: `git submodule
+update --init`, then a plain `cp` of
 `_private/cove-auth/*.go` into `internal/supabase/` and
 `_private/cove-discover/*.go` into `internal/discover/`. The `Makefile`'s
 `go` target auto-detects which private files are present
 (`Makefile:18-28`, checking for `internal/supabase/client.go` and
 `internal/discover/discover.go`) and adds the matching `-tags` automatically
 — so `make inject-private && make go` alone is enough; you don't need to
-remember the tag names. The copied-in files are gitignored in the main repo
-(`internal/discover/discover.go`, `discover_test.go`, `algorithm.go`,
-`algorithm_test.go`, and their `supabase` equivalents) — the git submodules
-under `_private/` are the actual source of truth, tracked in their own
-separate repos.
+remember the tag names. The Supabase implementation is intentionally checked
+in as a mirror so PR CI can compile and test `-tags supabase`; trusted-push
+and release CI run `scripts/check-private-sync.sh` before injection and fail
+if it differs from `_private/cove-auth`. Discovery implementation files remain
+gitignored and are available only after private-submodule injection.
 
 **Licensing note**: the main repo is AGPL-3.0. The proprietary submodule
-files carry their own "All Rights Reserved" copyright header and are
-explicitly excluded from the AGPL grant (see the header comment at the top of
-each file). Anyone building from a plain `git clone` (without submodule
-access) gets a fully-functional AGPL-licensed app with no personalization and
-no cloud sync — that's the intended OSS experience, not a degraded trial.
+files—and the checked-in Supabase mirror—carry their own "All Rights
+Reserved" copyright header and are explicitly excluded from the AGPL grant
+(see each file header). Untagged Go builds select the AGPL stubs. The standard
+Make targets auto-enable any implementation files present, but auth still
+requires Supabase runtime configuration and private discovery still requires
+submodule access.
+
+## Cross-device sync flow
+
+The frontend is the sync scheduler; the backend owns reconciliation and
+persistence:
+
+1. After session restoration, desktop/web calls `POST /api/auth/sync`
+   immediately, on focus/visibility resume, and every 60 seconds while visible.
+   Calls are throttled to a 45-second minimum and coalesced while one is in
+   flight. Android triggers on process resume and debounces post-mutation syncs.
+2. The backend validates the bearer JWT, reconciles the active local profile
+   with the account's remote profile rows, pulls remote data, and merges it
+   synchronously into the local stores. Entries, progress, profile names, and
+   settings use timestamp-based last-write-wins rules; dismissals are unioned;
+   removal tombstones prevent a deleted title from being resurrected by an
+   older device.
+3. A local-to-remote push starts asynchronously after the pull. RLS/unique-key
+   conflicts repair or adopt row IDs and retry once. Independent table errors
+   are joined so one failed dataset does not suppress the others.
+4. The response returns `library_generation`, allowing clients to refresh only
+   when merged library state changed. `push_error` reports the previous
+   completed asynchronous push; clients show each distinct error once instead
+   of spamming every poll.
+
+`MergeFrom` persists synchronously because a successful sync response must not
+race a delayed disk write. Unit tests cover generation stability, LWW merges,
+tombstone behavior, and sync cleanup/error de-duplication.
 
 **Worked example — the pluggable discovery algorithm.** This split doesn't
 have to mean "OSS users get nothing": `internal/discover`'s "custom

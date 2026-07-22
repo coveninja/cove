@@ -29,11 +29,12 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				URL string `json:"url"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
 				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
 				return
 			}
-			repo, err := m.AddRepo(body.URL)
+			repo, err := m.AddRepo(r.Context(), body.URL)
 			if err != nil {
 				http.Error(w, "could not add repo: "+err.Error(), http.StatusBadRequest)
 				return
@@ -52,6 +53,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				Enabled bool `json:"enabled"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return
@@ -89,7 +91,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, "missing ?id=", http.StatusBadRequest)
 			return
 		}
-		if err := m.RefreshRepo(id); err != nil {
+		if err := m.RefreshRepo(r.Context(), id); err != nil {
 			http.Error(w, "could not refresh repo: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -110,11 +112,12 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		var body struct {
 			Enabled bool `json:"enabled"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		if err := m.SetScraperEnabled(repoID, scraperID, body.Enabled); err != nil {
+		if err := m.SetScraperEnabled(r.Context(), repoID, scraperID, body.Enabled); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
