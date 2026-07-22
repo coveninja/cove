@@ -53,6 +53,7 @@
 #endif
 
 #include "GpuWorkaround.h"
+#include "LinuxGraphicsEnvironment.h"
 #include "MpvObject.h"
 
 // Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
@@ -479,17 +480,9 @@ int main(int argc, char *argv[]) {
   // sandbox pins QtWebEngine 6.9 (BaseApp), which predates the 6.11 leak, so
   // native Wayland is safe there. Revisit if the BaseApp moves to an
   // affected Qt.
-  const bool inFlatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID");
-  if (!inFlatpak && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
-    qputenv("QT_QPA_PLATFORM", "xcb");
-
-  // Under XWayland, Hyprland unmaps windows on workspace switch and the
-  // threaded render loop can stall ~15 s on the unmapped surface, leaving the
-  // window black. The basic render loop is not affected; the heavy
-  // rendering (Chromium compositor, mpv) happens outside the Quick scene graph
-  // either way, so the single-threaded loop costs nothing here.
-  if (!inFlatpak && qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
-    qputenv("QSG_RENDER_LOOP", "basic");
+  // Default to XCB on host installations. The Hyprland-only render-loop
+  // workaround is applied there as well; explicit user values always win.
+  LinuxGraphicsEnvironment::applyDefaults();
 #endif
 
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI

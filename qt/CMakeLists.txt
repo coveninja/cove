@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(cove_shell LANGUAGES CXX)
 
+option(COVE_BUILD_TESTS "Build Cove Qt shell tests" OFF)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -42,6 +44,8 @@ set(APP_SOURCES
   src/MpvObject.h
   src/GpuWorkaround.cpp
   src/GpuWorkaround.h
+  src/LinuxGraphicsEnvironment.cpp
+  src/LinuxGraphicsEnvironment.h
   resources.qrc
 )
 # resources/cove.rc embeds resources/cove.ico into cove_shell.exe (taskbar,
@@ -68,3 +72,21 @@ target_link_libraries(cove_shell PRIVATE
   Qt6::OpenGL
   ${MPV_LINK_TARGET}
 )
+
+if(COVE_BUILD_TESTS)
+    enable_testing()
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+
+    add_executable(cove_shell_environment_tests
+        tests/LinuxGraphicsEnvironmentTest.cpp
+        src/LinuxGraphicsEnvironment.cpp
+        src/LinuxGraphicsEnvironment.h
+    )
+    target_include_directories(cove_shell_environment_tests PRIVATE src)
+    target_link_libraries(cove_shell_environment_tests PRIVATE
+        Qt6::Core
+        Qt6::Test
+    )
+    add_test(NAME cove-shell-environment
+             COMMAND cove_shell_environment_tests)
+endif()

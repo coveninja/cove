@@ -210,8 +210,9 @@ jobs:
           sudo apt-get install -y cmake ninja-build pkg-config \
             qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
             qt6-webchannel-dev libmpv-dev
-      - run: cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCOVE_BUILD_TESTS=ON
       - run: cmake --build qt/build
+      - run: ctest --test-dir qt/build --output-on-failure
 
   android:
     name: Android lint, unit, and emulator tests

@@ -140,8 +140,11 @@ test-security:
 	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 	cd $(WEB_DIR) && npm audit --audit-level=low
 
-## Verify that the desktop shell still configures and compiles.
-test-qt: qt
+## Verify that the desktop shell configures, compiles, and passes its Qt tests.
+test-qt:
+	cmake -S $(QT_DIR) -B $(QT_BUILD) -DCOVE_BUILD_TESTS=ON
+	cmake --build $(QT_BUILD)
+	ctest --test-dir $(QT_BUILD) --output-on-failure
 
 ## Rebuild the gomobile AAR, then run Android lint/JVM tests and compile the
 ## instrumentation APK. A configured Android SDK/NDK and JDK 17 are required.
