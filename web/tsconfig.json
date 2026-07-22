@@ -13,7 +13,6 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "verbatimModuleSyntax": false,
-    "baseUrl": ".",
     "types": ["vidstack/svelte", "vite/client"],
     "paths": {
       "$lib": ["./src/lib"],
