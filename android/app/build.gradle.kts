@@ -1,5 +1,6 @@
 import java.io.FileInputStream
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 // Load developer secrets from local.properties (gitignored).
 // TMDB_API_KEY is passed into BuildConfig so CoveApplication can forward it
@@ -11,13 +12,12 @@ val localProps = Properties().also { props ->
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
     namespace = "com.coveninja.cove"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.coveninja.cove"
@@ -97,8 +97,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 
@@ -134,8 +137,9 @@ dependencies {
     // libmpv — Findroid's prebuilt mpv for Android. Ships all 4 ABIs:
     // arm64-v8a, armeabi-v7a, x86, x86_64 (confirmed via unzip -l inspection).
     // 0.5.1 uses the classic static API (MPVLib.create/init/etc.) and has
-    // minCompileSdk=1, compatible with our compileSdk=35.
-    implementation("dev.jdtech.mpv:libmpv:1.0.0")
+    // minCompileSdk=1, compatible with our compileSdk=36. The 1.x API is not
+    // source-compatible with the player bridge, so stay on 0.5.1 for now.
+    implementation("dev.jdtech.mpv:libmpv:0.5.1")
 
     // MediaSessionCompat — lock-screen / headset transport controls wired in
     // WebViewActivity for audio-focus and lock-screen media controls.

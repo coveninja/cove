@@ -82,7 +82,7 @@ changed:
 ```sh
 make android-aar
 cd android
-gradle lintDebug testDebugUnitTest assembleDebugAndroidTest
+./gradlew lintDebug testDebugUnitTest assembleDebugAndroidTest
 ```
 
 With an API 35 emulator running, execute the activity launch test with:

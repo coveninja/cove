@@ -226,8 +226,6 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: "8.11.1"
       - uses: actions/setup-node@v6
         with:
           node-version: 22
@@ -238,7 +236,8 @@ jobs:
       - name: Install Android NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
       - name: Install gomobile
         run: |
           MOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
@@ -250,7 +249,7 @@ jobs:
         run: make android-aar
       - name: Lint and unit test
         working-directory: android
-        run: gradle lintDebug testDebugUnitTest
+        run: ./gradlew lintDebug testDebugUnitTest
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -263,7 +262,7 @@ jobs:
           arch: x86_64
           profile: pixel_2
           working-directory: android
-          script: gradle connectedDebugAndroidTest
+          script: ./gradlew connectedDebugAndroidTest
       - uses: actions/upload-artifact@v4
         if: always()
         with:

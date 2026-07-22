@@ -115,7 +115,7 @@ The fast checks do not require an emulator:
 
 ```sh
 cd android
-gradle lintDebug testDebugUnitTest assembleDebugAndroidTest
+./gradlew lintDebug testDebugUnitTest assembleDebugAndroidTest
 ```
 
 `testDebugUnitTest` covers JSON contracts used by auth/sync. The instrumentation
@@ -123,7 +123,7 @@ APK contains a launch smoke test for `WebViewActivity`. With the API 35 `cove`
 AVD running:
 
 ```sh
-gradle connectedDebugAndroidTest
+./gradlew connectedDebugAndroidTest
 ```
 
 GitHub Actions builds a fresh gomobile AAR, runs lint and JVM tests, then runs
@@ -132,13 +132,9 @@ workflow artifacts.
 
 ## Gradle wrapper jar
 
-`gradle-wrapper.jar` is not committed. Generate it once with a locally installed
-Gradle 8.11+:
-```sh
-cd android
-~/Android/gradle-8.11.1/bin/gradle wrapper --gradle-version 8.11.1
-```
-After that `./gradlew` works without a system Gradle installation.
+The complete Gradle wrapper, including `gradle-wrapper.jar`, is committed so a
+fresh checkout can run `./gradlew` without a system Gradle installation. When
+upgrading Gradle, regenerate and commit all wrapper files together.
 
 ## App structure
 

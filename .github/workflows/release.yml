@@ -585,18 +585,17 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # The wrapper jar is not committed; install the same Gradle the wrapper
-      # pins (android/gradle/wrapper/gradle-wrapper.properties — keep in sync).
+      # Configure caching and build reporting; the checked-in wrapper selects
+      # the Gradle version required by the Android plugin.
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.11.1'
 
-      # Runners preinstall the Android SDK at $ANDROID_HOME; the Makefile's
-      # `?=` assignments pick it up. Only the pinned NDK needs installing.
+      # Runners preinstall the Android SDK at $ANDROID_HOME; install the exact
+      # platform, build tools, and NDK needed by the Android build.
       - name: Install Android NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
 
       - name: Inject private implementations
         run: |
@@ -690,7 +689,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle lintDebug testDebugUnitTest assembleRelease
+        run: ./gradlew lintDebug testDebugUnitTest assembleRelease
 
       - name: Stage APK + checksum
         run: |
