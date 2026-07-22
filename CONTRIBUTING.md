@@ -17,12 +17,11 @@ first `make run`. A few things specific to iterating on the code:
   The player will show "unavailable" (no `QWebChannel`/mpv bridge exists in a
   plain browser), but everything else — search, library, settings, addons —
   works against the real Go backend.
-- After changing any Go struct in `internal/tmdb`, `internal/addons`,
-  `internal/player`, `internal/settings`, `internal/library`, or
-  `internal/nuvio`, run `make generate` (wraps `tygo generate`) to regenerate
-  the mirrored TypeScript types in `web/src/lib/types/*.ts`. **Never hand-edit
-  those generated files** — they're overwritten on the next `make generate`
-  and the files themselves say so at the top.
+- After changing a Go struct exported to the frontend (see every package in
+  `tygo.yaml`), run `make generate` to regenerate the mirrored TypeScript
+  types in `web/src/lib/types/*.ts`. **Never hand-edit those generated files**
+  — they're overwritten on the next generation pass. `time.Time` fields must
+  have a `string` mapping in `tygo.yaml`, matching their JSON encoding.
 - `internal/nuvio` embeds pure-Go dependencies (`goja`, `goja_nodejs`,
   `andybalholm/brotli`) for its sandboxed JS runtime, so the OSS build stays
   `CGO_ENABLED=0` with no Node/V8 dependency. Keep any new dependency for that
@@ -32,22 +31,26 @@ first `make run`. A few things specific to iterating on the code:
 
 `internal/discover` and `internal/supabase` each have two implementations,
 switched at compile time by build tag: an open-source stub (`noop.go`,
-compiled by default) and a proprietary implementation pulled from a private
-git submodule via `make inject-private`. See
+compiled by a plain untagged Go command) and a proprietary implementation.
+The Supabase auth/sync implementation is mirrored in `internal/supabase` so
+tagged CI and contributors can compile it; releases still verify that it
+matches `_private/cove-auth` byte-for-byte. The discovery implementation is
+injected from `_private/cove-discover` by `make inject-private`. See
 [ARCHITECTURE.md](ARCHITECTURE.md#the-ossproprietary-split) for the full
 mechanism.
 
-If you don't have access to `_private/cove-auth`/`_private/cove-discover`,
-that's fine — `git submodule update --init` will simply fail or leave those
-directories empty, and a plain `make run`/`make go` (no `inject-private`
-step) builds and runs the full OSS experience: no personalization beyond a
-user-configured custom algorithm URL, and `/api/auth/*` returns `503`. This
-is the environment to develop and test against for any change to shared code
-(`internal/library`, `internal/settings`, `internal/tmdb`,
-`internal/player`, `internal/addons`, the frontend). If a change needs to
-touch the proprietary side (e.g. a new field the discovery engine should
-read), coordinate on making the corresponding `noop.go` change in the same
-PR so both builds keep working.
+If you don't have private-submodule access, that's fine. Untagged
+`go test ./...` exercises the public stubs; `go test -tags supabase ./...`
+exercises the mirrored auth/sync implementation. Personalized discovery
+remains on its stub unless the private discovery files are present. This
+covers shared work in `internal/library`, `internal/settings`, `internal/tmdb`,
+`internal/player`, `internal/addons`, and the frontend. If an interface changes
+across a build-tag boundary, update the corresponding stub and tagged
+implementation in the same change so both variants keep compiling.
+
+When changing the mirrored Supabase files, update `_private/cove-auth` and
+`internal/supabase` together, then run `bash scripts/check-private-sync.sh`.
+Push CI and release builds intentionally fail if those copies diverge.
 
 ## Code style
 
@@ -74,22 +77,38 @@ PR so both builds keep working.
 ## Testing
 
 ```sh
-go build ./...                      # OSS build
-go build -tags discover ./...       # with the proprietary discovery engine, if you have submodule access
-go test ./...                       # OSS-build tests
-go test -tags discover ./...        # proprietary-build tests only run under this tag
+make test      # complete Go + web suite; recommended before a PR
+make test-all  # add workflow/security checks plus Qt and Android builds
 ```
+
+The individual `test-go`, `test-web`, `test-build`, `test-workflows`,
+`test-security`, `test-qt`, and `test-android` targets are useful when changing
+one component. The web browser suite needs a one-time
+`cd web && npx playwright install chromium` setup.
 
 ```sh
-cd web
-npm run check   # svelte-check (types)
-npm run lint    # eslint
-npm run format  # prettier — run before committing frontend changes
+make test-private            # maintainers, after make inject-private
+make test-android-connected  # with an Android device/emulator running
 ```
 
-There's no CI lint/test gate on pull requests yet (`.github/workflows/release.yml`
-only handles tagged releases), so these are on you to run locally before
-opening a PR.
+Run Prettier before committing frontend changes:
+
+```sh
+cd android
+npm run format
+```
+
+The pull-request workflow runs public and Supabase-tagged Go tests with
+coverage, vet/format checks, the race detector, Linux/Windows compilation,
+Vitest/Playwright/typecheck/lint/build, a Qt build, Android lint/JVM tests and
+an API 35 emulator smoke test, dependency review, and vulnerability scans.
+Private `supabase,discover` integration tests additionally run on trusted
+pushes where the private-submodule token is available. Coverage is uploaded
+to Codecov and retained as downloadable workflow artifacts; it is currently
+informational, with no hard percentage gate.
+
+See [`docs/TESTING.md`](docs/TESTING.md) for the complete job matrix, coverage
+artifacts, Android emulator setup, and release gating.
 
 ## Before opening a PR
 

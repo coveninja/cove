@@ -25,6 +25,8 @@ packages:
       time.Time: "string"   # ISO 8601; tygo's default, listed here for clarity
   - path: "github.com/coveninja/cove/internal/profiles"
     output_path: "web/src/lib/types/profiles.ts"
+    type_mappings:
+      time.Time: "string"
   - path: "github.com/coveninja/cove/internal/updater"
     output_path: "web/src/lib/types/updater.ts"
   - path: "github.com/coveninja/cove/internal/calendar"

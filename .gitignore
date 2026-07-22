@@ -10,6 +10,10 @@
 /web/dist/
 /web/node_modules/
 /web/.eslintcache
+/web/coverage/
+/web/playwright-report/
+/web/test-results/
+/coverage-*.out
 /CLAUDE.md
 
 # Proprietary — sourced from the _private/cove-discover submodule via `make inject-private`

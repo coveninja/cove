@@ -38,6 +38,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -568,11 +569,12 @@ class WebViewActivity : ComponentActivity() {
         installFailedReceiver = receiver
 
         val filter = IntentFilter(PackageInstallerReceiver.ACTION_INSTALL_FAILED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(receiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
 
         // Download on IO, post progress to the main thread via mainHandler.
         lifecycleScope.launch(Dispatchers.IO) {

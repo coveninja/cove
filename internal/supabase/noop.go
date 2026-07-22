@@ -55,7 +55,7 @@ func (s *Server) SetupHandlers(mux *http.ServeMux) {
 		"/api/auth/logout",
 		"/api/auth/me",
 		"/api/auth/sync",
-		"/api/auth/confirm-register",
+		"/api/auth/register/confirm",
 	} {
 		mux.HandleFunc(path, stub)
 	}

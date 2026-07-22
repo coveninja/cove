@@ -60,7 +60,6 @@
 </script>
 
 <!-- Seek bar (full width, custom — no third-party slider) -->
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   role="slider"
   aria-label="Seek"

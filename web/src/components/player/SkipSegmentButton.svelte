@@ -4,7 +4,6 @@
   let { label, onSkip }: { label: string; onSkip: () => void } = $props();
 </script>
 
-<!-- svelte-ignore a11y_consider_explicit_label -->
 <Button
   variant="default"
   size="lg"

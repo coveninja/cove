@@ -113,32 +113,38 @@
     genres = [];
     genreRows = [];
 
-    api.genreList(type).then((list) => {
-      genres = list;
+    api
+      .genreList(type)
+      .then((list) => {
+        genres = list;
 
-      genreRows = list.slice(0, 8).map((g) => ({
-        key: `genre-${g.id}`,
-        header: type === "movie" ? `${g.name} movies` : `${g.name} shows`,
-        medias: [] as Media[],
-        loading: true,
-      }));
+        genreRows = list.slice(0, 8).map((g) => ({
+          key: `genre-${g.id}`,
+          header: type === "movie" ? `${g.name} movies` : `${g.name} shows`,
+          medias: [] as Media[],
+          loading: true,
+        }));
 
-      for (const genre of list.slice(0, 8)) {
-        const key = `genre-${genre.id}`;
-        api
-          .discoverByGenre(type, genre.id, { limit: 20 })
-          .then((medias) => {
-            genreRows = untrack(() => genreRows).map((r) =>
-              r.key === key ? { ...r, medias, loading: false } : r,
-            );
-          })
-          .catch(() => {
-            genreRows = untrack(() => genreRows).map((r) =>
-              r.key === key ? { ...r, loading: false } : r,
-            );
-          });
-      }
-    });
+        for (const genre of list.slice(0, 8)) {
+          const key = `genre-${genre.id}`;
+          api
+            .discoverByGenre(type, genre.id, { limit: 20 })
+            .then((medias) => {
+              genreRows = untrack(() => genreRows).map((r) =>
+                r.key === key ? { ...r, medias, loading: false } : r,
+              );
+            })
+            .catch(() => {
+              genreRows = untrack(() => genreRows).map((r) =>
+                r.key === key ? { ...r, loading: false } : r,
+              );
+            });
+        }
+      })
+      .catch(() => {
+        genres = [];
+        genreRows = [];
+      });
   });
 
   function watchFeatured(): void {

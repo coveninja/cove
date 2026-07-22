@@ -1,0 +1,294 @@
+name: CI checks
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Run actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+  go-test:
+    name: Go test (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: public
+            tags: ""
+          - variant: supabase
+            tags: supabase
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify formatting
+        shell: bash
+        run: |
+          files=$(git ls-files '*.go')
+          unformatted=$(gofmt -l $files)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        shell: bash
+        env:
+          GO_TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "$GO_TAGS" ]; then
+            go vet -tags "$GO_TAGS" ./...
+          else
+            go vet ./...
+          fi
+      - name: Test with coverage
+        shell: bash
+        env:
+          GO_TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "$GO_TAGS" ]; then
+            go test -count=1 -tags "$GO_TAGS" -covermode=atomic -coverprofile="coverage-${{ matrix.variant }}.out" ./...
+          else
+            go test -count=1 -covermode=atomic -coverprofile="coverage-${{ matrix.variant }}.out" ./...
+          fi
+          go tool cover -func="coverage-${{ matrix.variant }}.out" | tail -1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-coverage-${{ matrix.variant }}
+          path: coverage-${{ matrix.variant }}.out
+          if-no-files-found: ignore
+      - name: Publish Go coverage
+        uses: codecov/codecov-action@v6
+        with:
+          files: coverage-${{ matrix.variant }}.out
+          flags: go-${{ matrix.variant }}
+          use_oidc: true
+          fail_ci_if_error: false
+
+  go-race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -count=1 -race -tags supabase ./...
+
+  go-build:
+    name: Go build (${{ matrix.goos }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            output: cove
+          - goos: windows
+            output: cove.exe
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build tagged binary
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: amd64
+          GOOS: ${{ matrix.goos }}
+          OUTPUT: ${{ matrix.output }}
+        run: go build -tags supabase -o "$OUTPUT" .
+
+  private-integrations:
+    name: Private integration tests
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          token: ${{ secrets.COVE_PRIVATE_TOKEN }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify checked-in Supabase copy
+        run: bash scripts/check-private-sync.sh
+      - name: Inject private implementations
+        run: |
+          cp _private/cove-auth/*.go internal/supabase/
+          cp _private/cove-discover/*.go internal/discover/
+      - run: go test -count=1 -tags supabase,discover ./...
+      - run: go vet -tags supabase,discover ./...
+
+  web:
+    name: Web test, typecheck, lint, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: npm run lint
+      - run: npm run build
+      - name: Audit production and development dependencies
+        run: npm audit --audit-level=low
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-test-results
+          path: |
+            web/coverage
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+      - name: Publish web coverage
+        uses: codecov/codecov-action@v6
+        with:
+          files: web/coverage/lcov.info
+          flags: web
+          use_oidc: true
+          fail_ci_if_error: false
+
+  qt:
+    name: Qt shell build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Qt and mpv development packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build pkg-config \
+            qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
+            qt6-webchannel-dev libmpv-dev
+      - run: cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build qt/build
+
+  android:
+    name: Android lint, unit, and emulator tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: "8.11.1"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - name: Install Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018"
+      - name: Install gomobile
+        run: |
+          MOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          go install golang.org/x/mobile/cmd/gomobile@"$MOBILE_VERSION"
+          go install golang.org/x/mobile/cmd/gobind@"$MOBILE_VERSION"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          gomobile init
+      - name: Build test AAR
+        run: make android-aar
+      - name: Lint and unit test
+        working-directory: android
+        run: gradle lintDebug testDebugUnitTest
+      - name: Emulator launch smoke test
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          working-directory: android
+          script: gradle connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/lint-results-debug.html
+            android/app/build/reports/tests
+            android/app/build/reports/androidTests
+            android/app/build/outputs/androidTest-results
+          if-no-files-found: ignore
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+
+  govulncheck:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

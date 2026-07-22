@@ -9,7 +9,6 @@
   import { langName, trackLabel } from "$lib/player/trackLabels";
   import type { SubSel } from "$lib/player/subtitles";
   import MenuItem from "./MenuItem.svelte";
-  import { Separator } from "$lib/components/ui/separator/index.js";
 
   let {
     open = $bindable(false),

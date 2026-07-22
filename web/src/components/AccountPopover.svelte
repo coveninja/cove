@@ -86,7 +86,7 @@
 <Popover.Root bind:open>
   <Popover.Trigger>
     {#snippet child({ props })}
-      <Button variant="outline" size="icon" {...props}>
+      <Button variant="outline" size="icon" aria-label="Account" {...props}>
         {#if auth.session}
           <span
             class="flex size-full items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground"

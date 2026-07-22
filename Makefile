@@ -4,6 +4,8 @@
 #   make run        # build everything, then launch the shell
 #   make dev        # regenerate TS types, build everything, launch the shell
 #   make go|web|qt  # build a single component
+#   make test       # run the complete Go + web test suites
+#   make test-all   # run the broad local CI suite (adds Qt, Android, security)
 #   make web-dev    # Vite dev server (browser only — no mpv bridge)
 #   make patch      # bump patch version, stage all pending changes, commit, tag
 #                   # (optionally: make patch TITLE="..." MSG="..." to override the
@@ -42,7 +44,7 @@ ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
 export ANDROID_HOME
 export ANDROID_NDK_HOME
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell patch minor major clean android-aar android android-install tv-avd tv-install
+.PHONY: all build run dev go web qt qt-configure generate web-dev shell test test-all test-go test-web test-build test-workflows test-security test-qt test-android test-android-connected test-private patch minor major clean android-aar android android-install tv-avd tv-install
 
 all: build
 
@@ -88,6 +90,74 @@ dev: generate run
 ## shows "unavailable", but the rest of the UI works against the Go backend.
 web-dev:
 	cd $(WEB_DIR) && npm run dev
+
+## Complete day-to-day test suite. This is the recommended check before a PR:
+## public and Supabase-tagged Go tests plus the web unit/browser/type/lint/build
+## checks. Run `npx playwright install chromium` in web/ once before the first
+## browser-test run.
+test: test-go test-web
+
+## Go checks shared with CI. Coverage profiles are left in the repository root
+## (and ignored by git) so they can be inspected with `go tool cover`.
+test-go:
+	@files="$$(git ls-files --cached --others --exclude-standard '*.go')"; \
+	unformatted="$$(gofmt -l $$files)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "The following Go files need gofmt:"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+	go vet ./...
+	go test -count=1 -covermode=atomic -coverprofile=coverage-public.out ./...
+	go vet -tags supabase ./...
+	go test -count=1 -tags supabase -covermode=atomic -coverprofile=coverage-supabase.out ./...
+	go test -count=1 -race -tags supabase ./...
+
+## Frontend unit coverage, static checks, production build, and Playwright flows.
+test-web:
+	cd $(WEB_DIR) && npm test
+	cd $(WEB_DIR) && npm run check
+	cd $(WEB_DIR) && npm run lint
+	cd $(WEB_DIR) && npm run build
+	cd $(WEB_DIR) && npm run test:e2e
+
+## Cross-compile the tagged Go code in the same configurations used by CI.
+test-build:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags supabase ./...
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags supabase ./...
+
+## Lint the GitHub Actions definitions. Go downloads actionlint on first use.
+test-workflows:
+	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+
+## Dependency and reachable-vulnerability checks. These require network access.
+test-security:
+	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+	cd $(WEB_DIR) && npm audit --audit-level=low
+
+## Verify that the desktop shell still configures and compiles.
+test-qt: qt
+
+## Rebuild the gomobile AAR, then run Android lint/JVM tests and compile the
+## instrumentation APK. A configured Android SDK/NDK and JDK 17 are required.
+test-android: android-aar
+	cd android && ./gradlew lintDebug testDebugUnitTest assembleDebugAndroidTest
+
+## Run the Android instrumentation tests on an already-running device/emulator.
+test-android-connected: test-android
+	cd android && ./gradlew connectedDebugAndroidTest
+
+## Maintainer-only release-tag validation. Run `make inject-private` first.
+test-private:
+	@test -f internal/discover/discover.go || { echo "Private Discover sources are not injected; run 'make inject-private' first."; exit 1; }
+	bash scripts/check-private-sync.sh
+	go test -count=1 -tags supabase,discover ./...
+	go vet -tags supabase,discover ./...
+
+## Broadest environment-independent local approximation of CI. The private
+## integration and connected-emulator checks remain opt-in because they require
+## private submodules or a running Android target.
+test-all: test-workflows test test-build test-security test-qt test-android
 
 run-debug: build
 	QTWEBENGINE_REMOTE_DEBUGGING=9222 $(SHELL_BIN) --backend ./$(GO_BIN) --webroot ./$(WEB_DIR)/dist

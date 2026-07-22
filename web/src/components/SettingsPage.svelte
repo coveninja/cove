@@ -110,7 +110,11 @@
   let addAddonLoading = $state(false);
 
   async function loadAddons() {
-    addons = await api.getAddons();
+    try {
+      addons = await api.getAddons();
+    } catch {
+      addons = [];
+    }
   }
 
   const providerAddons = $derived(
@@ -182,7 +186,11 @@
   );
 
   async function loadNuvioRepos() {
-    nuvioRepos = await api.getNuvioRepos();
+    try {
+      nuvioRepos = await api.getNuvioRepos();
+    } catch {
+      nuvioRepos = [];
+    }
   }
 
   // Nuvio scraper streams carry AddonName = "Nuvio: <scraper name>" (see
@@ -411,7 +419,11 @@
   }
 
   async function loadTraktStatus() {
-    traktStatus = await api.traktStatus(); // null on 503 (not configured)
+    try {
+      traktStatus = await api.traktStatus(); // null on 503 (not configured)
+    } catch {
+      traktStatus = null;
+    }
   }
 
   function clearTraktPoll() {

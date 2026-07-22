@@ -23,6 +23,7 @@ android {
         applicationId = "com.coveninja.cove"
         minSdk = 28
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // CI passes the release tag via COVE_VERSION (e.g. "v1.2.3"); local
         // builds fall back to the dev placeholder. versionCode is derived as
         // major*10000 + minor*100 + patch so Play/package-manager upgrade
@@ -143,4 +144,9 @@ dependencies {
     // WebKit extensions — required for WebViewCompat / addDocumentStartJavaScript
     // in MpvBridge and WebViewActivity.
     implementation("androidx.webkit:webkit:1.12.1")
+
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }

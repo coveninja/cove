@@ -93,13 +93,11 @@
 
 <div class="fixed inset-0 z-50 mt-18">
   <ScrollArea class="h-full w-full">
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       role="presentation"
       class="flex min-h-full items-start justify-center overscroll-contain p-4 sm:p-6 lg:p-10"
       onmousedown={close}
     >
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         bind:this={el}
         role="presentation"

@@ -21,7 +21,7 @@ export interface Profile {
   name: string;
   is_primary: boolean;
   supabase_uid?: string; // nil = guest / local-only
-  name_updated_at: any /* time.Time */; // last time Name was changed; zero = unknown
+  name_updated_at: string; // last time Name was changed; zero = unknown
 }
 /**
  * Store owns the profile list and the currently active profile ID.

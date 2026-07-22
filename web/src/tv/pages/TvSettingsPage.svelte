@@ -100,7 +100,11 @@
   let addAddonLoading = $state(false);
 
   async function loadAddons() {
-    addons = await api.getAddons();
+    try {
+      addons = await api.getAddons();
+    } catch {
+      addons = [];
+    }
   }
 
   const providerAddons = $derived(addons.filter((a) => a.kind === KindProvider));
@@ -170,7 +174,11 @@
   );
 
   async function loadNuvioRepos() {
-    nuvioRepos = await api.getNuvioRepos();
+    try {
+      nuvioRepos = await api.getNuvioRepos();
+    } catch {
+      nuvioRepos = [];
+    }
   }
 
   const nuvioProviderOptions = $derived(
