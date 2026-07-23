@@ -27,10 +27,12 @@ export const focusable: Action<HTMLElement, FocusableOptions | undefined> = (
   el,
   options,
 ) => {
-  if (!el.hasAttribute("tabindex")) {
+  const addedTabIndex = !el.hasAttribute("tabindex");
+  const addedFocusableMarker = !el.hasAttribute("data-tv-focusable");
+  if (addedTabIndex) {
     el.tabIndex = -1;
   }
-  el.dataset.tvFocusable = "";
+  if (addedFocusableMarker) el.dataset.tvFocusable = "";
   registerFocusable(el, options?.groupId);
 
   return {
@@ -40,7 +42,8 @@ export const focusable: Action<HTMLElement, FocusableOptions | undefined> = (
     },
     destroy() {
       unregisterFocusable(el);
-      delete el.dataset.tvFocusable;
+      if (addedFocusableMarker) delete el.dataset.tvFocusable;
+      if (addedTabIndex) el.removeAttribute("tabindex");
     },
   };
 };
@@ -72,7 +75,7 @@ export const focusGroup: Action<HTMLElement, FocusGroupOptions> = (
 
   return {
     update(newOptions) {
-      unregisterGroup(options.id);
+      if (newOptions.id !== options.id) unregisterGroup(options.id);
       registerGroup(el, newOptions);
       options = newOptions;
     },
