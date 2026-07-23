@@ -85,6 +85,59 @@ var officialAddons = []AddonEntry{
 	},
 }
 
+type managerState struct {
+	stremioAddons   []AddonEntry
+	officialEnabled map[string]bool
+	updatedAt       time.Time
+}
+
+func cloneStringBoolMap(src map[string]bool) map[string]bool {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]bool, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneAddonEntries(src []AddonEntry) []AddonEntry {
+	if src == nil {
+		return nil
+	}
+	dst := make([]AddonEntry, len(src))
+	for i, entry := range src {
+		dst[i] = entry
+		dst[i].DisabledCatalogs = cloneStringBoolMap(entry.DisabledCatalogs)
+		dst[i].Manifest.Types = append([]string(nil), entry.Manifest.Types...)
+		dst[i].Manifest.Resources = append([]ManifestResource(nil), entry.Manifest.Resources...)
+		for j, resource := range entry.Manifest.Resources {
+			dst[i].Manifest.Resources[j].Types = append([]string(nil), resource.Types...)
+			dst[i].Manifest.Resources[j].IDPrefixes = append([]string(nil), resource.IDPrefixes...)
+		}
+		dst[i].Manifest.Catalogs = append([]ManifestCatalog(nil), entry.Manifest.Catalogs...)
+		for j, catalog := range entry.Manifest.Catalogs {
+			dst[i].Manifest.Catalogs[j].Extra = append([]ManifestCatalogExtra(nil), catalog.Extra...)
+		}
+	}
+	return dst
+}
+
+func (m *Manager) snapshotL() managerState {
+	return managerState{
+		stremioAddons:   cloneAddonEntries(m.stremioAddons),
+		officialEnabled: cloneStringBoolMap(m.officialEnabled),
+		updatedAt:       m.updatedAt,
+	}
+}
+
+func (m *Manager) restoreL(state managerState) {
+	m.stremioAddons = state.stremioAddons
+	m.officialEnabled = state.officialEnabled
+	m.updatedAt = state.updatedAt
+}
+
 // New returns a Manager loaded from the profile-scoped store (or empty on first run).
 // imdbLookup resolves a TMDB TV show ID to an IMDB ID (or "" on failure); it is
 // used by subtitle addons that only accept IMDB IDs.
@@ -151,14 +204,13 @@ func (m *Manager) GetEntries() []AddonEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	entries := make([]AddonEntry, 0, len(officialAddons)+len(m.stremioAddons))
-	for _, a := range officialAddons {
-		if enabled, ok := m.officialEnabled[a.ID]; ok {
-			a.Enabled = enabled
+	entries := cloneAddonEntries(officialAddons)
+	for i := range entries {
+		if enabled, ok := m.officialEnabled[entries[i].ID]; ok {
+			entries[i].Enabled = enabled
 		}
-		entries = append(entries, a)
 	}
-	entries = append(entries, m.stremioAddons...)
+	entries = append(entries, cloneAddonEntries(m.stremioAddons)...)
 	return entries
 }
 
@@ -186,15 +238,24 @@ func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := m.snapshotL()
 
 	for i, a := range m.stremioAddons {
 		if a.URL == entry.URL {
 			m.stremioAddons[i] = entry
-			return entry, m.saveL()
+			if err := m.saveL(); err != nil {
+				m.restoreL(previous)
+				return entry, err
+			}
+			return entry, nil
 		}
 	}
 	m.stremioAddons = append(m.stremioAddons, entry)
-	return entry, m.saveL()
+	if err := m.saveL(); err != nil {
+		m.restoreL(previous)
+		return entry, err
+	}
+	return entry, nil
 }
 
 // RemoveAddon removes a user-added (stremio) addon by ID or URL. When addonURL
@@ -210,10 +271,15 @@ func (m *Manager) RemoveAddon(id, addonURL string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := m.snapshotL()
 	for i, a := range m.stremioAddons {
 		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
 			m.stremioAddons = append(m.stremioAddons[:i], m.stremioAddons[i+1:]...)
-			return m.saveL()
+			if err := m.saveL(); err != nil {
+				m.restoreL(previous)
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("addon not found")
@@ -226,17 +292,26 @@ func (m *Manager) RemoveAddon(id, addonURL string) error {
 func (m *Manager) SetEnabled(id, addonURL string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := m.snapshotL()
 
 	for _, a := range officialAddons {
 		if a.ID == id {
 			m.officialEnabled[id] = enabled
-			return m.saveL()
+			if err := m.saveL(); err != nil {
+				m.restoreL(previous)
+				return err
+			}
+			return nil
 		}
 	}
 	for i, a := range m.stremioAddons {
 		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
 			m.stremioAddons[i].Enabled = enabled
-			return m.saveL()
+			if err := m.saveL(); err != nil {
+				m.restoreL(previous)
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("addon not found")
@@ -350,7 +425,7 @@ func (m *Manager) fetchStreamsCached(ctx context.Context, addon AddonEntry, medi
 			return nil
 		}
 		streams := res.Val.([]Stream)
-		return append([]Stream(nil), streams...)
+		return cloneStreams(streams)
 	case <-ctx.Done():
 		// This caller's fan-out deadline passed before the addon answered —
 		// the fetch above keeps running for the cache and any other waiter on
@@ -359,9 +434,35 @@ func (m *Manager) fetchStreamsCached(ctx context.Context, addon AddonEntry, medi
 	}
 }
 
+func cloneStreams(src []Stream) []Stream {
+	if src == nil {
+		return nil
+	}
+	dst := make([]Stream, len(src))
+	for i, stream := range src {
+		dst[i] = stream
+		dst[i].Subtitles = append([]Subtitle(nil), stream.Subtitles...)
+		if stream.Headers != nil {
+			dst[i].Headers = make(map[string]string, len(stream.Headers))
+			for key, value := range stream.Headers {
+				dst[i].Headers[key] = value
+			}
+		}
+		if stream.BehaviorHints != nil {
+			hints := *stream.BehaviorHints
+			dst[i].BehaviorHints = &hints
+		}
+		if stream.FileIdx != nil {
+			index := *stream.FileIdx
+			dst[i].FileIdx = &index
+		}
+	}
+	return dst
+}
+
 // streamCacheGet returns a copy of a fresh cache entry, or (nil, false) on a
-// miss or expiry. A copy so callers mutating AddonName never touch the cached
-// slice shared with other addons/requests.
+// miss or expiry. Nested slices, maps, and pointers are copied too so callers
+// can never mutate cache state shared with other addons/requests.
 func (m *Manager) streamCacheGet(key string) ([]Stream, bool) {
 	m.streamCacheMu.Lock()
 	defer m.streamCacheMu.Unlock()
@@ -369,7 +470,7 @@ func (m *Manager) streamCacheGet(key string) ([]Stream, bool) {
 	if !ok || time.Now().After(entry.expires) {
 		return nil, false
 	}
-	return append([]Stream(nil), entry.streams...), true
+	return cloneStreams(entry.streams), true
 }
 
 // streamCacheSet stores an addon's raw stream result and sweeps expired
@@ -384,7 +485,7 @@ func (m *Manager) streamCacheSet(key string, streams []Stream, ttl time.Duration
 			delete(m.streamCache, k)
 		}
 	}
-	m.streamCache[key] = streamCacheEntry{streams: streams, expires: now.Add(ttl)}
+	m.streamCache[key] = streamCacheEntry{streams: cloneStreams(streams), expires: now.Add(ttl)}
 }
 
 // GetAllSubtitles fans out to all enabled stremio subtitle addons concurrently
@@ -514,6 +615,7 @@ func (m *Manager) GetEnabledCatalogs() []CatalogRef {
 func (m *Manager) SetCatalogEnabled(addonID, addonURL, catalogKey string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	previous := m.snapshotL()
 
 	for i, a := range m.stremioAddons {
 		if addonURL != "" {
@@ -531,7 +633,11 @@ func (m *Manager) SetCatalogEnabled(addonID, addonURL, catalogKey string, enable
 		} else {
 			delete(m.stremioAddons[i].DisabledCatalogs, catalogKey)
 		}
-		return m.saveL()
+		if err := m.saveL(); err != nil {
+			m.restoreL(previous)
+			return err
+		}
+		return nil
 	}
 	return fmt.Errorf("addon not found")
 }
@@ -566,10 +672,10 @@ func (m *Manager) HasAddonURL(url string) bool {
 // saveL persists the current state and stamps updatedAt to now. Must be
 // called with m.mu write-locked.
 func (m *Manager) saveL() error {
+	m.updatedAt = time.Now().UTC()
 	if m.storePath == "" {
 		return nil
 	}
-	m.updatedAt = time.Now().UTC()
 	return saveStore(m.storePath, addonStore{
 		StremioAddons:   m.stremioAddons,
 		OfficialEnabled: m.officialEnabled,
@@ -589,8 +695,8 @@ func (m *Manager) UpdatedAt() time.Time {
 // MergeFrom applies a remote addon configuration using whole-store
 // last-write-wins: a no-op when remoteUpdatedAt is not strictly after the
 // local updatedAt. When the remote wins, stremio-source entries replace the
-// local stremio list and official-source entries update the officialEnabled map
-// (and carry DisabledCatalogs where applicable). The store is persisted with
+// local stremio list and official-source entries replace the officialEnabled
+// map (and carry DisabledCatalogs where applicable). The store is persisted with
 // UpdatedAt = remoteUpdatedAt (NOT time.Now()) so LWW converges across devices.
 //
 // Guard: an account that has never pushed addons will have no remote row; the
@@ -602,17 +708,20 @@ func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) {
 	if !remoteUpdatedAt.After(m.updatedAt) {
 		return
 	}
+	previous := m.snapshotL()
 	// Rebuild from the pulled entries.
 	var stremio []AddonEntry
+	officialEnabled := make(map[string]bool)
 	for _, e := range entries {
 		switch e.Source {
 		case SourceStremio:
 			stremio = append(stremio, e)
 		case SourceOfficial:
-			m.officialEnabled[e.ID] = e.Enabled
+			officialEnabled[e.ID] = e.Enabled
 		}
 	}
-	m.stremioAddons = stremio
+	m.stremioAddons = cloneAddonEntries(stremio)
+	m.officialEnabled = officialEnabled
 	m.updatedAt = remoteUpdatedAt
 	// Save directly with remoteUpdatedAt so the on-disk timestamp reflects the
 	// data mutation time, not the moment this merge ran.
@@ -622,6 +731,7 @@ func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) {
 			OfficialEnabled: m.officialEnabled,
 			UpdatedAt:       remoteUpdatedAt,
 		}); err != nil {
+			m.restoreL(previous)
 			log.Println("addons: MergeFrom persist:", err)
 		}
 	}

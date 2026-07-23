@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/coveninja/cove/internal/utils"
@@ -259,7 +260,7 @@ func (m *Manager) addonRequest(ctx context.Context, url string) (*http.Response,
 // normalizeAddonURL strips a trailing /manifest.json so users can paste either
 // the base URL or the full manifest URL and get the same result.
 func normalizeAddonURL(raw string) string {
-	u := strings.TrimRight(raw, "/")
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
 	u = strings.TrimSuffix(u, "/manifest.json")
 	return strings.TrimRight(u, "/")
 }
@@ -414,14 +415,14 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 				return
 			}
 			var body struct {
-				Enabled bool `json:"enabled"`
+				Enabled *bool `json:"enabled"`
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return
 			}
-			if err := m.SetEnabled(id, addonURL, body.Enabled); err != nil {
+			if err := m.SetEnabled(id, addonURL, *body.Enabled); err != nil {
 				http.Error(w, err.Error(), http.StatusNotFound)
 				return
 			}
@@ -456,24 +457,28 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, "missing ?id=", http.StatusBadRequest)
 			return
 		}
-		var tmdbID int
-		if _, err := fmt.Sscanf(tmdbIDStr, "%d", &tmdbID); err != nil {
+		tmdbID, err := strconv.Atoi(tmdbIDStr)
+		if err != nil || tmdbID <= 0 {
 			http.Error(w, "invalid ?id=", http.StatusBadRequest)
 			return
 		}
 
 		var season, episode *int
 		if s := r.URL.Query().Get("season"); s != "" {
-			var sv int
-			if _, err := fmt.Sscanf(s, "%d", &sv); err == nil {
-				season = &sv
+			sv, err := strconv.Atoi(s)
+			if err != nil || sv < 0 {
+				http.Error(w, "invalid ?season=", http.StatusBadRequest)
+				return
 			}
+			season = &sv
 		}
 		if e := r.URL.Query().Get("episode"); e != "" {
-			var ev int
-			if _, err := fmt.Sscanf(e, "%d", &ev); err == nil {
-				episode = &ev
+			ev, err := strconv.Atoi(e)
+			if err != nil || ev < 0 {
+				http.Error(w, "invalid ?episode=", http.StatusBadRequest)
+				return
 			}
+			episode = &ev
 		}
 
 		data, err := m.GetTimestamps(tmdbID, season, episode)
@@ -521,13 +526,14 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		var body struct {
-			Enabled bool `json:"enabled"`
+			Enabled *bool `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		if err := m.SetCatalogEnabled(addonID, addonURL, catalogKey, body.Enabled); err != nil {
+		if err := m.SetCatalogEnabled(addonID, addonURL, catalogKey, *body.Enabled); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
@@ -546,7 +552,16 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, "missing ?id= or ?type=", http.StatusBadRequest)
 			return
 		}
-		options, err := m.GetWatchOptions(mediaType, tmdbID)
+		id, err := strconv.Atoi(tmdbID)
+		if err != nil || id <= 0 {
+			http.Error(w, "invalid ?id=", http.StatusBadRequest)
+			return
+		}
+		if mediaType != "movie" && mediaType != "tv" {
+			http.Error(w, "invalid ?type=", http.StatusBadRequest)
+			return
+		}
+		options, err := m.GetWatchOptions(mediaType, strconv.Itoa(id))
 		if err != nil {
 			log.Println("watch-options:", err)
 			options = []WatchOption{}
