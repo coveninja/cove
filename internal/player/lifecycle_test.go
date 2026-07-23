@@ -309,11 +309,12 @@ func TestProxyStreamUsesLANTransportWhenAllowLANEnabled(t *testing.T) {
 		"safe transport must be used when AllowLanStreamSources=false")
 
 	// AllowLanStreamSources=true → proxyTransportLAN (lanTransport) → 502.
-	// settings.Store.Set() updates the cached value before attempting a disk
-	// write, so the in-memory state is always correct regardless of whether
-	// the write succeeds (it will fail for the zero-value Store's empty path).
-	st := new(settings.Store)
-	_ = st.Set(settings.Settings{AllowLanStreamSources: true})
+	// Use a real temporary store so the setting is persisted successfully
+	// before the player reads it.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := settings.New("lan-transport")
+	require.NoError(t, err)
+	require.NoError(t, st.Set(settings.Settings{AllowLanStreamSources: true}))
 	p.settings = st
 
 	rec = httptest.NewRecorder()

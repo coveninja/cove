@@ -256,8 +256,13 @@ func (s *Store) Set(incoming Settings) error {
 	defer s.mu.Unlock()
 	incoming = s.applyTokenPolicy(incoming)
 	incoming = s.stampRoamingUpdate(incoming)
+	previous := s.cached
 	s.cached = incoming
-	return s.write()
+	if err := s.write(); err != nil {
+		s.cached = previous
+		return err
+	}
+	return nil
 }
 
 // stampRoamingUpdate advances UpdatedAt only when a setting that participates
@@ -350,8 +355,10 @@ func (s *Store) MergeFrom(incoming Settings) {
 	incoming.AllowLanStreamSources = s.cached.AllowLanStreamSources
 	// Ratchet: onboarding completion is irreversible — once true, never reset.
 	incoming.OnboardingDone = incoming.OnboardingDone || s.cached.OnboardingDone
+	previous := s.cached
 	s.cached = incoming
 	if err := s.write(); err != nil {
+		s.cached = previous
 		log.Println("settings: merge write:", err)
 	}
 }
@@ -418,8 +425,12 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 				incoming.OnboardingDone = true
 			}
 			incoming = s.stampRoamingUpdate(incoming)
+			previous := s.cached
 			s.cached = incoming
 			err := s.write()
+			if err != nil {
+				s.cached = previous
+			}
 			s.mu.Unlock()
 
 			if err != nil {

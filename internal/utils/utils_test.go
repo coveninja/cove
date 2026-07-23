@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,14 +36,75 @@ func TestSrtToVTT(t *testing.T) {
 			want:  "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nLine one\nLine two\n",
 		},
 		{
-			name:  "replaces all commas including in text",
+			name:  "preserves commas in dialogue",
 			input: "1\n00:00:01,000 --> 00:00:02,000\nHello, world\n",
-			want:  "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello. world\n",
+			want:  "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello, world\n",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, SrtToVTT(tc.input))
+		})
+	}
+}
+
+func TestLocalAddr(t *testing.T) {
+	previous := localAddr
+	t.Cleanup(func() { localAddr = previous })
+
+	SetLocalAddr("192.0.2.10:7000")
+	assert.Equal(t, "192.0.2.10:7000", LocalAddr())
+
+	SetLocalAddr("")
+	assert.Equal(t, "192.0.2.10:7000", LocalAddr(), "an empty address must be ignored")
+}
+
+func TestConfigPath(t *testing.T) {
+	previous := dataDirOverride.Load()
+	t.Cleanup(func() { dataDirOverride.Store(previous) })
+	dataDirOverride.Store(nil)
+
+	t.Run("platform config directory", func(t *testing.T) {
+		configHome := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", configHome)
+		t.Setenv("AppData", configHome)
+		t.Setenv("HOME", configHome)
+
+		userConfigDir, err := os.UserConfigDir()
+		require.NoError(t, err)
+
+		path, err := ConfigPath("settings.json")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(userConfigDir, "cove", "settings.json"), path)
+		info, err := os.Stat(filepath.Dir(path))
+		require.NoError(t, err)
+		assert.True(t, info.IsDir())
+	})
+
+	t.Run("override and nested filename", func(t *testing.T) {
+		override := t.TempDir()
+		SetDataDir(override)
+
+		path, err := ConfigPath("mpv/mpv.conf")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(override, "mpv", "mpv.conf"), path)
+
+		SetDataDir("")
+		unchanged, err := ConfigPath("settings.json")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(override, "settings.json"), unchanged)
+	})
+}
+
+func TestConfigPathRejectsEscapes(t *testing.T) {
+	previous := dataDirOverride.Load()
+	t.Cleanup(func() { dataDirOverride.Store(previous) })
+	dataDirOverride.Store(nil)
+
+	for _, filename := range []string{"", ".", "..", "../outside.json", filepath.Join(string(filepath.Separator), "tmp", "outside.json")} {
+		t.Run(filename, func(t *testing.T) {
+			_, err := ConfigPath(filename)
+			assert.Error(t, err)
 		})
 	}
 }
@@ -70,6 +133,26 @@ func TestAtomicWriteFile(t *testing.T) {
 	for _, e := range entries {
 		assert.False(t, strings.Contains(e.Name(), ".tmp-"), "stray temp file: %s", e.Name())
 	}
+}
+
+func TestAtomicWriteFileFailuresLeaveNoTemporaryFile(t *testing.T) {
+	t.Run("missing parent", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "missing", "settings.json")
+		assert.Error(t, AtomicWriteFile(path, []byte("data"), 0o600))
+	})
+
+	t.Run("destination is directory", func(t *testing.T) {
+		parent := t.TempDir()
+		path := filepath.Join(parent, "settings.json")
+		require.NoError(t, os.Mkdir(path, 0o755))
+
+		assert.Error(t, AtomicWriteFile(path, []byte("data"), 0o600))
+		entries, err := os.ReadDir(parent)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "settings.json", entries[0].Name())
+		assert.True(t, entries[0].IsDir())
+	})
 }
 
 const allowedOrigin = "http://127.0.0.1:5174"
@@ -163,4 +246,46 @@ func TestCorsMiddleware_SameOrigin_POST_Allowed(t *testing.T) {
 
 	assert.Equal(t, http.StatusTeapot, rr.Code)
 	assert.True(t, ran, "handler must run for a same-origin write")
+}
+
+func TestCorsMiddleware_AllowedHeadersAndBodyLimit(t *testing.T) {
+	handler := CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", maxBodyBytes+1)))
+	req.Header.Set("Origin", allowedOrigin)
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rr.Code)
+	assert.Equal(t, "Origin", rr.Header().Get("Vary"))
+	assert.Equal(t, allowedOrigin, rr.Header().Get("Access-Control-Allow-Origin"))
+	assert.Contains(t, rr.Header().Get("Access-Control-Allow-Methods"), http.MethodDelete)
+	assert.Contains(t, rr.Header().Get("Access-Control-Allow-Headers"), "Authorization")
+	assert.Contains(t, rr.Header().Get("Access-Control-Expose-Headers"), "Content-Range")
+}
+
+func TestCorsMiddleware_DisallowedOriginOptionsForbidden(t *testing.T) {
+	ran := false
+	handler := CorsMiddleware(func(http.ResponseWriter, *http.Request) {
+		ran = true
+	})
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.False(t, ran)
 }
