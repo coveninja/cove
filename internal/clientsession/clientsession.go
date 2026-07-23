@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
+	"sync"
 
 	"github.com/coveninja/cove/internal/utils"
 )
+
+var sessionMu sync.Mutex
 
 func filePath() (string, error) {
 	// Route through utils.ConfigPath so the SetDataDir override (used by
@@ -25,6 +27,9 @@ func SetupHandlers(mux *http.ServeMux) {
 }
 
 func handle(w http.ResponseWriter, r *http.Request) {
+	// Auth tokens must never be stored by an intermediary or browser cache.
+	w.Header().Set("Cache-Control", "no-store")
+
 	path, err := filePath()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -32,7 +37,9 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		sessionMu.Lock()
 		data, err := os.ReadFile(path)
+		sessionMu.Unlock()
 		if os.IsNotExist(err) {
 			http.NotFound(w, r)
 			return
@@ -41,8 +48,12 @@ func handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if !json.Valid(data) {
+			http.Error(w, "stored session is invalid", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
+		_, _ = w.Write(data)
 
 	case http.MethodPost:
 		// Bound the incoming body to 1 MiB — session payloads are small JSON
@@ -59,18 +70,26 @@ func handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
 			return
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if err := os.WriteFile(path, body, 0o600); err != nil {
+		// ConfigPath has already created the parent directory. Serialize the
+		// atomic replacement with reads/deletes so every request observes one
+		// complete session state.
+		sessionMu.Lock()
+		err = utils.AtomicWriteFile(path, body, 0o600)
+		sessionMu.Unlock()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 
 	case http.MethodDelete:
-		os.Remove(path) // ignore error — file may not exist
+		sessionMu.Lock()
+		err := os.Remove(path)
+		sessionMu.Unlock()
+		if err != nil && !os.IsNotExist(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 
 	default:

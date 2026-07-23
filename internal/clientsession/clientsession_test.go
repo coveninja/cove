@@ -44,8 +44,10 @@ func TestClientSessionLifecycle(t *testing.T) {
 	got := request(http.MethodGet, "")
 	assert.Equal(t, http.StatusOK, got.Code)
 	assert.Equal(t, "application/json", got.Header().Get("Content-Type"))
+	assert.Equal(t, "no-store", got.Header().Get("Cache-Control"))
 	assert.JSONEq(t, payload, got.Body.String())
 
+	assert.Equal(t, http.StatusNoContent, request(http.MethodDelete, "").Code)
 	assert.Equal(t, http.StatusNoContent, request(http.MethodDelete, "").Code)
 	assert.Equal(t, http.StatusNotFound, request(http.MethodGet, "").Code)
 }
