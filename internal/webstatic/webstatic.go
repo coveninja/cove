@@ -29,5 +29,12 @@ func Mount(mux *http.ServeMux) {
 		log.Println("webstatic: sub dist:", err)
 		return
 	}
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	files := http.FileServer(http.FS(sub))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		files.ServeHTTP(w, r)
+	}))
 }
