@@ -292,7 +292,7 @@ describe("API boundary behavior", () => {
       start(controller) {
         controller.enqueue(
           encoder.encode(
-            '{"id":"movie:1","quality":"4K"}\nnot-json\n{"id":"tv:',
+            '{"id":"movie:1","quality":"4K"}\nnot-json\n{"wrong":"shape"}\n{"id":"tv:',
           ),
         );
         controller.enqueue(encoder.encode('2","quality":"1080p"}'));
@@ -328,6 +328,67 @@ describe("API boundary behavior", () => {
     await api.streamQualityBatch([], vi.fn());
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a quality reader and absorbs AbortError", async () => {
+    const abortError = new DOMException("cancelled", "AbortError");
+    const reader = {
+      read: vi.fn().mockRejectedValue(abortError),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        body: { getReader: () => reader },
+      } as unknown as Response),
+    );
+
+    await expect(
+      api.streamQualityBatch(["movie:1"], vi.fn()),
+    ).resolves.toBeUndefined();
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a failed quality reader and propagates non-abort failures", async () => {
+    const failure = new Error("stream failed");
+    const reader = {
+      read: vi.fn().mockRejectedValue(failure),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        body: { getReader: () => reader },
+      } as unknown as Response),
+    );
+
+    await expect(api.streamQualityBatch(["movie:1"], vi.fn())).rejects.toBe(
+      failure,
+    );
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces a fresh GET after an identity change clears coalesced requests", async () => {
+    let resolveFirst!: (response: Response) => void;
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValueOnce(jsonResponse({ onboardingDone: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stale = api.getSettings();
+    api.clearInflight();
+    const fresh = api.getSettings();
+
+    await expect(fresh).resolves.toMatchObject({ onboardingDone: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolveFirst(jsonResponse({ onboardingDone: false }));
+    await expect(stale).resolves.toMatchObject({ onboardingDone: false });
   });
 
   it("absorbs an unavailable optional Trakt integration but not other errors", async () => {

@@ -466,6 +466,7 @@ export const api = {
         if (!line.trim()) return;
         try {
           const { id, quality } = JSON.parse(line);
+          if (typeof id !== "string" || typeof quality !== "string") return;
           onEntry(id, quality);
         } catch {
           /* ignore malformed frames */
@@ -1070,7 +1071,11 @@ export const api = {
     refreshToken: string;
     email: string;
   }): Promise<void> =>
-    request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
+    request(`/client-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   clientSessionDelete: (): Promise<void> =>
     request(`/client-session`, { method: "DELETE" }),
 
