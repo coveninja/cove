@@ -108,6 +108,21 @@ describe("stream metadata helpers", () => {
     expect(getSizeBytes(torrent)).toBe(0);
   });
 
+  it("parses plain-text TB and MB sizes but rejects malformed decimals", () => {
+    expect(getSizeBytes(makeStream({ title: "Direct release 1.25 TB" }))).toBe(
+      1.25 * 1024 ** 4,
+    );
+    expect(getSizeBytes(makeStream({ title: "Direct release 850 MB" }))).toBe(
+      850 * MB,
+    );
+    expect(getSizeBytes(makeStream({ title: "Direct release 1.2.3 GB" }))).toBe(
+      0,
+    );
+    expect(
+      getSizeBytes(makeStream({ title: "Direct release 💾 1.2.3 GB" })),
+    ).toBe(0);
+  });
+
   it("formats human-readable direct and torrent summaries", () => {
     const torrent = makeStream({
       url: "",
@@ -168,6 +183,18 @@ describe("manual stream sorting", () => {
     expect(
       [first, second].toSorted(compareStreamsBy("language"))[0].stream,
     ).toBe(second.stream);
+  });
+
+  it("uses seeders to break equal quality and cache-status ties", () => {
+    const weak = sortable(makeStream({ title: "Movie.1080p 👤 2" }));
+    const strong = sortable(makeStream({ title: "Movie.1080p 👤 20" }));
+
+    expect([weak, strong].toSorted(compareStreamsBy("quality"))[0].stream).toBe(
+      strong.stream,
+    );
+    expect([weak, strong].toSorted(compareStreamsBy("cached"))[0].stream).toBe(
+      strong.stream,
+    );
   });
 });
 
@@ -267,6 +294,28 @@ describe("automatic stream ranking", () => {
     expect(rankStreams([weak, strong], "seeders")).toEqual([strong]);
   });
 
+  it("keeps distinct identifier-less addon rows with the same title", () => {
+    const highQuality = makeStream({
+      url: "",
+      infoHash: "",
+      addonName: "Catalog A",
+      name: "Provider\n4K",
+      title: "Generic release",
+    });
+    const compact = makeStream({
+      url: "",
+      infoHash: "",
+      addonName: "Catalog B",
+      name: "Provider\n720p",
+      title: "Generic release",
+    });
+
+    expect(rankStreams([highQuality, compact], "quality")).toEqual([
+      highQuality,
+      compact,
+    ]);
+  });
+
   it("uses provider, source, and audio preferences as soft boosts", () => {
     const preferred = makeStream({
       addonName: "Preferred",
@@ -298,6 +347,43 @@ describe("automatic stream ranking", () => {
         sourcePreference: "direct",
       })[0],
     ).toBe(other);
+    expect(
+      rankStreams([torrent, other], "quality", {
+        sourcePreference: "torrent",
+      })[0],
+    ).toBe(torrent);
+  });
+
+  it("scores direct-stream reliability from cache and debrid state", () => {
+    const cached = makeStream({ cached: true, debrid: "RealDebrid" });
+    const plain = makeStream();
+    const queuedDebrid = makeStream({ debrid: "RealDebrid" });
+
+    expect(rankStreams([queuedDebrid, plain, cached], "seeders")).toEqual([
+      cached,
+      plain,
+      queuedDebrid,
+    ]);
+  });
+
+  it("penalizes unsupported Dolby Vision profile 5 releases", () => {
+    window.__coveCaps = {
+      hevcMain10: true,
+      av1: true,
+      hevc: true,
+      vp9: true,
+      dolbyVision: false,
+    };
+    const profile5 = makeStream({
+      name: "Provider\n4K",
+      title: "Movie.4K.DoVi.Profile.5",
+    });
+    const compatible = makeStream({
+      name: "Provider\n4K",
+      title: "Movie.4K.HDR10",
+    });
+
+    expect(rankStreams([profile5, compatible], "quality")[0]).toBe(compatible);
   });
 
   it("demotes links confirmed dead without removing fallbacks", () => {
@@ -338,6 +424,86 @@ describe("automatic stream ranking", () => {
     expect(isCodecHardDisabled(h264)).toBe(false);
     expect(rankStreams([av1, h264], "quality")).toEqual([h264, av1]);
     expect(rankStreams([anotherAV1, av1], "quality")[0]).toBe(av1);
+  });
+
+  it("covers each explicit hardware-codec rejection independently", () => {
+    window.__coveCaps = {
+      hevcMain10: false,
+      av1: true,
+      hevc: true,
+      vp9: true,
+    };
+    expect(isCodecHardDisabled(makeStream({ title: "Movie.x264.Hi10P" }))).toBe(
+      true,
+    );
+
+    window.__coveCaps = {
+      hevcMain10: true,
+      av1: true,
+      hevc: true,
+      vp9: false,
+    };
+    expect(isCodecHardDisabled(makeStream({ title: "Movie.VP9" }))).toBe(true);
+
+    window.__coveCaps = {
+      hevcMain10: true,
+      av1: true,
+      hevc: false,
+      vp9: true,
+    };
+    expect(isCodecHardDisabled(makeStream({ title: "Movie.x265" }))).toBe(true);
+    expect(isCodecHardDisabled(makeStream({ title: "Movie.untagged" }))).toBe(
+      false,
+    );
+  });
+
+  it("uses every stream when smallest mode has only low-quality releases", () => {
+    const larger = makeStream({
+      name: "Provider\nCAM",
+      title: "Movie.CAM",
+      sizeBytes: 900 * MB,
+    });
+    const smaller = makeStream({
+      name: "Provider\nTS",
+      title: "Movie.TS",
+      sizeBytes: 500 * MB,
+    });
+
+    expect(rankStreams([larger, smaller], "smallest")[0]).toBe(smaller);
+  });
+
+  it("falls back to over-budget torrents when none fit the measured link", () => {
+    const hd = makeStream({
+      url: "",
+      infoHash: "over-budget-hd",
+      name: "Provider\n1080p",
+      title: "Movie.1080p 👤 20 💾 4 GB",
+    });
+    const sd = makeStream({
+      url: "",
+      infoHash: "over-budget-sd",
+      name: "Provider\n720p",
+      title: "Movie.720p 👤 20 💾 2 GB",
+    });
+
+    expect(
+      rankStreams([sd, hd], "bandwidth", {
+        measuredBandwidthMbps: 1,
+        estimatedMinutes: 90,
+      }),
+    ).toEqual([hd, sd]);
+  });
+
+  it("formats codec, bit-depth, language, and untagged pick reasons", () => {
+    const tagged = makeStream({
+      title: "Movie.1080p.x265.10bit.ENG",
+    });
+    const untagged = makeStream({
+      title: "Movie.1080p",
+    });
+
+    expect(formatAutoPickReason(tagged)).toContain("[h265 10bit en]");
+    expect(formatAutoPickReason(untagged)).not.toContain("[");
   });
 });
 

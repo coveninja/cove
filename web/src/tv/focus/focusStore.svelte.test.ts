@@ -120,6 +120,15 @@ describe("editableKeepsArrow", () => {
       expect(editableKeepsArrow(div, dir)).toBe(false);
     }
   });
+
+  it("keeps every arrow inside contenteditable controls", () => {
+    const div = document.createElement("div");
+    Object.defineProperty(div, "isContentEditable", { value: true });
+
+    for (const dir of ["left", "right", "up", "down"] as const) {
+      expect(editableKeepsArrow(div, dir)).toBe(true);
+    }
+  });
 });
 
 // ── registerFocusable / unregisterFocusable ────────────────────────────────────
@@ -230,6 +239,15 @@ describe("navigate inside a row group", () => {
   it("does not move right at the end of the row (stays on c)", () => {
     c.focus();
     navigate("right");
+    expect(document.activeElement).toBe(c);
+  });
+
+  it("skips a registered member that becomes disabled", () => {
+    b.setAttribute("disabled", "");
+    a.focus();
+
+    navigate("right");
+
     expect(document.activeElement).toBe(c);
   });
 });
@@ -366,6 +384,15 @@ describe("navigate inside a grid group", () => {
     navigate("down");
     expect(document.activeElement).toBe(c);
   });
+
+  it("moves left and up within the grid", () => {
+    d.focus();
+    navigate("left");
+    expect(document.activeElement).toBe(c);
+
+    navigate("up");
+    expect(document.activeElement).toBe(a);
+  });
 });
 
 // ── focusAfterKeyRelease ─────────────────────────────────────────────────────
@@ -456,6 +483,28 @@ describe("native and free-policy group members", () => {
     expect(document.activeElement).toBe(diagonal);
 
     unregisterGroup("free");
+  });
+
+  it("sorts reverse-registered members back into document order", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, 0, 200, 40);
+    const first = makeEl(0, 0, 40, 40, container);
+    const second = makeEl(80, 0, 40, 40, container);
+    registerFocusable(second, "reverse-row");
+    registerFocusable(first, "reverse-row");
+    registerGroup(container, {
+      id: "reverse-row",
+      policy: { type: "row" },
+    });
+    first.focus();
+
+    navigate("right");
+
+    expect(document.activeElement).toBe(second);
+    unregisterFocusable(first);
+    unregisterFocusable(second);
+    unregisterGroup("reverse-row");
   });
 });
 
@@ -587,6 +636,20 @@ describe("cross-group vertical navigation", () => {
 
     expect(document.activeElement).toBe(bottom.left);
   });
+
+  it("breaks equal-distance group ties by horizontal overlap", () => {
+    const source = group("tie-source", 0, false);
+    const aligned = group("tie-aligned", 100, false);
+    const offset = group("tie-offset", 100, false);
+    mockRect(offset.container, 300, 100, 240, 40);
+    mockRect(offset.left, 300, 100, 40, 40);
+    mockRect(offset.right, 420, 100, 40, 40);
+    source.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(aligned.left);
+  });
 });
 
 describe("cross-group geometric fallback", () => {
@@ -651,5 +714,19 @@ describe("focus visibility guards", () => {
     focusFirst();
 
     expect(document.activeElement).toBe(visible);
+  });
+
+  it("keeps caret navigation inside an actively focused text input", () => {
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.append(input);
+    mockRect(input, 0, 0, 100, 40);
+    const other = makeEl(200, 0);
+    input.focus();
+
+    navigate("right");
+
+    expect(document.activeElement).toBe(input);
+    expect(document.activeElement).not.toBe(other);
   });
 });

@@ -91,6 +91,75 @@ describe("AuthStore", () => {
     expect(supabaseMock.auth.onAuthStateChange).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to the first profile and tolerates a missing persisted session", async () => {
+    const store = new AuthStore();
+    const consoleLog = vi
+      .spyOn(console, "log")
+      .mockImplementation(() => undefined);
+    apiMock.profilesList.mockResolvedValue({
+      profiles: [primary, secondary],
+      active_profile_id: "missing",
+    });
+    apiMock.clientSessionGet.mockRejectedValue(new Error("not signed in"));
+
+    await store.init();
+
+    expect(store.activeProfile).toEqual(primary);
+    expect(store.isGuest).toBe(true);
+    expect(consoleLog).toHaveBeenCalledWith(
+      "[auth] init: no persisted session",
+    );
+    expect(supabaseMock.auth.onAuthStateChange).toHaveBeenCalledOnce();
+  });
+
+  it("uses a null active profile for an empty profile list", async () => {
+    const store = new AuthStore();
+    apiMock.profilesList.mockResolvedValue({
+      profiles: [],
+      active_profile_id: "",
+    });
+
+    await store.init();
+
+    expect(store.profiles).toEqual([]);
+    expect(store.activeProfile).toBeNull();
+  });
+
+  it("continues restoring auth when profile loading fails", async () => {
+    const store = new AuthStore();
+    const error = new Error("profiles unavailable");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    apiMock.profilesList.mockRejectedValue(error);
+
+    await store.init();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "[auth] init: load profiles:",
+      error,
+    );
+    expect(store.session?.accessToken).toBe("saved-access");
+  });
+
+  it("keeps a restored local session when Supabase setup fails", async () => {
+    const store = new AuthStore();
+    const error = new Error("Supabase unavailable");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    supabaseMock.auth.setSession.mockRejectedValue(error);
+
+    await store.init();
+    await Promise.resolve();
+
+    expect(store.session?.accessToken).toBe("saved-access");
+    expect(consoleError).toHaveBeenCalledWith(
+      "[auth] init: supabase.auth.setSession failed:",
+      error,
+    );
+  });
+
   it("persists genuine token refreshes but skips the restore echo", async () => {
     const store = new AuthStore();
     await store.init();
@@ -116,6 +185,35 @@ describe("AuthStore", () => {
       refreshToken: "fresh-refresh",
       email: "saved@example.test",
     });
+  });
+
+  it("normalizes a missing Supabase email and absorbs refresh persistence errors", async () => {
+    const store = new AuthStore();
+    const error = new Error("disk full");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    apiMock.clientSessionSave.mockRejectedValue(error);
+    await store.init();
+
+    authCallback?.("TOKEN_REFRESHED", {
+      access_token: "fresh-access",
+      refresh_token: "fresh-refresh",
+      user: { email: null },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.session).toEqual({
+      accessToken: "fresh-access",
+      email: "",
+    });
+    expect(apiMock.clientSessionSave).toHaveBeenCalledWith({
+      accessToken: "fresh-access",
+      refreshToken: "fresh-refresh",
+      email: "",
+    });
+    expect(consoleError).toHaveBeenCalledWith(error);
   });
 
   it("only clears local and persisted state for an explicit sign-out", async () => {
@@ -163,6 +261,27 @@ describe("AuthStore", () => {
     });
   });
 
+  it("keeps an unpersisted session usable when no refresh token is provided", async () => {
+    const store = new AuthStore();
+    const consoleWarn = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+
+    await store.setSession(
+      "temporary-access",
+      "temporary@example.test",
+      [primary],
+      primary,
+    );
+
+    expect(store.authToken).toBe("temporary-access");
+    expect(apiMock.clientSessionSave).not.toHaveBeenCalled();
+    expect(supabaseMock.auth.setSession).not.toHaveBeenCalled();
+    expect(consoleWarn).toHaveBeenCalledWith(
+      "[auth] setSession: no refreshToken — session will not persist",
+    );
+  });
+
   it("clears request identity on profile changes and logout", async () => {
     const store = new AuthStore();
     store.setProfiles([primary, secondary], secondary);
@@ -175,5 +294,20 @@ describe("AuthStore", () => {
     expect(apiMock.clientSessionDelete).toHaveBeenCalledTimes(1);
     expect(supabaseMock.auth.signOut).toHaveBeenCalledTimes(1);
     expect(apiMock.clearInflight).toHaveBeenCalledTimes(2);
+  });
+
+  it("still signs out of Supabase when deleting the persisted session fails", async () => {
+    const store = new AuthStore();
+    const error = new Error("delete failed");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    apiMock.clientSessionDelete.mockRejectedValue(error);
+
+    await store.logout();
+
+    expect(store.isGuest).toBe(true);
+    expect(consoleError).toHaveBeenCalledWith(error);
+    expect(supabaseMock.auth.signOut).toHaveBeenCalledOnce();
   });
 });
