@@ -11,6 +11,7 @@ import {
 
 import {
   editableKeepsArrow,
+  focusAfterKeyRelease,
   focusFirst,
   navigate,
   registerFocusable,
@@ -364,5 +365,214 @@ describe("navigate inside a grid group", () => {
     c.focus();
     navigate("down");
     expect(document.activeElement).toBe(c);
+  });
+});
+
+// ── focusAfterKeyRelease ─────────────────────────────────────────────────────
+
+describe("focusAfterKeyRelease", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("focuses after keyup has finished dispatching", () => {
+    const target = makeEl(0, 0);
+    const getEl = vi.fn(() => target);
+    focusAfterKeyRelease(getEl);
+
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter" }));
+    expect(document.activeElement).not.toBe(target);
+    vi.advanceTimersByTime(0);
+
+    expect(document.activeElement).toBe(target);
+    expect(getEl).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(300);
+    expect(getEl).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the fallback timer when no keyup arrives", () => {
+    const target = makeEl(0, 0);
+    focusAfterKeyRelease(() => target);
+
+    vi.advanceTimersByTime(299);
+    expect(document.activeElement).not.toBe(target);
+    vi.advanceTimersByTime(1);
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("cleanup prevents pending focus", () => {
+    const target = makeEl(0, 0);
+    const getEl = vi.fn(() => target);
+    const cleanup = focusAfterKeyRelease(getEl);
+
+    cleanup();
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter" }));
+    vi.runAllTimers();
+
+    expect(getEl).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(target);
+  });
+});
+
+// ── Native and free-policy group navigation ──────────────────────────────────
+
+describe("native and free-policy group members", () => {
+  it("navigates native buttons without explicit focusable registration", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, 0, 200, 40);
+    const first = makeEl(0, 0, 40, 40, container);
+    const second = makeEl(80, 0, 40, 40, container);
+    registerGroup(container, {
+      id: "native-row",
+      policy: { type: "row" },
+    });
+
+    first.focus();
+    navigate("right");
+    expect(document.activeElement).toBe(second);
+
+    unregisterGroup("native-row");
+  });
+
+  it("uses scoped geometric navigation for a free group", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, 0, 200, 200);
+    const first = makeEl(0, 0, 40, 40, container);
+    const diagonal = makeEl(100, 80, 40, 40, container);
+    registerGroup(container, {
+      id: "free",
+      policy: { type: "free" },
+      trapFocus: true,
+    });
+
+    first.focus();
+    navigate("right");
+    expect(document.activeElement).toBe(diagonal);
+
+    unregisterGroup("free");
+  });
+});
+
+// ── Cross-group routing and rememberFocus ─────────────────────────────────────
+
+describe("cross-group vertical navigation", () => {
+  const registeredElements: HTMLElement[] = [];
+  const registeredGroups: string[] = [];
+
+  function group(
+    id: string,
+    y: number,
+    rememberFocus = true,
+  ): {
+    container: HTMLElement;
+    left: HTMLElement;
+    right: HTMLElement;
+  } {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, y, 240, 40);
+    const left = makeEl(0, y, 40, 40, container);
+    const right = makeEl(120, y, 40, 40, container);
+    for (const element of [left, right]) {
+      registerFocusable(element, id);
+      registeredElements.push(element);
+    }
+    registerGroup(container, {
+      id,
+      policy: { type: "row" },
+      rememberFocus,
+    });
+    registeredGroups.push(id);
+    return { container, left, right };
+  }
+
+  afterEach(() => {
+    for (const element of registeredElements.splice(0)) {
+      unregisterFocusable(element);
+    }
+    for (const id of registeredGroups.splice(0)) unregisterGroup(id);
+  });
+
+  it("restores the target row's last focused member", () => {
+    const top = group("top", 0);
+    const bottom = group("bottom", 100);
+    bottom.right.focus();
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.right);
+  });
+
+  it("preserves remembered focus when a group is re-registered", () => {
+    const top = group("top-update", 0);
+    const bottom = group("bottom-update", 100);
+    bottom.right.focus();
+    registerGroup(bottom.container, {
+      id: "bottom-update",
+      policy: { type: "row" },
+      trapFocus: false,
+    });
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.right);
+  });
+
+  it("chooses the closest horizontal lane when remembering is disabled", () => {
+    const top = group("top-lane", 0);
+    const bottom = group("bottom-lane", 100, false);
+    bottom.right.focus();
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.left);
+  });
+
+  it("moves upward into the closest group", () => {
+    const top = group("top-up", 0, false);
+    const bottom = group("bottom-up", 100, false);
+    bottom.right.focus();
+
+    navigate("up");
+
+    expect(document.activeElement).toBe(top.right);
+  });
+});
+
+describe("focus visibility guards", () => {
+  it("skips focusables inside aria-hidden and inert ancestors", () => {
+    const hidden = document.createElement("div");
+    hidden.setAttribute("aria-hidden", "true");
+    document.body.append(hidden);
+    makeEl(0, 0, 40, 40, hidden);
+
+    const inert = document.createElement("div");
+    inert.inert = true;
+    document.body.append(inert);
+    makeEl(50, 0, 40, 40, inert);
+
+    const visible = makeEl(100, 0);
+    focusFirst();
+
+    expect(document.activeElement).toBe(visible);
+  });
+
+  it("skips an element rejected by checkVisibility", () => {
+    const hidden = makeEl(0, 0);
+    hidden.checkVisibility = vi.fn(() => false);
+    const visible = makeEl(100, 0);
+
+    focusFirst();
+
+    expect(document.activeElement).toBe(visible);
   });
 });
