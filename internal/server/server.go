@@ -37,6 +37,11 @@ import (
 	"github.com/coveninja/cove/internal/webstatic"
 )
 
+var (
+	lanShutdownTimeout    = 2 * time.Second
+	serverShutdownTimeout = 3 * time.Second
+)
+
 // Config holds all startup parameters for the Cove backend. Every field is a
 // flat scalar string (gomobile constraint — no structs, interfaces, or slices
 // may cross the JNI boundary). Empty strings mean "use the platform default".
@@ -135,9 +140,12 @@ func lanTokenMiddleware(st *settings.Store, next http.Handler) http.Handler {
 		}
 
 		expected := s.RemoteAccessToken
-		// Empty expected token means enabled without a token — refuse rather
-		// than granting open access.
-		if expected == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(clientToken)) != 1 {
+		// Fail closed immediately when settings disable remote access, even
+		// during the short window before the asynchronous listener-close hook
+		// runs. Empty expected token likewise never grants open access.
+		if !s.RemoteAccessEnabled ||
+			expected == "" ||
+			subtle.ConstantTimeCompare([]byte(expected), []byte(clientToken)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -161,8 +169,9 @@ type Handle struct {
 	stopOnce sync.Once
 
 	// Remote-access LAN listener — nil when closed. Protected by lanMu.
-	lanMu  sync.Mutex
-	lanSrv *http.Server
+	lanMu   sync.Mutex
+	lanSrv  *http.Server
+	stopped bool
 }
 
 // startLAN opens the remote-access LAN listener on addr if it is not already
@@ -170,8 +179,8 @@ type Handle struct {
 func (h *Handle) startLAN(addr string, handler http.Handler) {
 	h.lanMu.Lock()
 	defer h.lanMu.Unlock()
-	if h.lanSrv != nil {
-		return // already running
+	if h.stopped || h.lanSrv != nil {
+		return // already running or permanently stopped
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -206,10 +215,13 @@ func (h *Handle) stopLAN() {
 	if h.lanSrv == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), lanShutdownTimeout)
 	defer cancel()
 	if err := h.lanSrv.Shutdown(ctx); err != nil {
 		log.Println("remote access: LAN shutdown:", err)
+		if closeErr := h.lanSrv.Close(); closeErr != nil {
+			log.Println("remote access: force-close LAN listener:", closeErr)
+		}
 	}
 	h.lanSrv = nil
 	log.Println("Remote access disabled: LAN listener closed")
@@ -227,6 +239,9 @@ func (h *Handle) stopLAN() {
 func (h *Handle) Stop() {
 	h.stopOnce.Do(func() {
 		h.cancel()
+		h.lanMu.Lock()
+		h.stopped = true
+		h.lanMu.Unlock()
 		h.stopLAN()
 		if h.lib != nil {
 			h.lib.Flush()
@@ -234,10 +249,13 @@ func (h *Handle) Stop() {
 		if h.act != nil {
 			h.act.Flush()
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), serverShutdownTimeout)
 		defer cancel()
 		if err := h.srv.Shutdown(ctx); err != nil {
 			log.Println("server shutdown:", err)
+			if closeErr := h.srv.Close(); closeErr != nil {
+				log.Println("server force-close:", closeErr)
+			}
 		}
 		if h.player != nil {
 			h.player.Close()
@@ -476,6 +494,13 @@ func Start(cfg Config) (*Handle, error) {
 	// for embedding and tests), and improve diagnostics in every configuration.
 	srv.Addr = ln.Addr().String()
 	utils.SetLocalAddr(srv.Addr)
+	// Port 0 resolves to an actual ephemeral port at bind time. Reuse that
+	// resolved port for the optional IPv6 loopback listener and as the basis
+	// for the default LAN port, rather than opening unrelated random/default
+	// ports that do not correspond to the advertised main address.
+	if _, resolvedPort, splitErr := net.SplitHostPort(srv.Addr); splitErr == nil {
+		port = resolvedPort
+	}
 
 	// Chromium may resolve "localhost" to ::1, so also serve on the IPv6
 	// loopback when available. Best-effort: failure to bind is not fatal.
@@ -514,7 +539,9 @@ func Start(cfg Config) (*Handle, error) {
 	//
 	// The OnChange hook fires in a goroutine after every settings write, so
 	// toggling remote access takes effect without a restart.
-	lanAddr := remoteListenAddr(cfg)
+	lanCfg := cfg
+	lanCfg.BindAddr = srv.Addr
+	lanAddr := remoteListenAddr(lanCfg)
 	lanHandler := lanTokenMiddleware(st, mux)
 
 	st.SetOnChange(func(snap settings.Settings) {
