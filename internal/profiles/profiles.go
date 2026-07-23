@@ -26,6 +26,8 @@ import (
 // (ProfileFileName), so the character set must exclude path separators and "..".
 var validProfileID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+const maxProfileRequestBytes = 64 << 10
+
 // Profile is one named identity within a Cove installation. A single Supabase
 // account can own many profiles; each profile has its own library, settings,
 // and addon config stored in separate files on disk.
@@ -51,11 +53,85 @@ type Store struct {
 	onDelete func(profileID string, supabaseUID *string, userJWT string) // called after deletion for remote cleanup
 }
 
+func cloneProfile(p Profile) Profile {
+	if p.SupabaseUID != nil {
+		uid := *p.SupabaseUID
+		p.SupabaseUID = &uid
+	}
+	return p
+}
+
+func cloneProfiles(in []Profile) []Profile {
+	out := make([]Profile, len(in))
+	for i := range in {
+		out[i] = cloneProfile(in[i])
+	}
+	return out
+}
+
+func cloneDiskStore(in diskStore) diskStore {
+	return diskStore{
+		Profiles:        cloneProfiles(in.Profiles),
+		ActiveProfileID: in.ActiveProfileID,
+	}
+}
+
+// normalizeDiskStore validates the invariants relied on by profile-scoped
+// stores and repairs safe inconsistencies caused by an interrupted or
+// hand-edited profiles.json. Invalid or duplicate IDs cannot be repaired
+// without risking association with the wrong data files, so those fail
+// startup explicitly.
+func normalizeDiskStore(d *diskStore) (bool, error) {
+	if len(d.Profiles) == 0 {
+		primary := Profile{ID: newUUID(), Name: "Primary", IsPrimary: true}
+		d.Profiles = []Profile{primary}
+		d.ActiveProfileID = primary.ID
+		return true, nil
+	}
+
+	changed := false
+	seen := make(map[string]struct{}, len(d.Profiles))
+	primaryIdx := -1
+	activeFound := false
+	for i := range d.Profiles {
+		p := &d.Profiles[i]
+		if !validProfileID.MatchString(p.ID) {
+			return false, fmt.Errorf("invalid profile id %q in profiles store", p.ID)
+		}
+		if _, ok := seen[p.ID]; ok {
+			return false, fmt.Errorf("duplicate profile id %q in profiles store", p.ID)
+		}
+		seen[p.ID] = struct{}{}
+		if p.ID == d.ActiveProfileID {
+			activeFound = true
+		}
+		if p.IsPrimary {
+			if primaryIdx == -1 {
+				primaryIdx = i
+			} else {
+				p.IsPrimary = false
+				changed = true
+			}
+		}
+	}
+	if primaryIdx == -1 {
+		primaryIdx = 0
+		d.Profiles[primaryIdx].IsPrimary = true
+		changed = true
+	}
+	if !activeFound {
+		d.ActiveProfileID = d.Profiles[primaryIdx].ID
+		changed = true
+	}
+	return changed, nil
+}
+
 // New loads profiles.json from the per-user config directory. On first run it
 // creates a "Primary" profile and migrates any pre-existing library.json /
 // settings.json / addons.json into profile-scoped filenames.
-// onChange is invoked (from a goroutine) whenever the active profile changes;
-// the caller should reload library, settings, and addons for the new ID.
+// onChange is invoked whenever the active profile changes; SetActive and
+// AdoptID invoke it synchronously, while deletion invokes it asynchronously.
+// The caller should reload library, settings, and addons for the new ID.
 func New(onChange func(profileID string)) (*Store, error) {
 	s := &Store{onChange: onChange}
 
@@ -73,8 +149,14 @@ func New(onChange func(profileID string)) (*Store, error) {
 			Profiles:        []Profile{primary},
 			ActiveProfileID: primary.ID,
 		}
+		if err := s.write(); err != nil {
+			return nil, err
+		}
+		// Persist the ID before moving legacy data to it. If the write fails,
+		// leaving the legacy filenames untouched makes the next startup safe
+		// to retry instead of stranding data under an unrecorded random ID.
 		migrateLegacyFiles(primary.ID)
-		return s, s.write()
+		return s, nil
 	}
 	if err != nil {
 		return nil, err
@@ -82,12 +164,23 @@ func New(onChange func(profileID string)) (*Store, error) {
 	if err := json.Unmarshal(data, &s.disk); err != nil {
 		return nil, err
 	}
-	// Guard: always have at least one profile with a consistent active ID.
-	if len(s.disk.Profiles) == 0 {
-		primary := Profile{ID: newUUID(), Name: "Primary", IsPrimary: true}
-		s.disk.Profiles = []Profile{primary}
-		s.disk.ActiveProfileID = primary.ID
-		_ = s.write()
+	changed, err := normalizeDiskStore(&s.disk)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		if err := s.write(); err != nil {
+			return nil, err
+		}
+	}
+	// Migration is idempotent, so retry it on later startups as well. This
+	// completes any files left under legacy names if the first startup
+	// stopped after profiles.json was persisted but before every rename.
+	for _, p := range s.disk.Profiles {
+		if p.IsPrimary {
+			migrateLegacyFiles(p.ID)
+			break
+		}
 	}
 	return s, nil
 }
@@ -131,11 +224,11 @@ func (s *Store) ActiveProfile() Profile {
 	defer s.mu.RUnlock()
 	for _, p := range s.disk.Profiles {
 		if p.ID == s.disk.ActiveProfileID {
-			return p
+			return cloneProfile(p)
 		}
 	}
 	if len(s.disk.Profiles) > 0 {
-		return s.disk.Profiles[0]
+		return cloneProfile(s.disk.Profiles[0])
 	}
 	return Profile{}
 }
@@ -151,15 +244,15 @@ func (s *Store) ActiveProfileID() string {
 func (s *Store) All() []Profile {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]Profile, len(s.disk.Profiles))
-	copy(out, s.disk.Profiles)
-	return out
+	return cloneProfiles(s.disk.Profiles)
 }
 
 // SetOnDelete registers a hook called after a profile is deleted, so the
 // caller can clean up remote data. It runs asynchronously from the HTTP
 // handler goroutine.
 func (s *Store) SetOnDelete(fn func(profileID string, supabaseUID *string, userJWT string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.onDelete = fn
 }
 
@@ -169,7 +262,7 @@ func (s *Store) Get(id string) (Profile, bool) {
 	defer s.mu.RUnlock()
 	for _, p := range s.disk.Profiles {
 		if p.ID == id {
-			return p, true
+			return cloneProfile(p), true
 		}
 	}
 	return Profile{}, false
@@ -189,14 +282,21 @@ func (s *Store) SetActive(id string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("profile %q not found", id)
 	}
+	if s.disk.ActiveProfileID == id {
+		s.mu.Unlock()
+		return nil
+	}
+	before := cloneDiskStore(s.disk)
 	s.disk.ActiveProfileID = id
-	err := s.write()
-	s.mu.Unlock()
-	if err != nil {
+	if err := s.write(); err != nil {
+		s.disk = before
+		s.mu.Unlock()
 		return err
 	}
-	if s.onChange != nil {
-		s.onChange(id)
+	onChange := s.onChange
+	s.mu.Unlock()
+	if onChange != nil {
+		onChange(id)
 	}
 	return nil
 }
@@ -205,9 +305,14 @@ func (s *Store) SetActive(id string) error {
 func (s *Store) Create(name string) (Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	before := cloneDiskStore(s.disk)
 	p := Profile{ID: newUUID(), Name: name}
 	s.disk.Profiles = append(s.disk.Profiles, p)
-	return p, s.write()
+	if err := s.write(); err != nil {
+		s.disk = before
+		return Profile{}, err
+	}
+	return p, nil
 }
 
 // Rename updates a profile's display name and records the change timestamp.
@@ -216,9 +321,14 @@ func (s *Store) Rename(id, name string) error {
 	defer s.mu.Unlock()
 	for i, p := range s.disk.Profiles {
 		if p.ID == id {
+			before := cloneDiskStore(s.disk)
 			s.disk.Profiles[i].Name = name
 			s.disk.Profiles[i].NameUpdatedAt = time.Now()
-			return s.write()
+			if err := s.write(); err != nil {
+				s.disk = before
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("profile %q not found", id)
@@ -233,9 +343,14 @@ func (s *Store) RenameFromRemote(id, name string, updatedAt time.Time) error {
 	defer s.mu.Unlock()
 	for i, p := range s.disk.Profiles {
 		if p.ID == id {
+			before := cloneDiskStore(s.disk)
 			s.disk.Profiles[i].Name = name
 			s.disk.Profiles[i].NameUpdatedAt = updatedAt
-			return s.write()
+			if err := s.write(); err != nil {
+				s.disk = before
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("profile %q not found", id)
@@ -247,8 +362,13 @@ func (s *Store) UnlinkSupabase(profileID string) error {
 	defer s.mu.Unlock()
 	for i, p := range s.disk.Profiles {
 		if p.ID == profileID {
+			before := cloneDiskStore(s.disk)
 			s.disk.Profiles[i].SupabaseUID = nil
-			return s.write()
+			if err := s.write(); err != nil {
+				s.disk = before
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("profile %q not found", profileID)
@@ -275,22 +395,29 @@ func (s *Store) Delete(id string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("profile %q not found", id)
 	}
+	before := cloneDiskStore(s.disk)
 	wasActive := s.disk.ActiveProfileID == id
 	s.disk.Profiles = append(s.disk.Profiles[:idx], s.disk.Profiles[idx+1:]...)
 	newActiveID := s.disk.ActiveProfileID
 	if wasActive {
+		newActiveID = ""
 		for _, pp := range s.disk.Profiles {
 			if pp.IsPrimary {
 				newActiveID = pp.ID
 				break
 			}
 		}
+		if newActiveID == "" && len(s.disk.Profiles) > 0 {
+			newActiveID = s.disk.Profiles[0].ID
+		}
 		s.disk.ActiveProfileID = newActiveID
 	}
 	if err := s.write(); err != nil {
+		s.disk = before
 		s.mu.Unlock()
 		return err
 	}
+	onChange := s.onChange
 	s.mu.Unlock()
 
 	for _, base := range []string{"library", "settings", "addons", "nuvio", "activity"} {
@@ -303,8 +430,8 @@ func (s *Store) Delete(id string) error {
 		}
 	}
 
-	if wasActive && s.onChange != nil {
-		go s.onChange(newActiveID)
+	if wasActive && onChange != nil {
+		go onChange(newActiveID)
 	}
 	return nil
 }
@@ -334,31 +461,78 @@ func (s *Store) AdoptID(oldID, newID string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("profile %q not found", oldID)
 	}
+
+	type fileMove struct {
+		src string
+		dst string
+	}
+	var moves []fileMove
+	rollbackMoves := func() {
+		for i := len(moves) - 1; i >= 0; i-- {
+			if err := os.Rename(moves[i].dst, moves[i].src); err != nil {
+				log.Printf("profiles: roll back adoption file %s: %v", moves[i].src, err)
+			}
+		}
+	}
 	for _, base := range []string{"library", "settings", "addons", "nuvio", "activity"} {
 		src, err1 := utils.ConfigPath(ProfileFileName(base, oldID))
 		dst, err2 := utils.ConfigPath(ProfileFileName(base, newID))
-		if err1 != nil || err2 != nil {
+		if err1 != nil {
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("resolve source profile data path for %s: %w", base, err1)
+		}
+		if err2 != nil {
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("resolve destination profile data path for %s: %w", base, err2)
+		}
+		info, err := os.Stat(src)
+		if os.IsNotExist(err) {
 			continue
 		}
-		if _, err := os.Stat(src); os.IsNotExist(err) {
-			continue
+		if err != nil {
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("stat %s: %w", ProfileFileName(base, oldID), err)
+		}
+		if !info.Mode().IsRegular() {
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("%s is not a regular file", ProfileFileName(base, oldID))
+		}
+		if _, err := os.Stat(dst); err == nil {
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("%s already exists", ProfileFileName(base, newID))
+		} else if !os.IsNotExist(err) {
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("stat %s: %w", ProfileFileName(base, newID), err)
 		}
 		if err := os.Rename(src, dst); err != nil {
-			log.Printf("profiles: adopt %s: %v", ProfileFileName(base, oldID), err)
+			rollbackMoves()
+			s.mu.Unlock()
+			return fmt.Errorf("adopt %s: %w", ProfileFileName(base, oldID), err)
 		}
+		moves = append(moves, fileMove{src: src, dst: dst})
 	}
+	before := cloneDiskStore(s.disk)
 	s.disk.Profiles[idx].ID = newID
 	isActive := s.disk.ActiveProfileID == oldID
 	if isActive {
 		s.disk.ActiveProfileID = newID
 	}
-	err := s.write()
-	s.mu.Unlock()
-	if err != nil {
+	if err := s.write(); err != nil {
+		s.disk = before
+		rollbackMoves()
+		s.mu.Unlock()
 		return err
 	}
-	if isActive && s.onChange != nil {
-		s.onChange(newID)
+	onChange := s.onChange
+	s.mu.Unlock()
+	if isActive && onChange != nil {
+		onChange(newID)
 	}
 	return nil
 }
@@ -369,8 +543,13 @@ func (s *Store) LinkSupabase(profileID, supabaseUID string) error {
 	defer s.mu.Unlock()
 	for i, p := range s.disk.Profiles {
 		if p.ID == profileID {
+			before := cloneDiskStore(s.disk)
 			s.disk.Profiles[i].SupabaseUID = &supabaseUID
-			return s.write()
+			if err := s.write(); err != nil {
+				s.disk = before
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("profile %q not found", profileID)
@@ -398,13 +577,14 @@ func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.mu.RLock()
 		resp := map[string]any{
-			"profiles":          s.disk.Profiles,
+			"profiles":          cloneProfiles(s.disk.Profiles),
 			"active_profile_id": s.disk.ActiveProfileID,
 		}
 		s.mu.RUnlock()
 		jsonOK(w, resp)
 
 	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, maxProfileRequestBytes)
 		var body struct {
 			Name string `json:"name"`
 		}
@@ -438,9 +618,21 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sub == "activate" && r.Method == http.MethodPost {
+	if sub != "" {
+		if sub != "activate" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if _, ok := s.Get(id); !ok {
+			http.Error(w, "profile not found", http.StatusBadRequest)
+			return
+		}
 		if err := s.SetActive(id); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		jsonOK(w, s.ActiveProfile())
@@ -449,6 +641,7 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPatch:
+		r.Body = http.MaxBytesReader(w, r.Body, maxProfileRequestBytes)
 		var body struct {
 			Name string `json:"name"`
 		}
@@ -456,11 +649,16 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name required", http.StatusBadRequest)
 			return
 		}
-		if err := s.Rename(id, strings.TrimSpace(body.Name)); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if _, ok := s.Get(id); !ok {
+			http.Error(w, "profile not found", http.StatusBadRequest)
 			return
 		}
-		jsonOK(w, map[string]string{"id": id, "name": body.Name})
+		name := strings.TrimSpace(body.Name)
+		if err := s.Rename(id, name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, map[string]string{"id": id, "name": name})
 
 	case http.MethodDelete:
 		p, ok := s.Get(id)
@@ -468,13 +666,20 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "profile not found", http.StatusBadRequest)
 			return
 		}
-		if err := s.Delete(id); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if p.IsPrimary {
+			http.Error(w, "cannot delete the primary profile", http.StatusBadRequest)
 			return
 		}
-		if s.onDelete != nil {
+		if err := s.Delete(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.mu.RLock()
+		onDelete := s.onDelete
+		s.mu.RUnlock()
+		if onDelete != nil {
 			jwt := bearerFromRequest(r)
-			go s.onDelete(id, p.SupabaseUID, jwt)
+			go onDelete(id, p.SupabaseUID, jwt)
 		}
 		w.WriteHeader(http.StatusNoContent)
 
