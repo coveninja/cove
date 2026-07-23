@@ -229,7 +229,12 @@ func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID strin
 					continue
 				}
 				if fetchErr != nil {
+					m.repos[i].Scrapers[j].Enabled = false
 					m.repos[i].Scrapers[j].CodeErr = fetchErr.Error()
+					m.invalidateStreamCache()
+					if err := m.saveL(); err != nil {
+						return fmt.Errorf("could not fetch scraper code: %v; save state: %w", fetchErr, err)
+					}
 					return fmt.Errorf("could not fetch scraper code: %w", fetchErr)
 				}
 				now := time.Now()
@@ -269,7 +274,11 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 		return fmt.Errorf("repo not found")
 	}
 
-	data, err := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, "manifest.json")
+	manifestPath := "manifest.json"
+	if _, _, _, path, ok := parseRawGithubUsercontentURL(repo.URL); ok {
+		manifestPath = path
+	}
+	data, err := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, manifestPath)
 	if err != nil {
 		m.mu.Lock()
 		for i, r := range m.repos {
