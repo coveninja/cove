@@ -129,6 +129,12 @@ const streamHeadersTTL = 30 * time.Minute
 // resolved path — it is stored on the Player struct after construction.
 var torrentDataDirDefault = filepath.Join(os.TempDir(), "cove-torrents")
 
+// torrentIdleCutoff is the duration after which an idle torrent (readers == 0,
+// not the current prefetch target) becomes eligible for CleanupTorrents to
+// drop. Exposed as a package variable so tests can override it without
+// sleeping; in production code it is always the default 10 minutes.
+var torrentIdleCutoff = 10 * time.Minute
+
 // infoHashRe validates a BitTorrent v1 infohash: 40 hex characters (SHA-1,
 // hex-encoded). Every torrent entry point validates before the value reaches
 // the torrent client or any filesystem-related bookkeeping.
@@ -846,7 +852,7 @@ func (p *Player) PrefetchTorrent(infoHash string, season, episode *int, fileIdx 
 // stalled swarm, or a completed download nobody's touched since); as long as
 // bytes are still landing each pass, it's kept alive and its idle clock reset.
 func (p *Player) CleanupTorrents() {
-	cutoff := time.Now().Add(-10 * time.Minute)
+	cutoff := time.Now().Add(-torrentIdleCutoff)
 
 	type dropped struct {
 		hash string

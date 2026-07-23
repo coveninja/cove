@@ -1,10 +1,11 @@
 package com.coveninja.cove.auth
 
 import android.content.Context
-import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import com.coveninja.cove.storage.KeyValueStore
+import com.coveninja.cove.storage.SharedPreferencesStore
 
 /**
  * Keystore-backed storage for the Supabase session (JWT, refresh token, email).
@@ -30,12 +31,12 @@ object TokenStore {
     private const val KEY_REFRESH_TOKEN = "refresh_token"
     private const val KEY_EMAIL = "email"
 
-    private lateinit var prefs: SharedPreferences
+    private lateinit var store: KeyValueStore
 
     fun init(context: Context) {
         // security-crypto:1.0.0 uses MasterKeys (plural) with the pre-1.1.0-alpha API.
         // The parameter order is (fileName, masterKeyAlias, context, keyScheme, valueScheme).
-        prefs = try {
+        val prefs = try {
             val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
             EncryptedSharedPreferences.create(
                 PREFS_FILE,
@@ -48,6 +49,12 @@ object TokenStore {
             Log.w(TAG, "EncryptedSharedPreferences unavailable, falling back to plain prefs: ${e.message}")
             context.getSharedPreferences(PREFS_FILE + "_plain", Context.MODE_PRIVATE)
         }
+        initWith(SharedPreferencesStore(prefs))
+    }
+
+    /** Injection seam for unit tests; production code goes through [init]. */
+    internal fun initWith(backing: KeyValueStore) {
+        store = backing
     }
 
     data class Session(
@@ -58,27 +65,27 @@ object TokenStore {
 
     /** Returns the stored session, or null if none exists. */
     fun get(): Session? {
-        val token = prefs.getString(KEY_ACCESS_TOKEN, null) ?: return null
-        val refresh = prefs.getString(KEY_REFRESH_TOKEN, null) ?: ""
-        val email = prefs.getString(KEY_EMAIL, null) ?: ""
+        val token = store.getString(KEY_ACCESS_TOKEN, null) ?: return null
+        val refresh = store.getString(KEY_REFRESH_TOKEN, null) ?: ""
+        val email = store.getString(KEY_EMAIL, null) ?: ""
         return Session(token, refresh, email)
     }
 
     /** Persists a new session. */
     fun save(accessToken: String, refreshToken: String, email: String) {
-        prefs.edit()
-            .putString(KEY_ACCESS_TOKEN, accessToken)
-            .putString(KEY_REFRESH_TOKEN, refreshToken)
-            .putString(KEY_EMAIL, email)
-            .apply()
+        store.edit {
+            putString(KEY_ACCESS_TOKEN, accessToken)
+            putString(KEY_REFRESH_TOKEN, refreshToken)
+            putString(KEY_EMAIL, email)
+        }
     }
 
     /** Clears the stored session (called on sign-out or 401). */
     fun clear() {
-        prefs.edit()
-            .remove(KEY_ACCESS_TOKEN)
-            .remove(KEY_REFRESH_TOKEN)
-            .remove(KEY_EMAIL)
-            .apply()
+        store.edit {
+            remove(KEY_ACCESS_TOKEN)
+            remove(KEY_REFRESH_TOKEN)
+            remove(KEY_EMAIL)
+        }
     }
 }

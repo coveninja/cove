@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -549,4 +551,492 @@ func TestSetEnabled_URLTogglesOnlyMatchingEntry(t *testing.T) {
 
 	assert.False(t, enabledA, "URL-matched entry should be disabled")
 	assert.True(t, enabledB, "sibling entry should remain enabled")
+}
+
+// ── GetAllStreamsPrefetch fault-isolation (the non-fatal invariant) ───────────
+
+// TestGetAllStreamsPrefetch_FaultIsolation is the primary test for the
+// documented contract: one broken addon (HTTP 500) and one hanging addon must
+// not prevent the healthy addon's results from being returned.
+func TestGetAllStreamsPrefetch_FaultIsolation(t *testing.T) {
+	orig := fanOutDeadline
+	fanOutDeadline = 200 * time.Millisecond
+	t.Cleanup(func() { fanOutDeadline = orig })
+
+	// Healthy addon: responds immediately with two streams.
+	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"streams":[{"name":"ok-1","title":"t","url":"http://ok/1"},{"name":"ok-2","title":"t","url":"http://ok/2"}]}`)
+	}))
+	defer healthy.Close()
+
+	// Broken addon: returns HTTP 500 — FetchStreams returns an error.
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+
+	// Hanging addon: never responds until the handler returns (blocked forever
+	// from the test perspective; the fanCtx deadline unblocks the caller).
+	hangs := make(chan struct{})
+	hanging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hangs // blocks until the test is done — goroutine cleaned up by defer
+	}))
+	defer func() {
+		close(hangs)
+		hanging.Close()
+	}()
+
+	m := newTestManager([]AddonEntry{
+		streamAddon("healthy", healthy.URL),
+		streamAddon("broken", broken.URL),
+		streamAddon("hanging", hanging.URL),
+	})
+
+	start := time.Now()
+	streams, err := m.GetAllStreamsPrefetch(context.Background(), "movie", "tt404")
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "fan-out must never propagate individual addon errors")
+	assert.Less(t, elapsed, 2*time.Second, "fan-out must not wait forever for the hanging addon")
+	// Only the two streams from the healthy addon should be present.
+	require.Len(t, streams, 2, "broken and hanging addons must not block the healthy result")
+	for _, s := range streams {
+		assert.Equal(t, "healthy", s.AddonName, "stream must be tagged with the healthy addon name")
+	}
+}
+
+// ── GetEnabledCatalogs / SetCatalogEnabled round-trip ─────────────────────────
+
+func catalogAddon(id, url string, cats []ManifestCatalog) AddonEntry {
+	return AddonEntry{
+		ID:      id,
+		URL:     url,
+		Kind:    KindProvider,
+		Source:  SourceStremio,
+		Enabled: true,
+		Manifest: Manifest{
+			ID:       id,
+			Name:     id,
+			Catalogs: cats,
+		},
+	}
+}
+
+func TestGetEnabledCatalogs_SetCatalogEnabled_RoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "addons.json")
+
+	cats := []ManifestCatalog{
+		{Type: "movie", ID: "top", Name: "Top Movies"},
+		{Type: "series", ID: "popular", Name: "Popular Series"},
+	}
+	m := &Manager{
+		client: &http.Client{},
+		stremioAddons: []AddonEntry{
+			catalogAddon("cat-addon", "https://example.com/cat", cats),
+		},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+		storePath:       storePath,
+	}
+
+	// Both catalogs should be visible initially.
+	refs := m.GetEnabledCatalogs()
+	require.Len(t, refs, 2)
+	keys := make([]string, 0, 2)
+	for _, r := range refs {
+		keys = append(keys, r.CatalogType+"/"+r.CatalogID)
+	}
+	assert.Contains(t, keys, "movie/top")
+	assert.Contains(t, keys, "series/popular")
+
+	// Disable the movie catalog.
+	err := m.SetCatalogEnabled("cat-addon", "", "movie/top", false)
+	require.NoError(t, err)
+
+	refs = m.GetEnabledCatalogs()
+	require.Len(t, refs, 1)
+	assert.Equal(t, "popular", refs[0].CatalogID)
+
+	// Re-enable it — should be back.
+	err = m.SetCatalogEnabled("cat-addon", "", "movie/top", true)
+	require.NoError(t, err)
+
+	refs = m.GetEnabledCatalogs()
+	require.Len(t, refs, 2)
+}
+
+func TestSetCatalogEnabled_ByURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "addons.json")
+
+	m := &Manager{
+		client: &http.Client{},
+		stremioAddons: []AddonEntry{
+			catalogAddon("addon1", "https://a.example.com", []ManifestCatalog{
+				{Type: "movie", ID: "top", Name: "Top"},
+			}),
+		},
+		officialEnabled: make(map[string]bool),
+		streamCache:     make(map[string]streamCacheEntry),
+		storePath:       storePath,
+	}
+
+	// Match by URL — disable.
+	err := m.SetCatalogEnabled("", "https://a.example.com", "movie/top", false)
+	require.NoError(t, err)
+	assert.Empty(t, m.GetEnabledCatalogs())
+}
+
+func TestSetCatalogEnabled_NotFound(t *testing.T) {
+	m := newTestManager(nil)
+	err := m.SetCatalogEnabled("does-not-exist", "", "movie/top", false)
+	assert.ErrorContains(t, err, "addon not found")
+}
+
+// ── FindAddonURL / HasAddonURL ─────────────────────────────────────────────────
+
+func TestFindAddonURL_Found(t *testing.T) {
+	m := newTestManager([]AddonEntry{
+		{ID: "my-addon", URL: "https://myaddon.example.com", Kind: KindProvider, Source: SourceStremio, Enabled: true, Manifest: Manifest{ID: "my-addon"}},
+	})
+	url, ok := m.FindAddonURL("my-addon")
+	assert.True(t, ok)
+	assert.Equal(t, "https://myaddon.example.com", url)
+}
+
+func TestFindAddonURL_NotFound(t *testing.T) {
+	m := newTestManager(nil)
+	_, ok := m.FindAddonURL("no-such-addon")
+	assert.False(t, ok)
+}
+
+func TestHasAddonURL_True(t *testing.T) {
+	m := newTestManager([]AddonEntry{
+		{ID: "a", URL: "https://known.example.com", Kind: KindProvider, Source: SourceStremio, Enabled: true, Manifest: Manifest{ID: "a"}},
+	})
+	assert.True(t, m.HasAddonURL("https://known.example.com"))
+}
+
+func TestHasAddonURL_False(t *testing.T) {
+	m := newTestManager(nil)
+	assert.False(t, m.HasAddonURL("https://unknown.example.com"))
+}
+
+// ── GetTimestamps ──────────────────────────────────────────────────────────────
+
+func TestGetTimestamps_Disabled(t *testing.T) {
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: map[string]bool{"cove.introdb": false},
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+	data, err := m.GetTimestamps(12345, nil, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Empty(t, data.Intro)
+	assert.Empty(t, data.Credits)
+}
+
+func TestGetTimestamps_Enabled_Movie(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"intro":[{"start_ms":1000,"end_ms":90000}],"credits":[{"start_ms":3300000,"end_ms":3400000}]}`)
+	}))
+	defer srv.Close()
+
+	origURL := introdDbURL
+	introdDbURL = srv.URL
+	t.Cleanup(func() { introdDbURL = origURL })
+
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: map[string]bool{"cove.introdb": true},
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+	data, err := m.GetTimestamps(550, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.Len(t, data.Intro, 1)
+	assert.Equal(t, int64(1000), *data.Intro[0].StartMs)
+	require.Len(t, data.Credits, 1)
+}
+
+func TestGetTimestamps_Enabled_TVWithImdbLookup(t *testing.T) {
+	// theintrodb.org stub: has intro only.
+	tmdbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"intro":[{"start_ms":5000,"end_ms":85000}]}`)
+	}))
+	defer tmdbSrv.Close()
+
+	// introdb.app stub: has recap (not in tmdbSrv) and intro (should be ignored — base wins).
+	appSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"intro":{"start_ms":9999,"end_ms":99999},"recap":{"start_ms":0,"end_ms":30000},"outro":null}`)
+	}))
+	defer appSrv.Close()
+
+	origURL := introdDbURL
+	origAppURL := introdDbAppURL
+	introdDbURL = tmdbSrv.URL
+	introdDbAppURL = appSrv.URL
+	t.Cleanup(func() {
+		introdDbURL = origURL
+		introdDbAppURL = origAppURL
+	})
+
+	season, episode := 1, 3
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: map[string]bool{"cove.introdb": true},
+		streamCache:     make(map[string]streamCacheEntry),
+		imdbLookup:      func(tmdbID int) string { return "tt7654321" },
+	}
+	data, err := m.GetTimestamps(99, &season, &episode)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	// Base intro from theintrodb.org is preserved.
+	require.Len(t, data.Intro, 1)
+	assert.Equal(t, int64(5000), *data.Intro[0].StartMs)
+	// Recap comes from introdb.app fill.
+	require.Len(t, data.Recap, 1)
+}
+
+func TestGetTimestamps_OfficialDefaultEnabled(t *testing.T) {
+	// When officialEnabled map has no entry, isOfficialEnabledL must default to true.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	origURL := introdDbURL
+	introdDbURL = srv.URL
+	t.Cleanup(func() { introdDbURL = origURL })
+
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: make(map[string]bool), // empty — default-on
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+	data, err := m.GetTimestamps(1, nil, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, data)
+}
+
+// ── GetWatchOptions ────────────────────────────────────────────────────────────
+
+func TestGetWatchOptions_Disabled(t *testing.T) {
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: map[string]bool{"cove.justwatch": false},
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+	opts, err := m.GetWatchOptions("movie", "550")
+	require.NoError(t, err)
+	assert.Empty(t, opts)
+}
+
+func TestGetWatchOptions_Enabled_Happy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"results":{"US":{"flatrate":[{"provider_id":8,"provider_name":"Netflix","logo_path":"/netflix.jpg"}],"rent":[{"provider_id":2,"provider_name":"Apple TV","logo_path":"/apple.jpg"}],"link":"https://jw.link"}}}`)
+	}))
+	defer srv.Close()
+
+	t.Setenv("TMDB_API_KEY", "test-key")
+	origBase := watchOptionsBaseURL
+	watchOptionsBaseURL = srv.URL
+	origClient := watchOptionsClient
+	watchOptionsClient = &http.Client{}
+	t.Cleanup(func() {
+		watchOptionsBaseURL = origBase
+		watchOptionsClient = origClient
+	})
+
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: map[string]bool{"cove.justwatch": true},
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+	opts, err := m.GetWatchOptions("movie", "550")
+	require.NoError(t, err)
+	require.Len(t, opts, 2)
+	assert.Equal(t, "flatrate", opts[0].Type)
+	assert.Equal(t, "Netflix", opts[0].ProviderName)
+	assert.Equal(t, "rent", opts[1].Type)
+}
+
+func TestGetWatchOptions_Enabled_NoUSResults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"results":{"GB":{"flatrate":[],"link":"https://jw.link"}}}`)
+	}))
+	defer srv.Close()
+
+	t.Setenv("TMDB_API_KEY", "test-key")
+	origBase := watchOptionsBaseURL
+	watchOptionsBaseURL = srv.URL
+	origClient := watchOptionsClient
+	watchOptionsClient = &http.Client{}
+	t.Cleanup(func() {
+		watchOptionsBaseURL = origBase
+		watchOptionsClient = origClient
+	})
+
+	m := &Manager{
+		client:          &http.Client{},
+		officialEnabled: map[string]bool{"cove.justwatch": true},
+		streamCache:     make(map[string]streamCacheEntry),
+	}
+	opts, err := m.GetWatchOptions("movie", "550")
+	require.NoError(t, err)
+	assert.Empty(t, opts)
+}
+
+// ── SetProfile ─────────────────────────────────────────────────────────────────
+
+func TestSetProfile_LoadsFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	// Write a store file that SetProfile will pick up via utils.ConfigPath.
+	coveDir := filepath.Join(tmpDir, "cove")
+	require.NoError(t, os.MkdirAll(coveDir, 0o755))
+	storePath := filepath.Join(coveDir, "addons-testprofile.json")
+	storeJSON := `{"stremioAddons":[{"id":"loaded-addon","url":"https://loaded.example.com","manifest":{"id":"loaded-addon","name":"Loaded"},"kind":"provider","source":"stremio","enabled":true}]}`
+	require.NoError(t, os.WriteFile(storePath, []byte(storeJSON), 0o644))
+
+	m := newTestManager(nil)
+	err := m.SetProfile("testprofile")
+	require.NoError(t, err)
+
+	m.mu.RLock()
+	count := len(m.stremioAddons)
+	id := ""
+	if count > 0 {
+		id = m.stremioAddons[0].ID
+	}
+	m.mu.RUnlock()
+
+	require.Equal(t, 1, count)
+	assert.Equal(t, "loaded-addon", id)
+}
+
+// ── loadStore ──────────────────────────────────────────────────────────────────
+
+func TestLoadStore_NotExist(t *testing.T) {
+	s, err := loadStore(filepath.Join(t.TempDir(), "nonexistent.json"))
+	require.NoError(t, err)
+	assert.Empty(t, s.StremioAddons)
+}
+
+func TestLoadStore_MalformedJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	require.NoError(t, os.WriteFile(path, []byte("not json {{{"), 0o644))
+	_, err := loadStore(path)
+	assert.Error(t, err)
+}
+
+func TestLoadStore_Valid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.json")
+	storeJSON := `{"stremioAddons":[{"id":"x","url":"https://x.com","manifest":{"id":"x","name":"X"},"kind":"provider","source":"stremio","enabled":true}],"officialEnabled":{"cove.justwatch":false}}`
+	require.NoError(t, os.WriteFile(path, []byte(storeJSON), 0o644))
+	s, err := loadStore(path)
+	require.NoError(t, err)
+	require.Len(t, s.StremioAddons, 1)
+	assert.Equal(t, "x", s.StremioAddons[0].ID)
+	assert.False(t, s.OfficialEnabled["cove.justwatch"])
+}
+
+func TestLoadStore_ZeroUpdatedAtAdoptsFileMtime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.json")
+	// Store with data but no updatedAt (zero time).
+	storeJSON := `{"stremioAddons":[{"id":"y","url":"https://y.com","manifest":{"id":"y","name":"Y"},"kind":"provider","source":"stremio","enabled":true}]}`
+	require.NoError(t, os.WriteFile(path, []byte(storeJSON), 0o644))
+	s, err := loadStore(path)
+	require.NoError(t, err)
+	assert.False(t, s.UpdatedAt.IsZero(), "UpdatedAt must fall back to file mtime when the JSON field is zero")
+}
+
+// ── FetchCatalog / CatalogKey ──────────────────────────────────────────────────
+
+func TestCatalogKey(t *testing.T) {
+	c := ManifestCatalog{Type: "movie", ID: "top"}
+	assert.Equal(t, "movie/top", c.CatalogKey())
+}
+
+func TestFetchCatalog_Skip0(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/catalog/movie/top.json", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"metas":[{"id":"tt1","type":"movie","name":"Film One","poster":"","description":"","releaseInfo":"2024"}]}`)
+	}))
+	defer srv.Close()
+
+	m := newTestManager(nil)
+	metas, err := m.FetchCatalog(context.Background(), srv.URL, "movie", "top", 0)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	assert.Equal(t, "tt1", metas[0].ID)
+	assert.Equal(t, "Film One", metas[0].Name)
+}
+
+func TestFetchCatalog_SkipN(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/catalog/movie/top/skip=20.json", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"metas":[{"id":"tt2","type":"movie","name":"Film Two","poster":"","description":"","releaseInfo":"2023"}]}`)
+	}))
+	defer srv.Close()
+
+	m := newTestManager(nil)
+	metas, err := m.FetchCatalog(context.Background(), srv.URL, "movie", "top", 20)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	assert.Equal(t, "tt2", metas[0].ID)
+}
+
+func TestFetchCatalog_NonOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	m := newTestManager(nil)
+	_, err := m.FetchCatalog(context.Background(), srv.URL, "movie", "top", 0)
+	assert.Error(t, err)
+}
+
+func TestFetchCatalog_MalformedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{bad json`)
+	}))
+	defer srv.Close()
+
+	m := newTestManager(nil)
+	_, err := m.FetchCatalog(context.Background(), srv.URL, "movie", "top", 0)
+	assert.Error(t, err)
+}
+
+func TestGetEnabledCatalogs_HomeEligibleFilter(t *testing.T) {
+	// A catalog with a required non-skip extra must be excluded from home.
+	searchOnlyCat := ManifestCatalog{
+		Type:  "movie",
+		ID:    "search",
+		Name:  "Search Only",
+		Extra: []ManifestCatalogExtra{{Name: "search", IsRequired: true}},
+	}
+	normalCat := ManifestCatalog{Type: "movie", ID: "normal", Name: "Normal"}
+
+	m := newTestManager([]AddonEntry{
+		catalogAddon("addon", "https://addon.example.com", []ManifestCatalog{searchOnlyCat, normalCat}),
+	})
+
+	refs := m.GetEnabledCatalogs()
+	require.Len(t, refs, 1, "search-only catalog must be excluded")
+	assert.Equal(t, "normal", refs[0].CatalogID)
 }

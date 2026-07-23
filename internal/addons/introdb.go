@@ -8,8 +8,8 @@ import (
 	"net/http"
 )
 
-const introdDbURL = "https://api.theintrodb.org/v3"
-const introdDbAppURL = "https://api.introdb.app"
+var introdDbURL = "https://api.theintrodb.org/v3"
+var introdDbAppURL = "https://api.introdb.app"
 
 // TimestampSegment is a single timed segment (intro, recap, credits, or preview).
 // StartMs or EndMs may be nil: nil start means beginning of file, nil end means end of file.

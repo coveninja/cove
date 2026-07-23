@@ -242,9 +242,13 @@ inject-private:
 ##   3. JDK 17 (gomobile invokes javac when packaging the AAR)
 ## Private build tags (supabase, discover) are added automatically when the
 ## corresponding implementation files are present (run `make inject-private` first).
+## GOFLAGS disables VCS stamping: gomobile compiles ./gobind inside a temporary
+## work directory under $TMPDIR, and when that is a separate mount (tmpfs on
+## most Linux setups) git aborts at the filesystem boundary with exit 128,
+## which the Go toolchain treats as fatal rather than skipping the stamp.
 android-aar: web
 	mkdir -p android/app/libs
-	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 28 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
+	PATH=$(HOME)/go/bin:$(PATH) GOFLAGS=-buildvcs=false gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 28 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
 
 ## Build the Android debug APK. Requires all android-aar prerequisites above.
 android: android-aar

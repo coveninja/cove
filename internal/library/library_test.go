@@ -459,3 +459,582 @@ func TestAdoptRemoteIDs_LibraryEntryIDRemapped(t *testing.T) {
 	assert.Equal(t, "new-entry-uuid", progress[0].LibraryEntryID,
 		"LibraryEntryID must follow the adopted entry ID")
 }
+
+// ── AllRemovals ───────────────────────────────────────────────────────────────
+
+func TestAllRemovals_EmptyInitially(t *testing.T) {
+	l := newLib(t)
+	assert.Empty(t, l.AllRemovals())
+}
+
+func TestAllRemovals_ViaDeleteHandler(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":77,"media_type":"movie","title":"Tombstone Test","status":"watch_later"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/library/77/movie", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	// The tombstone is what supabase/sync.go's pushRemovals consumes via AllRemovals().
+	removals := l.AllRemovals()
+	require.Len(t, removals, 1, "AllRemovals must return the tombstone that Supabase sync pushes")
+	assert.Equal(t, 77, removals[0].TmdbID)
+	assert.Equal(t, "movie", removals[0].MediaType)
+	assert.False(t, removals[0].RemovedAt.IsZero())
+}
+
+func TestAllRemovals_ViaMergeFrom(t *testing.T) {
+	l := newLib(t)
+	now := time.Now()
+	r := &Removal{TmdbID: 88, MediaType: "tv", RemovedAt: now}
+	l.MergeFrom(nil, nil, nil, []*Removal{r})
+	removals := l.AllRemovals()
+	require.Len(t, removals, 1)
+	assert.Equal(t, 88, removals[0].TmdbID)
+	assert.Equal(t, "tv", removals[0].MediaType)
+}
+
+// ── MarkExternallyWatched ─────────────────────────────────────────────────────
+
+func TestMarkExternallyWatched_CreatesEntryAndProgress(t *testing.T) {
+	l := newLib(t)
+	watchedAt := time.Now().Add(-time.Hour)
+	l.MarkExternallyWatched(100, "movie", nil, nil, "Inception", "/path.jpg", watchedAt)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, 100, entries[0].TmdbID)
+	assert.Equal(t, StatusWatching, entries[0].Status)
+	assert.Equal(t, "Inception", entries[0].Title)
+
+	progs := l.AllProgress()
+	require.Len(t, progs, 1)
+	assert.True(t, progs[0].Completed)
+	assert.Equal(t, watchedAt.UTC(), progs[0].WatchedAt.UTC())
+}
+
+func TestMarkExternallyWatched_NoopIfAlreadyCompletedAtSameOrLaterTime(t *testing.T) {
+	l := newLib(t)
+	watchedAt := time.Now()
+	l.MarkExternallyWatched(101, "movie", nil, nil, "Foo", "", watchedAt)
+
+	// Same time — no-op.
+	l.MarkExternallyWatched(101, "movie", nil, nil, "Foo", "", watchedAt)
+	// Earlier time — also no-op.
+	l.MarkExternallyWatched(101, "movie", nil, nil, "Foo", "", watchedAt.Add(-time.Minute))
+
+	progs := l.AllProgress()
+	require.Len(t, progs, 1)
+	assert.Equal(t, watchedAt.UTC(), progs[0].WatchedAt.UTC())
+}
+
+func TestMarkExternallyWatched_UpdatesIfNewer(t *testing.T) {
+	l := newLib(t)
+	first := time.Now().Add(-2 * time.Hour)
+	l.MarkExternallyWatched(102, "movie", nil, nil, "Bar", "", first)
+
+	second := first.Add(time.Hour)
+	l.MarkExternallyWatched(102, "movie", nil, nil, "Bar", "", second)
+
+	progs := l.AllProgress()
+	require.Len(t, progs, 1)
+	assert.Equal(t, second.UTC(), progs[0].WatchedAt.UTC())
+}
+
+func TestMarkExternallyWatched_DoesNotOverwriteExistingEntryStatus(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	// Add entry manually with StatusWatchLater.
+	body := `{"tmdb_id":103,"media_type":"movie","title":"Existing","status":"watch_later"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	l.MarkExternallyWatched(103, "movie", nil, nil, "Existing", "", time.Now())
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, StatusWatchLater, entries[0].Status, "existing entry status must not be overwritten by MarkExternallyWatched")
+}
+
+func TestMarkExternallyWatched_TVEpisode(t *testing.T) {
+	l := newLib(t)
+	s, ep := 2, 3
+	l.MarkExternallyWatched(104, "tv", &s, &ep, "Show", "", time.Now())
+
+	progs := l.AllProgress()
+	require.Len(t, progs, 1)
+	require.NotNil(t, progs[0].Season)
+	assert.Equal(t, 2, *progs[0].Season)
+	require.NotNil(t, progs[0].Episode)
+	assert.Equal(t, 3, *progs[0].Episode)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	require.NotNil(t, entries[0].LastWatchedSeason)
+	assert.Equal(t, 2, *entries[0].LastWatchedSeason)
+	require.NotNil(t, entries[0].LastWatchedEpisode)
+	assert.Equal(t, 3, *entries[0].LastWatchedEpisode)
+}
+
+// ── AddWatchLater ─────────────────────────────────────────────────────────────
+
+func TestAddWatchLater_AddsIfNotExists(t *testing.T) {
+	l := newLib(t)
+	addedAt := time.Now().Add(-24 * time.Hour)
+	l.AddWatchLater(110, "movie", "Watchlist Film", "/poster.jpg", addedAt)
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, StatusWatchLater, entries[0].Status)
+	assert.Equal(t, "Watchlist Film", entries[0].Title)
+	assert.Equal(t, addedAt.UTC(), entries[0].AddedAt.UTC())
+}
+
+func TestAddWatchLater_NoopIfEntryAlreadyExists(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	// Add entry with a different status first.
+	body := `{"tmdb_id":111,"media_type":"movie","title":"Already There","status":"watching"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	l.AddWatchLater(111, "movie", "Already There", "", time.Now())
+
+	entries := l.AllEntries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, StatusWatching, entries[0].Status, "AddWatchLater must not overwrite existing entry")
+}
+
+// ── SetOnNearComplete / SetOnProgressSave ─────────────────────────────────────
+
+func TestSetOnNearComplete_FiresWhenCompleted(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	fired := make(chan struct{}, 1)
+	l.SetOnNearComplete(func() { fired <- struct{}{} })
+
+	body := bytes.NewBufferString(`{"tmdb_id":120,"media_type":"movie","position_seconds":6000,"duration_seconds":6000,"completed":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("onNearComplete was not called on completion")
+	}
+}
+
+func TestSetOnNearComplete_FiresAt90Percent(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	fired := make(chan struct{}, 1)
+	l.SetOnNearComplete(func() { fired <- struct{}{} })
+
+	body := bytes.NewBufferString(`{"tmdb_id":121,"media_type":"movie","position_seconds":5400,"duration_seconds":6000,"completed":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("onNearComplete was not called at ≥90%")
+	}
+}
+
+func TestSetOnNearComplete_DoesNotFireForEarlyProgress(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	fired := make(chan struct{}, 1)
+	l.SetOnNearComplete(func() { fired <- struct{}{} })
+
+	body := bytes.NewBufferString(`{"tmdb_id":122,"media_type":"movie","position_seconds":100,"duration_seconds":6000,"completed":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	select {
+	case <-fired:
+		t.Fatal("onNearComplete must not fire for early progress (<90%)")
+	case <-time.After(50 * time.Millisecond):
+		// correct — nothing fired
+	}
+}
+
+func TestSetOnProgressSave_Fires(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	events := make(chan ProgressSaveEvent, 1)
+	l.SetOnProgressSave(func(ev ProgressSaveEvent) { events <- ev })
+
+	body := bytes.NewBufferString(`{"tmdb_id":130,"media_type":"movie","position_seconds":120,"duration_seconds":6000,"completed":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	select {
+	case ev := <-events:
+		assert.Equal(t, 130, ev.TmdbID)
+		assert.Equal(t, "movie", ev.MediaType)
+		assert.Equal(t, float64(120), ev.Position)
+		assert.Equal(t, float64(6000), ev.Duration)
+		assert.False(t, ev.Completed)
+	case <-time.After(time.Second):
+		t.Fatal("onProgressSave was not called")
+	}
+}
+
+func TestSetOnProgressSave_FiredOnEveryTick(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	var count int
+	events := make(chan struct{}, 5)
+	l.SetOnProgressSave(func(_ ProgressSaveEvent) { events <- struct{}{} })
+
+	for i := 0; i < 3; i++ {
+		body := bytes.NewBufferString(`{"tmdb_id":131,"media_type":"movie","position_seconds":10,"duration_seconds":6000,"completed":false}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/library/progress", body)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+	}
+
+	timeout := time.After(time.Second)
+	for count < 3 {
+		select {
+		case <-events:
+			count++
+		case <-timeout:
+			t.Fatalf("onProgressSave only fired %d/3 times", count)
+		}
+	}
+}
+
+// ── handleItem ────────────────────────────────────────────────────────────────
+
+func TestHandleItem_GET_NotInLibrary(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/library/999/movie", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Nil(t, resp["entry"], "entry should be null for unknown title")
+	assert.NotNil(t, resp["progress"])
+}
+
+func TestHandleItem_GET_InLibrary(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":140,"media_type":"movie","title":"In Library","status":"watching"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/library/140/movie", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp struct {
+		Entry     *LibraryEntry    `json:"entry"`
+		Progress  []*WatchProgress `json:"progress"`
+		Dismissed bool             `json:"dismissed"`
+	}
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	require.NotNil(t, resp.Entry)
+	assert.Equal(t, 140, resp.Entry.TmdbID)
+	assert.Equal(t, StatusWatching, resp.Entry.Status)
+	assert.NotNil(t, resp.Progress)
+}
+
+func TestHandleItem_DELETE_CreatesTombstone(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":150,"media_type":"tv","title":"To Remove","status":"watch_later"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/library/150/tv", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+
+	// Entry must be gone from the library.
+	assert.Empty(t, l.AllEntries())
+
+	// Tombstone must be present — supabase/sync.go pushRemovals reads AllRemovals()
+	// to build the rows it upserts into library_removals and then deletes from
+	// library_entries on the remote side. Without the tombstone sync cannot evict
+	// the remote copy.
+	removals := l.AllRemovals()
+	require.Len(t, removals, 1, "tombstone must exist in AllRemovals after DELETE")
+	assert.Equal(t, 150, removals[0].TmdbID)
+	assert.Equal(t, "tv", removals[0].MediaType)
+	assert.False(t, removals[0].RemovedAt.IsZero())
+}
+
+func TestHandleItem_DELETE_PreservesWatchProgress(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	// Add entry.
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(`{"tmdb_id":151,"media_type":"movie","title":"Prog Test","status":"watching"}`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Save some progress.
+	req = httptest.NewRequest(http.MethodPost, "/api/library/progress", bytes.NewBufferString(`{"tmdb_id":151,"media_type":"movie","position_seconds":300,"duration_seconds":6000,"completed":false}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Delete entry.
+	req = httptest.NewRequest(http.MethodDelete, "/api/library/151/movie", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	// Progress must survive the removal (user is removing from list, not erasing history).
+	progs := l.AllProgress()
+	require.Len(t, progs, 1, "watch progress must be preserved when entry is deleted")
+	assert.Equal(t, float64(300), progs[0].PositionSeconds)
+}
+
+func TestHandleItem_PATCH_Status(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":160,"media_type":"movie","title":"Status Test","status":"watch_later"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/library/160/movie/status", bytes.NewBufferString(`{"status":"finished"}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var e LibraryEntry
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&e))
+	assert.Equal(t, StatusFinished, e.Status)
+}
+
+func TestHandleItem_PATCH_Status_NotFound(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/library/9999/movie/status", bytes.NewBufferString(`{"status":"finished"}`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestHandleItem_PATCH_Rating(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":170,"media_type":"movie","title":"Rating Test","status":"watching"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/library/170/movie/rating", bytes.NewBufferString(`{"rating":4.5}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var e LibraryEntry
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&e))
+	require.NotNil(t, e.Rating)
+	assert.Equal(t, 4.5, *e.Rating)
+}
+
+func TestHandleItem_PATCH_Rating_ClearWithNull(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":171,"media_type":"movie","title":"Clear Rating","status":"watching"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/library/171/movie/rating", bytes.NewBufferString(`{"rating":3.0}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/library/171/movie/rating", bytes.NewBufferString(`{"rating":null}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var e LibraryEntry
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&e))
+	assert.Nil(t, e.Rating)
+}
+
+func TestHandleItem_PATCH_Rating_InvalidRange(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":172,"media_type":"movie","title":"Bad Rating","status":"watching"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/library/172/movie/rating", bytes.NewBufferString(`{"rating":6.0}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleItem_InvalidPath(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	// Trailing-slash route reaches handleItem with an empty trimmed path.
+	req := httptest.NewRequest(http.MethodGet, "/api/library/", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleItem_InvalidTmdbID(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/library/notanumber/movie", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// ── handleDismiss ─────────────────────────────────────────────────────────────
+
+func TestHandleDismiss_POST_AddsDismissal(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	body := `{"tmdb_id":180,"media_type":"movie"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/library/dismiss", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+
+	dismissals := l.AllDismissals()
+	require.Len(t, dismissals, 1)
+	assert.Equal(t, 180, dismissals[0].TmdbID)
+	assert.Equal(t, "movie", dismissals[0].MediaType)
+	assert.False(t, dismissals[0].DismissedAt.IsZero())
+}
+
+func TestHandleDismiss_DELETE_RemovesDismissal(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/library/dismiss", bytes.NewBufferString(`{"tmdb_id":181,"media_type":"tv"}`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+	require.Len(t, l.AllDismissals(), 1)
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/library/dismiss", bytes.NewBufferString(`{"tmdb_id":181,"media_type":"tv"}`))
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Empty(t, l.AllDismissals())
+}
+
+func TestHandleDismiss_POST_BumpsTasteGen(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	g0 := l.TasteGeneration()
+	req := httptest.NewRequest(http.MethodPost, "/api/library/dismiss", bytes.NewBufferString(`{"tmdb_id":182,"media_type":"movie"}`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNoContent, rr.Code)
+	assert.Greater(t, l.TasteGeneration(), g0, "dismissal must bump tasteGen")
+}
+
+func TestHandleDismiss_POST_MissingFields(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/library/dismiss", bytes.NewBufferString(`{"tmdb_id":0,"media_type":""}`))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestHandleDismiss_InvalidMethod(t *testing.T) {
+	l := newLib(t)
+	mux := http.NewServeMux()
+	l.SetupHandlers(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/library/dismiss", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}

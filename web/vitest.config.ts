@@ -15,10 +15,14 @@ export default mergeConfig(
       coverage: {
         provider: "v8",
         reporter: ["text", "json-summary", "lcov"],
-        include: [
-          "src/lib/api.ts",
-          "src/lib/sync.ts",
-          "src/lib/stores/**/*.ts",
+        // Measure the whole TS surface, not a hand-picked subset — otherwise
+        // untested modules never appear in the denominator and coverage can
+        // never regress. Excludes are generated or vendored code only.
+        include: ["src/**/*.ts"],
+        exclude: [
+          "src/lib/types/**", // tygo-generated from Go structs
+          "src/lib/components/ui/**", // vendored shadcn-svelte
+          "**/*.test.ts",
         ],
       },
       restoreMocks: true,

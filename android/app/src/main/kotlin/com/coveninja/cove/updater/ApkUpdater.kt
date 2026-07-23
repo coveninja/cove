@@ -81,9 +81,17 @@ class ApkUpdater {
         val baseUrl = if (BuildConfig.UPDATE_BASE_URL.isNotEmpty()) {
             BuildConfig.UPDATE_BASE_URL.trimEnd('/')
         } else {
-            "https://api.github.com/repos/coveninja/cove"
+            GITHUB_API_BASE
         }
 
+        return checkForUpdateAt(currentVersionCode, baseUrl)
+    }
+
+    /**
+     * Release-lookup half of [checkForUpdate], split out so unit tests can point
+     * it at a stub server. [baseUrl] is already trimmed of any trailing slash.
+     */
+    internal fun checkForUpdateAt(currentVersionCode: Int, baseUrl: String): UpdateResult? {
         val req = Request.Builder()
             .url("$baseUrl/releases/latest")
             .header("Accept", "application/vnd.github+json")
@@ -266,6 +274,8 @@ class ApkUpdater {
 
     companion object {
         private const val TAG = "ApkUpdater"
+
+        private const val GITHUB_API_BASE = "https://api.github.com/repos/coveninja/cove"
 
         /**
          * Converts a semver triple to a versionCode using the same formula as

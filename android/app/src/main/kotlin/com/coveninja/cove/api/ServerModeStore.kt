@@ -1,8 +1,8 @@
 package com.coveninja.cove.api
 
 import android.content.Context
-import android.content.SharedPreferences
-import com.coveninja.cove.BuildConfig
+import com.coveninja.cove.storage.KeyValueStore
+import com.coveninja.cove.storage.SharedPreferencesStore
 
 /**
  * ServerMode describes how the Android app connects to its Cove backend.
@@ -36,19 +36,26 @@ object ServerModeStore {
     private const val KEY_BASE_URL = "base_url"
     private const val KEY_TOKEN = "token"
 
-    private lateinit var prefs: SharedPreferences
+    private lateinit var store: KeyValueStore
 
     /** Must be called in Application.onCreate before any other method. */
     fun init(context: Context) {
-        prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        initWith(
+            SharedPreferencesStore(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)),
+        )
+    }
+
+    /** Injection seam for unit tests; production code goes through [init]. */
+    internal fun initWith(backing: KeyValueStore) {
+        store = backing
     }
 
     /** Returns the currently-persisted ServerMode. */
     fun get(): ServerMode {
-        return when (prefs.getString(KEY_MODE, "local")) {
+        return when (store.getString(KEY_MODE, "local")) {
             "remote" -> {
-                val url = prefs.getString(KEY_BASE_URL, "") ?: ""
-                val token = prefs.getString(KEY_TOKEN, "") ?: ""
+                val url = store.getString(KEY_BASE_URL, "") ?: ""
+                val token = store.getString(KEY_TOKEN, "") ?: ""
                 if (url.isNotBlank()) ServerMode.Remote(url, token) else ServerMode.Local
             }
             else -> ServerMode.Local
@@ -57,9 +64,7 @@ object ServerModeStore {
 
     /** Persists Local mode and updates CoveApiClient immediately. */
     fun setLocal() {
-        prefs.edit()
-            .putString(KEY_MODE, "local")
-            .apply()
+        store.edit { putString(KEY_MODE, "local") }
         CoveApiClient.applyMode(ServerMode.Local)
     }
 
@@ -69,11 +74,11 @@ object ServerModeStore {
      * for validating connectivity before persisting.
      */
     fun setRemote(baseUrl: String, token: String) {
-        prefs.edit()
-            .putString(KEY_MODE, "remote")
-            .putString(KEY_BASE_URL, baseUrl)
-            .putString(KEY_TOKEN, token)
-            .apply()
+        store.edit {
+            putString(KEY_MODE, "remote")
+            putString(KEY_BASE_URL, baseUrl)
+            putString(KEY_TOKEN, token)
+        }
         CoveApiClient.applyMode(ServerMode.Remote(baseUrl, token))
     }
 }

@@ -12,6 +12,10 @@ import (
 // pin the request goroutine (http.DefaultClient has no timeout).
 var watchOptionsClient = &http.Client{Timeout: 15 * time.Second}
 
+// watchOptionsBaseURL is the TMDB API base. A var (not a const) so tests can
+// redirect to a local httptest.Server without hitting the real network.
+var watchOptionsBaseURL = "https://api.themoviedb.org/3"
+
 // fetchWatchOptions queries TMDB's watch/providers endpoint for a title and
 // returns the streaming availability for the US region. It uses os.Getenv
 // directly because internal/tmdb imports this package, making a reverse import
@@ -23,8 +27,8 @@ func fetchWatchOptions(mediaType, tmdbID string) ([]WatchOption, error) {
 	}
 
 	url := fmt.Sprintf(
-		"https://api.themoviedb.org/3/%s/%s/watch/providers?api_key=%s",
-		mediaType, tmdbID, apiKey,
+		"%s/%s/%s/watch/providers?api_key=%s",
+		watchOptionsBaseURL, mediaType, tmdbID, apiKey,
 	)
 
 	resp, err := watchOptionsClient.Get(url) //nolint:noctx

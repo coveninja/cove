@@ -1,0 +1,33 @@
+# Coverage gates. The CI uploads keep `fail_ci_if_error: false` so Codecov
+# outages don't break builds — enforcement lives here, as a status check.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+      go:
+        target: auto
+        threshold: 1%
+        flags:
+          - go-public
+          - go-supabase
+      web:
+        target: auto
+        threshold: 1%
+        flags:
+          - web
+    patch:
+      default:
+        target: auto
+        threshold: 5%
+
+flag_management:
+  individual_flags:
+    - name: go-public
+    - name: go-supabase
+    - name: web
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true
