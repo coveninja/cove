@@ -60,6 +60,7 @@ export const imageFade: Action<
       node.removeEventListener("error", onReveal);
       node.removeEventListener("transitionend", onTransitionEnd);
       clearTimeout(fallbackTimer);
+      clearStyles();
     },
   };
 };
