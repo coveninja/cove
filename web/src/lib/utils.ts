@@ -53,9 +53,15 @@ export function inferQuality(stream: Stream): string | null {
   }
 
   const text = `${stream.name} ${stream.title}`.toLowerCase();
-  if (text.includes("dolby vision") || text.includes("4k dv")) return "4k dv";
-  if (text.includes("hdr")) return "4k hdr";
-  if (text.includes("2160") || text.includes("4k") || text.includes("uhd")) return "4k";
+  const is4k =
+    text.includes("2160") || text.includes("4k") || text.includes("uhd");
+  if (
+    is4k &&
+    (text.includes("dolby vision") || text.includes("4k dv"))
+  )
+    return "4k dv";
+  if (is4k && text.includes("hdr")) return "4k hdr";
+  if (is4k) return "4k";
   if (text.includes("1080") || text.includes("fhd") || text.includes("full hd")) return "1080p";
   if (text.includes("720")) return "720p";
   if (text.includes("480")) return "480p";
@@ -243,6 +249,9 @@ export function epProgress(
 }
 
 export function progressPct(p: WatchProgress): number {
-  if (!p.duration_seconds) return 0;
-  return Math.min(100, (p.position_seconds / p.duration_seconds) * 100);
+  if (p.duration_seconds <= 0 || !Number.isFinite(p.position_seconds)) return 0;
+  return Math.max(
+    0,
+    Math.min(100, (p.position_seconds / p.duration_seconds) * 100),
+  );
 }
