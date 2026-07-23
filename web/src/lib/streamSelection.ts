@@ -584,7 +584,10 @@ function rankScored(
       return finalizeRanking(
         fromPool,
         all,
-        (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5),
+        // Unknown is deliberately below the normalized 0..1 range so the
+        // soft provider/source boosts can never turn "we have no size" into
+        // the smallest known file. It still remains in the fallback ranking.
+        (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : -1),
         (a, b) => tiebreakSize(a) - tiebreakSize(b),
       );
     }
