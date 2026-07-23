@@ -289,6 +289,7 @@ func TestGetVideos_ReturnsResultsForTVShow(t *testing.T) {
 	require.Len(t, videos.Results, 1)
 	assert.Equal(t, "abc123", videos.Results[0].Key)
 	assert.Equal(t, "YouTube", videos.Results[0].Site)
+	assert.Equal(t, "https://www.youtube.com/embed/abc123", videos.Results[0].EmbedURL)
 }
 
 func TestGetVideos_NonOKReturnsError(t *testing.T) {
@@ -531,7 +532,9 @@ func TestSetupHandlers_MissingParamsReturn400(t *testing.T) {
 		{"search missing q", "/api/search"},
 		{"multi-search missing q", "/api/search/multi"},
 		{"person non-integer id", "/api/person?id=bad"},
+		{"person non-positive id", "/api/person?id=0"},
 		{"provider non-integer id", "/api/provider?id=notanint"},
+		{"provider non-positive id", "/api/provider?id=-1"},
 		{"images missing id and type", "/api/images"},
 		{"images invalid media type", "/api/images?id=1&type=actor"},
 		{"images id=0", "/api/images?id=0&type=movie"},
@@ -541,6 +544,14 @@ func TestSetupHandlers_MissingParamsReturn400(t *testing.T) {
 		{"media missing id and type", "/api/media"},
 		{"media invalid media type", "/api/media?id=1&type=person"},
 		{"media id=0", "/api/media?id=0&type=movie"},
+		{"details invalid id", "/api/details?id=1junk&type=movie"},
+		{"details invalid media type", "/api/details?id=1&type=person"},
+		{"similar invalid id", "/api/similar?id=0&type=movie"},
+		{"similar invalid media type", "/api/similar?id=1&type=person"},
+		{"logos invalid id", "/api/logos?id=-1&type=movie"},
+		{"logos invalid media type", "/api/logos?id=1&type=person"},
+		{"imdb invalid id", "/api/imdb?id=bad"},
+		{"seasons invalid id", "/api/tv/seasons?id=0"},
 		{"quality/batch missing ids", "/api/quality/batch"},
 		{"catalog missing addonId", "/api/catalog"},
 		{"catalog missing catalogId", "/api/catalog?addonId=x&catalogType=movie"},

@@ -1124,9 +1124,9 @@ func (c *Client) GetVideos(tmdbID int, mediaType string) (*MediaVideos, error) {
 		return nil, err
 	}
 
-	for _, v := range data.Results {
-		if v.Site == "YouTube" {
-			v.EmbedURL = fmt.Sprintf("https://www.youtube.com/embed/%s", v.Key)
+	for i := range data.Results {
+		if data.Results[i].Site == "YouTube" {
+			data.Results[i].EmbedURL = fmt.Sprintf("https://www.youtube.com/embed/%s", data.Results[i].Key)
 		}
 	}
 
@@ -1206,6 +1206,9 @@ func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /%s/%d", res.StatusCode, mediaType, tmdbID)
+	}
 
 	var details Details
 	if err := json.NewDecoder(res.Body).Decode(&details); err != nil {
@@ -1304,6 +1307,9 @@ func (c *Client) GetSimilar(tmdbID int, mediaType string) ([]Media, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /%s/%d/recommendations", res.StatusCode, mediaType, tmdbID)
+	}
 
 	var data searchResponse
 	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
@@ -1340,6 +1346,9 @@ func (c *Client) GetLogos(tmdbID int, mediaType string) ([]string, error) {
 			log.Println(err)
 		}
 	}(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tmdb: HTTP %d for /%s/%d/images", res.StatusCode, mediaType, tmdbID)
+	}
 
 	var data struct {
 		Logos []struct {
@@ -1644,8 +1653,28 @@ func (c *Client) ResolveMeta(ctx context.Context, meta addons.StremioMeta) *Medi
 	return nil
 }
 
+func parseTMDBID(raw string) (int, bool) {
+	id, err := strconv.Atoi(raw)
+	return id, err == nil && id > 0
+}
+
+func validMediaType(mediaType string) bool {
+	return mediaType == "movie" || mediaType == "tv"
+}
+
 func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
-	mux.HandleFunc("/api/keywords", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	getOnly := func(next http.HandlerFunc) http.HandlerFunc {
+		return utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			next(w, r)
+		})
+	}
+
+	mux.HandleFunc("/api/keywords", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
@@ -1662,7 +1691,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/search", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/search", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
@@ -1700,7 +1729,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 
 	// GET /api/search/multi?q=<query> — sectioned results (titles split into
 	// movies/tv, plus people and providers).
-	mux.HandleFunc("/api/search/multi", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/search/multi", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
@@ -1720,9 +1749,9 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 	}))
 
 	// GET /api/person?id=<personID> — bio + filmography for the person overlay.
-	mux.HandleFunc("/api/person", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.URL.Query().Get("id"))
-		if err != nil {
+	mux.HandleFunc("/api/person", getOnly(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
@@ -1739,9 +1768,9 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 
 	// GET /api/provider?id=<providerID>&limit=<n> — popular titles on a provider
 	// (US region). Blends movies and TV.
-	mux.HandleFunc("/api/provider", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.URL.Query().Get("id"))
-		if err != nil {
+	mux.HandleFunc("/api/provider", getOnly(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
@@ -1760,7 +1789,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/images", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/images", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 
@@ -1769,13 +1798,13 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			return
 		}
 
-		if mediaType != "movie" && mediaType != "tv" {
+		if !validMediaType(mediaType) {
 			http.Error(w, "invalid media type", http.StatusBadRequest)
 			return
 		}
 
-		id, err := strconv.Atoi(tmdbIDStr)
-		if err != nil || id <= 0 {
+		id, ok := parseTMDBID(tmdbIDStr)
+		if !ok {
 			http.Error(w, "invalid id format", http.StatusBadRequest)
 			return
 		}
@@ -1794,7 +1823,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/videos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/videos", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 
@@ -1803,13 +1832,13 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			return
 		}
 
-		if mediaType != "movie" && mediaType != "tv" {
+		if !validMediaType(mediaType) {
 			http.Error(w, "invalid media type", http.StatusBadRequest)
 			return
 		}
 
-		id, err := strconv.Atoi(tmdbIDStr)
-		if err != nil || id <= 0 {
+		id, ok := parseTMDBID(tmdbIDStr)
+		if !ok {
 			http.Error(w, "invalid id format", http.StatusBadRequest)
 			return
 		}
@@ -1832,7 +1861,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 	// Returns a single, fully-populated Media object by ID — for callers that
 	// only have a bare tmdb_id (e.g. from a LibraryEntry) and need the real
 	// TMDB object rather than reconstructing a partial one client-side.
-	mux.HandleFunc("/api/media", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/media", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 
@@ -1840,13 +1869,13 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			http.Error(w, "missing required parameters", http.StatusBadRequest)
 			return
 		}
-		if mediaType != "movie" && mediaType != "tv" {
+		if !validMediaType(mediaType) {
 			http.Error(w, "invalid media type", http.StatusBadRequest)
 			return
 		}
 
-		id, err := strconv.Atoi(tmdbIDStr)
-		if err != nil || id <= 0 {
+		id, ok := parseTMDBID(tmdbIDStr)
+		if !ok {
 			http.Error(w, "invalid id format", http.StatusBadRequest)
 			return
 		}
@@ -1863,13 +1892,15 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/details", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
+	mux.HandleFunc("/api/details", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		mediaType := r.URL.Query().Get("type")
-		id := 0
-		_, err := fmt.Sscanf(tmdbID, "%d", &id)
-		if err != nil {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
 			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		if !validMediaType(mediaType) {
+			http.Error(w, "invalid media type", http.StatusBadRequest)
 			return
 		}
 		details, err := c.GetDetails(id, mediaType)
@@ -1883,9 +1914,17 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/similar", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+	mux.HandleFunc("/api/similar", getOnly(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
 		mediaType := r.URL.Query().Get("type")
+		if !validMediaType(mediaType) {
+			http.Error(w, "invalid media type", http.StatusBadRequest)
+			return
+		}
 		results, err := c.GetSimilar(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1899,13 +1938,15 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/logos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
+	mux.HandleFunc("/api/logos", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		mediaType := r.URL.Query().Get("type")
-		id := 0
-		_, err := fmt.Sscanf(tmdbID, "%d", &id)
-		if err != nil {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
 			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		if !validMediaType(mediaType) {
+			http.Error(w, "invalid media type", http.StatusBadRequest)
 			return
 		}
 		logos, err := c.GetLogos(id, mediaType)
@@ -1919,12 +1960,10 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 		}
 	}))
 
-	mux.HandleFunc("/api/imdb", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
-		id := 0
-		_, err := fmt.Sscanf(tmdbID, "%d", &id)
-		if err != nil {
-			log.Println(err)
+	mux.HandleFunc("/api/imdb", getOnly(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
+			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
 		imdbID, err := c.GetIMDBId(id)
@@ -1941,10 +1980,9 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 
 	// GET /api/tv/seasons?id=<tmdbID>
 	// Returns the list of seasons for a TV show.
-	mux.HandleFunc("/api/tv/seasons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
-		id := 0
-		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+	mux.HandleFunc("/api/tv/seasons", getOnly(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
@@ -1961,11 +1999,10 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 
 	// GET /api/tv/episodes?id=<tmdbID>&season=<seasonNumber>
 	// Returns the episodes for a given season of a TV show.
-	mux.HandleFunc("/api/tv/episodes", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
+	mux.HandleFunc("/api/tv/episodes", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		seasonStr := r.URL.Query().Get("season")
-		id := 0
-		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
+		id, ok := parseTMDBID(r.URL.Query().Get("id"))
+		if !ok {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
@@ -1990,7 +2027,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 	// every title in a discovery grid, and running goja + third-party network
 	// scrapers per grid tile would be far too slow/heavy for a quality badge.
 	// Don't "fix" this into consistency with /api/streams later.
-	mux.HandleFunc("/api/quality/batch", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/quality/batch", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		idsParam := r.URL.Query().Get("ids")
 		if idsParam == "" {
 			http.Error(w, "missing ids", http.StatusBadRequest)
@@ -2042,7 +2079,9 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			// Cached hit — emit immediately, no worker/IMDB-lookup/addon
 			// fan-out needed at all.
 			if q, hit := c.qualityCacheGet(typedID); hit {
-				write(typedID, q)
+				if q != "" {
+					write(typedID, q)
+				}
 				continue
 			}
 
@@ -2102,12 +2141,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 	// Returns {medias:[], nextSkip:n} — one page of a Stremio addon catalog,
 	// resolved through TMDB. Unresolvable metas are silently dropped; page
 	// results are cached 5 minutes per (addonURL, type, id, skip, limit) key.
-	mux.HandleFunc("/api/catalog", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
+	mux.HandleFunc("/api/catalog", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		addonID := r.URL.Query().Get("addonId")
 		catalogType := r.URL.Query().Get("catalogType")
 		catalogID := r.URL.Query().Get("catalogId")
@@ -2243,9 +2277,10 @@ func parseQualityID(raw string) (typedID, mediaType string, tmdbID int, ok bool)
 	numPart := raw
 	if idx := strings.IndexByte(raw, ':'); idx >= 0 {
 		prefix := raw[:idx]
-		if prefix == "movie" || prefix == "tv" {
-			mediaType = prefix
+		if prefix != "movie" && prefix != "tv" {
+			return "", "", 0, false
 		}
+		mediaType = prefix
 		numPart = raw[idx+1:]
 	}
 	id, err := strconv.Atoi(numPart)

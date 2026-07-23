@@ -20,7 +20,7 @@ func TestParseQualityID(t *testing.T) {
 		{"typed tv", "tv:1396", "tv:1396", "tv", 1396, true},
 		{"bare defaults to movie", "603", "movie:603", "movie", 603, true},
 		{"whitespace trimmed", " 603 ", "movie:603", "movie", 603, true},
-		{"unknown prefix defaults to movie, number after colon ignored as prefix", "foo:603", "movie:603", "movie", 603, true},
+		{"unknown prefix rejected", "foo:603", "", "", 0, false},
 		{"invalid number", "movie:abc", "", "", 0, false},
 		{"zero id rejected", "movie:0", "", "", 0, false},
 		{"empty", "", "", "", 0, false},
