@@ -192,7 +192,7 @@ async function requestOrNull<T>(
 
 /** A torrent src is a bare infohash; anything starting with http is a direct URL. */
 function isHashSrc(src: string): boolean {
-  return !src.startsWith("http");
+  return !/^https?:\/\//i.test(src);
 }
 
 // ── Library: TypeScript-only types ────────────────────────────────────────────
@@ -223,9 +223,12 @@ export const STATUS_COLORS: Record<
 
 /** "1h 23m" / "4m 12s" / "8s" */
 export function formatPosition(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
+  const totalSeconds = Number.isFinite(seconds)
+    ? Math.max(0, Math.floor(seconds))
+    : 0;
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;

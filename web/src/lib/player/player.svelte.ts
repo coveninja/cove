@@ -221,6 +221,7 @@ export class MpvPlayer {
   }
 
   setPlaybackSpeed(speed: number): void {
+    if (!Number.isFinite(speed) || speed <= 0) return;
     this.playbackSpeed = speed;
     this.#mpv?.setMpvProperty("speed", String(speed));
   }
@@ -300,6 +301,7 @@ export class MpvPlayer {
   }
 
   seek(seconds: number): void {
+    if (!Number.isFinite(seconds)) return;
     const clamped = this.duration
       ? Math.max(0, Math.min(seconds, this.duration))
       : Math.max(0, seconds);
@@ -309,6 +311,7 @@ export class MpvPlayer {
   }
 
   setVolume(volume: number): void {
+    if (!Number.isFinite(volume)) return;
     const clamped = Math.max(0, Math.min(volume, 100));
     this.volume = clamped;
     this.#mpv?.setVolume(clamped);

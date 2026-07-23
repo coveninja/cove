@@ -119,6 +119,74 @@ describe("API request invariants", () => {
       path: "/auth/sync",
     });
   });
+
+  it("preserves existing headers while adding the latest auth token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ results: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    let token = "first-token";
+    setTokenSource(() => token);
+
+    await api.probeStreams([], 900);
+    token = "second-token";
+    await api.probeStreams([], 900);
+
+    const firstHeaders = new Headers(
+      (fetchMock.mock.calls[0][1] as RequestInit).headers,
+    );
+    const secondHeaders = new Headers(
+      (fetchMock.mock.calls[1][1] as RequestInit).headers,
+    );
+    expect(firstHeaders.get("Content-Type")).toBe("application/json");
+    expect(firstHeaders.get("Authorization")).toBe("Bearer first-token");
+    expect(secondHeaders.get("Authorization")).toBe("Bearer second-token");
+  });
+
+  it("handles an unreadable HTTP error body without masking response metadata", async () => {
+    const bodyFailure = new Error("body stream failed");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        text: vi.fn().mockRejectedValue(bodyFailure),
+      } as unknown as Response),
+    );
+
+    const error = await api.authSync().catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 502,
+      body: "",
+      path: "/auth/sync",
+      message: "API 502 on /auth/sync",
+    });
+  });
+
+  it("evicts a failed JSON response so the next GET can recover", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{not-json"))
+      .mockResolvedValueOnce(jsonResponse({ onboardingDone: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getSettings()).rejects.toBeInstanceOf(SyntaxError);
+    await expect(api.getSettings()).resolves.toMatchObject({
+      onboardingDone: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts an empty successful response for void endpoints", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 204 })),
+    );
+
+    await expect(api.authLogout()).resolves.toBeUndefined();
+  });
 });
 
 describe("concurrency limiter", () => {
@@ -236,6 +304,23 @@ describe("API boundary behavior", () => {
     await expect(api.progressGet(603, "movie")).resolves.toBeNull();
   });
 
+  it("throws for non-404 optional-data failures even when the body is unreadable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: vi.fn().mockRejectedValue(new Error("body unavailable")),
+      } as unknown as Response),
+    );
+
+    await expect(api.libraryGet(603, "movie")).rejects.toMatchObject({
+      status: 500,
+      body: "",
+      path: "/library/603/movie",
+    });
+  });
+
   it("does not coalesce GET requests with caller-owned abort signals", async () => {
     const fetchMock = vi.fn().mockImplementation(() => jsonResponse([]));
     vi.stubGlobal("fetch", fetchMock);
@@ -283,6 +368,12 @@ describe("API boundary behavior", () => {
     );
     expect(api.subtitleProxyUrl("https://subs.test/a b.srt")).toBe(
       "http://127.0.0.1:6969/api/subtitle-proxy?url=https%3A%2F%2Fsubs.test%2Fa%20b.srt",
+    );
+    expect(api.playUrl("HTTPS://CDN.TEST/video.mkv")).toBe(
+      "HTTPS://CDN.TEST/video.mkv",
+    );
+    expect(api.playUrl("http-stream-like-hash")).toBe(
+      "http://127.0.0.1:6969/api/play?hash=http-stream-like-hash",
     );
   });
 
@@ -405,6 +496,9 @@ describe("API boundary behavior", () => {
   });
 
   it("formats playback positions at second, minute, and hour boundaries", () => {
+    expect(formatPosition(Number.NaN)).toBe("0s");
+    expect(formatPosition(Number.POSITIVE_INFINITY)).toBe("0s");
+    expect(formatPosition(-1)).toBe("0s");
     expect(formatPosition(8.9)).toBe("8s");
     expect(formatPosition(252)).toBe("4m 12s");
     expect(formatPosition(4980)).toBe("1h 23m");

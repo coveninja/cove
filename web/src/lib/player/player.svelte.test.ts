@@ -49,7 +49,7 @@ function makeBridge(valid: boolean | undefined = true) {
 
 function connectWith(
   mpv: ReturnType<typeof makeBridge> | undefined,
-  shell = { setTvZoom: vi.fn() },
+  shell: { setTvZoom?: () => void } = { setTvZoom: vi.fn() },
 ): { player: MpvPlayer; shell: typeof shell } {
   const transport = {};
   window.qt = { webChannelTransport: transport };
@@ -87,6 +87,15 @@ describe("MpvPlayer", () => {
     expect(player.ready).toBe(false);
     player.play("https://stream.test/video");
     expect(player.position).toBe(0);
+  });
+
+  it("requires both WebChannel globals before connecting", () => {
+    window.qt = { webChannelTransport: {} };
+    expect(new MpvPlayer().available).toBe(false);
+
+    delete window.qt;
+    window.QWebChannel = class {} as unknown as typeof window.QWebChannel;
+    expect(new MpvPlayer().available).toBe(false);
   });
 
   it("connects signals, requests initial state, and splits tracks", async () => {
@@ -156,6 +165,23 @@ describe("MpvPlayer", () => {
     expect(error).toHaveBeenCalledWith("[player] mpv missing from channel");
   });
 
+  it("accepts older bridges with no validity flag or optional shell methods", () => {
+    const bridge = makeBridge();
+    bridge.valid = undefined;
+    const { player } = connectWith(bridge, {});
+
+    expect(player.available).toBe(true);
+    expect(player.ready).toBe(true);
+    expect(bridge.requestState).toHaveBeenCalledOnce();
+
+    delete (
+      bridge as unknown as {
+        reloadMpvConf?: ReturnType<typeof vi.fn>;
+      }
+    ).reloadMpvConf;
+    expect(() => player.reloadMpvConf()).not.toThrow();
+  });
+
   it("resets stale playback state and suppresses queued pre-load positions", () => {
     const bridge = makeBridge();
     const { player } = connectWith(bridge);
@@ -217,6 +243,30 @@ describe("MpvPlayer", () => {
     expect(bridge.stop).toHaveBeenCalled();
   });
 
+  it("seeks without a known duration and ignores invalid numeric controls", () => {
+    const bridge = makeBridge();
+    const { player } = connectWith(bridge);
+    player.position = 12;
+    player.volume = 45;
+    player.playbackSpeed = 1.25;
+
+    player.seek(30);
+    expect(player.position).toBe(30);
+    expect(bridge.seek).toHaveBeenCalledWith(30);
+
+    player.seek(Number.NaN);
+    player.setVolume(Number.POSITIVE_INFINITY);
+    player.setPlaybackSpeed(0);
+    player.setPlaybackSpeed(Number.NaN);
+
+    expect(player.position).toBe(30);
+    expect(player.volume).toBe(45);
+    expect(player.playbackSpeed).toBe(1.25);
+    expect(bridge.seek).toHaveBeenCalledOnce();
+    expect(bridge.setVolume).not.toHaveBeenCalled();
+    expect(bridge.setMpvProperty).not.toHaveBeenCalled();
+  });
+
   it("maps aspect, subtitle, track, speed, and fullscreen controls to mpv", () => {
     const bridge = makeBridge();
     const { player } = connectWith(bridge);
@@ -260,5 +310,38 @@ describe("MpvPlayer", () => {
     expect(bridge.setFullscreen).toHaveBeenCalledTimes(2);
     expect(bridge.setFullscreen).toHaveBeenNthCalledWith(1, true);
     expect(bridge.setFullscreen).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it("maps fit and zoom aspect modes, subtitle defaults, and cycle wrapping", () => {
+    const bridge = makeBridge();
+    const { player } = connectWith(bridge);
+
+    player.setAspectMode("zoom");
+    expect(bridge.setMpvProperty).toHaveBeenCalledWith("video-zoom", "0.263");
+    expect(bridge.setMpvProperty).toHaveBeenCalledWith(
+      "sub-ass-force-margins",
+      "yes",
+    );
+    expect(player.cycleAspectMode()).toBe("fit");
+    expect(bridge.setMpvProperty).toHaveBeenLastCalledWith(
+      "sub-ass-force-margins",
+      "no",
+    );
+
+    player.setSubtitleStyle(100, 10, false);
+    expect(bridge.setMpvProperty).toHaveBeenCalledWith(
+      "sub-border-style",
+      "outline-and-shadow",
+    );
+    player.addSubtitle("https://subs.test/default.srt");
+    expect(bridge.addSubtitle).toHaveBeenCalledWith(
+      "https://subs.test/default.srt",
+      "",
+      "",
+    );
+
+    player.togglePause();
+    expect(player.paused).toBe(false);
+    expect(bridge.resume).toHaveBeenCalledOnce();
   });
 });

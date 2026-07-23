@@ -249,7 +249,12 @@ export function epProgress(
 }
 
 export function progressPct(p: WatchProgress): number {
-  if (p.duration_seconds <= 0 || !Number.isFinite(p.position_seconds)) return 0;
+  if (
+    p.duration_seconds <= 0 ||
+    !Number.isFinite(p.duration_seconds) ||
+    !Number.isFinite(p.position_seconds)
+  )
+    return 0;
   return Math.max(
     0,
     Math.min(100, (p.position_seconds / p.duration_seconds) * 100),

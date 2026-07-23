@@ -255,6 +255,23 @@ describe("shared UI utilities", () => {
     ).toBe("second");
   });
 
+  it("rejects images below each requested quality threshold", () => {
+    const set = images([
+      image("wrong-aspect", { aspect_ratio: 1.2 }),
+      image("low-rating", { vote_average: 2 }),
+      image("few-votes", { vote_count: 1 }),
+      image("eligible"),
+    ]);
+
+    expect(
+      getImageOpt(set, "backdrops", {
+        aspect_ratio: 1.78,
+        voteAverage: 5,
+        voteCount: 5,
+      }),
+    ).toBe("eligible");
+  });
+
   it("builds and filters video embeds with trailer fallback", () => {
     const videos: MediaVideos = {
       results: [
@@ -317,6 +334,21 @@ describe("shared UI utilities", () => {
     ).toBe("https://www.youtube.com/embed/second");
   });
 
+  it("falls back to the first video when filters reject every match", () => {
+    expect(
+      getVideoOpt(
+        {
+          results: [
+            video("first", { official: false }),
+            video("second", { official: false }),
+          ],
+        },
+        "Trailer",
+        { official: true },
+      ),
+    ).toBe("https://www.youtube.com/embed/first");
+  });
+
   it("formats near and distant release dates", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 20, 12));
@@ -349,5 +381,9 @@ describe("shared UI utilities", () => {
     expect(progressPct(progress({ duration_seconds: 0 }))).toBe(0);
     expect(progressPct(progress({ duration_seconds: -1 }))).toBe(0);
     expect(progressPct(progress({ position_seconds: Number.NaN }))).toBe(0);
+    expect(progressPct(progress({ duration_seconds: Number.NaN }))).toBe(0);
+    expect(
+      progressPct(progress({ duration_seconds: Number.POSITIVE_INFINITY })),
+    ).toBe(0);
   });
 });

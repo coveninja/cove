@@ -692,4 +692,21 @@ describe("special API contracts", () => {
       path: "/update/apply",
     });
   });
+
+  it("preserves updater status when its failure body cannot be read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        text: vi.fn().mockRejectedValue(new Error("connection closed")),
+      } as unknown as Response),
+    );
+
+    await expect(api.applyUpdate()).rejects.toMatchObject({
+      status: 502,
+      body: "",
+      path: "/update/apply",
+    });
+  });
 });
