@@ -6,16 +6,18 @@ class LinuxGraphicsEnvironmentTest : public QObject {
   Q_OBJECT
 
 private slots:
-  void kdeHybridGpuKeepsDefaultRenderLoop();
+  void kdeHybridGpuUsesXcbEgl();
   void hyprlandXcbUsesBasicRenderLoop();
   void hyprlandDetection_data();
   void hyprlandDetection();
   void explicitRenderLoopWins();
+  void explicitXcbGlIntegrationWins();
+  void xcbWithoutRenderOffloadKeepsDefaultGlIntegration();
   void nativeWaylandDoesNotUseBasicRenderLoop();
   void flatpakDoesNotReceiveHostDefaults();
 };
 
-void LinuxGraphicsEnvironmentTest::kdeHybridGpuKeepsDefaultRenderLoop() {
+void LinuxGraphicsEnvironmentTest::kdeHybridGpuUsesXcbEgl() {
   QProcessEnvironment environment;
   environment.insert(QStringLiteral("XDG_CURRENT_DESKTOP"),
                      QStringLiteral("KDE"));
@@ -24,6 +26,7 @@ void LinuxGraphicsEnvironmentTest::kdeHybridGpuKeepsDefaultRenderLoop() {
   const auto defaults = LinuxGraphicsEnvironment::defaultsFor(environment);
   QVERIFY(defaults.setQpaPlatformToXcb);
   QVERIFY(!defaults.setRenderLoopToBasic);
+  QVERIFY(defaults.setXcbGlIntegrationToEgl);
 }
 
 void LinuxGraphicsEnvironmentTest::hyprlandXcbUsesBasicRenderLoop() {
@@ -72,16 +75,39 @@ void LinuxGraphicsEnvironmentTest::explicitRenderLoopWins() {
   QVERIFY(!defaults.setRenderLoopToBasic);
 }
 
+void LinuxGraphicsEnvironmentTest::explicitXcbGlIntegrationWins() {
+  QProcessEnvironment environment;
+  environment.insert(QStringLiteral("DRI_PRIME"), QStringLiteral("1"));
+  environment.insert(QStringLiteral("QT_XCB_GL_INTEGRATION"),
+                     QStringLiteral("xcb_glx"));
+
+  const auto defaults = LinuxGraphicsEnvironment::defaultsFor(environment);
+  QVERIFY(defaults.setQpaPlatformToXcb);
+  QVERIFY(!defaults.setXcbGlIntegrationToEgl);
+}
+
+void LinuxGraphicsEnvironmentTest::
+    xcbWithoutRenderOffloadKeepsDefaultGlIntegration() {
+  QProcessEnvironment environment;
+  environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("xcb"));
+
+  const auto defaults = LinuxGraphicsEnvironment::defaultsFor(environment);
+  QVERIFY(!defaults.setQpaPlatformToXcb);
+  QVERIFY(!defaults.setXcbGlIntegrationToEgl);
+}
+
 void LinuxGraphicsEnvironmentTest::nativeWaylandDoesNotUseBasicRenderLoop() {
   QProcessEnvironment environment;
   environment.insert(QStringLiteral("XDG_CURRENT_DESKTOP"),
                      QStringLiteral("Hyprland"));
   environment.insert(QStringLiteral("QT_QPA_PLATFORM"),
                      QStringLiteral("wayland"));
+  environment.insert(QStringLiteral("DRI_PRIME"), QStringLiteral("1"));
 
   const auto defaults = LinuxGraphicsEnvironment::defaultsFor(environment);
   QVERIFY(!defaults.setQpaPlatformToXcb);
   QVERIFY(!defaults.setRenderLoopToBasic);
+  QVERIFY(!defaults.setXcbGlIntegrationToEgl);
 }
 
 void LinuxGraphicsEnvironmentTest::flatpakDoesNotReceiveHostDefaults() {
@@ -90,10 +116,12 @@ void LinuxGraphicsEnvironmentTest::flatpakDoesNotReceiveHostDefaults() {
                      QStringLiteral("io.github.coveninja.Cove"));
   environment.insert(QStringLiteral("XDG_CURRENT_DESKTOP"),
                      QStringLiteral("Hyprland"));
+  environment.insert(QStringLiteral("DRI_PRIME"), QStringLiteral("1"));
 
   const auto defaults = LinuxGraphicsEnvironment::defaultsFor(environment);
   QVERIFY(!defaults.setQpaPlatformToXcb);
   QVERIFY(!defaults.setRenderLoopToBasic);
+  QVERIFY(!defaults.setXcbGlIntegrationToEgl);
 }
 
 QTEST_APPLESS_MAIN(LinuxGraphicsEnvironmentTest)

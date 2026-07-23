@@ -328,8 +328,10 @@ int main(int argc, char *argv[]) {
   // sandbox pins QtWebEngine 6.9 (BaseApp), which predates the 6.11 leak, so
   // native Wayland is safe there. Revisit if the BaseApp moves to an
   // affected Qt.
-  // Default to XCB on host installations. The Hyprland-only render-loop
-  // workaround is applied there as well; explicit user values always win.
+  // Default to XCB on host installations. This also applies the Hyprland-only
+  // render-loop workaround and keeps DRI_PRIME render offload on XCB's EGL
+  // path so Qt Quick and QtWebEngine allocate on the same GPU. Explicit user
+  // values always win.
   LinuxGraphicsEnvironment::applyDefaults();
 #endif
 

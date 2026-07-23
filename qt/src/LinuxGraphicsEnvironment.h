@@ -7,6 +7,7 @@ namespace LinuxGraphicsEnvironment {
 struct Defaults {
   bool setQpaPlatformToXcb = false;
   bool setRenderLoopToBasic = false;
+  bool setXcbGlIntegrationToEgl = false;
 };
 
 // Computes Cove's Linux graphics defaults without mutating the process
