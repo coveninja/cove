@@ -12,7 +12,7 @@ import { rankStreamsWithProbe, type StreamSelectionMode } from "$lib/streamSelec
 import { api } from "$lib/api";
 import { Player } from "$lib/player/player.svelte";
 
-class PlaybackStore {
+export class PlaybackStore {
   playerSession = $state<PlayerSession | null>(null);
   playerMode = $state<"full" | null>(null);
 
@@ -302,9 +302,10 @@ class PlaybackStore {
 // so in-progress playback sessions survive hot reloads in development. (Same
 // pattern as player.svelte.ts / MpvPlayer.)
 function makeOrReusePlayback(): PlaybackStore {
-  if (import.meta.hot) {
-    import.meta.hot.data.playback ??= new PlaybackStore();
-    return import.meta.hot.data.playback as PlaybackStore;
+  const hotData = import.meta.hot?.data;
+  if (hotData) {
+    hotData.playback ??= new PlaybackStore();
+    return hotData.playback as PlaybackStore;
   }
   return new PlaybackStore();
 }
