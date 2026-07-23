@@ -84,7 +84,7 @@ declare global {
   }
 }
 
-class MpvPlayer {
+export class MpvPlayer {
   /** Running inside the Cove shell (the bridge globals are present). */
   available = $state(false);
   /** Channel handshake finished; controls are live. */
@@ -353,9 +353,10 @@ class MpvPlayer {
 // both channels (positionChanged stops reaching JS even though C++ emits it).
 // import.meta.hot.data persists across HMR boundary; reuse the same instance.
 function makeOrReusePlayer(): MpvPlayer {
-  if (import.meta.hot) {
-    import.meta.hot.data.player ??= new MpvPlayer();
-    return import.meta.hot.data.player as MpvPlayer;
+  const hotData = import.meta.hot?.data;
+  if (hotData) {
+    hotData.player ??= new MpvPlayer();
+    return hotData.player as MpvPlayer;
   }
   return new MpvPlayer();
 }
