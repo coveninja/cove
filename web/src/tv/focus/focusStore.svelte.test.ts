@@ -546,6 +546,83 @@ describe("cross-group vertical navigation", () => {
 
     expect(document.activeElement).toBe(top.right);
   });
+
+  it("routes an ungrouped hero control into the first row", () => {
+    const hero = makeEl(120, 0);
+    const row = group("hero-target", 100, false);
+    hero.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(row.right);
+  });
+
+  it("does not restore a remembered carousel item that is clipped off-screen", () => {
+    const top = group("clip-top", 0);
+    const bottom = group("clip-bottom", 100);
+    bottom.container.style.overflowX = "hidden";
+    Object.defineProperty(bottom.container, "scrollWidth", {
+      configurable: true,
+      value: 240,
+    });
+    Object.defineProperty(bottom.container, "clientWidth", {
+      configurable: true,
+      value: 100,
+    });
+    vi.mocked(bottom.container.getBoundingClientRect).mockReturnValue({
+      left: 0,
+      top: 100,
+      right: 100,
+      bottom: 140,
+      width: 100,
+      height: 40,
+      x: 0,
+      y: 100,
+      toJSON: () => ({}),
+    } as DOMRect);
+    bottom.right.focus();
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.left);
+  });
+});
+
+describe("cross-group geometric fallback", () => {
+  it("redirects geometric entry to the target group's remembered member", () => {
+    const sourceContainer = document.createElement("div");
+    const targetContainer = document.createElement("div");
+    document.body.append(sourceContainer, targetContainer);
+    mockRect(sourceContainer, 0, 0, 40, 40);
+    mockRect(targetContainer, 100, 0, 200, 40);
+    const source = makeEl(0, 0, 40, 40, sourceContainer);
+    const nearest = makeEl(100, 0, 40, 40, targetContainer);
+    const remembered = makeEl(180, 0, 40, 40, targetContainer);
+    registerFocusable(source, "source-column");
+    registerFocusable(nearest, "target-row");
+    registerFocusable(remembered, "target-row");
+    registerGroup(sourceContainer, {
+      id: "source-column",
+      policy: { type: "column" },
+    });
+    registerGroup(targetContainer, {
+      id: "target-row",
+      policy: { type: "row" },
+    });
+    remembered.focus();
+    source.focus();
+
+    navigate("right");
+
+    expect(document.activeElement).toBe(remembered);
+
+    unregisterFocusable(source);
+    unregisterFocusable(nearest);
+    unregisterFocusable(remembered);
+    unregisterGroup("source-column");
+    unregisterGroup("target-row");
+  });
 });
 
 describe("focus visibility guards", () => {

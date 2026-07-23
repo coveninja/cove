@@ -123,6 +123,45 @@ describe("PlaybackStore", () => {
     ]);
   });
 
+  it("treats sound and malformed subtitle failures as non-critical", async () => {
+    const store = new PlaybackStore();
+    const rejectedSound = vi
+      .fn()
+      .mockRejectedValue(new Error("audio context blocked"));
+    store.init({ playStartSound: rejectedSound, openMediaDetail: vi.fn() });
+    apiMock.getSubtitles.mockResolvedValue(null);
+
+    store.startPlayback(media(1), stream("playable"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(rejectedSound).toHaveBeenCalledOnce();
+    expect(store.playerSession?.stream.name).toBe("playable");
+    expect(store.playerSession?.subtitles).toEqual([]);
+
+    apiMock.getSubtitles.mockRejectedValueOnce(new Error("addon unavailable"));
+    store.startPlayback(media(2), stream("still-playable"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.playerSession?.stream.name).toBe("still-playable");
+  });
+
+  it("replaces and expires playback toast timers", () => {
+    vi.useFakeTimers();
+    const store = new PlaybackStore();
+
+    store.showPlaybackToast("first", 100);
+    vi.advanceTimersByTime(50);
+    store.showPlaybackToast("second", 200);
+    vi.advanceTimersByTime(50);
+    expect(store.playbackToast).toBe("second");
+
+    vi.advanceTimersByTime(149);
+    expect(store.playbackToast).toBe("second");
+    vi.advanceTimersByTime(1);
+    expect(store.playbackToast).toBeNull();
+  });
+
   it("quick-plays the highest ranked movie using current selection preferences", async () => {
     const store = new PlaybackStore();
     const input = [stream("slow"), stream("best")];
@@ -155,6 +194,147 @@ describe("PlaybackStore", () => {
       candidates: [input[1], input[0]],
       attempt: 0,
     });
+  });
+
+  it("retries empty stream searches and accepts the eighth attempt", async () => {
+    vi.useFakeTimers();
+    const store = new PlaybackStore();
+    const winner = stream("eventual-winner");
+    apiMock.getStreams
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([winner]);
+    rankStreamsWithProbe.mockResolvedValue([winner]);
+
+    const pending = store.quickPlay(media(44));
+    await vi.advanceTimersByTimeAsync(14_000);
+    await pending;
+
+    expect(apiMock.getStreams).toHaveBeenCalledTimes(8);
+    expect(store.playerSession?.stream).toEqual(winner);
+  });
+
+  it("reports no streams immediately after the final retry, then clears it", async () => {
+    vi.useFakeTimers();
+    const store = new PlaybackStore();
+    apiMock.getStreams.mockResolvedValue([]);
+
+    const pending = store.quickPlay(media(45));
+    await vi.advanceTimersByTimeAsync(14_000);
+    await pending;
+
+    expect(apiMock.getStreams).toHaveBeenCalledTimes(8);
+    expect(store.quickPlayPending?.message).toBe("No stream found");
+
+    await vi.advanceTimersByTimeAsync(2_499);
+    expect(store.quickPlayPending?.message).toBe("No stream found");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.quickPlayPending).toBeNull();
+  });
+
+  it("releases retry backoff immediately when quick play is cancelled", async () => {
+    vi.useFakeTimers();
+    const store = new PlaybackStore();
+    apiMock.getStreams.mockResolvedValue([]);
+
+    const pending = store.quickPlay(media(46));
+    await vi.advanceTimersByTimeAsync(0);
+    store.cancelQuickPlay();
+    await pending;
+
+    expect(apiMock.getStreams).toHaveBeenCalledOnce();
+    expect(store.quickPlayPending).toBeNull();
+  });
+
+  it("starts TV playback at episode one and includes its episode name", async () => {
+    const store = new PlaybackStore();
+    const winner = stream("pilot");
+    apiMock.getStreams.mockResolvedValue([winner]);
+    rankStreamsWithProbe.mockResolvedValue([winner]);
+    apiMock.tvEpisodes.mockResolvedValue([
+      {
+        episode_number: 1,
+        name: "Pilot",
+        overview: "",
+        still_path: "",
+        air_date: "",
+        runtime: 42,
+      },
+    ]);
+
+    await store.quickPlay(media(50, "tv"));
+
+    expect(apiMock.getStreams).toHaveBeenCalledWith(
+      50,
+      { type: "tv", season: 1, episode: 1 },
+      expect.any(AbortSignal),
+    );
+    expect(apiMock.tvEpisodes).toHaveBeenCalledWith(50, 1);
+    expect(store.playerSession).toMatchObject({
+      season: 1,
+      episode: 1,
+      episodeName: "Pilot",
+    });
+  });
+
+  it("continues TV playback when episode metadata cannot be loaded", async () => {
+    const store = new PlaybackStore();
+    const winner = stream("episode");
+    const error = new Error("TMDB unavailable");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    apiMock.getStreams.mockResolvedValue([winner]);
+    rankStreamsWithProbe.mockResolvedValue([winner]);
+    apiMock.tvEpisodes.mockRejectedValue(error);
+
+    await store.quickPlay(media(51, "tv"), 3, 7);
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "quickPlay: failed to fetch episode name",
+      error,
+    );
+    expect(store.playerSession).toMatchObject({
+      season: 3,
+      episode: 7,
+      episodeName: undefined,
+    });
+  });
+
+  it("shows no-stream feedback when ranking produces no candidates", async () => {
+    vi.useFakeTimers();
+    const store = new PlaybackStore();
+    apiMock.getStreams.mockResolvedValue([stream("candidate")]);
+    rankStreamsWithProbe.mockResolvedValue([]);
+
+    await store.quickPlay(media(52));
+    expect(store.quickPlayPending?.message).toBe("No stream found");
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(store.quickPlayPending).toBeNull();
+  });
+
+  it("reports stream lookup errors without retrying a failed request", async () => {
+    const store = new PlaybackStore();
+    const error = new Error("provider unavailable");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    apiMock.getStreams.mockRejectedValue(error);
+
+    await store.quickPlay(media(53));
+
+    expect(apiMock.getStreams).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "quickPlay: failed to fetch streams",
+      error,
+    );
+    expect(store.quickPlayPending?.message).toBe("No stream found");
   });
 
   it("aborts and ignores a superseded quick-play request", async () => {
@@ -223,6 +403,40 @@ describe("PlaybackStore", () => {
     expect(playerMock.setFullscreen).toHaveBeenCalledWith(false);
     expect(openMediaDetail).toHaveBeenCalledWith(item);
     expect(store.playbackToast).toContain("Couldn't start");
+  });
+
+  it("gives up after three attempts even when another candidate remains", () => {
+    const store = new PlaybackStore();
+    const openMediaDetail = vi.fn();
+    store.init({
+      playStartSound: vi.fn().mockResolvedValue(undefined),
+      openMediaDetail,
+    });
+    const item = media(12);
+    const dead = stream("fourth-dead");
+    const untried = stream("untried");
+    store.startPlayback(
+      item,
+      dead,
+      undefined,
+      undefined,
+      undefined,
+      [dead, untried],
+      3,
+    );
+
+    store.handlePlaybackFailed();
+
+    expect(store.playerSession).toBeNull();
+    expect(openMediaDetail).toHaveBeenCalledWith(item);
+  });
+
+  it("ignores playback-failed notifications when there is no session", () => {
+    const store = new PlaybackStore();
+
+    store.handlePlaybackFailed();
+
+    expect(playerMock.setFullscreen).not.toHaveBeenCalled();
   });
 
   it("cancels a pending quick play and clears its overlay", async () => {
