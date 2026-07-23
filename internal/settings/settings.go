@@ -255,9 +255,30 @@ func (s *Store) Set(incoming Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	incoming = s.applyTokenPolicy(incoming)
-	incoming.UpdatedAt = time.Now().UTC()
+	incoming = s.stampRoamingUpdate(incoming)
 	s.cached = incoming
 	return s.write()
+}
+
+// stampRoamingUpdate advances UpdatedAt only when a setting that participates
+// in Supabase sync changed. Device-local network settings are intentionally
+// excluded from roaming; letting those fields advance the shared timestamp
+// could cause an otherwise stale snapshot to beat newer cloud preferences.
+// Must be called with s.mu held.
+func (s *Store) stampRoamingUpdate(incoming Settings) Settings {
+	roamingOnly := func(value Settings) Settings {
+		value.RemoteAccessEnabled = false
+		value.RemoteAccessToken = ""
+		value.AllowLanStreamSources = false
+		value.UpdatedAt = time.Time{}
+		return value
+	}
+	if roamingOnly(incoming) == roamingOnly(s.cached) {
+		incoming.UpdatedAt = s.cached.UpdatedAt
+	} else {
+		incoming.UpdatedAt = time.Now().UTC()
+	}
+	return incoming
 }
 
 // applyTokenPolicy ensures RemoteAccessToken is populated whenever remote
@@ -307,13 +328,12 @@ func (s *Store) applyTokenPolicy(incoming Settings) Settings {
 // a local edit that hasn't been pushed to Supabase yet (see library.MergeFrom for
 // the same pattern applied to library entries).
 //
-// RemoteAccessEnabled and RemoteAccessToken are always preserved from the LOCAL
-// (cached) values and are never overwritten by an incoming merge, regardless of
-// which side has the newer UpdatedAt. These fields are device-local security
-// configuration: propagating them via Supabase would silently open a LAN listener
-// on every synced device (e.g. the phone's embedded backend), which is both a
-// security concern and a functional bug. This mirrors the nuvio-config exclusion
-// precedent — per-device runtime configuration must not roam across devices.
+// RemoteAccessEnabled, RemoteAccessToken, and AllowLanStreamSources are always
+// preserved from the LOCAL (cached) values and are never overwritten by an
+// incoming merge, regardless of which side has the newer UpdatedAt. These
+// fields control device-local network exposure: propagating them via Supabase
+// could silently open a LAN listener or permit LAN proxy targets on another
+// device. Per-device runtime configuration must not roam across devices.
 //
 // OnboardingDone is a monotonic flag: once true it must never be reset. There is
 // no redo-onboarding feature, so a fresh-device pull must not clobber a flag that
@@ -327,6 +347,7 @@ func (s *Store) MergeFrom(incoming Settings) {
 	// Always preserve device-local remote-access config (see comment above).
 	incoming.RemoteAccessEnabled = s.cached.RemoteAccessEnabled
 	incoming.RemoteAccessToken = s.cached.RemoteAccessToken
+	incoming.AllowLanStreamSources = s.cached.AllowLanStreamSources
 	// Ratchet: onboarding completion is irreversible — once true, never reset.
 	incoming.OnboardingDone = incoming.OnboardingDone || s.cached.OnboardingDone
 	s.cached = incoming
@@ -391,12 +412,12 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 
 			s.mu.Lock()
 			incoming = s.applyTokenPolicy(incoming)
-			incoming.UpdatedAt = time.Now().UTC()
 			// Stale frontend stores PUT full blobs; once onboarding is done it
 			// must not be reset by a store that loaded before completion was persisted.
 			if s.cached.OnboardingDone {
 				incoming.OnboardingDone = true
 			}
+			incoming = s.stampRoamingUpdate(incoming)
 			s.cached = incoming
 			err := s.write()
 			s.mu.Unlock()

@@ -107,11 +107,9 @@ func TestMergeFrom_AcceptsNewer(t *testing.T) {
 	assert.True(t, st.Get().OnboardingDone, "a genuinely newer incoming merge must be accepted")
 }
 
-// TestMergeFrom_PreservesRemoteAccessFields verifies that a Supabase pull
-// (MergeFrom) never overwrites the local device's RemoteAccessEnabled and
-// RemoteAccessToken — propagating these via sync would silently open a LAN
-// listener on every synced device, which is a security and correctness bug.
-func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
+// TestMergeFrom_PreservesDeviceLocalNetworkFields verifies that a Supabase
+// pull never overwrites settings controlling this device's LAN exposure.
+func TestMergeFrom_PreservesDeviceLocalNetworkFields(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	st, err := New("test")
 	require.NoError(t, err)
@@ -123,14 +121,17 @@ func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
 	local := st.Get()
 	local.RemoteAccessEnabled = true
 	local.RemoteAccessToken = "local-device-token"
+	local.AllowLanStreamSources = true
 	require.NoError(t, st.Set(local))
 	require.True(t, st.Get().RemoteAccessEnabled)
 	require.Equal(t, "local-device-token", st.Get().RemoteAccessToken)
+	require.True(t, st.Get().AllowLanStreamSources)
 
 	// A newer remote pull with different remote-access values arrives.
 	remote := st.Get()
 	remote.RemoteAccessEnabled = false        // remote device has it disabled
 	remote.RemoteAccessToken = "remote-token" // remote device's token
+	remote.AllowLanStreamSources = false      // remote device rejects LAN sources
 	remote.HideSpoilers = true                // some regular setting that should merge
 	remote.UpdatedAt = st.Get().UpdatedAt.Add(time.Hour)
 	st.MergeFrom(remote)
@@ -141,6 +142,31 @@ func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
 	// Device-local remote-access config must NOT have been overwritten.
 	assert.True(t, s.RemoteAccessEnabled, "RemoteAccessEnabled must be preserved from local")
 	assert.Equal(t, "local-device-token", s.RemoteAccessToken, "RemoteAccessToken must be preserved from local")
+	assert.True(t, s.AllowLanStreamSources, "AllowLanStreamSources must be preserved from local")
+}
+
+func TestDeviceLocalChangesDoNotAdvanceRoamingTimestamp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	roaming := st.Get()
+	roaming.HideSpoilers = true
+	require.NoError(t, st.Set(roaming))
+	roamingUpdatedAt := st.Get().UpdatedAt
+	require.False(t, roamingUpdatedAt.IsZero())
+
+	deviceLocal := st.Get()
+	deviceLocal.RemoteAccessEnabled = true
+	deviceLocal.RemoteAccessToken = "local-token"
+	deviceLocal.AllowLanStreamSources = true
+	require.NoError(t, st.Set(deviceLocal))
+	assert.Equal(t, roamingUpdatedAt, st.Get().UpdatedAt)
+
+	nextRoaming := st.Get()
+	nextRoaming.AutoPlay = true
+	require.NoError(t, st.Set(nextRoaming))
+	assert.True(t, st.Get().UpdatedAt.After(roamingUpdatedAt))
 }
 
 func TestSetProfile(t *testing.T) {
