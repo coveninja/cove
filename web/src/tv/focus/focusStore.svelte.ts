@@ -192,7 +192,9 @@ function groupMembers(entry: GroupEntry): HTMLElement[] {
   });
 
   const all = [...new Set([...registered, ...native])];
-  return all.filter(isVisible).sort(domOrder);
+  return all.filter(
+    (el) => isVisible(el) && !(el as HTMLInputElement).disabled,
+  ).sort(domOrder);
 }
 
 // ── Policy navigation ─────────────────────────────────────────────────────────
