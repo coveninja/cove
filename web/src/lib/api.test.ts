@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api, setTokenSource } from "$lib/api";
+import { ApiError, api, formatPosition, setTokenSource } from "$lib/api";
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -209,5 +209,143 @@ describe("concurrency limiter", () => {
 
     const [, result] = await Promise.all([r1, r2]);
     expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+describe("API boundary behavior", () => {
+  beforeEach(() => {
+    setTokenSource(() => null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setTokenSource(() => null);
+    api.clearInflight();
+  });
+
+  it("treats 404 and successful empty responses as absent optional data", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+        .mockResolvedValueOnce(new Response(null, { status: 204 })),
+    );
+
+    await expect(api.libraryGet(603, "movie")).resolves.toBeNull();
+    await expect(api.progressGet(603, "movie")).resolves.toBeNull();
+  });
+
+  it("does not coalesce GET requests with caller-owned abort signals", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+    const first = new AbortController();
+    const second = new AbortController();
+
+    await Promise.all([
+      api.getStreams(1396, { type: "tv", season: 2, episode: 3 }, first.signal),
+      api.getStreams(
+        1396,
+        { type: "tv", season: 2, episode: 3 },
+        second.signal,
+      ),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:6969/api/streams?id=1396&type=tv&season=2&episode=3",
+    );
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).not.toBe(
+      first.signal,
+    );
+  });
+
+  it("builds encoded player and progress URLs without losing zero-valued options", () => {
+    expect(
+      api.playUrl("torrent hash", { season: 0, episode: 0, fileIdx: 0 }),
+    ).toBe(
+      "http://127.0.0.1:6969/api/play?hash=torrent+hash&season=0&episode=0&fileIdx=0",
+    );
+    expect(
+      api.progressStreamUrl("torrent hash", {
+        season: 1,
+        episode: 2,
+        fileIdx: 0,
+      }),
+    ).toBe(
+      "http://127.0.0.1:6969/api/progress/stream?hash=torrent+hash&season=1&episode=2&fileIdx=0",
+    );
+    expect(api.playUrl("https://cdn.test/video file.mkv")).toBe(
+      "https://cdn.test/video file.mkv",
+    );
+    expect(api.playProxyUrl("https://cdn.test/v?a=1&b=2")).toBe(
+      "http://127.0.0.1:6969/api/play?url=https%3A%2F%2Fcdn.test%2Fv%3Fa%3D1%26b%3D2",
+    );
+    expect(api.subtitleProxyUrl("https://subs.test/a b.srt")).toBe(
+      "http://127.0.0.1:6969/api/subtitle-proxy?url=https%3A%2F%2Fsubs.test%2Fa%20b.srt",
+    );
+  });
+
+  it("parses chunked NDJSON, ignores malformed frames, and flushes the final frame", async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            '{"id":"movie:1","quality":"4K"}\nnot-json\n{"id":"tv:',
+          ),
+        );
+        controller.enqueue(encoder.encode('2","quality":"1080p"}'));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body));
+    vi.stubGlobal("fetch", fetchMock);
+    setTokenSource(() => "quality-token");
+    const entries: Array<[string, string]> = [];
+
+    await api.streamQualityBatch(["movie:1", "tv:2"], (id, quality) =>
+      entries.push([id, quality]),
+    );
+
+    expect(entries).toEqual([
+      ["movie:1", "4K"],
+      ["tv:2", "1080p"],
+    ]);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      "http://127.0.0.1:6969/api/quality/batch?ids=movie%3A1,tv%3A2",
+    );
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      "Bearer quality-token",
+    );
+  });
+
+  it("skips an empty quality batch without opening a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.streamQualityBatch([], vi.fn());
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("absorbs an unavailable optional Trakt integration but not other errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response("not compiled", { status: 503 }))
+        .mockResolvedValueOnce(new Response("broken", { status: 500 })),
+    );
+
+    await expect(api.traktStatus()).resolves.toBeNull();
+    await expect(api.traktStatus()).rejects.toMatchObject({ status: 500 });
+  });
+
+  it("formats playback positions at second, minute, and hour boundaries", () => {
+    expect(formatPosition(8.9)).toBe("8s");
+    expect(formatPosition(252)).toBe("4m 12s");
+    expect(formatPosition(4980)).toBe("1h 23m");
   });
 });

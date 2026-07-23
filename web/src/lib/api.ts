@@ -462,21 +462,29 @@ export const api = {
       reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      const emitLine = (line: string): void => {
+        if (!line.trim()) return;
+        try {
+          const { id, quality } = JSON.parse(line);
+          onEntry(id, quality);
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // NDJSON producers normally terminate every frame with a newline,
+          // but accepting a final unterminated frame avoids silently dropping
+          // the last quality result when a proxy closes the stream cleanly.
+          buffer += decoder.decode();
+          emitLine(buffer);
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const { id, quality } = JSON.parse(line);
-            onEntry(id, quality);
-          } catch {
-            /* ignore malformed frames */
-          }
-        }
+        for (const line of lines) emitLine(line);
       }
     } catch (e) {
       // Cancel the reader on any error/abort so the locked ReadableStream is
