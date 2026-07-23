@@ -140,8 +140,11 @@ test-security:
 	go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 	cd $(WEB_DIR) && npm audit --audit-level=low
 
-## Verify that the desktop shell still configures and compiles.
-test-qt: qt
+## Verify that the desktop shell configures, compiles, and passes its Qt tests.
+test-qt:
+	cmake -S $(QT_DIR) -B $(QT_BUILD) -DCOVE_BUILD_TESTS=ON
+	cmake --build $(QT_BUILD)
+	ctest --test-dir $(QT_BUILD) --output-on-failure
 
 ## Rebuild the gomobile AAR, then run Android lint/JVM tests and compile the
 ## instrumentation APK. A configured Android SDK/NDK and JDK 17 are required.
@@ -239,9 +242,13 @@ inject-private:
 ##   3. JDK 17 (gomobile invokes javac when packaging the AAR)
 ## Private build tags (supabase, discover) are added automatically when the
 ## corresponding implementation files are present (run `make inject-private` first).
+## GOFLAGS disables VCS stamping: gomobile compiles ./gobind inside a temporary
+## work directory under $TMPDIR, and when that is a separate mount (tmpfs on
+## most Linux setups) git aborts at the filesystem boundary with exit 128,
+## which the Go toolchain treats as fatal rather than skipping the stamp.
 android-aar: web
 	mkdir -p android/app/libs
-	PATH=$(HOME)/go/bin:$(PATH) gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 28 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
+	PATH=$(HOME)/go/bin:$(PATH) GOFLAGS=-buildvcs=false gomobile bind -target android/arm,android/arm64,android/386,android/amd64 -androidapi 28 -tags $(_ANDROID_TAGS) -o android/app/libs/cove.aar ./mobile
 
 ## Build the Android debug APK. Requires all android-aar prerequisites above.
 android: android-aar

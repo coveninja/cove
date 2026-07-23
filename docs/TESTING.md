@@ -70,8 +70,9 @@ profile activation, and sync push-error presentation.
 ### Qt
 
 ```sh
-cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCOVE_BUILD_TESTS=ON
 cmake --build qt/build
+ctest --test-dir qt/build --output-on-failure
 ```
 
 ### Android
@@ -108,7 +109,7 @@ request, and manual dispatch.
 | Go build matrix      | Static Linux and Windows compilation                                                   |
 | Private integrations | Trusted pushes only: source-copy check plus `supabase,discover` test/vet               |
 | Web                  | Vitest coverage, Svelte typecheck, ESLint, production build, npm audit, and Playwright |
-| Qt                   | Blocking Ubuntu QtWebEngine/libmpv configure and build                                 |
+| Qt                   | Blocking Ubuntu QtWebEngine/libmpv configure, build, and environment-policy tests       |
 | Android              | Fresh gomobile AAR, lint, JVM tests, and API 35 emulator launch                        |
 | Dependency review    | Vulnerable dependency changes introduced by pull requests                              |
 | govulncheck          | Reachable Go vulnerability scan                                                        |

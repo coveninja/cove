@@ -72,5 +72,9 @@ func handle(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		os.Remove(path) // ignore error — file may not exist
 		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		w.Header().Set("Allow", "GET, POST, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }

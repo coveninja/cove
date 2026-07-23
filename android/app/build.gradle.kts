@@ -97,6 +97,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests {
+            // Most classes under test call android.util.Log, which throws
+            // "not mocked" by default in JVM unit tests. Returning defaults
+            // keeps the logging calls inert instead of requiring Robolectric.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 kotlin {
@@ -149,6 +158,14 @@ dependencies {
     implementation("androidx.webkit:webkit:1.16.0")
 
     testImplementation("junit:junit:4.13.2")
+
+    // Stub HTTP server for ApkUpdater / CoveApiClient tests. Pinned to the same
+    // 4.12.0 as the okhttp implementation dependency above.
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+
+    // runTest for the suspend functions on CoveApiClient. 1.9.0 matches the
+    // kotlinx-coroutines-core version already on the runtime classpath.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("androidx.test:core-ktx:1.7.0")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")

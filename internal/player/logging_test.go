@@ -46,3 +46,28 @@ func TestHashNoiseFilter(t *testing.T) {
 	require.NoError(t, filter.Handle(ctx, other))
 	assert.Len(t, cap.records, 2, "unrelated WARN should pass through")
 }
+
+// TestHashNoiseFilterWithAttrsAndWithGroup verifies that WithAttrs and
+// WithGroup delegate to the inner Handler and wrap the result in a new
+// hashNoiseFilter — the returned handler must still suppress hash noise.
+func TestHashNoiseFilterWithAttrsAndWithGroup(t *testing.T) {
+	cap := &capturingHandler{}
+	filter := hashNoiseFilter{cap}
+
+	// WithAttrs must return a hashNoiseFilter wrapping an enriched inner handler.
+	attrFilter := filter.WithAttrs([]slog.Attr{slog.String("component", "torrent")})
+	_, ok := attrFilter.(hashNoiseFilter)
+	assert.True(t, ok, "WithAttrs must return a hashNoiseFilter")
+
+	// WithGroup must return a hashNoiseFilter wrapping a grouped inner handler.
+	groupFilter := filter.WithGroup("torrent")
+	_, ok = groupFilter.(hashNoiseFilter)
+	assert.True(t, ok, "WithGroup must return a hashNoiseFilter")
+
+	// The wrapped filter must still drop hash noise — regression guard.
+	ctx := context.Background()
+	noisy := slog.NewRecord(time.Time{}, slog.LevelWarn, "finished hashing piece", 0)
+	noisy.AddAttrs(slog.Bool("correct", true))
+	require.NoError(t, attrFilter.Handle(ctx, noisy))
+	assert.Empty(t, cap.records, "WithAttrs result must still suppress hash noise")
+}

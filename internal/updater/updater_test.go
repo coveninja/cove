@@ -1,12 +1,20 @@
 package updater
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewerThan(t *testing.T) {
@@ -92,4 +100,122 @@ func TestSecurePath(t *testing.T) {
 			t.Errorf("securePath(%q) should have been rejected as escaping", name)
 		}
 	}
+}
+
+type archiveEntry struct {
+	name string
+	body string
+	mode os.FileMode
+}
+
+func writeZip(t *testing.T, entries []archiveEntry) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "update.zip")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	zw := zip.NewWriter(f)
+	for _, entry := range entries {
+		header := &zip.FileHeader{Name: entry.name, Method: zip.Store}
+		header.SetMode(entry.mode)
+		writer, err := zw.CreateHeader(header)
+		require.NoError(t, err)
+		_, err = io.WriteString(writer, entry.body)
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	require.NoError(t, f.Close())
+	return path
+}
+
+func tarGz(t *testing.T, entries []archiveEntry) []byte {
+	t.Helper()
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	tw := tar.NewWriter(gz)
+	for _, entry := range entries {
+		typeflag := byte(tar.TypeReg)
+		if entry.mode.IsDir() {
+			typeflag = tar.TypeDir
+		} else if entry.mode&os.ModeSymlink != 0 {
+			typeflag = tar.TypeSymlink
+		}
+		header := &tar.Header{
+			Name: entry.name, Mode: int64(entry.mode.Perm()), Typeflag: typeflag,
+			Size: int64(len(entry.body)),
+		}
+		if typeflag != tar.TypeReg {
+			header.Size = 0
+		}
+		require.NoError(t, tw.WriteHeader(header))
+		if typeflag == tar.TypeReg {
+			_, err := io.WriteString(tw, entry.body)
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	return compressed.Bytes()
+}
+
+func TestExtractZipWritesFilesAndStagesRunningBinary(t *testing.T) {
+	dest := t.TempDir()
+	archive := writeZip(t, []archiveEntry{
+		{name: "web/", mode: os.ModeDir | 0o755},
+		{name: "web/index.html", body: "new ui", mode: 0o644},
+		{name: "cove.exe", body: "new binary", mode: 0o755},
+	})
+
+	require.NoError(t, extractZip(archive, dest, "cove.exe"))
+	web, err := os.ReadFile(filepath.Join(dest, "web", "index.html"))
+	require.NoError(t, err)
+	assert.Equal(t, "new ui", string(web))
+	binary, err := os.ReadFile(filepath.Join(dest, "cove.exe.new"))
+	require.NoError(t, err)
+	assert.Equal(t, "new binary", string(binary))
+	_, err = os.Stat(filepath.Join(dest, "cove.exe"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestExtractZipRejectsTraversalAndLinks(t *testing.T) {
+	for _, entry := range []archiveEntry{
+		{name: "../escape", body: "bad", mode: 0o644},
+		{name: "link", body: "target", mode: os.ModeSymlink | 0o777},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			err := extractZip(writeZip(t, []archiveEntry{entry}), t.TempDir(), "cove.exe")
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestExtractTarGzWritesNestedFilesAndExecutableMode(t *testing.T) {
+	dest := t.TempDir()
+	archive := tarGz(t, []archiveEntry{
+		{name: "web/", mode: os.ModeDir | 0o755},
+		{name: "web/index.html", body: "new ui", mode: 0o644},
+		{name: "cove", body: "new binary", mode: 0o755},
+	})
+
+	require.NoError(t, extractTarGz(bytes.NewReader(archive), dest))
+	web, err := os.ReadFile(filepath.Join(dest, "web", "index.html"))
+	require.NoError(t, err)
+	assert.Equal(t, "new ui", string(web))
+	info, err := os.Stat(filepath.Join(dest, "cove"))
+	require.NoError(t, err)
+	assert.NotZero(t, info.Mode().Perm()&0o111)
+	_, err = os.Stat(filepath.Join(dest, "cove.new"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestExtractTarGzRejectsTraversalLinksAndInvalidInput(t *testing.T) {
+	for _, entry := range []archiveEntry{
+		{name: "../../escape", body: "bad", mode: 0o644},
+		{name: "link", mode: os.ModeSymlink | 0o777},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			err := extractTarGz(bytes.NewReader(tarGz(t, []archiveEntry{entry})), t.TempDir())
+			assert.Error(t, err)
+		})
+	}
+	assert.Error(t, extractTarGz(strings.NewReader("not gzip"), t.TempDir()))
 }

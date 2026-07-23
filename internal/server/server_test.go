@@ -1,9 +1,13 @@
 package server
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/coveninja/cove/internal/settings"
 )
@@ -146,5 +150,123 @@ func TestLAN_EmptyExpectedToken(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("empty expected token: want 401, got %d", rec.Code)
+	}
+}
+
+func TestRemoteListenAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{"explicit override", Config{BindAddr: "127.0.0.1:6969", RemoteBindAddr: "192.168.1.2:8000"}, "192.168.1.2:8000"},
+		{"standard port", Config{BindAddr: "127.0.0.1:6969"}, "0.0.0.0:6970"},
+		{"IPv6 main address", Config{BindAddr: "[::1]:7000"}, "0.0.0.0:7001"},
+		{"missing port", Config{BindAddr: "127.0.0.1"}, "0.0.0.0:6970"},
+		{"non-numeric port", Config{BindAddr: "127.0.0.1:http"}, "0.0.0.0:6970"},
+		{"zero port", Config{BindAddr: "127.0.0.1:0"}, "0.0.0.0:6970"},
+		{"overflow port", Config{BindAddr: "127.0.0.1:65535"}, "0.0.0.0:6970"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := remoteListenAddr(tt.cfg); got != tt.want {
+				t.Fatalf("remoteListenAddr() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLANListenerLifecycle(t *testing.T) {
+	h := &Handle{}
+	t.Cleanup(h.stopLAN)
+	h.startLAN("127.0.0.1:0", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Test-Listener", "yes")
+		_, _ = io.WriteString(w, "ready")
+	}))
+	if h.lanSrv == nil {
+		t.Fatal("startLAN did not create a server")
+	}
+	first := h.lanSrv
+	h.startLAN("127.0.0.1:0", http.NotFoundHandler())
+	if h.lanSrv != first {
+		t.Fatal("second startLAN call replaced the running listener")
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + first.Addr + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "ready" || resp.Header.Get("X-Test-Listener") != "yes" {
+		t.Fatalf("response = %d %q headers=%v", resp.StatusCode, body, resp.Header)
+	}
+
+	h.stopLAN()
+	if h.lanSrv != nil {
+		t.Fatal("stopLAN retained the stopped server")
+	}
+	h.stopLAN() // idempotent
+}
+
+func TestStartLANBindFailureLeavesListenerStopped(t *testing.T) {
+	h := &Handle{}
+	h.startLAN("not a tcp address", okHandler)
+	if h.lanSrv != nil {
+		t.Fatal("failed bind left a server installed")
+	}
+}
+
+func TestStopIsIdempotent(t *testing.T) {
+	var cancelCalls atomic.Int32
+	h := &Handle{
+		cancel: func() { cancelCalls.Add(1) },
+		srv:    &http.Server{},
+	}
+	h.Stop()
+	h.Stop()
+	if got := cancelCalls.Load(); got != 1 {
+		t.Fatalf("cancel called %d times, want once", got)
+	}
+}
+
+func TestStartServesPingAndStopsCleanly(t *testing.T) {
+	dataDir := t.TempDir()
+	h, err := Start(Config{
+		BindAddr:   "127.0.0.1:0",
+		DataDir:    dataDir,
+		CacheDir:   t.TempDir(),
+		TorrentDir: t.TempDir(),
+		Version:    "dev",
+	})
+	if err != nil {
+		t.Fatal("Start:", err)
+	}
+	t.Cleanup(h.Stop)
+
+	if h.srv.Addr == "127.0.0.1:0" || h.srv.Addr == "" {
+		t.Fatalf("server did not retain resolved listener address: %q", h.srv.Addr)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + h.srv.Addr + "/api/ping")
+	if err != nil {
+		t.Fatal("GET /api/ping:", err)
+	}
+	defer resp.Body.Close()
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal("decode ping:", err)
+	}
+	if resp.StatusCode != http.StatusOK || body["status"] != "ok" {
+		t.Fatalf("ping response = %d %#v", resp.StatusCode, body)
+	}
+
+	h.Stop()
+	if _, err := client.Get("http://" + h.srv.Addr + "/api/ping"); err == nil {
+		t.Fatal("main listener still accepted requests after Stop")
 	}
 }

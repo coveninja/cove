@@ -121,12 +121,15 @@ func (sw *SyncWorker) runCycle() {
 		lastActs.Movies.WatchlistedAt.After(cursor) ||
 		lastActs.Shows.WatchlistedAt.After(cursor)
 
+	cycleSucceeded := true
 	if needsPull {
 		if err := sw.pullHistory(cursor); err != nil {
 			log.Println("trakt: sync pull history:", err)
+			cycleSucceeded = false
 		}
 		if err := sw.pullWatchlist(); err != nil {
 			log.Println("trakt: sync pull watchlist:", err)
+			cycleSucceeded = false
 		}
 	}
 
@@ -134,12 +137,22 @@ func (sw *SyncWorker) runCycle() {
 	// still the same delta window, so this is always additive and idempotent.
 	if err := sw.pushHistory(cursor); err != nil {
 		log.Println("trakt: sync push history:", err)
+		cycleSucceeded = false
 	}
 	if err := sw.pushWatchlist(cursor); err != nil {
 		log.Println("trakt: sync push watchlist:", err)
+		cycleSucceeded = false
 	}
 
-	// Advance the cursor to the cycle start time.
+	// Advancing after a partial failure would permanently skip the failed
+	// remote activity or local delta on the next cycle. Keep the old cursor so
+	// every leg is retried; all Trakt sync endpoints are additive/idempotent.
+	if !cycleSucceeded {
+		log.Println("trakt: sync cycle incomplete; cursor retained for retry")
+		return
+	}
+
+	// Advance the cursor only after every required leg succeeded.
 	tst.LastSyncAt = cycleStart
 	if err := sw.store.Save(tst); err != nil {
 		log.Println("trakt: sync save cursor:", err)

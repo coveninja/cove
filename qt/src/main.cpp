@@ -10,22 +10,17 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
-#include <QHostAddress>
 #include <QIcon>
 #include <QLockFile>
-#include <QMimeDatabase>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
-#include <QTcpServer>
-#include <QTcpSocket>
 #include <QTextStream>
 #include <QTemporaryFile>
 #include <QTimer>
@@ -52,8 +47,12 @@
 #include <unistd.h>
 #endif
 
+#include "BackendProbe.h"
 #include "GpuWorkaround.h"
+#include "LinuxGraphicsEnvironment.h"
 #include "MpvObject.h"
+#include "RestartPolicy.h"
+#include "StaticServer.h"
 
 // Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
 // properties (data, resources, states, transform, etc.) that don't have notify
@@ -142,114 +141,6 @@ static void reportStartupFailure(const QString &reason) {
     qApp->exit(1);
 }
 
-// ── Static file server ───────────────────────────────────────────────────────
-class StaticServer : public QTcpServer {
-public:
-  explicit StaticServer(const QString &root, QObject *parent = nullptr)
-      : QTcpServer(parent), m_root(QDir(root).absolutePath()) {}
-
-  QUrl start() {
-    if (!listen(QHostAddress::LocalHost, 5174)) {
-      qWarning() << "[shell] static server failed to listen:" << errorString();
-      return {};
-    }
-    return QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(serverPort()));
-  }
-
-protected:
-  void incomingConnection(qintptr handle) override {
-    auto *sock = new QTcpSocket(this);
-    sock->setSocketDescriptor(handle);
-    auto buffer = std::make_shared<QByteArray>();
-    connect(sock, &QTcpSocket::readyRead, this, [this, sock, buffer]() {
-      buffer->append(sock->readAll());
-      if (buffer->indexOf("\r\n\r\n") < 0) {
-        // Guard against a stalled or malformed client growing the buffer
-        // indefinitely; abort once we've received 64 KiB without a header end.
-        if (buffer->size() > 64 * 1024) {
-          sock->abort();
-          sock->deleteLater();
-        }
-        return;
-      }
-      serve(sock, *buffer);
-    });
-    connect(sock, &QTcpSocket::disconnected, sock, &QObject::deleteLater);
-    // Abort connections that never complete an HTTP request within 10s.
-    // respond() always sends Connection: close + disconnectFromHost(), so sock
-    // is never kept alive past a served request — the singleShot auto-cancels
-    // when sock is destroyed after a normal request completes.
-    QTimer::singleShot(10000, sock, [sock]() {
-      sock->abort();
-      sock->deleteLater();
-    });
-  }
-
-private:
-  void serve(QTcpSocket *sock, const QByteArray &request) {
-    const QByteArray firstLine = request.left(request.indexOf("\r\n"));
-    const QList<QByteArray> tokens = firstLine.split(' ');
-    QString path = tokens.size() >= 2 ? QString::fromUtf8(tokens[1]) : "/";
-    path = QUrl(path).path();
-    if (path.isEmpty() || path == "/")
-      path = "/index.html";
-
-    QString filePath =
-        QFileInfo(QDir(m_root).filePath(path.mid(1))).absoluteFilePath();
-    if (filePath != m_root && !filePath.startsWith(m_root + "/")) {
-      respond(sock, 403, "text/plain", "Forbidden");
-      return;
-    }
-
-    QFileInfo info(filePath);
-    if (!info.exists() || info.isDir()) {
-      if (QFileInfo(path).suffix().isEmpty())
-        filePath = QDir(m_root).filePath("index.html");
-      else {
-        respond(sock, 404, "text/plain", "Not found");
-        return;
-      }
-    }
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-      respond(sock, 500, "text/plain", "Read error");
-      return;
-    }
-    respond(sock, 200, mimeFor(filePath), file.readAll());
-  }
-
-  static QByteArray mimeFor(const QString &filePath) {
-    const QString ext = QFileInfo(filePath).suffix().toLower();
-    if (ext == "js" || ext == "mjs")
-      return "text/javascript; charset=utf-8";
-    if (ext == "css")
-      return "text/css; charset=utf-8";
-    if (ext == "html")
-      return "text/html; charset=utf-8";
-    if (ext == "json" || ext == "map")
-      return "application/json; charset=utf-8";
-    if (ext == "wasm")
-      return "application/wasm";
-    return QMimeDatabase().mimeTypeForFile(filePath).name().toUtf8();
-  }
-
-  void respond(QTcpSocket *sock, int code, const QByteArray &mime,
-               const QByteArray &body) {
-    QByteArray resp;
-    resp += "HTTP/1.1 " + QByteArray::number(code) + " OK\r\n";
-    resp += "Content-Type: " + mime + "\r\n";
-    resp += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
-    resp += "Cache-Control: no-cache\r\n";
-    resp += "Connection: close\r\n\r\n";
-    resp += body;
-    sock->write(resp);
-    sock->disconnectFromHost();
-  }
-
-  QString m_root;
-};
-
 // ── Backend (Go sidecar) ─────────────────────────────────────────────────────
 // The aboutToQuit handler in main() covers clean shutdowns, but a crashed or
 // SIGKILLed shell never reaches it, leaving an orphan backend holding :6969
@@ -303,48 +194,6 @@ static QProcess *startBackend(const QString &exePath, QObject *parent) {
   }
 #endif
   return proc;
-}
-
-// Polls 127.0.0.1:port until it accepts a connection, then calls onReady.
-// Calls onTimeout instead if the backend never comes up within timeoutMs —
-// without this, a backend that's alive but never binds the port (or never
-// started at all) left the shell polling forever with no window and no
-// error, indistinguishable from the app doing nothing.
-static void waitForBackend(quint16 port, int timeoutMs,
-                            std::function<void()> onReady,
-                            std::function<void()> onTimeout) {
-  auto *timer = new QTimer;
-  timer->setInterval(150);
-  auto elapsed = std::make_shared<QElapsedTimer>();
-  elapsed->start();
-  QObject::connect(
-      timer, &QTimer::timeout, timer,
-      [timer, port, timeoutMs, onReady, onTimeout, elapsed]() {
-        if (elapsed->hasExpired(timeoutMs)) {
-          timer->stop();
-          timer->deleteLater();
-          onTimeout();
-          return;
-        }
-        // Parent probe to the timer so any pending probe is freed when the
-        // timer is destroyed (timeout path or app quit).
-        // Use timer as the context object (not probe) so Qt auto-disconnects
-        // this slot when the timer is destroyed — a late `connected` signal
-        // after the timeout must not touch the freed timer.
-        auto *probe = new QTcpSocket(timer);
-        QObject::connect(probe, &QTcpSocket::connected, timer,
-                         [timer, probe, onReady]() {
-                           timer->stop();
-                           timer->deleteLater();
-                           probe->abort();
-                           probe->deleteLater();
-                           onReady();
-                         });
-        QObject::connect(probe, &QTcpSocket::errorOccurred, probe,
-                         [probe]() { probe->deleteLater(); });
-        probe->connectToHost(QHostAddress::LocalHost, port);
-      });
-  timer->start();
 }
 
 // Qt ships qwebchannel.js as a compiled-in resource of the WebChannel module.
@@ -479,17 +328,11 @@ int main(int argc, char *argv[]) {
   // sandbox pins QtWebEngine 6.9 (BaseApp), which predates the 6.11 leak, so
   // native Wayland is safe there. Revisit if the BaseApp moves to an
   // affected Qt.
-  const bool inFlatpak = !qEnvironmentVariableIsEmpty("FLATPAK_ID");
-  if (!inFlatpak && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
-    qputenv("QT_QPA_PLATFORM", "xcb");
-
-  // Under XWayland, Hyprland unmaps windows on workspace switch and the
-  // threaded render loop can stall ~15 s on the unmapped surface, leaving the
-  // window black. The basic render loop is not affected; the heavy
-  // rendering (Chromium compositor, mpv) happens outside the Quick scene graph
-  // either way, so the single-threaded loop costs nothing here.
-  if (!inFlatpak && qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
-    qputenv("QSG_RENDER_LOOP", "basic");
+  // Default to XCB on host installations. This also applies the Hyprland-only
+  // render-loop workaround and keeps DRI_PRIME render offload on XCB's EGL
+  // path so Qt Quick and QtWebEngine allocate on the same GPU. Explicit user
+  // values always win.
+  LinuxGraphicsEnvironment::applyDefaults();
 #endif
 
   // Required before the app: share GL contexts, force Quick onto the OpenGL RHI
@@ -656,15 +499,15 @@ int main(int argc, char *argv[]) {
 
     // Restart-with-backoff bookkeeping for a crash *after* the backend was
     // already up and serving (a startup failure still goes through
-    // reportStartupFailure via `settled`, unchanged). windowTimer resets the
-    // count whenever more than 60s has elapsed since the first restart in
+    // reportStartupFailure via `settled`, unchanged). The restart policy resets
+    // the count whenever more than 60s has elapsed since the first restart in
     // the current burst, so a backend that crashes rarely (e.g. once a day)
     // always gets a fresh 3 attempts rather than accumulating toward the cap
     // forever.
-    auto restartCount = std::make_shared<int>(0);
-    auto restartWindow = std::make_shared<QElapsedTimer>();
     constexpr int maxRestartsPerWindow = 3;
     constexpr int restartWindowMs = 60000;
+    auto restartPolicy = std::make_shared<RestartPolicy>(
+        maxRestartsPerWindow, restartWindowMs);
 
     // launchBackend starts the backend, wires up its error/exit signals, and
     // waits for it to answer on apiPort. `first` controls whether a
@@ -676,8 +519,8 @@ int main(int argc, char *argv[]) {
     // crash — a lambda can't capture itself directly.
     auto launchBackend = std::make_shared<std::function<void(bool)>>();
     *launchBackend = [&app, backendPath, loadScene, baseUrl, isDev, isTv, apiPort,
-                       shuttingDown, currentBackend, restartCount, restartWindow,
-                       launchBackend](bool first) {
+                      shuttingDown, currentBackend, restartPolicy,
+                      launchBackend](bool first) {
       QProcess *backend = startBackend(backendPath, &app);
       *currentBackend = backend;
 
@@ -706,7 +549,7 @@ int main(int argc, char *argv[]) {
       QObject::connect(
           backend,
           QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-          [&app, backendPath, settled, shuttingDown, restartCount, restartWindow,
+          [&app, backendPath, settled, shuttingDown, restartPolicy,
            launchBackend](int exitCode, QProcess::ExitStatus) {
             if (exitCode == 42) {
 #ifdef Q_OS_WIN
@@ -738,24 +581,22 @@ int main(int argc, char *argv[]) {
             if (*shuttingDown)
               return;
 
-            if (!restartWindow->isValid() || restartWindow->hasExpired(restartWindowMs)) {
-              restartWindow->start();
-              *restartCount = 0;
-            }
-            ++*restartCount;
-            if (*restartCount > maxRestartsPerWindow) {
-              reportStartupFailure(QStringLiteral(
-                  "Backend crashed repeatedly (exit code %1).").arg(exitCode));
+            if (restartPolicy->recordCrash() ==
+                RestartPolicy::Decision::GiveUp) {
+              reportStartupFailure(
+                  QStringLiteral("Backend crashed repeatedly (exit code %1).")
+                      .arg(exitCode));
               return;
             }
             qWarning().noquote()
-                << "[shell] backend crashed (exit code" << exitCode << ") — restarting ("
-                << *restartCount << "/" << maxRestartsPerWindow << " in this window)";
+                << "[shell] backend crashed (exit code" << exitCode
+                << ") — restarting (" << restartPolicy->restartCount() << "/"
+                << restartPolicy->maxRestarts() << " in this window)";
             (*launchBackend)(/*first=*/false);
           });
 
-      waitForBackend(
-          apiPort, 20000,
+      BackendProbe::waitFor(
+          &app, apiPort, 20000,
           [loadScene, baseUrl, isDev, isTv, settled, first]() {
             if (*settled)
               return;

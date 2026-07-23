@@ -103,7 +103,7 @@ func remoteListenAddr(cfg Config) string {
 		return "0.0.0.0:6970" // safe fallback
 	}
 	port, err := strconv.Atoi(portStr)
-	if err != nil {
+	if err != nil || port < 1 || port >= 65535 {
 		return "0.0.0.0:6970"
 	}
 	return net.JoinHostPort("0.0.0.0", strconv.Itoa(port+1))
@@ -157,6 +157,7 @@ type Handle struct {
 	srv      *http.Server
 	lib      *library.Library
 	act      *activity.Store
+	player   *player.Player
 	stopOnce sync.Once
 
 	// Remote-access LAN listener — nil when closed. Protected by lanMu.
@@ -178,7 +179,9 @@ func (h *Handle) startLAN(addr string, handler http.Handler) {
 		return
 	}
 	srv := &http.Server{
-		Addr:              addr,
+		// Record the resolved address. This differs only when callers request
+		// port 0, and makes the listener observable for diagnostics and tests.
+		Addr:              ln.Addr().String(),
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		// ReadTimeout bounds request reads only; long-lived streaming responses
@@ -192,7 +195,7 @@ func (h *Handle) startLAN(addr string, handler http.Handler) {
 			log.Println("remote access LAN listener:", err)
 		}
 	}()
-	log.Printf("Remote access enabled: LAN listener on %s (token required)", addr)
+	log.Printf("Remote access enabled: LAN listener on %s (token required)", srv.Addr)
 }
 
 // stopLAN shuts down the remote-access LAN listener if it is running.
@@ -235,6 +238,9 @@ func (h *Handle) Stop() {
 		defer cancel()
 		if err := h.srv.Shutdown(ctx); err != nil {
 			log.Println("server shutdown:", err)
+		}
+		if h.player != nil {
+			h.player.Close()
 		}
 	})
 }
@@ -463,8 +469,13 @@ func Start(cfg Config) (*Handle, error) {
 	ln, err := net.Listen("tcp", cfg.BindAddr)
 	if err != nil {
 		cancel()
+		p.Close()
 		return nil, fmt.Errorf("bind %s: %w", cfg.BindAddr, err)
 	}
+	// Preserve the actual address when port 0 was requested (primarily useful
+	// for embedding and tests), and improve diagnostics in every configuration.
+	srv.Addr = ln.Addr().String()
+	utils.SetLocalAddr(srv.Addr)
 
 	// Chromium may resolve "localhost" to ::1, so also serve on the IPv6
 	// loopback when available. Best-effort: failure to bind is not fatal.
@@ -486,13 +497,14 @@ func Start(cfg Config) (*Handle, error) {
 		}
 	}()
 
-	log.Println("Server running on:", cfg.BindAddr)
+	log.Println("Server running on:", srv.Addr)
 
 	handle := &Handle{
 		cancel: cancel,
 		srv:    srv,
 		lib:    lib,
 		act:    act,
+		player: p,
 	}
 
 	// ── Remote-access LAN listener (Phase 5) ──────────────────────────────

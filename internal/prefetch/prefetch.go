@@ -56,12 +56,28 @@ const (
 // with `go w.Run(ctx)`.
 type Worker struct {
 	lib      *library.Library
-	tmdb     *tmdb.Client
-	addonMgr *addons.Manager
-	nuvioMgr *nuvio.Manager
+	tmdb     tmdbReader
+	addonMgr addonPrefetcher
+	nuvioMgr nuvioPrefetcher
 	settings *settings.Store
 
 	notify chan struct{}
+}
+
+type tmdbReader interface {
+	GetEpisodes(tmdbID, seasonNumber int) ([]tmdb.TVEpisode, error)
+	GetTVIMDBId(tmdbID int) (string, error)
+	GetIMDBId(tmdbID int) (string, error)
+	GetMediaByID(tmdbID int, mediaType string) (*tmdb.Media, error)
+}
+
+type addonPrefetcher interface {
+	GetAllStreamsPrefetch(ctx context.Context, mediaType, stremioID string) ([]addons.Stream, error)
+}
+
+type nuvioPrefetcher interface {
+	HasEnabledScrapers() bool
+	GetStreams(ctx context.Context, mediaType string, tmdbID int, imdbID, title string, year int, season, episode *int) []addons.Stream
 }
 
 // New wires up a Worker from the same dependencies main.go already
@@ -233,7 +249,11 @@ func (w *Worker) buildCandidates() []candidate {
 			if e.MediaType == "tv" {
 				s, ep := 1, 1
 				if e.LastWatchedSeason != nil && e.LastWatchedEpisode != nil {
-					s, ep = *e.LastWatchedSeason, *e.LastWatchedEpisode
+					next := w.nextEpisode(e.TmdbID, *e.LastWatchedSeason, *e.LastWatchedEpisode)
+					if next == nil {
+						continue
+					}
+					s, ep = next.season, next.episode
 				}
 				out = append(out, candidate{tmdbID: e.TmdbID, mediaType: "tv", season: &s, episode: &ep, touchedAt: touchedAt})
 			} else {
