@@ -121,6 +121,23 @@ func emptyDiskStore() diskStore {
 	}
 }
 
+func cloneDiskStore(source diskStore) diskStore {
+	cloned := emptyDiskStore()
+	for key, entry := range source.Entries {
+		cloned.Entries[key] = cloneEntry(entry)
+	}
+	for key, progress := range source.Progress {
+		cloned.Progress[key] = cloneProgress(progress)
+	}
+	for key, dismissal := range source.Dismissed {
+		cloned.Dismissed[key] = cloneDismissal(dismissal)
+	}
+	for key, removal := range source.Removed {
+		cloned.Removed[key] = cloneRemoval(removal)
+	}
+	return cloned
+}
+
 // ensureMaps normalizes syntactically valid files containing explicit null map
 // fields. Missing fields retain the pre-initialized maps during unmarshal, but
 // explicit null values replace them with nil and would otherwise make the next
@@ -308,8 +325,9 @@ func (l *Library) AllRemovals() []*Removal {
 // ties), and a re-added entry beats a tombstone only if its UpdatedAt is
 // strictly after the removal. Remote removals are applied to local entries and
 // both sides' tombstone maps are kept consistent.
-func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal, removals []*Removal) {
+func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal, removals []*Removal) error {
 	l.mu.Lock()
+	previous := cloneDiskStore(l.db)
 	changed := false
 
 	// Build a map of incoming removals for O(1) lookup in the entries loop.
@@ -450,7 +468,9 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	// away rather than wait out persistDebounce.
 	if changed {
 		if err := l.writeNow(); err != nil {
-			log.Println("library persist:", err)
+			l.db = previous
+			l.mu.Unlock()
+			return fmt.Errorf("library persist: %w", err)
 		}
 		l.gen.Add(1)
 	}
@@ -460,6 +480,7 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	if changed {
 		l.tasteGen.Add(1)
 	}
+	return nil
 }
 
 // RemoteRowID identifies a remote Supabase row by its natural key and UUID,

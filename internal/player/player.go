@@ -40,16 +40,22 @@ import (
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/tmdb"
 	"github.com/coveninja/cove/internal/utils"
+	"golang.org/x/sync/singleflight"
 )
 
 // Player owns all of the package's mutable state — the torrent client and the
 // active-torrent registry — plus the injected TMDB client and addon manager.
 // Fields are unexported, so tygo emits nothing for Player.
 type Player struct {
-	client *torrent.Client
+	client          *torrent.Client
+	closeMu         sync.Mutex
+	closed          bool
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 
 	activeTorrents   map[string]*torrentState
 	activeTorrentsMu sync.RWMutex
+	metadataSF       singleflight.Group
 
 	tmdbClient playerTMDB
 	addonMgr   playerAddons
@@ -145,6 +151,13 @@ func validateInfoHash(infoHash string) error {
 		return fmt.Errorf("invalid infohash: expected 40 hexadecimal characters")
 	}
 	return nil
+}
+
+func canonicalInfoHash(infoHash string) (string, error) {
+	if err := validateInfoHash(infoHash); err != nil {
+		return "", err
+	}
+	return strings.ToLower(infoHash), nil
 }
 
 // removeTorrentDataEntry removes a path beneath dataDir without allowing the
@@ -275,8 +288,11 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 			return nil
 		},
 	}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	return &Player{
 		client:            client,
+		lifecycleCtx:      lifecycleCtx,
+		lifecycleCancel:   lifecycleCancel,
 		activeTorrents:    map[string]*torrentState{},
 		tmdbClient:        tmdbClient,
 		addonMgr:          addonMgr,
@@ -293,13 +309,25 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 // Close releases torrent listeners, storage handles, and background client
 // goroutines. Server shutdown calls this after draining HTTP requests.
 func (p *Player) Close() {
-	if p == nil || p.client == nil {
+	if p == nil {
 		return
 	}
-	for _, err := range p.client.Close() {
+	p.closeMu.Lock()
+	if p.closed || p.client == nil {
+		p.closeMu.Unlock()
+		return
+	}
+	p.closed = true
+	if p.lifecycleCancel != nil {
+		p.lifecycleCancel()
+	}
+	client := p.client
+	p.client = nil
+	p.closeMu.Unlock()
+
+	for _, err := range client.Close() {
 		log.Println("torrent client close:", err)
 	}
-	p.client = nil
 }
 
 // rememberStream records a stream URL the backend returned to the client
@@ -711,9 +739,16 @@ func (p *Player) applyUploadPolicy(t *torrent.Torrent) {
 // index from the addon (Stremio fileIdx field); it takes priority over the
 // regex matching, with fallback to regex when the index is invalid or points
 // to a non-video file.
-func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *int) (*torrent.File, error) {
-	if err := validateInfoHash(infoHash); err != nil {
+func (p *Player) getTorrentFile(ctx context.Context, infoHash string, season, episode *int, fileIdx *int) (*torrent.File, error) {
+	infoHash, err := canonicalInfoHash(infoHash)
+	if err != nil {
 		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("metadata fetch canceled for %s: %w", infoHash, err)
 	}
 
 	// resolveFile applies fileIdx-first selection against an already-metadata-
@@ -741,52 +776,76 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *
 	}
 	p.activeTorrentsMu.Unlock()
 
-	t, err := p.client.AddMagnet("magnet:?xt=urn:btih:" + infoHash)
-	if err != nil {
-		return nil, fmt.Errorf("invalid magnet for %s: %w", infoHash, err)
-	}
+	resultCh := p.metadataSF.DoChan(infoHash, func() (interface{}, error) {
+		// Another caller may have completed metadata between the fast-path
+		// check above and this flight starting.
+		p.activeTorrentsMu.Lock()
+		if st, ok := p.activeTorrents[infoHash]; ok && st.torrent.Info() != nil {
+			t := st.torrent
+			st.lastUsed = time.Now()
+			p.activeTorrentsMu.Unlock()
+			return t, nil
+		}
+		p.activeTorrentsMu.Unlock()
 
-	// Apply upload policy immediately — before GotInfo — so the torrent's
-	// upload behaviour is set from the moment we join the swarm.
-	p.applyUploadPolicy(t)
+		p.closeMu.Lock()
+		if p.closed || p.client == nil {
+			p.closeMu.Unlock()
+			return nil, fmt.Errorf("player is closed")
+		}
+		playerCtx := p.lifecycleCtx
+		t, err := p.client.AddMagnet("magnet:?xt=urn:btih:" + infoHash)
+		p.closeMu.Unlock()
+		if err != nil {
+			return nil, fmt.Errorf("invalid magnet for %s: %w", infoHash, err)
+		}
 
-	// Bound the metadata fetch. A dead swarm never fires GotInfo, and without a
-	// deadline this blocks the request goroutine forever — the original cause
-	// of goroutine pile-up under bad hashes. On timeout we drop the torrent so
-	// it doesn't sit in the client holding resources.
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
+		// This operation is shared by every waiter for the hash. Give it its own
+		// deadline instead of any one request's context; a canceled HTTP request
+		// must not drop a torrent another stream is still waiting for.
+		p.applyUploadPolicy(t)
+		metadataCtx, cancel := context.WithTimeout(playerCtx, 45*time.Second)
+		defer cancel()
+		select {
+		case <-t.GotInfo():
+		case <-metadataCtx.Done():
+			canonicalHash := t.InfoHash().HexString()
+			t.Drop()
+			if err := removeTorrentDataEntry(p.dataDir, canonicalHash); err != nil {
+				log.Printf("torrent %s: could not remove timed-out data: %v", canonicalHash, err)
+			}
+			if errors.Is(metadataCtx.Err(), context.Canceled) {
+				return nil, fmt.Errorf("player closed while fetching metadata for %s", infoHash)
+			}
+			return nil, fmt.Errorf("timed out fetching metadata for %s", infoHash)
+		}
+
+		now := time.Now()
+		p.activeTorrentsMu.Lock()
+		if st, ok := p.activeTorrents[infoHash]; ok {
+			st.lastUsed = now
+		} else {
+			p.activeTorrents[infoHash] = &torrentState{
+				torrent:   t,
+				lastCheck: now,
+				lastUsed:  now,
+			}
+		}
+		p.activeTorrentsMu.Unlock()
+		return t, nil
+	})
+
 	select {
-	case <-t.GotInfo():
+	case result := <-resultCh:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		t := result.Val.(*torrent.Torrent)
+		p.applyUploadPolicy(t)
+		return resolveFile(t)
 	case <-ctx.Done():
-		canonicalHash := t.InfoHash().HexString()
-		t.Drop()
-		// Attempt best-effort cleanup of any partial data left under the infohash
-		// directory (anacrolix may create a dir by infohash before metadata arrives).
-		if err := removeTorrentDataEntry(p.dataDir, canonicalHash); err != nil {
-			log.Printf("torrent %s: could not remove timed-out data: %v", canonicalHash, err)
-		}
-		return nil, fmt.Errorf("timed out fetching metadata for %s", infoHash)
+		return nil, fmt.Errorf("metadata fetch canceled for %s: %w", infoHash, ctx.Err())
 	}
-
-	now := time.Now()
-	p.activeTorrentsMu.Lock()
-	// A concurrent first play of the same hash may have registered while we
-	// waited on GotInfo (AddMagnet dedupes to the same *Torrent). Keep the
-	// existing state — overwriting would discard its live reader count and
-	// let the reaper drop a torrent that's still being streamed.
-	if st, ok := p.activeTorrents[infoHash]; ok {
-		st.lastUsed = now
-	} else {
-		p.activeTorrents[infoHash] = &torrentState{
-			torrent:   t,
-			lastCheck: now,
-			lastUsed:  now,
-		}
-	}
-	p.activeTorrentsMu.Unlock()
-
-	return resolveFile(t)
 }
 
 // PrefetchTorrent background-downloads infoHash's selected file (F7): once
@@ -805,7 +864,11 @@ func (p *Player) getTorrentFile(infoHash string, season, episode *int, fileIdx *
 // prefetching deprioritizes that old file back to PiecePriorityNone first, so
 // at most one background download is ever in flight.
 func (p *Player) PrefetchTorrent(infoHash string, season, episode *int, fileIdx *int) error {
-	file, err := p.getTorrentFile(infoHash, season, episode, fileIdx)
+	infoHash, err := canonicalInfoHash(infoHash)
+	if err != nil {
+		return err
+	}
+	file, err := p.getTorrentFile(context.Background(), infoHash, season, episode, fileIdx)
 	if err != nil {
 		return err
 	}
@@ -964,7 +1027,12 @@ func (p *Player) dropIdleNonPrefetch(exceptHash string) {
 // when non-nil, overrides regex matching with the addon-supplied raw file
 // index (see getTorrentFile).
 func (p *Player) StreamTorrent(infoHash string, season, episode *int, fileIdx *int, w http.ResponseWriter, r *http.Request) {
-	file, err := p.getTorrentFile(infoHash, season, episode, fileIdx)
+	infoHash, err := canonicalInfoHash(infoHash)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	file, err := p.getTorrentFile(r.Context(), infoHash, season, episode, fileIdx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -1057,6 +1125,10 @@ func parseFileIdx(r *http.Request) *int {
 // aren't fetched in isolation from the rest of the swarm bookkeeping) and
 // torrent-wide is a reasonable proxy for "is this moving".
 func (p *Player) GetProgress(infoHash string, season, episode *int, fileIdx *int) map[string]interface{} {
+	infoHash, err := canonicalInfoHash(infoHash)
+	if err != nil {
+		return map[string]interface{}{"found": false}
+	}
 	p.activeTorrentsMu.Lock()
 	state, ok := p.activeTorrents[infoHash]
 	if !ok {
@@ -1564,6 +1636,10 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 	}))
 
 	mux.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		rawURL := r.URL.Query().Get("url")
 		if rawURL == "" {
 			http.Error(w, "missing url", http.StatusBadRequest)
@@ -1585,33 +1661,46 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer func(Body io.ReadCloser) {
-			err := Body.Close()
-			if err != nil {
-				log.Println(err)
-			}
-		}(resp.Body)
-
-		// 10 MiB is far beyond any real subtitle file.
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-
-		// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
-		content := string(body)
-		if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
-			content = utils.SrtToVTT(content)
-		}
-		_, err = fmt.Fprint(w, content)
-		if err != nil {
-			log.Println(err)
-			return
-		}
+		writeSubtitleResponse(w, resp)
 	}))
+}
+
+// writeSubtitleResponse validates and emits an already-fetched subtitle
+// response. Keeping response processing separate lets tests exercise upstream
+// failures and size limits without replacing the SSRF-safe production client.
+func writeSubtitleResponse(w http.ResponseWriter, resp *http.Response) {
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		http.Error(w, fmt.Sprintf("subtitle upstream returned HTTP %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	// 10 MiB is far beyond any real subtitle file.
+	const maxSubtitleBytes = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubtitleBytes+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(body) > maxSubtitleBytes {
+		http.Error(w, "subtitle exceeds 10 MiB limit", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+
+	// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
+	content := string(body)
+	if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
+		content = utils.SrtToVTT(content)
+	}
+	if _, err := fmt.Fprint(w, content); err != nil {
+		log.Println(err)
+	}
 }
 
 func firstNonEmpty(vals ...string) string {

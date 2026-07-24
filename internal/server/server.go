@@ -291,36 +291,8 @@ func Start(cfg Config) (*Handle, error) {
 	}
 
 	// Profiles must be initialised first — all other packages are profile-scoped.
-	var addonMgr *addons.Manager
-	var nuvioMgr *nuvio.Manager
-	var st *settings.Store
-	var lib *library.Library
-	var act *activity.Store
-	var traktSrv *traktpkg.Server
-
-	profileStore, err := profiles.New(func(profileID string) {
-		// Reload all data stores when the active profile switches.
-		if err := lib.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload library:", err)
-		}
-		if err := st.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload settings:", err)
-		}
-		if err := addonMgr.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload addons:", err)
-		}
-		if err := nuvioMgr.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload nuvio repos:", err)
-		}
-		if err := act.SetProfile(profileID); err != nil {
-			log.Println("profile switch: reload activity:", err)
-		}
-		if traktSrv != nil {
-			if err := traktSrv.SetProfile(profileID); err != nil {
-				log.Println("profile switch: reload trakt:", err)
-			}
-		}
-	})
+	// The transition hook is installed after every dependent store exists.
+	profileStore, err := profiles.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("could not init profiles: %w", err)
 	}
@@ -328,27 +300,27 @@ func Start(cfg Config) (*Handle, error) {
 
 	tmdbClient := tmdb.New(cfg.TMDBAPIKey)
 
-	addonMgr = addons.New(activeID, func(tmdbID int) string {
+	addonMgr := addons.New(activeID, func(tmdbID int) string {
 		id, err := tmdbClient.GetTVIMDBId(tmdbID)
 		if err != nil {
 			return ""
 		}
 		return id
 	})
-	nuvioMgr = nuvio.New(activeID)
+	nuvioMgr := nuvio.New(activeID)
 
-	st, err = settings.New(activeID)
+	st, err := settings.New(activeID)
 	if err != nil {
 		log.Println("could not load settings:", err)
 	}
-	lib, err = library.New(activeID)
+	lib, err := library.New(activeID)
 	if err != nil {
 		log.Println("could not load library:", err)
 	}
 
 	// Activity log — per-profile watch-time bucketed by date/hour. Non-fatal:
 	// a failure here degrades the insights page but doesn't break playback.
-	act, err = activity.New(activeID)
+	act, err := activity.New(activeID)
 	if err != nil {
 		log.Println("could not load activity log:", err)
 	}
@@ -410,8 +382,33 @@ func Start(cfg Config) (*Handle, error) {
 		ClientID:     cfg.TraktClientID,
 		ClientSecret: cfg.TraktClientSecret,
 	}
-	traktSrv = traktpkg.New(traktCfg, activeID, lib, st, tmdbClient)
+	traktSrv := traktpkg.New(traktCfg, activeID, lib, st, tmdbClient)
 	traktSrv.SetupHandlers(mux)
+
+	// Reload every profile-scoped subsystem as one reversible transition.
+	// profiles.Store calls this hook in the reverse direction if any reload
+	// fails, so a corrupt sidecar cannot leave the process in a mixed-profile
+	// state while profiles.json advertises a different active profile.
+	profileStore.SetOnChange(func(_ string, profileID string) error {
+		return traktSrv.SetProfileAndReload(profileID, func() error {
+			var reloadErrs []error
+			for _, step := range []struct {
+				name string
+				load func(string) error
+			}{
+				{name: "library", load: lib.SetProfile},
+				{name: "settings", load: st.SetProfile},
+				{name: "addons", load: addonMgr.SetProfile},
+				{name: "nuvio", load: nuvioMgr.SetProfile},
+				{name: "activity", load: act.SetProfile},
+			} {
+				if err := step.load(profileID); err != nil {
+					reloadErrs = append(reloadErrs, fmt.Errorf("%s: %w", step.name, err))
+				}
+			}
+			return errors.Join(reloadErrs...)
+		})
+	})
 
 	disc := discover.New(tmdbClient, lib, st)
 	disc.SetupHandlers(mux)
@@ -544,7 +541,11 @@ func Start(cfg Config) (*Handle, error) {
 	lanAddr := remoteListenAddr(lanCfg)
 	lanHandler := lanTokenMiddleware(st, mux)
 
-	st.SetOnChange(func(snap settings.Settings) {
+	st.SetOnChange(func(_ settings.Settings) {
+		// Settings writes notify asynchronously. Always reconcile from the live
+		// store rather than acting on the callback snapshot so rapid toggles
+		// cannot let an older goroutine reopen a listener after a newer disable.
+		snap := st.Get()
 		if snap.RemoteAccessEnabled {
 			handle.startLAN(lanAddr, lanHandler)
 		} else {

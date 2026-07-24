@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -255,4 +256,72 @@ func TestNewAndSetProfileRejectMalformedDataAndNormalizeMaps(t *testing.T) {
 		store.mu.RUnlock()
 		store.Flush()
 	})
+}
+
+// TestCloneDiskStoreSkipsNilDays verifies that cloneDiskStore silently skips
+// nil *DayEntry values (activity.go line 61) while deep-copying the rest. Such
+// nil values can appear when the on-disk JSON contains an explicit null for a
+// date key. The clone snapshots the pre-merge state MergeFromJSON restores on
+// a write failure, so it must not carry nil entries into the rollback target.
+func TestCloneDiskStoreSkipsNilDays(t *testing.T) {
+	source := diskStore{
+		Days: map[string]*DayEntry{
+			"nil-day":  nil,
+			"real-day": {ByTitle: map[string]int64{"1:movie": 42}},
+		},
+		LastPos:    map[string]float64{"1:movie": 12.5},
+		Backfilled: true,
+	}
+
+	cloned := cloneDiskStore(source)
+
+	_, nilDayPresent := cloned.Days["nil-day"]
+	assert.False(t, nilDayPresent, "nil DayEntry must be skipped by cloneDiskStore")
+	require.NotNil(t, cloned.Days["real-day"], "non-nil DayEntry must be preserved")
+	assert.Equal(t, int64(42), cloned.Days["real-day"].ByTitle["1:movie"])
+	assert.Equal(t, 12.5, cloned.LastPos["1:movie"])
+	assert.True(t, cloned.Backfilled)
+
+	// The clone must be deep: mutating it must not touch the source's maps.
+	cloned.Days["real-day"].ByTitle["1:movie"] = 99
+	assert.Equal(t, int64(42), source.Days["real-day"].ByTitle["1:movie"],
+		"clone must not alias the source's ByTitle map")
+}
+
+// TestMergeFromJSONWriteFailureRollsBackState verifies that MergeFromJSON
+// propagates a disk-write error and restores the pre-merge snapshot
+// (activity.go lines 225-226).
+func TestMergeFromJSONWriteFailureRollsBackState(t *testing.T) {
+	store := newTestStore(t)
+	at := time.Now()
+
+	// Establish a known baseline in both memory and on disk.
+	store.OnProgressSave(progressEvent("1:movie", 50, at))
+	store.Flush()
+
+	// Make the config directory read-only so AtomicWriteFile cannot create a
+	// temp file, causing writeNow to return an error.
+	dir := filepath.Dir(store.path)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	// Attempt to merge data that would increment LastPos for a different key.
+	remote := diskStore{
+		Days:    make(map[string]*DayEntry),
+		LastPos: map[string]float64{"2:movie": 100},
+	}
+	data, err := json.Marshal(remote)
+	require.NoError(t, err)
+
+	mergeErr := store.MergeFromJSON(data)
+	require.Error(t, mergeErr, "MergeFromJSON must propagate write errors")
+
+	// State must be rolled back: only the original LastPos entry should exist.
+	store.mu.RLock()
+	pos1 := store.db.LastPos["1:movie"]
+	_, has2 := store.db.LastPos["2:movie"]
+	store.mu.RUnlock()
+
+	assert.Equal(t, float64(50), pos1, "rollback must restore the pre-merge LastPos")
+	assert.False(t, has2, "rolled-back state must not contain the incoming key")
 }

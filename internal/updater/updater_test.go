@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -188,6 +190,24 @@ func TestExtractZipRejectsTraversalAndLinks(t *testing.T) {
 	}
 }
 
+func TestExtractZipRejectsPreexistingDestinationSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks may require elevated Windows privileges")
+	}
+	dest := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(dest, "web")))
+	archive := writeZip(t, []archiveEntry{
+		{name: "web/index.html", body: "escaped", mode: 0o644},
+	})
+
+	err := extractZip(archive, dest, "cove.exe")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+	_, err = os.Stat(filepath.Join(outside, "index.html"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestExtractTarGzWritesNestedFilesAndExecutableMode(t *testing.T) {
 	dest := t.TempDir()
 	archive := tarGz(t, []archiveEntry{
@@ -218,4 +238,184 @@ func TestExtractTarGzRejectsTraversalLinksAndInvalidInput(t *testing.T) {
 		})
 	}
 	assert.Error(t, extractTarGz(strings.NewReader("not gzip"), t.TempDir()))
+}
+
+func TestExtractTarGzValidationFailureLeavesExistingReleaseUntouched(t *testing.T) {
+	dest := t.TempDir()
+	target := filepath.Join(dest, "web", "index.html")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("old ui"), 0o644))
+	archive := tarGz(t, []archiveEntry{
+		{name: "web/index.html", body: "new ui", mode: 0o644},
+		{name: "../../escape", body: "bad", mode: 0o644},
+	})
+
+	require.Error(t, extractTarGz(bytes.NewReader(archive), dest))
+	got, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "old ui", string(got))
+}
+
+func TestCopyWithLimitRejectsOversizedContent(t *testing.T) {
+	var dst bytes.Buffer
+	n, err := copyWithLimit(&dst, strings.NewReader("12345"), 4)
+	require.Error(t, err)
+	assert.EqualValues(t, 5, n)
+	assert.Contains(t, err.Error(), "exceeds")
+}
+
+type updaterErrorReader struct{}
+
+func (updaterErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
+func TestCopyWithLimitPropagatesReadErrors(t *testing.T) {
+	var dst bytes.Buffer
+	n, err := copyWithLimit(&dst, updaterErrorReader{}, 4)
+	require.ErrorContains(t, err, "read failed")
+	assert.Zero(t, n)
+}
+
+func TestExtractArchivesRejectEntryCountAndInvalidStageDestination(t *testing.T) {
+	entries := make([]archiveEntry, maxArchiveEntries+1)
+	for i := range entries {
+		entries[i] = archiveEntry{name: fmt.Sprintf("files/%d.txt", i), mode: 0o644}
+	}
+	require.ErrorContains(
+		t,
+		extractZip(writeZip(t, entries), t.TempDir(), "cove.exe"),
+		"too many entries",
+	)
+	require.ErrorContains(
+		t,
+		extractTarGz(bytes.NewReader(tarGz(t, entries)), t.TempDir()),
+		"too many entries",
+	)
+
+	blockedDest := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blockedDest, []byte("blocked"), 0o600))
+	oneFile := []archiveEntry{{name: "cove", body: "binary", mode: 0o755}}
+	assert.Error(t, extractZip(writeZip(t, oneFile), blockedDest, "cove.exe"))
+	assert.Error(t, extractTarGz(bytes.NewReader(tarGz(t, oneFile)), blockedDest))
+}
+
+func TestExtractArchivesRejectDeclaredSizeLimitsAndConflictingPaths(t *testing.T) {
+	zipPath := writeZip(t, []archiveEntry{{name: "large", body: "x", mode: 0o644}})
+	zipBytes, err := os.ReadFile(zipPath)
+	require.NoError(t, err)
+	centralDirectory := bytes.Index(zipBytes, []byte{'P', 'K', 1, 2})
+	require.NotEqual(t, -1, centralDirectory)
+	binary.LittleEndian.PutUint32(
+		zipBytes[centralDirectory+24:centralDirectory+28],
+		uint32(maxExtractedBytes+1),
+	)
+	require.NoError(t, os.WriteFile(zipPath, zipBytes, 0o600))
+	assert.ErrorContains(t, extractZip(zipPath, t.TempDir(), "cove.exe"), "extracted byte limit")
+
+	var oversizedTarGz bytes.Buffer
+	gz := gzip.NewWriter(&oversizedTarGz)
+	tw := tar.NewWriter(gz)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name: "large",
+		Mode: 0o644,
+		Size: maxExtractedBytes + 1,
+	}))
+	_ = tw.Close() // Deliberately incomplete body; extraction rejects the header first.
+	require.NoError(t, gz.Close())
+	assert.ErrorContains(
+		t,
+		extractTarGz(bytes.NewReader(oversizedTarGz.Bytes()), t.TempDir()),
+		"extracted byte limit",
+	)
+
+	conflictingZip := writeZip(t, []archiveEntry{
+		{name: "parent", body: "file", mode: 0o644},
+		{name: "parent/child", body: "nested", mode: 0o644},
+	})
+	assert.Error(t, extractZip(conflictingZip, t.TempDir(), "cove.exe"))
+}
+
+func TestCommitStagedFilesRollsBackCompletedReplacements(t *testing.T) {
+	dest := t.TempDir()
+	target := filepath.Join(dest, "cove")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o755))
+
+	stage := t.TempDir()
+	replacement := filepath.Join(stage, "cove")
+	require.NoError(t, os.WriteFile(replacement, []byte("new"), 0o755))
+	missing := filepath.Join(stage, "missing")
+
+	err := commitStagedFiles(dest, []stagedFile{
+		{rel: "cove", path: replacement},
+		{rel: "web/index.html", path: missing},
+	})
+	require.Error(t, err)
+	got, readErr := os.ReadFile(target)
+	require.NoError(t, readErr)
+	assert.Equal(t, "old", string(got))
+	_, statErr := os.Stat(filepath.Join(dest, "web", "index.html"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+// TestCommitStagedFilesFailsWhenBackupDirCannotBeCreated covers the
+// backup-staging failure in commitStagedFiles (updater.go lines 583-585): a
+// read-only destination directory prevents creating the temporary backup
+// directory, so the commit aborts before touching any target file.
+func TestCommitStagedFilesFailsWhenBackupDirCannotBeCreated(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directory denial does not apply to root")
+	}
+	dest := t.TempDir()
+	stage := t.TempDir()
+	replacement := filepath.Join(stage, "file")
+	require.NoError(t, os.WriteFile(replacement, []byte("new"), 0o755))
+
+	require.NoError(t, os.Chmod(dest, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dest, 0o755) })
+
+	err := commitStagedFiles(dest, []stagedFile{{rel: "file", path: replacement}})
+	require.Error(t, err)
+	// The staged replacement must be left untouched in place.
+	_, statErr := os.Stat(filepath.Join(dest, "file"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestCommitAndDestinationValidationErrors(t *testing.T) {
+	dest := t.TempDir()
+	assert.Error(t, commitStagedFiles(dest, []stagedFile{{
+		rel:  "../escape",
+		path: filepath.Join(t.TempDir(), "unused"),
+	}}))
+
+	blockedDest := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blockedDest, []byte("blocked"), 0o600))
+	assert.Error(t, commitStagedFiles(blockedDest, nil))
+	assert.Error(t, validateDestinationPath(filepath.Join(t.TempDir(), "missing"), "target"))
+	assert.Error(t, validateDestinationPath(blockedDest, blockedDest))
+
+	if runtime.GOOS != "windows" {
+		root := t.TempDir()
+		link := filepath.Join(root, "link")
+		require.NoError(t, os.Symlink(t.TempDir(), link))
+		assert.ErrorContains(t, validateDestinationPath(root, filepath.Join(link, "file")), "symlink")
+	}
+
+	parentFileRoot := t.TempDir()
+	parentFile := filepath.Join(parentFileRoot, "parent")
+	require.NoError(t, os.WriteFile(parentFile, []byte("file"), 0o600))
+	assert.ErrorContains(
+		t,
+		validateDestinationPath(parentFileRoot, filepath.Join(parentFile, "child")),
+		"parent is not a directory",
+	)
+
+	directoryTargetRoot := t.TempDir()
+	directoryTarget := filepath.Join(directoryTargetRoot, "directory")
+	require.NoError(t, os.Mkdir(directoryTarget, 0o755))
+	assert.ErrorContains(
+		t,
+		validateDestinationPath(directoryTargetRoot, directoryTarget),
+		"not a regular file",
+	)
 }

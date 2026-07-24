@@ -2,12 +2,15 @@ package nuvio
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 )
+
+var errRegistryChanged = errors.New("nuvio registry changed while request was in flight")
 
 // githubURLPattern accepts github.com/owner/repo, with or without a scheme,
 // trailing slash, .git suffix, or an explicit /tree/<branch>.
@@ -87,6 +90,10 @@ func (m *Manager) resolveBranchAndManifest(ctx context.Context, owner, name, bra
 // raw.githubusercontent.com link to the manifest file itself (the form some
 // community plugin directories hand users via a "copy" button).
 func (m *Manager) AddRepo(ctx context.Context, rawURL string) (Repo, error) {
+	m.mu.RLock()
+	revision := m.configRevision
+	m.mu.RUnlock()
+
 	var owner, name, resolvedBranch string
 	var data []byte
 
@@ -135,16 +142,19 @@ func (m *Manager) AddRepo(ctx context.Context, rawURL string) (Repo, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if revision != m.configRevision {
+		return Repo{}, errRegistryChanged
+	}
+	previousRepos := cloneRepos(m.repos)
+	previousUpdatedAt := m.updatedAt
 	for i, r := range m.repos {
 		if r.ID == repo.ID {
 			m.repos[i] = repo
-			m.invalidateStreamCache()
-			return repo, m.saveL()
+			return repo, m.commitMutationL(previousRepos, previousUpdatedAt)
 		}
 	}
 	m.repos = append(m.repos, repo)
-	m.invalidateStreamCache()
-	return repo, m.saveL()
+	return repo, m.commitMutationL(previousRepos, previousUpdatedAt)
 }
 
 // RemoveRepo deletes a repo and all its cached scraper code.
@@ -153,9 +163,10 @@ func (m *Manager) RemoveRepo(id string) error {
 	defer m.mu.Unlock()
 	for i, r := range m.repos {
 		if r.ID == id {
+			previousRepos := cloneRepos(m.repos)
+			previousUpdatedAt := m.updatedAt
 			m.repos = append(m.repos[:i], m.repos[i+1:]...)
-			m.invalidateStreamCache()
-			return m.saveL()
+			return m.commitMutationL(previousRepos, previousUpdatedAt)
 		}
 	}
 	return fmt.Errorf("repo not found")
@@ -168,9 +179,10 @@ func (m *Manager) SetRepoEnabled(id string, enabled bool) error {
 	defer m.mu.Unlock()
 	for i, r := range m.repos {
 		if r.ID == id {
+			previousRepos := cloneRepos(m.repos)
+			previousUpdatedAt := m.updatedAt
 			m.repos[i].Enabled = enabled
-			m.invalidateStreamCache()
-			return m.saveL()
+			return m.commitMutationL(previousRepos, previousUpdatedAt)
 		}
 	}
 	return fmt.Errorf("repo not found")
@@ -202,9 +214,10 @@ func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID strin
 	}
 
 	if !enabled {
+		previousRepos := cloneRepos(m.repos)
+		previousUpdatedAt := m.updatedAt
 		m.repos[repoIdx].Scrapers[scraperIdx].Enabled = false
-		m.invalidateStreamCache()
-		err := m.saveL()
+		err := m.commitMutationL(previousRepos, previousUpdatedAt)
 		m.mu.Unlock()
 		return err
 	}
@@ -212,48 +225,52 @@ func (m *Manager) SetScraperEnabled(ctx context.Context, repoID, scraperID strin
 	repo := m.repos[repoIdx]
 	scraper := repo.Scrapers[scraperIdx]
 	needsFetch := scraper.Code == "" || scraper.CodeErr != ""
+	revision := m.configRevision
+	if !needsFetch {
+		previousRepos := cloneRepos(m.repos)
+		previousUpdatedAt := m.updatedAt
+		m.repos[repoIdx].Scrapers[scraperIdx].Enabled = true
+		err := m.commitMutationL(previousRepos, previousUpdatedAt)
+		m.mu.Unlock()
+		return err
+	}
 	m.mu.Unlock()
 
-	if needsFetch {
-		code, fetchErr := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, scraper.Filename)
-
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		// Re-find in case the slice changed while the network call was in flight.
-		for i, r := range m.repos {
-			if r.ID != repoID {
-				continue
-			}
-			for j, s := range r.Scrapers {
-				if s.ID != scraperID {
-					continue
-				}
-				if fetchErr != nil {
-					m.repos[i].Scrapers[j].Enabled = false
-					m.repos[i].Scrapers[j].CodeErr = fetchErr.Error()
-					m.invalidateStreamCache()
-					if err := m.saveL(); err != nil {
-						return fmt.Errorf("could not fetch scraper code: %v; save state: %w", fetchErr, err)
-					}
-					return fmt.Errorf("could not fetch scraper code: %w", fetchErr)
-				}
-				now := time.Now()
-				m.repos[i].Scrapers[j].Code = string(code)
-				m.repos[i].Scrapers[j].CodeFetchedAt = &now
-				m.repos[i].Scrapers[j].CodeErr = ""
-				m.repos[i].Scrapers[j].Enabled = true
-				m.invalidateStreamCache()
-				return m.saveL()
-			}
-		}
-		return fmt.Errorf("scraper not found")
-	}
+	code, fetchErr := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, scraper.Filename)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.repos[repoIdx].Scrapers[scraperIdx].Enabled = true
-	m.invalidateStreamCache()
-	return m.saveL()
+	if revision != m.configRevision {
+		return errRegistryChanged
+	}
+	// Re-find defensively even though the revision guard rejects any mutation.
+	for i, r := range m.repos {
+		if r.ID != repoID {
+			continue
+		}
+		for j, s := range r.Scrapers {
+			if s.ID != scraperID {
+				continue
+			}
+			previousRepos := cloneRepos(m.repos)
+			previousUpdatedAt := m.updatedAt
+			if fetchErr != nil {
+				m.repos[i].Scrapers[j].Enabled = false
+				m.repos[i].Scrapers[j].CodeErr = fetchErr.Error()
+				if err := m.commitMutationL(previousRepos, previousUpdatedAt); err != nil {
+					return fmt.Errorf("could not fetch scraper code: %v; save state: %w", fetchErr, err)
+				}
+				return fmt.Errorf("could not fetch scraper code: %w", fetchErr)
+			}
+			now := time.Now()
+			m.repos[i].Scrapers[j].Code = string(code)
+			m.repos[i].Scrapers[j].CodeFetchedAt = &now
+			m.repos[i].Scrapers[j].CodeErr = ""
+			m.repos[i].Scrapers[j].Enabled = true
+			return m.commitMutationL(previousRepos, previousUpdatedAt)
+		}
+	}
+	return fmt.Errorf("scraper not found")
 }
 
 // RefreshRepo refetches manifest.json and, for any currently-enabled scraper,
@@ -262,6 +279,7 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 	m.mu.RLock()
 	var repo Repo
 	found := false
+	revision := m.configRevision
 	for _, r := range m.repos {
 		if r.ID == id {
 			repo = r
@@ -280,11 +298,11 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 	}
 	data, err := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, manifestPath)
 	if err != nil {
-		return m.recordRepoRefreshError(id, err)
+		return m.recordRepoRefreshError(id, revision, err)
 	}
 	entries, err := parseManifest(data)
 	if err != nil {
-		return m.recordRepoRefreshError(id, fmt.Errorf("could not parse manifest.json: %w", err))
+		return m.recordRepoRefreshError(id, revision, fmt.Errorf("could not parse manifest.json: %w", err))
 	}
 
 	// Preserve Enabled/Code for scrapers that still exist; refetch code for
@@ -313,29 +331,39 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if revision != m.configRevision {
+		return errRegistryChanged
+	}
 	for i, r := range m.repos {
 		if r.ID == id {
+			previousRepos := cloneRepos(m.repos)
+			previousUpdatedAt := m.updatedAt
 			m.repos[i].Scrapers = newScrapers
 			m.repos[i].FetchedAt = time.Now()
 			m.repos[i].FetchErr = ""
+			return m.commitMutationL(previousRepos, previousUpdatedAt)
 		}
 	}
-	m.invalidateStreamCache()
-	return m.saveL()
+	return fmt.Errorf("repo not found")
 }
 
 // recordRepoRefreshError keeps refresh failures visible after restart. FetchErr
 // is user-facing state, so updating it only in memory would make the error
 // disappear as soon as Cove or the active profile restarted.
-func (m *Manager) recordRepoRefreshError(id string, refreshErr error) error {
+func (m *Manager) recordRepoRefreshError(id string, revision uint64, refreshErr error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if revision != m.configRevision {
+		return errRegistryChanged
+	}
 	for i := range m.repos {
 		if m.repos[i].ID != id {
 			continue
 		}
+		previousRepos := cloneRepos(m.repos)
+		previousUpdatedAt := m.updatedAt
 		m.repos[i].FetchErr = refreshErr.Error()
-		if saveErr := m.saveL(); saveErr != nil {
+		if saveErr := m.commitMutationL(previousRepos, previousUpdatedAt); saveErr != nil {
 			return fmt.Errorf("%w; save state: %v", refreshErr, saveErr)
 		}
 		return refreshErr

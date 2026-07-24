@@ -11,6 +11,7 @@
     logoUrl,
     loadingMessage,
     takingAWhile,
+    cancelVisible = false,
     onCancel,
     onClose,
   }: {
@@ -19,6 +20,7 @@
     logoUrl: string | null;
     loadingMessage: string;
     takingAWhile: boolean;
+    cancelVisible?: boolean;
     onCancel: () => void;
     onClose?: () => void;
   } = $props();
@@ -63,6 +65,8 @@
     <p class="relative z-10 mt-2 text-xs text-white/40" transition:fade={{ duration: 150 }}>
       This is taking a while…
     </p>
+  {/if}
+  {#if cancelVisible || takingAWhile}
     <Button
       variant="outline"
       size="sm"

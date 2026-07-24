@@ -33,11 +33,14 @@
   // ── Props (same contract as desktop Player + mobile-specific additions) ──────
 
   let {
-    src,
+    src = "",
     media,
+    pendingMessage = undefined,
+    onCancelPending = undefined,
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
+    fileIdx = undefined,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream: _onPlayStream = undefined,
@@ -45,11 +48,14 @@
     /** Parent registers a close-sheets callback for Escape priority handling. */
     onRegisterCloseSheets = undefined,
   }: {
-    src: string;
+    src?: string;
     media?: Media;
+    pendingMessage?: string;
+    onCancelPending?: () => void;
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
+    fileIdx?: number;
     onPlaybackFailed?: () => void;
     onPlayNext?: (season: number, episode: number) => void;
     onPlayStream?: (
@@ -62,6 +68,8 @@
     onclose?: () => void;
     onRegisterCloseSheets?: (fn: () => boolean) => void;
   } = $props();
+
+  const streamDiscoveryPending = $derived(!src && pendingMessage !== undefined);
 
   // Register close-sheets with parent for Escape priority handling.
   $effect(() => {
@@ -121,7 +129,7 @@
         Player.setVolume(Math.round($settings.defaultVolume * 100));
       }
     });
-    Player.play(api.playUrl(src, { season, episode }));
+    Player.play(api.playUrl(src, { season, episode, fileIdx }));
     untrack(() => {
       Player.setAspectMode(media ? loadAspectMode(media.id) : "fit");
       showPrefs = media ? loadShowTrackPrefs(media.id) : {};
@@ -177,7 +185,7 @@
     Player.stop();
   });
 
-  const canPlay = $derived(!switching && Player.ready && Player.duration > 0);
+  const canPlay = $derived(!!src && !switching && Player.ready && Player.duration > 0);
 
   // ── Playback-start watchdog ──────────────────────────────────────────────────
 
@@ -269,12 +277,12 @@
 
   // ── Torrent download progress (hash sources) ─────────────────────────────────
 
-  const isHash = $derived(!src.startsWith("http"));
+  const isHash = $derived(!!src && !src.startsWith("http"));
   const torrent = new TorrentProgress();
 
   $effect(() => {
-    if (!isHash) return;
-    return torrent.start(src, { season, episode });
+    if (!src || !isHash) return;
+    return torrent.start(src, { season, episode, fileIdx });
   });
 
   // ── Background next-episode prefetch ─────────────────────────────────────────
@@ -336,11 +344,13 @@
   });
 
   const loadingMessage = $derived(
-    isHash
-      ? torrent.peers > 0
-        ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
-        : "Connecting to peers…"
-      : "Buffering…",
+    streamDiscoveryPending
+      ? pendingMessage!
+      : isHash
+        ? torrent.peers > 0
+          ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
+          : "Connecting to peers…"
+        : "Buffering…",
   );
 
   // ── Logo ─────────────────────────────────────────────────────────────────────
@@ -934,7 +944,7 @@
 >
 
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
-  {#if !Player.available}
+  {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
       <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">
         Native player unavailable.
@@ -983,7 +993,7 @@
         onAdvance={advance}
       />
     {/if}
-  {:else if Player.available}
+  {:else if streamDiscoveryPending || Player.available}
     <!-- ── Loading / buffering screen ─────────────────────────────────────── -->
     <MobileLoadingScreen
       {media}
@@ -991,8 +1001,11 @@
       {logoUrl}
       {loadingMessage}
       {takingAWhile}
-      {onclose}
-      onCancel={triggerPlaybackFailed}
+      cancelVisible={streamDiscoveryPending}
+      onclose={streamDiscoveryPending ? onCancelPending : onclose}
+      onCancel={streamDiscoveryPending
+        ? (onCancelPending ?? triggerPlaybackFailed)
+        : triggerPlaybackFailed}
     />
   {/if}
 

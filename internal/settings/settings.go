@@ -343,11 +343,11 @@ func (s *Store) applyTokenPolicy(incoming Settings) Settings {
 // OnboardingDone is a monotonic flag: once true it must never be reset. There is
 // no redo-onboarding feature, so a fresh-device pull must not clobber a flag that
 // was set on another device.
-func (s *Store) MergeFrom(incoming Settings) {
+func (s *Store) MergeFrom(incoming Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !incoming.UpdatedAt.After(s.cached.UpdatedAt) {
-		return
+		return nil
 	}
 	// Always preserve device-local remote-access config (see comment above).
 	incoming.RemoteAccessEnabled = s.cached.RemoteAccessEnabled
@@ -359,8 +359,9 @@ func (s *Store) MergeFrom(incoming Settings) {
 	s.cached = incoming
 	if err := s.write(); err != nil {
 		s.cached = previous
-		log.Println("settings: merge write:", err)
+		return fmt.Errorf("settings merge persist: %w", err)
 	}
+	return nil
 }
 
 // SetProfile reloads settings from the given profile's data file.
@@ -382,7 +383,14 @@ func (s *Store) SetProfile(profileID string) error {
 	s.mu.Lock()
 	s.cached = cur
 	s.path = path
+	onChange := s.onChange
 	s.mu.Unlock()
+	if onChange != nil {
+		// Profile transitions are synchronous. The caller must not report the
+		// new profile active while device-local effects such as the LAN listener
+		// still reflect the previous profile.
+		onChange(cur)
+	}
 	return nil
 }
 

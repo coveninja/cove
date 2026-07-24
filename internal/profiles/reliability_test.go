@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -259,10 +260,51 @@ func TestActiveProfileFallbacks(t *testing.T) {
 	assert.Equal(t, Profile{}, s.ActiveProfile())
 }
 
+func TestActiveSnapshotRejectsStaleTransitions(t *testing.T) {
+	s := newStore(t)
+	active, revision := s.ActiveSnapshot()
+	assert.Equal(t, s.ActiveProfileID(), active.ID)
+
+	called := false
+	require.NoError(t, s.WithActiveSnapshot(active.ID, revision, func() error {
+		called = true
+		return nil
+	}))
+	assert.True(t, called)
+	require.ErrorIs(
+		t,
+		s.WithActiveSnapshot("other-profile", revision, func() error {
+			t.Fatal("stale snapshot callback must not run")
+			return nil
+		}),
+		ErrActiveProfileChanged,
+	)
+
+	kid, err := s.Create("Kid")
+	require.NoError(t, err)
+	require.NoError(t, s.SetActive(kid.ID))
+	require.ErrorIs(
+		t,
+		s.WithActiveSnapshot(active.ID, revision, func() error {
+			t.Fatal("superseded revision callback must not run")
+			return nil
+		}),
+		ErrActiveProfileChanged,
+	)
+
+	empty := &Store{}
+	got, gotRevision := empty.ActiveSnapshot()
+	assert.Equal(t, Profile{}, got)
+	assert.Zero(t, gotRevision)
+}
+
 func TestSetActiveSameIDIsNoOp(t *testing.T) {
 	called := make(chan string, 1)
 	s := newStore(t)
-	s.onChange = func(id string) { called <- id }
+	s.onChange = func(_ string, id string) error {
+		called <- id
+		return nil
+	}
 	forceProfileWriteFailure(t, s)
 
 	require.NoError(t, s.SetActive(s.ActiveProfileID()))
@@ -271,6 +313,60 @@ func TestSetActiveSameIDIsNoOp(t *testing.T) {
 		t.Fatalf("onChange called for no-op activation: %s", id)
 	default:
 	}
+}
+
+func TestSetActiveRollsBackWhenTransitionHookFails(t *testing.T) {
+	s := newStore(t)
+	primaryID := s.ActiveProfileID()
+	kid, err := s.Create("Kid")
+	require.NoError(t, err)
+
+	var transitions [][2]string
+	s.SetOnChange(func(previousID, profileID string) error {
+		transitions = append(transitions, [2]string{previousID, profileID})
+		if profileID == kid.ID {
+			return fmt.Errorf("corrupt target store")
+		}
+		return nil
+	})
+
+	err = s.SetActive(kid.ID)
+	require.ErrorContains(t, err, "corrupt target store")
+	assert.Equal(t, primaryID, s.ActiveProfileID())
+	assert.Equal(t, [][2]string{
+		{primaryID, kid.ID},
+		{kid.ID, primaryID},
+	}, transitions)
+
+	reloaded, reloadErr := New(nil)
+	require.NoError(t, reloadErr)
+	assert.Equal(t, primaryID, reloaded.ActiveProfileID(), "rollback must be persisted")
+}
+
+func TestDeleteActiveRollsBackBeforeRemovingFilesWhenTransitionFails(t *testing.T) {
+	s := newStore(t)
+	kid, err := s.Create("Kid")
+	require.NoError(t, err)
+	require.NoError(t, s.SetActive(kid.ID))
+
+	kidLibrary, err := utils.ConfigPath(ProfileFileName("library", kid.ID))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(kidLibrary, []byte(`{"entries":[]}`), 0o600))
+
+	s.SetOnChange(func(_, profileID string) error {
+		if profileID != kid.ID {
+			return fmt.Errorf("primary reload failed")
+		}
+		return nil
+	})
+
+	err = s.Delete(kid.ID)
+	require.ErrorContains(t, err, "primary reload failed")
+	assert.Equal(t, kid.ID, s.ActiveProfileID())
+	_, ok := s.Get(kid.ID)
+	assert.True(t, ok)
+	_, statErr := os.Stat(kidLibrary)
+	assert.NoError(t, statErr, "data files must survive a rolled-back deletion")
 }
 
 func TestMutationNotFoundErrors(t *testing.T) {
@@ -297,7 +393,10 @@ func TestMutationWriteFailuresRollBack(t *testing.T) {
 		kid, err := s.Create("Kid")
 		require.NoError(t, err)
 		called := make(chan string, 1)
-		s.onChange = func(id string) { called <- id }
+		s.onChange = func(_ string, id string) error {
+			called <- id
+			return nil
+		}
 		forceProfileWriteFailure(t, s)
 
 		assert.Error(t, s.SetActive(kid.ID))
@@ -432,7 +531,10 @@ func TestAdoptIDNonActiveProfileLeavesActiveProfileUnchanged(t *testing.T) {
 	kid, err := s.Create("Kid")
 	require.NoError(t, err)
 	called := make(chan string, 1)
-	s.onChange = func(id string) { called <- id }
+	s.onChange = func(_ string, id string) error {
+		called <- id
+		return nil
+	}
 
 	require.NoError(t, s.AdoptID(kid.ID, "adopted-kid-id"))
 	assert.Equal(t, primaryID, s.ActiveProfileID())
@@ -445,4 +547,208 @@ func TestAdoptIDNonActiveProfileLeavesActiveProfileUnchanged(t *testing.T) {
 		t.Fatalf("onChange called for non-active adoption: %s", id)
 	default:
 	}
+}
+
+func TestTransitionRollbackReportsPersistenceAndReloadFailures(t *testing.T) {
+	breakRollback := func(t *testing.T, s *Store) {
+		t.Helper()
+		blocker := filepath.Join(t.TempDir(), "not-a-directory")
+		require.NoError(t, os.WriteFile(blocker, []byte("blocked"), 0o600))
+		s.path = filepath.Join(blocker, "profiles.json")
+	}
+
+	t.Run("set active", func(t *testing.T) {
+		s := newStore(t)
+		kid, err := s.Create("Kid")
+		require.NoError(t, err)
+		s.SetOnChange(func(_, _ string) error {
+			breakRollback(t, s)
+			return fmt.Errorf("reload failed")
+		})
+
+		err = s.SetActive(kid.ID)
+		require.ErrorContains(t, err, "rollback store")
+		require.ErrorContains(t, err, "rollback reload")
+	})
+
+	t.Run("delete active", func(t *testing.T) {
+		s := newStore(t)
+		kid, err := s.Create("Kid")
+		require.NoError(t, err)
+		require.NoError(t, s.SetActive(kid.ID))
+		s.SetOnChange(func(_, _ string) error {
+			breakRollback(t, s)
+			return fmt.Errorf("reload failed")
+		})
+
+		err = s.Delete(kid.ID)
+		require.ErrorContains(t, err, "rollback store")
+		require.ErrorContains(t, err, "rollback reload")
+	})
+
+	t.Run("adopt active ID", func(t *testing.T) {
+		s := newStore(t)
+		oldID := s.ActiveProfileID()
+		s.SetOnChange(func(_, _ string) error {
+			breakRollback(t, s)
+			return fmt.Errorf("reload failed")
+		})
+
+		err := s.AdoptID(oldID, "remote-profile-id")
+		require.ErrorContains(t, err, "rollback store")
+		require.ErrorContains(t, err, "rollback reload")
+	})
+}
+
+// TestAdoptActiveIDReloadFailureRollsBackCleanly covers the branch where the
+// forward reload hook fails but both the store rollback and the reverse reload
+// succeed (profiles.go line 641): the returned error names only the original
+// reload failure, without the compound rollback suffix.
+func TestAdoptActiveIDReloadFailureRollsBackCleanly(t *testing.T) {
+	s := newStore(t)
+	oldID := s.ActiveProfileID()
+
+	var calls int
+	s.SetOnChange(func(_, _ string) error {
+		calls++
+		if calls == 1 {
+			return fmt.Errorf("forward reload failed")
+		}
+		return nil
+	})
+
+	err := s.AdoptID(oldID, "remote-profile-id")
+	require.ErrorContains(t, err, "forward reload failed")
+	assert.NotContains(t, err.Error(), "rollback store")
+	assert.Equal(t, 2, calls, "reverse reload must run after the forward failure")
+
+	// The store rolled back to the original ID and it is still active.
+	assert.Equal(t, oldID, s.ActiveProfileID())
+	_, ok := s.Get(oldID)
+	assert.True(t, ok)
+	_, ok = s.Get("remote-profile-id")
+	assert.False(t, ok)
+}
+
+// TestAdoptIDRenameFailureRollsBack covers the os.Rename error branch
+// (profiles.go lines 610-612): a read-only config directory prevents the
+// per-profile data file from being renamed to the adopted ID, so AdoptID
+// fails and leaves the source file in place.
+func TestAdoptIDRenameFailureRollsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directory denial does not apply to root")
+	}
+	s := newStore(t)
+	oldID := s.ActiveProfileID()
+
+	src, err := utils.ConfigPath(ProfileFileName("library", oldID))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(src, []byte("library"), 0o644))
+
+	// Make the config directory read-only so os.Rename cannot move the file.
+	configDir := filepath.Dir(src)
+	require.NoError(t, os.Chmod(configDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o755) })
+
+	err = s.AdoptID(oldID, "remote-profile-id")
+	require.Error(t, err)
+	assert.Equal(t, oldID, s.ActiveProfileID())
+
+	require.NoError(t, os.Chmod(configDir, 0o755))
+	data, readErr := os.ReadFile(src)
+	require.NoError(t, readErr)
+	assert.Equal(t, "library", string(data), "source file must be left in place")
+}
+
+// TestAdoptIDStatSourceErrorRollsBack covers the branch where stat-ing a
+// per-profile source file fails with an error other than "not exist"
+// (profiles.go lines 590-594): a config directory without execute permission
+// makes the source file unreachable, so AdoptID reports the stat failure.
+func TestAdoptIDStatSourceErrorRollsBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permission denial does not apply to root")
+	}
+	s := newStore(t)
+	oldID := s.ActiveProfileID()
+
+	src, err := utils.ConfigPath(ProfileFileName("library", oldID))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(src, []byte("library"), 0o644))
+
+	// Remove execute permission so the directory cannot be traversed to stat
+	// the file inside it — os.Stat returns a permission error, not NotExist.
+	configDir := filepath.Dir(src)
+	require.NoError(t, os.Chmod(configDir, 0o644))
+	t.Cleanup(func() { _ = os.Chmod(configDir, 0o755) })
+
+	err = s.AdoptID(oldID, "remote-profile-id")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, oldID, s.ActiveProfileID())
+}
+
+// TestNewReturnsWriteErrorOnFirstRun covers the first-run write-failure branch
+// in New (profiles.go lines 162-164): the config directory exists but is
+// read-only, so persisting the freshly created primary profile fails.
+func TestNewReturnsWriteErrorOnFirstRun(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directory denial does not apply to root")
+	}
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	coveDir := filepath.Join(xdg, "cove")
+	require.NoError(t, os.Mkdir(coveDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(coveDir, 0o755) })
+
+	s, err := New(nil)
+	assert.Nil(t, s)
+	assert.Error(t, err)
+}
+
+// TestNewReturnsWriteErrorWhenNormalizationPersistFails covers the branch where
+// loading an existing store requires normalization but persisting the repaired
+// store fails (profiles.go lines 182-184).
+func TestNewReturnsWriteErrorWhenNormalizationPersistFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directory denial does not apply to root")
+	}
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	// A store with two primaries needs normalization (the second is demoted),
+	// which sets changed=true and triggers a persisting write.
+	writeProfilesFixture(t, diskStore{
+		Profiles: []Profile{
+			{ID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Name: "One", IsPrimary: true},
+			{ID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Name: "Two", IsPrimary: true},
+		},
+		ActiveProfileID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+	})
+
+	coveDir := filepath.Join(xdg, "cove")
+	require.NoError(t, os.Chmod(coveDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(coveDir, 0o755) })
+
+	s, err := New(nil)
+	assert.Nil(t, s)
+	assert.Error(t, err)
+}
+
+// TestDeleteActiveFallsBackToFirstProfileWhenNoPrimary covers the defensive
+// fallback in Delete (profiles.go lines 487-489): when the active profile is
+// removed and no remaining profile is marked primary, the first remaining
+// profile becomes active. Normalization normally guarantees a primary exists,
+// so the store is seeded directly to reach this branch.
+func TestDeleteActiveFallsBackToFirstProfileWhenNoPrimary(t *testing.T) {
+	s := newStore(t)
+	s.mu.Lock()
+	s.disk.Profiles = []Profile{
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "First", IsPrimary: false},
+		{ID: "22222222-2222-2222-2222-222222222222", Name: "Second", IsPrimary: false},
+	}
+	s.disk.ActiveProfileID = "22222222-2222-2222-2222-222222222222"
+	s.mu.Unlock()
+
+	require.NoError(t, s.Delete("22222222-2222-2222-2222-222222222222"))
+	assert.Equal(t, "11111111-1111-1111-1111-111111111111", s.ActiveProfileID(),
+		"deleting the active profile with no primary must fall back to the first remaining profile")
 }

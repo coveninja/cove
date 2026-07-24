@@ -33,8 +33,10 @@
   // ─── Props (unchanged from the old Player) ──────────────────────────────────
 
   let {
-    src,
+    src = "",
     media,
+    pendingMessage = undefined,
+    onCancelPending = undefined,
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
@@ -43,8 +45,12 @@
     onPlayNext = undefined,
     onPlayStream = undefined,
   }: {
-    src: string;
+    src?: string;
     media?: Media;
+    /** Pre-session quick-play status. When present without src, this player
+     * owns the stream-discovery loading state before native playback starts. */
+    pendingMessage?: string;
+    onCancelPending?: () => void;
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
@@ -81,6 +87,7 @@
   // when a component uses <svelte:window>, causing bare `onclose?.()` to be
   // inferred as `(ev: Event) => void` instead of `() => void`.
   const _onclose = $derived(onclose as (() => void) | undefined);
+  const streamDiscoveryPending = $derived(!src && pendingMessage !== undefined);
 
   // ─── Playback lifecycle ─────────────────────────────────────────────────────
 
@@ -239,7 +246,7 @@
   });
   let switching = $state(false);
 
-  const canPlay = $derived(!switching && Player.ready && Player.duration > 0)
+  const canPlay = $derived(!!src && !switching && Player.ready && Player.duration > 0)
 
   // ─── Playback-start watchdog (B2) ───────────────────────────────────────────
   // If a stream never actually starts — a dead torrent with no peers, a dead
@@ -409,11 +416,11 @@
 
   // ─── Torrent download progress (SSE, hash sources only) ──────────────────────
 
-  const isHash = $derived(!src.startsWith("http"));
+  const isHash = $derived(!!src && !src.startsWith("http"));
   const torrent = new TorrentProgress();
 
   $effect(() => {
-    if (!isHash) return;
+    if (!src || !isHash) return;
     return torrent.start(src, { season, episode, fileIdx });
   });
 
@@ -489,11 +496,13 @@
   });
 
   const loadingMessage = $derived(
-          isHash
-                  ? torrent.peers > 0
-                          ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
-                          : "Connecting to peers…"
-                  : "Buffering…",
+          streamDiscoveryPending
+            ? pendingMessage!
+            : isHash
+              ? torrent.peers > 0
+                ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
+                : "Connecting to peers…"
+              : "Buffering…",
   );
 
   let logoUrl = $state<string | null>(null);
@@ -1076,7 +1085,7 @@
         onwheel={(e) => { if (!menuOpen) nudgeVolume(e.deltaY < 0 ? 5 : -5); }}
 >
   <!-- ── Bridge unavailable (running outside the Cove shell) ─────────────────── -->
-  {#if !Player.available}
+  {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
       <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">
         Native player unavailable — run inside the Cove desktop app.
@@ -1154,15 +1163,18 @@
   {/if}
 
   <!-- ── Loading screen ─────────────────────────────────────────────────────── -->
-  {#if Player.available && !canPlay}
+  {#if streamDiscoveryPending || (Player.available && !canPlay)}
     <LoadingScreen
       {media}
       {title}
       {logoUrl}
       {loadingMessage}
       {takingAWhile}
-      onCancel={triggerPlaybackFailed}
-      onClose={_onclose}
+      cancelVisible={streamDiscoveryPending}
+      onCancel={streamDiscoveryPending
+        ? (onCancelPending ?? triggerPlaybackFailed)
+        : triggerPlaybackFailed}
+      onClose={streamDiscoveryPending ? onCancelPending : _onclose}
     />
   {/if}
 </div>

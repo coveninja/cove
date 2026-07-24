@@ -8,9 +8,11 @@ package supabase
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,6 +68,11 @@ type Server struct {
 // After the push completes (success or partial failure), lastPushErr and
 // lastPushAt are updated so the next handleSync response can surface them.
 func (s *Server) pushAsync(userJWT, profileID, context string) {
+	activeProfile, profileRevision := s.profileStore.ActiveSnapshot()
+	if activeProfile.ID != profileID {
+		s.recordPushResult("profile changed before push started")
+		return
+	}
 	if !s.pushQueued.CompareAndSwap(false, true) {
 		return
 	}
@@ -75,6 +82,22 @@ func (s *Server) pushAsync(userJWT, profileID, context string) {
 		s.pushQueued.Store(false)
 
 		var pushErrs []string
+		stale := false
+		run := func(label string, fn func() error) {
+			if stale {
+				return
+			}
+			err := s.profileStore.WithActiveSnapshot(profileID, profileRevision, fn)
+			if errors.Is(err, profiles.ErrActiveProfileChanged) {
+				stale = true
+				pushErrs = append(pushErrs, "profile changed while push was in flight")
+				return
+			}
+			if err != nil {
+				log.Println(context+": push "+label+":", err)
+				pushErrs = append(pushErrs, label+": "+err.Error())
+			}
+		}
 
 		// Read the library generation before PushLibrary reads entries: if a
 		// mutation lands mid-push the counter will be bumped again, ensuring
@@ -82,65 +105,62 @@ func (s *Server) pushAsync(userJWT, profileID, context string) {
 		// Skip the full-library upsert when nothing has changed since the last
 		// successful push. With 60 s frontend polling this avoids an otherwise
 		// constant stream of full-library upserts on an idle desktop.
-		gen := s.lib.Generation()
-		if s.lastPushedGenOK && gen == s.lastPushedGen && profileID == s.lastPushedProfile {
-			// library unchanged; skip PushLibrary this cycle
-		} else if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
-			log.Println(context+": push library:", err)
-			pushErrs = append(pushErrs, "library: "+err.Error())
-		} else {
+		run("library", func() error {
+			gen := s.lib.Generation()
+			if s.lastPushedGenOK && gen == s.lastPushedGen && profileID == s.lastPushedProfile {
+				return nil
+			}
+			if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
+				return err
+			}
 			s.lastPushedGen = gen
 			s.lastPushedGenOK = true
 			s.lastPushedProfile = profileID
-		}
-		if err := s.cfg.PushSettings(userJWT, profileID, s.st); err != nil {
-			log.Println(context+": push settings:", err)
-			pushErrs = append(pushErrs, "settings: "+err.Error())
-		}
-		if err := s.cfg.PushAddons(userJWT, profileID, s.addonMgr); err != nil {
-			log.Println(context+": push addons:", err)
-			pushErrs = append(pushErrs, "addons: "+err.Error())
-		}
+			return nil
+		})
+		run("settings", func() error {
+			return s.cfg.PushSettings(userJWT, profileID, s.st)
+		})
+		run("addons", func() error {
+			return s.cfg.PushAddons(userJWT, profileID, s.addonMgr)
+		})
 		if s.nuvioMgr != nil {
-			if err := s.cfg.PushNuvio(userJWT, profileID, s.nuvioMgr); err != nil {
-				log.Println(context+": push nuvio:", err)
-				pushErrs = append(pushErrs, "nuvio: "+err.Error())
-			}
+			run("nuvio", func() error {
+				return s.cfg.PushNuvio(userJWT, profileID, s.nuvioMgr)
+			})
 		}
 		if s.activityStore != nil {
-			if err := s.cfg.PushActivity(userJWT, profileID, s.activityStore); err != nil {
-				log.Println(context+": push activity:", err)
-				pushErrs = append(pushErrs, "activity: "+err.Error())
-			}
+			run("activity", func() error {
+				return s.cfg.PushActivity(userJWT, profileID, s.activityStore)
+			})
 		}
 
-		active := s.profileStore.ActiveProfile()
-		if active.SupabaseUID != nil {
-			nameTS := active.NameUpdatedAt
+		if activeProfile.SupabaseUID != nil {
+			nameTS := activeProfile.NameUpdatedAt
 			if nameTS.IsZero() {
 				nameTS = time.Now()
 			}
-			if err := s.cfg.EnsureProfile(userJWT, active.ID, *active.SupabaseUID, active.Name, active.IsPrimary, nameTS); err != nil {
-				log.Println(context+": push profile name:", err)
-				pushErrs = append(pushErrs, "profile: "+err.Error())
-			}
+			run("profile", func() error {
+				return s.cfg.EnsureProfile(
+					userJWT,
+					activeProfile.ID,
+					*activeProfile.SupabaseUID,
+					activeProfile.Name,
+					activeProfile.IsPrimary,
+					nameTS,
+				)
+			})
 		}
 
-		var joined string
-		if len(pushErrs) > 0 {
-			for i, e := range pushErrs {
-				if i > 0 {
-					joined += "; "
-				}
-				joined += e
-			}
-		}
-
-		s.pushErrMu.Lock()
-		s.lastPushErr = joined
-		s.lastPushAt = time.Now()
-		s.pushErrMu.Unlock()
+		s.recordPushResult(strings.Join(pushErrs, "; "))
 	}()
+}
+
+func (s *Server) recordPushResult(result string) {
+	s.pushErrMu.Lock()
+	s.lastPushErr = result
+	s.lastPushAt = time.Now()
+	s.pushErrMu.Unlock()
 }
 
 // NewServer creates the auth handler set. cfg may be nil (Supabase not configured),
@@ -272,11 +292,17 @@ func (s *Server) finishRegistration(w http.ResponseWriter, userID, accessToken, 
 		profileName = activeProfile.Name
 	}
 
-	if err := s.profileStore.LinkSupabase(activeProfile.ID, userID); err != nil {
-		log.Println("supabase register: link profile:", err)
-	}
 	if err := s.cfg.EnsureProfile(accessToken, activeProfile.ID, userID, profileName, activeProfile.IsPrimary, time.Now()); err != nil {
 		http.Error(w, "could not create remote profile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.profileStore.LinkSupabase(activeProfile.ID, userID); err != nil {
+		// Do not report registration success with an unpersisted local link.
+		// Best-effort remote cleanup keeps a failed local transaction retryable.
+		if cleanupErr := s.cfg.DeleteProfileData(accessToken, activeProfile.ID); cleanupErr != nil {
+			log.Println("supabase register: roll back remote profile:", cleanupErr)
+		}
+		http.Error(w, "could not link local profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -402,7 +428,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.profileStore.UnlinkSupabase(s.profileStore.ActiveProfile().ID); err != nil {
-		log.Println("supabase logout: unlink:", err)
+		http.Error(w, "could not unlink local profile: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -553,47 +580,82 @@ func (s *Server) CleanupDeletedProfile(userJWT, profileID string, supabaseUID *s
 
 // mergeRemote pulls all Supabase data for a user and merges it into the active profile.
 func (s *Server) mergeRemote(supabaseUID, userJWT string) error {
+	original := s.profileStore.ActiveProfile()
 	active, err := s.reconcileProfile(supabaseUID, userJWT)
 	if err != nil {
 		return err
 	}
 
-	// Link UID to profile if not already set.
-	if active.SupabaseUID == nil {
-		if err := s.profileStore.LinkSupabase(active.ID, supabaseUID); err != nil {
-			return fmt.Errorf("link profile: %w", err)
-		}
-	}
-
 	pulled, err := s.cfg.PullAll(userJWT, active.ID)
 	if err != nil {
+		s.rollbackReconciliation(original, active)
 		return fmt.Errorf("pull remote data: %w", err)
 	}
 
-	s.lib.MergeFrom(pulled.Entries, pulled.Progress, pulled.Dismissals, pulled.Removals)
-
-	if pulled.Settings != nil {
-		s.st.MergeFrom(*pulled.Settings)
-	}
-
-	// Addons: guard against no-remote-row so an account that never pushed
-	// addons doesn't wipe locally configured ones.
-	if pulled.AddonsPresent {
-		s.addonMgr.MergeFrom(pulled.Addons, pulled.AddonsUpdatedAt)
-	}
-
-	// Nuvio: guard against no-remote-row.
-	if pulled.NuvioPresent && s.nuvioMgr != nil && len(pulled.NuvioData) > 0 {
-		if err := s.nuvioMgr.MergeFromJSON(pulled.NuvioData, pulled.NuvioUpdatedAt); err != nil {
-			log.Println("supabase: merge nuvio:", err)
+	_, revision := s.profileStore.ActiveSnapshot()
+	err = s.profileStore.WithActiveSnapshot(active.ID, revision, func() error {
+		if err := s.lib.MergeFrom(pulled.Entries, pulled.Progress, pulled.Dismissals, pulled.Removals); err != nil {
+			return err
 		}
+
+		if pulled.Settings != nil {
+			if err := s.st.MergeFrom(*pulled.Settings); err != nil {
+				return err
+			}
+		}
+
+		// Addons: guard against no-remote-row so an account that never pushed
+		// addons doesn't wipe locally configured ones.
+		if pulled.AddonsPresent {
+			if err := s.addonMgr.MergeFrom(pulled.Addons, pulled.AddonsUpdatedAt); err != nil {
+				return err
+			}
+		}
+
+		// Nuvio: guard against no-remote-row.
+		if pulled.NuvioPresent && s.nuvioMgr != nil && len(pulled.NuvioData) > 0 {
+			if err := s.nuvioMgr.MergeFromJSON(pulled.NuvioData, pulled.NuvioUpdatedAt); err != nil {
+				return fmt.Errorf("merge nuvio: %w", err)
+			}
+		}
+
+		// Activity: guard against no-remote-row.
+		if pulled.ActivityPresent && s.activityStore != nil && len(pulled.ActivityData) > 0 {
+			if err := s.activityStore.MergeFromJSON(pulled.ActivityData); err != nil {
+				return fmt.Errorf("merge activity: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.rollbackReconciliation(original, active)
+		return fmt.Errorf("apply remote data: %w", err)
 	}
 
-	// Activity: guard against no-remote-row.
-	if pulled.ActivityPresent && s.activityStore != nil && len(pulled.ActivityData) > 0 {
-		if err := s.activityStore.MergeFromJSON(pulled.ActivityData); err != nil {
-			log.Println("supabase: merge activity:", err)
+	// Link only after the initial pull has been applied durably. A failed pull
+	// must leave a guest profile retryable rather than half-signed-in.
+	if active.SupabaseUID == nil {
+		if err := s.profileStore.LinkSupabase(active.ID, supabaseUID); err != nil {
+			s.rollbackReconciliation(original, active)
+			return fmt.Errorf("link profile: %w", err)
 		}
 	}
 	return nil
+}
+
+func (s *Server) rollbackReconciliation(original, reconciled profiles.Profile) {
+	current := s.profileStore.ActiveProfile()
+	if current.ID != original.ID && current.ID == reconciled.ID {
+		if err := s.profileStore.AdoptID(current.ID, original.ID); err != nil {
+			log.Println("supabase: roll back adopted profile:", err)
+			return
+		}
+	}
+	current = s.profileStore.ActiveProfile()
+	if current.ID == original.ID &&
+		(current.Name != original.Name || !current.NameUpdatedAt.Equal(original.NameUpdatedAt)) {
+		if err := s.profileStore.RenameFromRemote(original.ID, original.Name, original.NameUpdatedAt); err != nil {
+			log.Println("supabase: roll back profile name:", err)
+		}
+	}
 }

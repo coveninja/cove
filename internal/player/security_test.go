@@ -1,6 +1,7 @@
 package player
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,9 +40,18 @@ func TestValidateInfoHash(t *testing.T) {
 
 func TestGetTorrentFileRejectsInvalidHashBeforeUsingClient(t *testing.T) {
 	p := &Player{}
-	_, err := p.getTorrentFile("../../outside", nil, nil, nil)
+	_, err := p.getTorrentFile(context.Background(), "../../outside", nil, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid infohash")
+}
+
+func TestGetTorrentFileHonorsCanceledRequestBeforeUsingClient(t *testing.T) {
+	p := &Player{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.getTorrentFile(ctx, "0123456789abcdef0123456789abcdef01234567", nil, nil, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRemoveTorrentDataEntryRemovesContainedTarget(t *testing.T) {

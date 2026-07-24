@@ -25,11 +25,9 @@
   import { api, setTokenSource } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
   import { startAutoSync } from "$lib/sync";
-  import { Spinner } from "$lib/components/ui/spinner";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
   import { navigate, focusFirst, editableKeepsArrow } from "./focus/focusStore.svelte";
-  import { X } from "lucide-svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -187,15 +185,6 @@
       currentPage = previousPage;
     }
   }
-
-  // ── quickPlayPending cancel button ref (autofocus when overlay appears) ──────
-  let cancelBtn = $state<HTMLButtonElement | null>(null);
-
-  $effect(() => {
-    if (playback.quickPlayPending && cancelBtn) {
-      cancelBtn.focus();
-    }
-  });
 
   // ── TvPlayer sheet-close hook for Escape priority ────────────────────────────
   // TvPlayer (M6) registers this via onRegisterCloseSheets; returns true if it
@@ -493,56 +482,8 @@
         </div>
       </div>
 
-      <!-- quickPlayPending overlay: covers the gap between a Watch press and
-           playerSession being set, before the player can show its own loading UI.
-           Poster image (or title text) + spinner — restyled slightly larger
-           than mobile for 10-foot viewing. -->
-      {#if playback.quickPlayPending && !playback.playerSession}
-        <div
-          class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black"
-          transition:fade={{ duration: 150 }}
-        >
-          {#if playback.quickPlayPending.media.poster_path}
-            <div
-              class="absolute inset-0 scale-110 bg-cover bg-center"
-              style="background-image: url('{playback.quickPlayPending.media
-                .poster_path}'); filter: blur(5px); opacity: 0.35;"
-            ></div>
-            <div class="absolute inset-0 bg-black/65"></div>
-            <img
-              src={playback.quickPlayPending.media.poster_path}
-              alt={playback.quickPlayPending.media.media_type === "tv"
-                ? playback.quickPlayPending.media.name
-                : playback.quickPlayPending.media.title}
-              class="relative z-10 h-72 w-48 rounded-xl object-cover shadow-2xl"
-            />
-          {:else}
-            <div class="absolute inset-0 bg-black/65"></div>
-            <span class="relative z-10 px-8 text-center text-4xl font-bold text-white">
-              {playback.quickPlayPending.media.media_type === "tv"
-                ? playback.quickPlayPending.media.name
-                : playback.quickPlayPending.media.title}
-            </span>
-          {/if}
-          <Spinner class="relative z-10 mt-8 size-12" />
-          <p class="relative z-10 mt-4 text-base text-white/50">
-            {playback.quickPlayPending.message}
-          </p>
-          <button
-            bind:this={cancelBtn}
-            type="button"
-            class="relative z-10 mt-8 flex items-center gap-2 rounded-full border border-white/25 px-6 py-3 text-base text-white/70 transition hover:bg-white/10 hover:text-white"
-            onclick={() => playback.cancelQuickPlay()}
-            aria-label="Cancel"
-          >
-            <X class="size-5" />
-            Cancel
-          </button>
-        </div>
-      {/if}
-
       <!-- TV Player (M6) -->
-      {#if playback.playerSession}
+      {#if playback.playerSession || (playback.quickPlayPending && !playback.playerSession)}
         <div
           class="absolute inset-0 z-30 overflow-hidden"
           transition:scale={{
@@ -553,15 +494,22 @@
           }}
         >
           <TvPlayer
-            src={playback.playerSession.stream.infoHash ||
-              (playback.playerSession.stream.headers
-                ? api.playProxyUrl(playback.playerSession.stream.url)
-                : playback.playerSession.stream.url)}
-            media={playback.playerSession.media}
-            externalSubtitles={playback.playerSession.subtitles}
-            season={playback.playerSession.season}
-            episode={playback.playerSession.episode}
-            fileIdx={playback.playerSession.stream.fileIdx}
+            src={playback.playerSession
+              ? playback.playerSession.stream.infoHash ||
+                (playback.playerSession.stream.headers
+                  ? api.playProxyUrl(playback.playerSession.stream.url)
+                  : playback.playerSession.stream.url)
+              : ""}
+            media={playback.playerSession?.media ??
+              playback.quickPlayPending?.media}
+            pendingMessage={!playback.playerSession
+              ? playback.quickPlayPending?.message
+              : undefined}
+            onCancelPending={() => playback.cancelQuickPlay()}
+            externalSubtitles={playback.playerSession?.subtitles ?? []}
+            season={playback.playerSession?.season}
+            episode={playback.playerSession?.episode}
+            fileIdx={playback.playerSession?.stream.fileIdx}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;

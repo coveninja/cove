@@ -439,6 +439,27 @@ describe("PlaybackStore", () => {
     expect(playerMock.setFullscreen).not.toHaveBeenCalled();
   });
 
+  it("exits waitForRetry immediately when the signal is already aborted on entry", async () => {
+    // Covers waitForRetry's line-19 early-exit: if cancelQuickPlay() fires
+    // while the fetch Promise is resolving (inside the mock), the abort signal
+    // is already set by the time waitForRetry is called after an empty result.
+    // The function must return a resolved Promise immediately without
+    // registering a timer, so the loop exits cleanly on the next iteration's
+    // aborted check rather than waiting 2 s.
+    const store = new PlaybackStore();
+    apiMock.getStreams.mockImplementation(() => {
+      // Abort during mock execution so the signal is set before waitForRetry.
+      store.cancelQuickPlay();
+      return Promise.resolve([]);
+    });
+
+    await store.quickPlay(media(99));
+
+    expect(apiMock.getStreams).toHaveBeenCalledOnce();
+    expect(store.quickPlayPending).toBeNull();
+    expect(store.playerSession).toBeNull();
+  });
+
   it("cancels a pending quick play and clears its overlay", async () => {
     const store = new PlaybackStore();
     let signal: AbortSignal | undefined;

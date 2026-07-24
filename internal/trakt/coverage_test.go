@@ -544,3 +544,48 @@ func TestRunDeviceFlowTerminalStates(t *testing.T) {
 		assert.Equal(t, int32(3), calls.Load())
 	})
 }
+
+// TestReadTokenStateReturnsNonNotExistReadError covers the ReadFile error path
+// in readTokenState (store.go lines 53-55): a directory at the token path makes
+// os.ReadFile fail with an error other than "not exist".
+func TestReadTokenStateReturnsNonNotExistReadError(t *testing.T) {
+	configRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	dir := filepath.Join(configRoot, "cove")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "trakt-isdir.json"), 0o755))
+
+	_, err := newStore("isdir")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, os.ErrNotExist)
+}
+
+// TestDoWriteThrottlesConsecutiveWrites covers the write-throttle sleep in
+// doWrite (client.go line 116): a second write issued within the write
+// interval sleeps for the remaining time.
+func TestDoWriteThrottlesConsecutiveWrites(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	store := testStore(t)
+	require.NoError(t, store.Save(tokenState{
+		AccessToken: "token", ExpiresAt: time.Now().Add(time.Hour),
+	}))
+	client := newClient("id", "secret", store)
+	client.baseURL = srv.URL
+	client.writeInterval = time.Hour
+	var slept []time.Duration
+	client.sleep = func(d time.Duration) { slept = append(slept, d) }
+
+	resp, err := client.doWrite(http.MethodPost, "/sync/history", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+	resp, err = client.doWrite(http.MethodPost, "/sync/history", nil)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	require.Len(t, slept, 1, "only the second consecutive write should throttle")
+	assert.Positive(t, slept[0])
+}

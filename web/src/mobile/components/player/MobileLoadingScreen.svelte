@@ -10,6 +10,7 @@
     logoUrl,
     loadingMessage,
     takingAWhile,
+    cancelVisible = false,
     onclose,
     onCancel,
   }: {
@@ -18,6 +19,7 @@
     logoUrl: string | null;
     loadingMessage: string;
     takingAWhile: boolean;
+    cancelVisible?: boolean;
     onclose?: () => void;
     onCancel: () => void;
   } = $props();
@@ -65,6 +67,8 @@
     >
       This is taking a while…
     </p>
+  {/if}
+  {#if cancelVisible || takingAWhile}
     <button
       type="button"
       class="relative z-10 mt-4 rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"

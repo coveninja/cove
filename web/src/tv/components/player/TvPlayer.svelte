@@ -32,8 +32,10 @@
   // ── Props (identical contract to MobilePlayer) ──────────────────────────────
 
   let {
-    src,
+    src = "",
     media,
+    pendingMessage = undefined,
+    onCancelPending = undefined,
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
@@ -44,8 +46,10 @@
     onclose = undefined,
     onRegisterCloseSheets = undefined,
   }: {
-    src: string;
+    src?: string;
     media?: Media;
+    pendingMessage?: string;
+    onCancelPending?: () => void;
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
@@ -65,6 +69,8 @@
     onclose?: () => void;
     onRegisterCloseSheets?: (fn: () => boolean) => void;
   } = $props();
+
+  const streamDiscoveryPending = $derived(!src && pendingMessage !== undefined);
 
   // Register close-sheets with parent for Escape priority handling.
   $effect(() => {
@@ -186,7 +192,7 @@
     Player.stop();
   });
 
-  const canPlay = $derived(!switching && Player.ready && Player.duration > 0);
+  const canPlay = $derived(!!src && !switching && Player.ready && Player.duration > 0);
 
   // ── Playback-start watchdog ──────────────────────────────────────────────────
 
@@ -278,11 +284,11 @@
 
   // ── Torrent download progress (hash sources) ─────────────────────────────────
 
-  const isHash = $derived(!src.startsWith("http"));
+  const isHash = $derived(!!src && !src.startsWith("http"));
   const torrent = new TorrentProgress();
 
   $effect(() => {
-    if (!isHash) return;
+    if (!src || !isHash) return;
     return torrent.start(src, { season, episode, fileIdx });
   });
 
@@ -340,11 +346,13 @@
   });
 
   const loadingMessage = $derived(
-    isHash
-      ? torrent.peers > 0
-        ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
-        : "Connecting to peers…"
-      : "Buffering…",
+    streamDiscoveryPending
+      ? pendingMessage!
+      : isHash
+        ? torrent.peers > 0
+          ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
+          : "Connecting to peers…"
+        : "Buffering…",
   );
 
   // ── Logo ─────────────────────────────────────────────────────────────────────
@@ -1056,7 +1064,7 @@
 <div class="relative h-full w-full overflow-hidden">
 
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
-  {#if !Player.available}
+  {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
       <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">
         Native player unavailable.
@@ -1112,14 +1120,17 @@
 
   {:else}
     <!-- ── Loading / buffering screen ───────────────────────────────────────── -->
-    {#if Player.available}
+    {#if streamDiscoveryPending || Player.available}
       <TvLoadingScreen
         {media}
         {title}
         {logoUrl}
         {loadingMessage}
         {takingAWhile}
-        onCancel={() => triggerPlaybackFailed()}
+        cancelVisible={streamDiscoveryPending}
+        onCancel={streamDiscoveryPending
+          ? (onCancelPending ?? triggerPlaybackFailed)
+          : triggerPlaybackFailed}
       />
     {/if}
   {/if}

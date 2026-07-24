@@ -12,6 +12,7 @@ import (
 
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/utils"
+	"golang.org/x/sync/singleflight"
 )
 
 // maxConcurrentScrapers bounds how many goja runtimes run at once for a
@@ -32,11 +33,12 @@ const overallDeadline = 25 * time.Second
 // tygo emits nothing for Manager — only the data types (Repo, Scraper, etc.)
 // cross into the generated TS.
 type Manager struct {
-	mu        sync.RWMutex
-	repos     []Repo
-	updatedAt time.Time // last local mutation time; used for LWW sync resolution
-	client    *http.Client
-	storePath string
+	mu             sync.RWMutex
+	repos          []Repo
+	updatedAt      time.Time // last local mutation time; used for LWW sync resolution
+	configRevision uint64    // rejects stale network-backed registry mutations
+	client         *http.Client
+	storePath      string
 
 	// Results cache (E1). Running goja + third-party scrapers is expensive
 	// (up to overallDeadline per call), so repeat opens of the same title —
@@ -46,6 +48,7 @@ type Manager struct {
 	streamCacheMu   sync.Mutex
 	streamCache     map[string]nuvioStreamCacheEntry
 	cacheGeneration uint64
+	streamSF        singleflight.Group
 }
 
 // nuvioStreamCacheEntry is one cached GetStreams result, pre-expiry.
@@ -178,6 +181,7 @@ func (m *Manager) SetProfile(profileID string) error {
 	m.storePath = path
 	m.repos = store.Repos
 	m.updatedAt = store.UpdatedAt
+	m.configRevision++
 	m.mu.Unlock()
 	m.invalidateStreamCache()
 	return nil
@@ -187,8 +191,12 @@ func (m *Manager) SetProfile(profileID string) error {
 func (m *Manager) GetRepos() []Repo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	repos := make([]Repo, len(m.repos))
-	copy(repos, m.repos)
+	return cloneRepos(m.repos)
+}
+
+func cloneRepos(source []Repo) []Repo {
+	repos := make([]Repo, len(source))
+	copy(repos, source)
 	for i := range repos {
 		repos[i].Scrapers = append([]Scraper(nil), repos[i].Scrapers...)
 		for j := range repos[i].Scrapers {
@@ -222,11 +230,29 @@ func (m *Manager) HasEnabledScrapers() bool {
 // saveL persists the current state and stamps updatedAt to now. Must be
 // called with m.mu write-locked.
 func (m *Manager) saveL() error {
+	nextUpdatedAt := time.Now().UTC()
 	if m.storePath == "" {
+		m.updatedAt = nextUpdatedAt
 		return nil
 	}
-	m.updatedAt = time.Now().UTC()
-	return saveStore(m.storePath, nuvioStore{Repos: m.repos, UpdatedAt: m.updatedAt})
+	if err := saveStore(m.storePath, nuvioStore{Repos: m.repos, UpdatedAt: nextUpdatedAt}); err != nil {
+		return err
+	}
+	m.updatedAt = nextUpdatedAt
+	return nil
+}
+
+// commitMutationL persists a registry mutation, rolling the in-memory state
+// back when persistence fails. Must be called with m.mu write-locked.
+func (m *Manager) commitMutationL(previousRepos []Repo, previousUpdatedAt time.Time) error {
+	if err := m.saveL(); err != nil {
+		m.repos = previousRepos
+		m.updatedAt = previousUpdatedAt
+		return err
+	}
+	m.configRevision++
+	m.invalidateStreamCache()
+	return nil
 }
 
 // SnapshotJSON marshals the whole nuvio store and returns it along with the
@@ -247,21 +273,31 @@ func (m *Manager) SnapshotJSON() ([]byte, time.Time) {
 // contributing results immediately.
 func (m *Manager) MergeFromJSON(data []byte, remoteUpdatedAt time.Time) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !remoteUpdatedAt.After(m.updatedAt) {
+		m.mu.Unlock()
 		return nil
 	}
 	var s nuvioStore
 	if err := json.Unmarshal(data, &s); err != nil {
+		m.mu.Unlock()
 		return err
 	}
+	previousRepos := cloneRepos(m.repos)
+	previousUpdatedAt := m.updatedAt
 	m.repos = s.Repos
 	m.updatedAt = remoteUpdatedAt
-	m.invalidateStreamCache()
-	if m.storePath == "" {
-		return nil
+	if m.storePath != "" {
+		if err := saveStore(m.storePath, nuvioStore{Repos: m.repos, UpdatedAt: remoteUpdatedAt}); err != nil {
+			m.repos = previousRepos
+			m.updatedAt = previousUpdatedAt
+			m.mu.Unlock()
+			return err
+		}
 	}
-	return saveStore(m.storePath, nuvioStore{Repos: m.repos, UpdatedAt: remoteUpdatedAt})
+	m.configRevision++
+	m.mu.Unlock()
+	m.invalidateStreamCache()
+	return nil
 }
 
 // enabledScraper pairs a scraper with the repo it came from, snapshotted
@@ -290,6 +326,45 @@ func (m *Manager) GetStreams(ctx context.Context, mediaType string, tmdbID int, 
 	}
 	cacheGeneration := m.cacheGenerationSnapshot()
 
+	// Include the cache generation in the flight key. A repo/profile mutation
+	// invalidates the cache while an old scrape may still be running; callers
+	// after that mutation must start a new scrape instead of joining obsolete
+	// work.
+	flightKey := fmt.Sprintf("%d|%s", cacheGeneration, key)
+	resultCh := m.streamSF.DoChan(flightKey, func() (interface{}, error) {
+		if streams, ok := m.streamCacheGet(key); ok {
+			return streams, nil
+		}
+		// The scrape is shared by all waiters, so one disconnected request must
+		// not cancel work that the other waiters and cache still need. The
+		// operation retains its own overallDeadline below.
+		return m.getStreamsUncached(
+			context.Background(), key, cacheGeneration,
+			mediaType, tmdbID, imdbID, title, year, season, episode,
+		), nil
+	})
+
+	select {
+	case result := <-resultCh:
+		if result.Err != nil || result.Val == nil {
+			return nil
+		}
+		return cloneStreams(result.Val.([]addons.Stream))
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+func (m *Manager) getStreamsUncached(
+	ctx context.Context,
+	key string,
+	cacheGeneration uint64,
+	mediaType string,
+	tmdbID int,
+	imdbID, title string,
+	year int,
+	season, episode *int,
+) []addons.Stream {
 	m.mu.RLock()
 	var scrapers []enabledScraper
 	for _, r := range m.repos {

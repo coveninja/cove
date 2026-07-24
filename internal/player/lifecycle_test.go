@@ -3,16 +3,19 @@ package player
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/coveninja/cove/internal/settings"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +50,14 @@ func addFakeHash(t *testing.T, p *Player, hash string, st *torrentState) {
 
 // ─── New / Close ─────────────────────────────────────────────────────────────
 
+// TestCloseNilPlayerDoesNotPanic verifies that Close() on a nil *Player is a
+// safe no-op — the nil guard at the top of Close() runs before any field
+// access. This exercises lines 313-314 of player.go.
+func TestCloseNilPlayerDoesNotPanic(t *testing.T) {
+	var p *Player
+	p.Close() // must not panic
+}
+
 // TestNewAndClose verifies that New constructs a Player with a real torrent
 // client and that Close is idempotent (calling it twice must not panic).
 func TestNewAndClose(t *testing.T) {
@@ -58,6 +69,19 @@ func TestNewAndClose(t *testing.T) {
 
 	p.Close()
 	p.Close() // second close must be a no-op
+}
+
+func TestCloseIsSafeWhenCalledConcurrently(t *testing.T) {
+	p := newTestPlayer(t)
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.Close()
+		}()
+	}
+	wg.Wait()
 }
 
 // TestNewUsesSuppliedDataDir verifies that the dataDir parameter is
@@ -641,4 +665,123 @@ func TestSubtitleProxyHandlerValidation(t *testing.T) {
 	// with a transport error and the handler returns 502 Bad Gateway.
 	rec = serve(mux, http.MethodGet, "/api/subtitle-proxy?url=http://127.0.0.1/sub.vtt", "")
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
+
+	rec = serve(mux, http.MethodPost, "/api/subtitle-proxy?url=https://subs.example/sub.vtt", "")
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestSubtitleProxyRejectsUpstreamErrorsAndOversizedBodies(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSubtitleResponse(rec, &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("missing")),
+	})
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Contains(t, rec.Body.String(), "HTTP 404")
+
+	rec = httptest.NewRecorder()
+	writeSubtitleResponse(rec, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", (10<<20)+1))),
+	})
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
+type subtitleReadCloser struct {
+	readErr  error
+	closeErr error
+}
+
+type subtitleErrorWriter struct {
+	header http.Header
+}
+
+func (w *subtitleErrorWriter) Header() http.Header {
+	return w.header
+}
+
+func (*subtitleErrorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("client write failed")
+}
+
+func (*subtitleErrorWriter) WriteHeader(int) {}
+
+func (r subtitleReadCloser) Read([]byte) (int, error) {
+	return 0, r.readErr
+}
+
+func (r subtitleReadCloser) Close() error {
+	return r.closeErr
+}
+
+// TestSubtitleProxySuccessCallsWriteSubtitleResponse verifies that when the
+// upstream subtitle fetch succeeds, the handler passes the response body to
+// writeSubtitleResponse and the caller receives processed subtitle content.
+// utils.SafeHTTPClient is temporarily replaced with a plain *http.Client so
+// the local test server (127.0.0.1) is not rejected by SafeTransport's SSRF
+// check. This exercises line 1664 of player.go.
+func TestSubtitleProxySuccessCallsWriteSubtitleResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nTest subtitle"))
+	}))
+	defer upstream.Close()
+
+	// Swap SafeHTTPClient so the handler can reach the local test server; restore
+	// it when the test exits so other tests are unaffected.
+	old := utils.SafeHTTPClient
+	utils.SafeHTTPClient = &http.Client{}
+	defer func() { utils.SafeHTTPClient = old }()
+
+	_, mux := handlerPlayer(nil, nil, nil)
+	rec := serve(mux, http.MethodGet, "/api/subtitle-proxy?url="+upstream.URL+"/sub.vtt", "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/vtt; charset=utf-8", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Body.String(), "WEBVTT")
+}
+
+func TestWriteSubtitleResponseConvertsAndHandlesUpstreamIO(t *testing.T) {
+	t.Run("keeps WebVTT", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeSubtitleResponse(rec, &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("WEBVTT\n\n00:00.000 --> 00:01.000\nHi")),
+		})
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "text/vtt; charset=utf-8", rec.Header().Get("Content-Type"))
+		assert.Equal(t, "WEBVTT\n\n00:00.000 --> 00:01.000\nHi", rec.Body.String())
+	})
+
+	t.Run("converts SRT", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeSubtitleResponse(rec, &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("1\n00:00:00,000 --> 00:00:01,000\nHi")),
+		})
+		assert.Contains(t, rec.Body.String(), "WEBVTT")
+		assert.Contains(t, rec.Body.String(), "00:00:00.000 --> 00:00:01.000")
+	})
+
+	t.Run("read and close errors", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeSubtitleResponse(rec, &http.Response{
+			StatusCode: http.StatusOK,
+			Body: subtitleReadCloser{
+				readErr:  errors.New("upstream read failed"),
+				closeErr: errors.New("upstream close failed"),
+			},
+		})
+		assert.Equal(t, http.StatusBadGateway, rec.Code)
+		assert.Contains(t, rec.Body.String(), "upstream read failed")
+	})
+
+	t.Run("client write error", func(t *testing.T) {
+		writer := &subtitleErrorWriter{header: make(http.Header)}
+		writeSubtitleResponse(writer, &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("WEBVTT")),
+		})
+		assert.Equal(t, "text/vtt; charset=utf-8", writer.header.Get("Content-Type"))
+	})
 }

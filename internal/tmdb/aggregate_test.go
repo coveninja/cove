@@ -36,6 +36,26 @@ func TestCatalogCache_HitAndSeparation(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestCatalogCache_DeepCopiesNestedMediaFields(t *testing.T) {
+	c := New("key")
+	source := []Media{{ID: 1, Images: []string{"one"}, GenreIDs: []int{7}}}
+	c.catalogCacheSet("nested", source, 0)
+	source[0].Images[0] = "source-mutated"
+	source[0].GenreIDs[0] = 99
+
+	first, _, ok := c.catalogCacheGet("nested")
+	require.True(t, ok)
+	assert.Equal(t, []string{"one"}, first[0].Images)
+	assert.Equal(t, []int{7}, first[0].GenreIDs)
+	first[0].Images[0] = "caller-mutated"
+	first[0].GenreIDs[0] = 42
+
+	second, _, ok := c.catalogCacheGet("nested")
+	require.True(t, ok)
+	assert.Equal(t, []string{"one"}, second[0].Images)
+	assert.Equal(t, []int{7}, second[0].GenreIDs)
+}
+
 func TestCatalogCache_ExpiredEntryIsMiss(t *testing.T) {
 	c := New("key")
 	// Plant an already-expired entry directly so we don't have to wait for TTL.
@@ -99,6 +119,25 @@ func TestSearch_MergesAndFiltersNoPoster(t *testing.T) {
 	}
 	assert.Contains(t, mediaTypes, "movie")
 	assert.Contains(t, mediaTypes, "tv")
+}
+
+func TestSearchKeepsMovieAndTVWithSameNumericID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/search/movie") {
+			fmt.Fprint(w, `{"results":[{"id":7,"title":"Movie","poster_path":"/movie.jpg","popularity":2}]}`)
+		} else {
+			fmt.Fprint(w, `{"results":[{"id":7,"name":"Series","poster_path":"/tv.jpg","popularity":1}]}`)
+		}
+	}))
+	defer srv.Close()
+	withTestBaseURL(t, srv)
+
+	results, err := New("key").Search("collision")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "movie", results[0].MediaType)
+	assert.Equal(t, "tv", results[1].MediaType)
 }
 
 func TestSearch_DecodeErrorPropagates(t *testing.T) {
@@ -818,6 +857,23 @@ func TestGetPerson_HappyPathBuildsPersonDetails(t *testing.T) {
 	assert.Len(t, pd.Credits, 2)
 	// Credits are popularity-sorted: Show (9.0) before Movie (5.0).
 	assert.Equal(t, 2, pd.Credits[0].ID)
+}
+
+func TestGetPersonKeepsMovieAndTVWithSameNumericID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"id":7,"name":"Actor","combined_credits":{"cast":[
+			{"id":5,"title":"Movie","media_type":"movie","poster_path":"/m.jpg","popularity":2},
+			{"id":5,"name":"Series","media_type":"tv","poster_path":"/t.jpg","popularity":1}
+		]}}`)
+	}))
+	defer srv.Close()
+	withTestBaseURL(t, srv)
+
+	person, err := New("key").GetPerson(7)
+	require.NoError(t, err)
+	require.Len(t, person.Credits, 2)
+	assert.Equal(t, "movie", person.Credits[0].MediaType)
+	assert.Equal(t, "tv", person.Credits[1].MediaType)
 }
 
 // ── GetSeasons ────────────────────────────────────────────────────────────────

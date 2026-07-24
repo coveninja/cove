@@ -39,9 +39,8 @@ export class PlaybackStore {
   playerSession = $state<PlayerSession | null>(null);
   playerMode = $state<"full" | null>(null);
 
-  // Covers the gap between a "Watch" click and playerSession being set — the
-  // fetchStreamsWithRetry/rankStreams/tvEpisodes work in quickPlay, none of
-  // which shows anything today.
+  // Pre-session stream-discovery state. The platform Player mounts with this
+  // state, then stays mounted as quickPlay hands it the resolved session/src.
   quickPlayPending = $state<{ media: Media; message: string } | null>(null);
 
   // Tiny inline toast — mirrors Player.svelte's own "feedback flash" pattern

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/coveninja/cove/internal/library"
@@ -30,6 +31,11 @@ type SyncWorker struct {
 	tmdb     *tmdb.Client
 
 	notify chan struct{}
+
+	// profileMu is shared with Server.SetProfileAndReload. A sync cycle holds a
+	// read lock for its full pull/apply/push sequence; profile reload takes the
+	// write lock, so neither tokens nor library stores can change mid-cycle.
+	profileMu *sync.RWMutex
 }
 
 func newSyncWorker(
@@ -40,12 +46,13 @@ func newSyncWorker(
 	tmdbClient *tmdb.Client,
 ) *SyncWorker {
 	return &SyncWorker{
-		client:   client,
-		store:    store,
-		lib:      lib,
-		settings: st,
-		tmdb:     tmdbClient,
-		notify:   make(chan struct{}, 1),
+		client:    client,
+		store:     store,
+		lib:       lib,
+		settings:  st,
+		tmdb:      tmdbClient,
+		notify:    make(chan struct{}, 1),
+		profileMu: &sync.RWMutex{},
 	}
 }
 
@@ -91,6 +98,9 @@ func (sw *SyncWorker) Run(ctx context.Context) {
 // runCycle performs one full sync: pull history + watchlist from Trakt, push
 // local completed progress + watch_later entries. Additive only — never deletes.
 func (sw *SyncWorker) runCycle() {
+	sw.profileMu.RLock()
+	defer sw.profileMu.RUnlock()
+
 	st := sw.settings.Get()
 	if !st.TraktSyncEnabled {
 		return

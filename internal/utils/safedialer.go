@@ -71,7 +71,11 @@ func isPublicAddr(addr netip.Addr) bool {
 func SafeTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		// Do not inherit HTTP_PROXY/HTTPS_PROXY for untrusted URLs. A proxy is
+		// itself the dial target, so allowing one here would validate the proxy's
+		// address instead of the user-supplied destination and let the proxy
+		// reach loopback/LAN services on our behalf.
+		Proxy: nil,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {

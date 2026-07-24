@@ -15,10 +15,10 @@ export default mergeConfig(
       coverage: {
         provider: "v8",
         reporter: ["text", "json-summary", "lcov"],
-        // Measure the whole TS surface, not a hand-picked subset — otherwise
-        // untested modules never appear in the denominator and coverage can
-        // never regress. Excludes are generated or vendored code only.
-        include: ["src/**/*.ts"],
+        // Measure both logic modules and Svelte components. Omitting .svelte
+        // files made the report look healthy while most of the UI was absent
+        // from the denominator. Excludes are generated or vendored code only.
+        include: ["src/**/*.{ts,svelte}"],
         exclude: [
           "src/lib/types/**", // tygo-generated from Go structs
           "src/lib/components/ui/**", // vendored shadcn-svelte

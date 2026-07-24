@@ -29,8 +29,6 @@
   import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import { startAutoSync } from "$lib/sync";
-  import { Spinner } from "$lib/components/ui/spinner";
-  import { X } from "lucide-svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
   // avoiding any $effect timing gap between auth state changing and the token
@@ -463,63 +461,12 @@
         </div>
       </div>
 
-      {#if playback.quickPlayPending && !playback.playerSession}
-        <!--
-          Covers the gap between a "Watch" click and playerSession being set,
-          i.e. before <PlayerComponent> even mounts (and before its own
-          "Connecting to peers…"/"Buffering…" loading screen can show
-          anything). Mirrors that loading screen's visual style — blurred
-          poster backdrop, Spinner, status text — for a seamless handoff.
-        -->
-        <div
-          class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black"
-          transition:fade={{ duration: 150 }}
-        >
-          {#if playback.quickPlayPending.media.poster_path}
-            <div
-              class="absolute inset-0 scale-110 bg-cover bg-center"
-              style="background-image: url('{playback.quickPlayPending.media
-                .poster_path}'); filter: blur(5px); opacity: 0.35;"
-            ></div>
-            <div class="absolute inset-0 bg-black/65"></div>
-            <img
-              src={playback.quickPlayPending.media.poster_path}
-              alt={playback.quickPlayPending.media.media_type === "tv"
-                ? playback.quickPlayPending.media.name
-                : playback.quickPlayPending.media.title}
-              class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
-            />
-          {:else}
-            <div class="absolute inset-0 bg-black/65"></div>
-            <span
-              class="relative z-10 px-8 text-center text-3xl font-bold text-white"
-            >
-              {playback.quickPlayPending.media.media_type === "tv"
-                ? playback.quickPlayPending.media.name
-                : playback.quickPlayPending.media.title}
-            </span>
-          {/if}
-          <Spinner class="relative z-10 mt-6 size-10" />
-          <p class="relative z-10 mt-4 text-sm text-white/50">
-            {playback.quickPlayPending.message}
-          </p>
-          <button
-            type="button"
-            class="relative z-10 mt-6 flex items-center gap-2 rounded-full border border-white/20 px-4 py-2 text-sm text-white/60 transition hover:bg-white/10 hover:text-white"
-            onclick={() => playback.cancelQuickPlay()}
-            aria-label="Cancel"
-          >
-            <X class="size-4" />
-            Cancel
-          </button>
-        </div>
-      {/if}
-
-      {#if playback.playerSession}
+      {#if playback.playerSession || (playback.quickPlayPending && !playback.playerSession)}
         <!--
           One single <Player> instance overlaying the page full-screen. The page
           underneath is only hidden (not unmounted), so its state/scroll survive;
-          closing the player reveals it again.
+          closing the player reveals it again. It mounts during stream discovery
+          so the same loading screen owns the entire watch-to-playback handoff.
         -->
         <div
           class="absolute inset-0 z-30 overflow-hidden rounded-xl shadow-2xl"
@@ -534,15 +481,22 @@
                through the backend proxy — mpv fetching the raw URL directly
                would drop the Referer/Origin the host requires. -->
           <PlayerComponent
-            src={playback.playerSession.stream.infoHash ||
-              (playback.playerSession.stream.headers
-                ? api.playProxyUrl(playback.playerSession.stream.url)
-                : playback.playerSession.stream.url)}
-            media={playback.playerSession.media}
-            externalSubtitles={playback.playerSession.subtitles}
-            season={playback.playerSession.season}
-            episode={playback.playerSession.episode}
-            fileIdx={playback.playerSession.stream.fileIdx}
+            src={playback.playerSession
+              ? playback.playerSession.stream.infoHash ||
+                (playback.playerSession.stream.headers
+                  ? api.playProxyUrl(playback.playerSession.stream.url)
+                  : playback.playerSession.stream.url)
+              : ""}
+            media={playback.playerSession?.media ??
+              playback.quickPlayPending?.media}
+            pendingMessage={!playback.playerSession
+              ? playback.quickPlayPending?.message
+              : undefined}
+            onCancelPending={() => playback.cancelQuickPlay()}
+            externalSubtitles={playback.playerSession?.subtitles ?? []}
+            season={playback.playerSession?.season}
+            episode={playback.playerSession?.episode}
+            fileIdx={playback.playerSession?.stream.fileIdx}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;

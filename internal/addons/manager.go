@@ -702,11 +702,11 @@ func (m *Manager) UpdatedAt() time.Time {
 // Guard: an account that has never pushed addons will have no remote row; the
 // caller must distinguish "no remote row" from "remote row with empty list" and
 // pass entries = nil / call this method only when a remote row is present.
-func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) {
+func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !remoteUpdatedAt.After(m.updatedAt) {
-		return
+		return nil
 	}
 	previous := m.snapshotL()
 	// Rebuild from the pulled entries.
@@ -732,9 +732,10 @@ func (m *Manager) MergeFrom(entries []AddonEntry, remoteUpdatedAt time.Time) {
 			UpdatedAt:       remoteUpdatedAt,
 		}); err != nil {
 			m.restoreL(previous)
-			log.Println("addons: MergeFrom persist:", err)
+			return fmt.Errorf("addons merge persist: %w", err)
 		}
 	}
+	return nil
 }
 
 // detectKind classifies an addon as a stream provider or subtitle provider based
