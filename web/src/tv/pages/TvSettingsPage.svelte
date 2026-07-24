@@ -17,7 +17,7 @@
     Scraper as NuvioScraper,
   } from "$lib/types/nuvio";
   import { focusGroup, focusable } from "../focus/actions";
-  import { TriangleAlert, RefreshCw, Trash2 } from "lucide-svelte";
+  import { TriangleAlert, RefreshCw, Trash2, Cog, X } from "lucide-svelte";
 
   // ── Section navigation ────────────────────────────────────────────────────────
   type SectionId =
@@ -160,6 +160,21 @@
       );
     } catch (e) {
       console.error("handleToggleCatalog failed", e);
+    }
+  }
+
+  let refreshingAddonId = $state<string | null>(null);
+  let configureAddon = $state<AddonEntry | null>(null);
+
+  async function handleRefreshAddon(addon: AddonEntry) {
+    refreshingAddonId = addon.id;
+    try {
+      await api.refreshAddon(addon.id, addon.url);
+      await loadAddons();
+    } catch (e) {
+      console.error("handleRefreshAddon failed", e);
+    } finally {
+      refreshingAddonId = null;
     }
   }
 
@@ -1205,8 +1220,35 @@
                     <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(addon.enabled)}"></span>
                   </button>
 
-                  <!-- Remove button (Stremio addons only) -->
+                  <!-- Configure / Refresh / Remove (Stremio addons only) -->
                   {#if addon.source !== SourceOfficial}
+                    {#if addon.manifest.behaviorHints?.configurable}
+                      <button
+                        type="button"
+                        onclick={() => (configureAddon = addon)}
+                        title="Configure"
+                        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
+                               transition-colors hover:text-foreground
+                               focus:outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        <Cog class="size-5" />
+                      </button>
+                    {/if}
+                    <button
+                      type="button"
+                      onclick={() => handleRefreshAddon(addon)}
+                      disabled={refreshingAddonId === addon.id}
+                      title="Refresh"
+                      class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
+                             transition-colors hover:text-foreground disabled:opacity-50
+                             focus:outline-none focus:ring-2 focus:ring-accent"
+                    >
+                      <RefreshCw
+                        class="size-5 {refreshingAddonId === addon.id
+                          ? 'animate-spin'
+                          : ''}"
+                      />
+                    </button>
                     <button
                       type="button"
                       onclick={() => handleRemoveAddon(addon)}
@@ -1440,3 +1482,65 @@
     </div><!-- /settings-content -->
   </div><!-- /right panel -->
 </div>
+
+{#if configureAddon}
+  <!-- Configure addon overlay (TV) -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) configureAddon = null;
+    }}
+    onkeydown={(e) => {
+      if (e.key === "Escape") configureAddon = null;
+    }}
+  >
+    <div
+      class="relative flex w-[90vw] max-w-5xl flex-col rounded-2xl border border-border bg-background shadow-2xl"
+      style="height: 85vh;"
+    >
+      <!-- Header -->
+      <div
+        class="flex shrink-0 items-center justify-between border-b border-border px-5 py-4"
+      >
+        <span class="truncate text-base font-semibold">
+          {configureAddon.manifest.name || configureAddon.url}
+        </span>
+        <button
+          type="button"
+          class="ml-3 shrink-0 rounded-xl p-2 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+          onclick={() => (configureAddon = null)}
+          aria-label="Close"
+        >
+          <X class="size-5" />
+        </button>
+      </div>
+
+      <!-- Hint -->
+      <p class="shrink-0 px-5 py-2 text-sm text-muted-foreground">
+        After configuring, copy the generated manifest URL and paste it into
+        "Add Stremio addon" above.
+      </p>
+
+      <!-- iframe -->
+      <div class="min-h-0 flex-1 px-5 pb-3">
+        <iframe
+          src={`${configureAddon.url}/configure`}
+          class="h-full w-full rounded-xl border border-border"
+          title="Addon configuration"
+        ></iframe>
+      </div>
+
+      <!-- Fallback link -->
+      <div class="shrink-0 px-5 pb-4 text-sm text-muted-foreground">
+        <a
+          href={`${configureAddon.url}/configure`}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-primary underline">Open in browser</a
+        >
+        — some addons can't be configured in-app.
+      </div>
+    </div>
+  </div>
+{/if}

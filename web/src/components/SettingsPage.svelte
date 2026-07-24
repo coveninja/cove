@@ -36,6 +36,8 @@
     EyeOff,
     Copy,
     Check as CheckIcon,
+    Cog,
+    X,
   } from "lucide-svelte";
   import type {
     Repo as NuvioRepo,
@@ -170,6 +172,21 @@
       );
     } catch (e) {
       console.error("handleToggleCatalog failed", e);
+    }
+  }
+
+  let refreshingAddonId = $state<string | null>(null);
+  let configureAddon = $state<AddonEntry | null>(null);
+
+  async function handleRefreshAddon(addon: AddonEntry) {
+    refreshingAddonId = addon.id;
+    try {
+      await api.refreshAddon(addon.id, addon.url);
+      await loadAddons();
+    } catch (e) {
+      console.error("handleRefreshAddon failed", e);
+    } finally {
+      refreshingAddonId = null;
     }
   }
 
@@ -1387,8 +1404,31 @@
                     class="shrink-0"
                   />
 
-                  <!-- Remove (stremio only) -->
+                  <!-- Configure / Refresh / Remove (stremio only) -->
                   {#if addon.source !== SourceOfficial}
+                    {#if addon.manifest.behaviorHints?.configurable}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="shrink-0 text-muted-foreground"
+                        onclick={() => (configureAddon = addon)}
+                        title="Configure"
+                      >
+                        <Cog class="size-4" />
+                      </Button>
+                    {/if}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="shrink-0 text-muted-foreground"
+                      onclick={() => handleRefreshAddon(addon)}
+                      disabled={refreshingAddonId === addon.id}
+                      title="Refresh"
+                    >
+                      <RefreshCw
+                        class={`size-4 ${refreshingAddonId === addon.id ? "animate-spin" : ""}`}
+                      />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -1799,3 +1839,65 @@
     {/if}
   </div>
 </ScrollArea>
+
+{#if configureAddon}
+  <!-- Configure addon overlay -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) configureAddon = null;
+    }}
+    onkeydown={(e) => {
+      if (e.key === "Escape") configureAddon = null;
+    }}
+  >
+    <div
+      class="relative flex w-[90vw] max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl"
+      style="height: 85vh;"
+    >
+      <!-- Header -->
+      <div
+        class="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
+      >
+        <span class="truncate text-sm font-medium">
+          {configureAddon.manifest.name || configureAddon.url}
+        </span>
+        <button
+          type="button"
+          class="ml-3 shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+          onclick={() => (configureAddon = null)}
+          aria-label="Close"
+        >
+          <X class="size-4" />
+        </button>
+      </div>
+
+      <!-- Hint -->
+      <p class="shrink-0 px-4 py-2 text-xs text-muted-foreground">
+        After configuring, copy the generated manifest URL and paste it into
+        "Add Stremio addon" above.
+      </p>
+
+      <!-- iframe -->
+      <div class="min-h-0 flex-1 px-4 pb-2">
+        <iframe
+          src={`${configureAddon.url}/configure`}
+          class="h-full w-full rounded border border-border"
+          title="Addon configuration"
+        ></iframe>
+      </div>
+
+      <!-- Fallback link -->
+      <div class="shrink-0 px-4 pb-3 text-xs text-muted-foreground">
+        <a
+          href={`${configureAddon.url}/configure`}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-primary underline">Open in browser</a
+        >
+        — some addons can't be configured in-app.
+      </div>
+    </div>
+  </div>
+{/if}
