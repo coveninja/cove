@@ -1,6 +1,7 @@
 package player
 
 import (
+	"context"
 	"io"
 	"strings"
 	"sync"
@@ -101,15 +102,15 @@ func TestGetTorrentFileReusesMetadataAndHonorsFileIdx(t *testing.T) {
 		{path: "Show.S01E02.mkv", data: strings.Repeat("2", 30)},
 	})
 
-	selected, err := p.getTorrentFile(hash, intp(1), intp(1), intp(1))
+	selected, err := p.getTorrentFile(context.Background(), hash, intp(1), intp(1), intp(1))
 	require.NoError(t, err)
 	assert.Equal(t, "Show.S01E02.mkv", selected.DisplayPath(), "fileIdx takes priority over episode matching")
 
-	selected, err = p.getTorrentFile(hash, intp(1), intp(2), intp(99))
+	selected, err = p.getTorrentFile(context.Background(), hash, intp(1), intp(2), intp(99))
 	require.NoError(t, err)
 	assert.Equal(t, "Show.S01E02.mkv", selected.DisplayPath(), "invalid fileIdx falls back to episode matching")
 	assert.Error(t, func() error {
-		_, err := p.getTorrentFile("not-a-hash", nil, nil, nil)
+		_, err := p.getTorrentFile(context.Background(), "not-a-hash", nil, nil, nil)
 		return err
 	}())
 }
@@ -167,6 +168,7 @@ func TestGetProgressUsesSelectedFileAndRefreshesOnlyActiveReaders(t *testing.T) 
 	progress = p.GetProgress(hash, intp(1), intp(1), intp(99))
 	assert.Equal(t, int64(20), progress["totalBytes"], "invalid fileIdx should fall back to episode matching")
 	assert.Equal(t, false, p.GetProgress("missing", nil, nil, nil)["found"])
+	assert.Equal(t, true, p.GetProgress(strings.ToUpper(hash), nil, nil, nil)["found"])
 }
 
 func TestGetProgressWithoutMetadataOrVideoFiles(t *testing.T) {

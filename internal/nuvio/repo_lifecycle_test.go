@@ -194,6 +194,59 @@ func TestSetScraperEnabledFetchesCachesAndReusesCode(t *testing.T) {
 	assert.Equal(t, 1, fetches, "cached scraper code should be reused")
 }
 
+func TestInFlightScraperEnableCannotOverrideLaterDisable(t *testing.T) {
+	manager := testManager(t)
+	manager.repos = []Repo{{
+		ID: "owner/repo", Owner: "owner", Name: "repo", Branch: "main", Enabled: true,
+		Scrapers: []Scraper{{ID: "working", Name: "Working", Filename: "working.js"}},
+	}}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+		return nuvioResponse(http.StatusOK, `module.exports = {getStreams: () => []};`), nil
+	})}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- manager.SetScraperEnabled(context.Background(), "owner/repo", "working", true)
+	}()
+	<-started
+	require.NoError(t, manager.SetScraperEnabled(context.Background(), "owner/repo", "working", false))
+	close(release)
+
+	require.ErrorIs(t, <-result, errRegistryChanged)
+	scraper := manager.GetRepos()[0].Scrapers[0]
+	assert.False(t, scraper.Enabled)
+	assert.Empty(t, scraper.Code)
+}
+
+func TestInFlightAddRepoCannotMutateNewProfile(t *testing.T) {
+	manager := testManager(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+		return nuvioResponse(http.StatusOK, scraperManifest("1.0.0", "scraper.js")), nil
+	})}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.AddRepo(context.Background(), "https://github.com/owner/repo/tree/main")
+		result <- err
+	}()
+	<-started
+	require.NoError(t, manager.SetProfile("second"))
+	close(release)
+
+	require.ErrorIs(t, <-result, errRegistryChanged)
+	assert.Empty(t, manager.GetRepos())
+	reloaded := New("second")
+	assert.Empty(t, reloaded.GetRepos())
+}
+
 func TestRefreshRepoRecordsFailuresAndUpdatesEnabledScrapers(t *testing.T) {
 	manager := testManager(t)
 	manager.repos = []Repo{{

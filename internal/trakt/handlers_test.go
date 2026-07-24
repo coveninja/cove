@@ -80,6 +80,7 @@ func newHandlerServerAt(t *testing.T, baseURL string) *Server {
 		lib:        lib,
 		settings:   st,
 		syncWorker: sw,
+		profileMu:  sw.profileMu,
 	}
 }
 

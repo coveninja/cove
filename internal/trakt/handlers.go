@@ -46,6 +46,7 @@ type Server struct {
 	lib        *library.Library
 	settings   *settings.Store
 	syncWorker *SyncWorker
+	profileMu  *sync.RWMutex
 
 	// Device-flow backend polling state. All fields guarded by flowMu.
 	flowMu     sync.Mutex
@@ -71,6 +72,7 @@ func New(cfg Config, profileID string, lib *library.Library, st *settings.Store,
 		lib:        lib,
 		settings:   st,
 		syncWorker: sw,
+		profileMu:  sw.profileMu,
 	}
 }
 
@@ -78,9 +80,21 @@ func New(cfg Config, profileID string, lib *library.Library, st *settings.Store,
 // Any in-flight device-flow polling loop is cancelled — the flow was for the
 // old profile and must not authorize the new one.
 func (s *Server) SetProfile(profileID string) error {
+	return s.SetProfileAndReload(profileID, nil)
+}
+
+// SetProfileAndReload holds the Trakt sync-cycle write lock while the caller
+// reloads every other profile-scoped store. This closes the gap where a cycle
+// could use one profile's token with another profile's library.
+func (s *Server) SetProfileAndReload(profileID string, reload func() error) error {
+	s.profileMu.Lock()
+	defer s.profileMu.Unlock()
 	s.cancelFlow("idle")
 	if err := s.store.SetProfile(profileID); err != nil {
 		return err
+	}
+	if reload != nil {
+		return reload()
 	}
 	return nil
 }
@@ -261,6 +275,8 @@ func (s *Server) handleScrobble(w http.ResponseWriter, r *http.Request) {
 
 	// Fire async — never block the player on a network call.
 	go func() {
+		s.profileMu.RLock()
+		defer s.profileMu.RUnlock()
 		if err := s.client.EnsureValidToken(); err != nil {
 			log.Println("trakt: scrobble ensure token:", err)
 			return

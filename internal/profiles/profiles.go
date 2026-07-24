@@ -26,6 +26,8 @@ import (
 // (ProfileFileName), so the character set must exclude path separators and "..".
 var validProfileID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+var ErrActiveProfileChanged = fmt.Errorf("active profile changed while operation was in flight")
+
 const maxProfileRequestBytes = 64 << 10
 
 // Profile is one named identity within a Cove installation. A single Supabase
@@ -46,11 +48,13 @@ type diskStore struct {
 
 // Store owns the profile list and the currently active profile ID.
 type Store struct {
-	mu       sync.RWMutex
-	disk     diskStore
-	path     string
-	onChange func(profileID string)                                      // called when active profile switches
-	onDelete func(profileID string, supabaseUID *string, userJWT string) // called after deletion for remote cleanup
+	mu           sync.RWMutex
+	transitionMu sync.Mutex
+	disk         diskStore
+	path         string
+	revision     uint64
+	onChange     func(previousID, profileID string) error                    // called when active profile switches
+	onDelete     func(profileID string, supabaseUID *string, userJWT string) // called after deletion for remote cleanup
 }
 
 func cloneProfile(p Profile) Profile {
@@ -133,7 +137,13 @@ func normalizeDiskStore(d *diskStore) (bool, error) {
 // AdoptID invoke it synchronously, while deletion invokes it asynchronously.
 // The caller should reload library, settings, and addons for the new ID.
 func New(onChange func(profileID string)) (*Store, error) {
-	s := &Store{onChange: onChange}
+	s := &Store{}
+	if onChange != nil {
+		s.onChange = func(_ string, profileID string) error {
+			onChange(profileID)
+			return nil
+		}
+	}
 
 	path, err := utils.ConfigPath("profiles.json")
 	if err != nil {
@@ -183,6 +193,20 @@ func New(onChange func(profileID string)) (*Store, error) {
 		}
 	}
 	return s, nil
+}
+
+// SetOnChange installs a transactional active-profile transition hook.
+//
+// The hook receives the previous and requested profile IDs. If it returns an
+// error, Store restores the previous active ID on disk and invokes the hook in
+// the reverse direction so callers can restore any subsystem state they changed
+// before detecting the failure.
+func (s *Store) SetOnChange(fn func(previousID, profileID string) error) {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+	s.mu.Lock()
+	s.onChange = fn
+	s.mu.Unlock()
 }
 
 // migrateLegacyFiles renames legacy single-user files to profile-scoped names.
@@ -240,6 +264,39 @@ func (s *Store) ActiveProfileID() string {
 	return s.disk.ActiveProfileID
 }
 
+// ActiveSnapshot returns the active profile and a transition revision. The
+// transition lock closes the window where profiles.json has changed but
+// profile-scoped stores are still reloading.
+func (s *Store) ActiveSnapshot() (Profile, uint64) {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, p := range s.disk.Profiles {
+		if p.ID == s.disk.ActiveProfileID {
+			return cloneProfile(p), s.revision
+		}
+	}
+	return Profile{}, s.revision
+}
+
+// WithActiveSnapshot runs fn only while the requested active profile revision
+// is still current. Profile transitions wait for fn, preventing a caller from
+// reading one profile's live stores and labelling the result with another
+// profile ID.
+func (s *Store) WithActiveSnapshot(profileID string, revision uint64, fn func() error) error {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+	s.mu.RLock()
+	currentID := s.disk.ActiveProfileID
+	currentRevision := s.revision
+	s.mu.RUnlock()
+	if currentID != profileID || currentRevision != revision {
+		return ErrActiveProfileChanged
+	}
+	return fn()
+}
+
 // All returns a snapshot of all profiles.
 func (s *Store) All() []Profile {
 	s.mu.RLock()
@@ -270,6 +327,9 @@ func (s *Store) Get(id string) (Profile, bool) {
 
 // SetActive switches to the given profile ID and triggers onChange.
 func (s *Store) SetActive(id string) error {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	s.mu.Lock()
 	found := false
 	for _, p := range s.disk.Profiles {
@@ -287,6 +347,7 @@ func (s *Store) SetActive(id string) error {
 		return nil
 	}
 	before := cloneDiskStore(s.disk)
+	previousID := s.disk.ActiveProfileID
 	s.disk.ActiveProfileID = id
 	if err := s.write(); err != nil {
 		s.disk = before
@@ -296,8 +357,21 @@ func (s *Store) SetActive(id string) error {
 	onChange := s.onChange
 	s.mu.Unlock()
 	if onChange != nil {
-		onChange(id)
+		if err := onChange(previousID, id); err != nil {
+			s.mu.Lock()
+			s.disk = before
+			rollbackErr := s.write()
+			s.mu.Unlock()
+			reloadErr := onChange(id, previousID)
+			if rollbackErr != nil || reloadErr != nil {
+				return fmt.Errorf("switch profile: %w (rollback store: %v; rollback reload: %v)", err, rollbackErr, reloadErr)
+			}
+			return fmt.Errorf("switch profile: %w", err)
+		}
 	}
+	s.mu.Lock()
+	s.revision++
+	s.mu.Unlock()
 	return nil
 }
 
@@ -376,9 +450,12 @@ func (s *Store) UnlinkSupabase(profileID string) error {
 
 // Delete removes a profile and its per-profile data files from disk. Returns
 // an error if the profile does not exist or is the primary profile. If the
-// deleted profile was active, the primary profile becomes active and onChange
-// is fired asynchronously.
+// deleted profile was active, the primary profile becomes active through the
+// same synchronous, reversible transition used by SetActive.
 func (s *Store) Delete(id string) error {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	s.mu.Lock()
 	idx := -1
 	for i, p := range s.disk.Profiles {
@@ -420,6 +497,25 @@ func (s *Store) Delete(id string) error {
 	onChange := s.onChange
 	s.mu.Unlock()
 
+	if wasActive && onChange != nil {
+		if err := onChange(id, newActiveID); err != nil {
+			s.mu.Lock()
+			s.disk = before
+			rollbackErr := s.write()
+			s.mu.Unlock()
+			reloadErr := onChange(newActiveID, id)
+			if rollbackErr != nil || reloadErr != nil {
+				return fmt.Errorf("delete profile: switch active profile: %w (rollback store: %v; rollback reload: %v)", err, rollbackErr, reloadErr)
+			}
+			return fmt.Errorf("delete profile: switch active profile: %w", err)
+		}
+	}
+	if wasActive {
+		s.mu.Lock()
+		s.revision++
+		s.mu.Unlock()
+	}
+
 	for _, base := range []string{"library", "settings", "addons", "nuvio", "activity"} {
 		path, err := utils.ConfigPath(ProfileFileName(base, id))
 		if err != nil {
@@ -430,9 +526,6 @@ func (s *Store) Delete(id string) error {
 		}
 	}
 
-	if wasActive && onChange != nil {
-		go onChange(newActiveID)
-	}
 	return nil
 }
 
@@ -443,6 +536,9 @@ func (s *Store) Delete(id string) error {
 // synchronously so the caller can merge remote data into the reloaded stores
 // as soon as this returns.
 func (s *Store) AdoptID(oldID, newID string) error {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	if !validProfileID.MatchString(newID) {
 		return fmt.Errorf("invalid profile id %q", newID)
 	}
@@ -532,7 +628,23 @@ func (s *Store) AdoptID(oldID, newID string) error {
 	onChange := s.onChange
 	s.mu.Unlock()
 	if isActive && onChange != nil {
-		onChange(newID)
+		if err := onChange(oldID, newID); err != nil {
+			s.mu.Lock()
+			s.disk = before
+			rollbackStoreErr := s.write()
+			s.mu.Unlock()
+			rollbackMoves()
+			reloadErr := onChange(newID, oldID)
+			if rollbackStoreErr != nil || reloadErr != nil {
+				return fmt.Errorf("adopt profile id: reload: %w (rollback store: %v; rollback reload: %v)", err, rollbackStoreErr, reloadErr)
+			}
+			return fmt.Errorf("adopt profile id: reload: %w", err)
+		}
+	}
+	if isActive {
+		s.mu.Lock()
+		s.revision++
+		s.mu.Unlock()
 	}
 	return nil
 }

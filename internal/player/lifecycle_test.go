@@ -3,11 +3,13 @@ package player
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +60,19 @@ func TestNewAndClose(t *testing.T) {
 
 	p.Close()
 	p.Close() // second close must be a no-op
+}
+
+func TestCloseIsSafeWhenCalledConcurrently(t *testing.T) {
+	p := newTestPlayer(t)
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.Close()
+		}()
+	}
+	wg.Wait()
 }
 
 // TestNewUsesSuppliedDataDir verifies that the dataDir parameter is
@@ -641,4 +656,32 @@ func TestSubtitleProxyHandlerValidation(t *testing.T) {
 	// with a transport error and the handler returns 502 Bad Gateway.
 	rec = serve(mux, http.MethodGet, "/api/subtitle-proxy?url=http://127.0.0.1/sub.vtt", "")
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
+
+	rec = serve(mux, http.MethodPost, "/api/subtitle-proxy?url=https://subs.example/sub.vtt", "")
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestSubtitleProxyRejectsUpstreamErrorsAndOversizedBodies(t *testing.T) {
+	oldClient := subtitleHTTPClient
+	t.Cleanup(func() { subtitleHTTPClient = oldClient })
+	var status = http.StatusNotFound
+	var body io.Reader = strings.NewReader("missing")
+	subtitleHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(body),
+			Request:    r,
+		}, nil
+	})}
+	_, mux := handlerPlayer(nil, nil, nil)
+
+	rec := serve(mux, http.MethodGet, "/api/subtitle-proxy?url=https://subs.example/sub.vtt", "")
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Contains(t, rec.Body.String(), "HTTP 404")
+
+	status = http.StatusOK
+	body = io.LimitReader(strings.NewReader(strings.Repeat("x", (10<<20)+1)), (10<<20)+1)
+	rec = serve(mux, http.MethodGet, "/api/subtitle-proxy?url=https://subs.example/sub.vtt", "")
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }

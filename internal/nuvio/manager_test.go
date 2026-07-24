@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,6 +213,59 @@ func TestGetStreamsRunsEnabledScraperAndCachesResult(t *testing.T) {
 	cached := m.GetStreams(context.Background(), "movie", 22, "tt22", "Example", 2025, nil, nil)
 	require.Len(t, cached, 1)
 	assert.Equal(t, "source", cached[0].Name)
+}
+
+func TestGetStreamsCoalescesConcurrentColdCacheMisses(t *testing.T) {
+	useLocalScraperTransport(t)
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			close(requestStarted)
+		}
+		<-releaseResponse
+		_, _ = w.Write([]byte(`{"url":"https://example.com/shared"}`))
+	}))
+	defer server.Close()
+
+	m := testManager(t)
+	repo := enabledRepo()
+	repo.Scrapers[0].Code = `
+		async function getStreams() {
+			const response = await fetch("` + server.URL + `");
+			const stream = await response.json();
+			return [{name: "shared", url: stream.url}];
+		}
+		module.exports = {getStreams};
+	`
+	m.repos = []Repo{repo}
+
+	const callers = 8
+	results := make([][]addons.Stream, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = m.GetStreams(context.Background(), "movie", 77, "", "Example", 2025, nil, nil)
+		}(i)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared scraper request did not start")
+	}
+	// Give all callers time to join the in-flight key before releasing it.
+	time.Sleep(20 * time.Millisecond)
+	close(releaseResponse)
+	wg.Wait()
+
+	assert.EqualValues(t, 1, requests.Load())
+	for _, streams := range results {
+		require.Len(t, streams, 1)
+		assert.Equal(t, "shared", streams[0].Name)
+	}
 }
 
 func TestRepoAndScraperMutationsInvalidateCache(t *testing.T) {

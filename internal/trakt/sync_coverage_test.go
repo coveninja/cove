@@ -117,6 +117,71 @@ func TestSyncCycleGuardsAndNoPullCursorBehavior(t *testing.T) {
 	})
 }
 
+func TestProfileReloadWaitsForInFlightSyncCycle(t *testing.T) {
+	lib, settingsStore := syncLibraryAndSettings(t)
+	store := testStore(t)
+	require.NoError(t, store.Save(tokenState{
+		AccessToken: "profile-a-token",
+		ExpiresAt:   time.Now().Add(2 * time.Hour),
+	}))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer profile-a-token", r.Header.Get("Authorization"))
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/sync/last_activities":
+			close(started)
+			<-release
+			_, _ = w.Write([]byte(`{}`))
+		case "/sync/history", "/sync/watchlist":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := testClient(server.URL, store)
+	worker := newSyncWorker(client, store, lib, settingsStore, nil)
+	traktServer := &Server{
+		client:     client,
+		store:      store,
+		syncWorker: worker,
+		profileMu:  worker.profileMu,
+	}
+
+	cycleDone := make(chan struct{})
+	go func() {
+		worker.runCycle()
+		close(cycleDone)
+	}()
+	<-started
+
+	reloaded := make(chan struct{})
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- traktServer.SetProfileAndReload("profile-b", func() error {
+			close(reloaded)
+			return nil
+		})
+	}()
+	select {
+	case <-reloaded:
+		t.Fatal("profile stores reloaded while the old profile sync was still active")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	<-cycleDone
+	require.NoError(t, <-reloadDone)
+	assert.GreaterOrEqual(t, requests.Load(), int32(3))
+	assert.False(t, store.IsConnected(), "profile-b must not inherit profile-a's token")
+}
+
 func TestPullWatchlistParsesMovieShowAndSkipsInvalidRows(t *testing.T) {
 	lib, settingsStore := syncLibraryAndSettings(t)
 	now := time.Now().UTC().Truncate(time.Second)

@@ -250,6 +250,95 @@ func TestServerProfileSwitchReloadsSubsystems(t *testing.T) {
 	}
 }
 
+func TestServerProfileActivationRollsBackOnCorruptSidecar(t *testing.T) {
+	cfg := isolatedServerConfig(t)
+	utils.SetDataDir(cfg.DataDir)
+	profileStore, err := profiles.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryID := profileStore.ActiveProfileID()
+	kid, err := profileStore.Create("Kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cfg.DataDir, profiles.ProfileFileName("settings", kid.ID)),
+		[]byte("{"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := Start(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Stop)
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	requestJSON(
+		t,
+		client,
+		http.MethodPost,
+		serverURL(h, "/api/profiles/"+kid.ID+"/activate"),
+		nil,
+		http.StatusInternalServerError,
+	)
+	list := getJSON[struct {
+		ActiveProfileID string `json:"active_profile_id"`
+	}](t, client, serverURL(h, "/api/profiles"))
+	if list.ActiveProfileID != primaryID {
+		t.Fatalf("active profile = %q after failed activation, want %q", list.ActiveProfileID, primaryID)
+	}
+
+	reloaded, err := profiles.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.ActiveProfileID() != primaryID {
+		t.Fatalf("persisted active profile = %q, want %q", reloaded.ActiveProfileID(), primaryID)
+	}
+}
+
+func TestServerProfileSwitchReconcilesLANListener(t *testing.T) {
+	cfg := isolatedServerConfig(t)
+	utils.SetDataDir(cfg.DataDir)
+	profileStore, err := profiles.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryID := profileStore.ActiveProfileID()
+	kid, err := profileStore.Create("Kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kidSettings, err := settings.New(kid.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := kidSettings.Get()
+	snap.RemoteAccessEnabled = true
+	snap.RemoteAccessToken = "kid-secret"
+	if err := kidSettings.Set(snap); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := Start(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Stop)
+	client := &http.Client{Timeout: 2 * time.Second}
+	waitForLANAddress(t, h, false)
+
+	requestJSON(t, client, http.MethodPost, serverURL(h, "/api/profiles/"+kid.ID+"/activate"), nil, http.StatusOK)
+	waitForLANAddress(t, h, true)
+
+	requestJSON(t, client, http.MethodPost, serverURL(h, "/api/profiles/"+primaryID+"/activate"), nil, http.StatusOK)
+	waitForLANAddress(t, h, false)
+}
+
 func TestStartContinuesWithCorruptBestEffortStoresAndBrokenImageCache(t *testing.T) {
 	cfg := isolatedServerConfig(t)
 	utils.SetDataDir(cfg.DataDir)

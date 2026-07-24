@@ -10,8 +10,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,6 +131,102 @@ func TestMergeRemoteStopsBeforePushWhenPullFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pull library_entries")
 	assert.Zero(t, postCount, "a failed pull must never be followed by a push")
+	assert.Nil(t, profileStore.ActiveProfile().SupabaseUID, "failed initial pull must not leave the profile linked")
+}
+
+func TestMergeRemoteFailsClosedWhenLocalPersistenceFails(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{URL: "https://project.invalid", AnonKey: "anon"})
+	profileID := server.profileStore.ActiveProfileID()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if restTable(r) == "profiles" {
+			return response(http.StatusOK, `[{
+				"id":"`+profileID+`","user_id":"user-1","name":"Primary","is_primary":true
+			}]`), nil
+		}
+		if restTable(r) == "library_entries" {
+			return response(http.StatusOK, `[{
+				"id":"remote-entry","tmdb_id":42,"media_type":"movie",
+				"title":"Remote","status":"watch_later",
+				"added_at":"`+now+`","updated_at":"`+now+`"
+			}]`), nil
+		}
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	probe, err := utils.ConfigPath("probe")
+	require.NoError(t, err)
+	appDir := filepath.Dir(probe)
+	require.NoError(t, os.RemoveAll(appDir))
+	require.NoError(t, os.WriteFile(appDir, []byte("not a directory"), 0o600))
+
+	err = server.mergeRemote("user-1", "jwt")
+	require.ErrorContains(t, err, "apply remote data")
+	require.ErrorContains(t, err, "library persist")
+	assert.Nil(t, server.profileStore.ActiveProfile().SupabaseUID)
+	assert.Empty(t, server.lib.AllEntries(), "failed persistence must roll back the in-memory merge")
+}
+
+func TestAsyncPushCannotContinueAcrossProfileSwitch(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{URL: "https://project.invalid", AnonKey: "anon"})
+	primaryID := server.profileStore.ActiveProfileID()
+	kid, err := server.profileStore.Create("Kid")
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, server.lib.MergeFrom([]*library.LibraryEntry{{
+		ID: "entry-1", TmdbID: 42, MediaType: "movie", Title: "Primary",
+		Status: library.StatusWatchLater, AddedAt: now, UpdatedAt: now,
+	}}, nil, nil, nil))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var postedTables []string
+	var switchCompleted atomic.Bool
+	var postsAfterSwitch atomic.Int32
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodPost {
+			if switchCompleted.Load() {
+				postsAfterSwitch.Add(1)
+			}
+			table := restTable(r)
+			mu.Lock()
+			postedTables = append(postedTables, table)
+			mu.Unlock()
+			if table == "library_entries" {
+				close(started)
+				<-release
+			}
+		}
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	server.pushAsync("jwt", primaryID, "test push")
+	<-started
+	switched := make(chan error, 1)
+	go func() {
+		err := server.profileStore.SetActive(kid.ID)
+		switchCompleted.Store(true)
+		switched <- err
+	}()
+	select {
+	case err := <-switched:
+		t.Fatalf("profile switched before the active-profile push released its snapshot: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-switched)
+
+	require.Eventually(t, func() bool {
+		server.pushErrMu.Lock()
+		defer server.pushErrMu.Unlock()
+		return !server.lastPushAt.IsZero()
+	}, time.Second, 5*time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.NotEmpty(t, postedTables)
+	assert.Equal(t, int32(0), postsAfterSwitch.Load(), "the old push must issue no request after profile activation completes")
 }
 
 func TestValidateJWTRequiresProjectIssuerAndAuthenticatedAudience(t *testing.T) {

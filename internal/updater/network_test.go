@@ -203,6 +203,36 @@ func TestCheckForPlatformSkipsUnsupportedAndUnusableReleases(t *testing.T) {
 	}
 }
 
+func TestCheckForPlatformClearsStalePendingUpdate(t *testing.T) {
+	t.Run("unsupported platform", func(t *testing.T) {
+		resetUpdaterGlobals(t)
+		setPendingUpdate("https://download.invalid/old", "https://download.invalid/old.sha256")
+
+		result, err := checkForPlatform("v1.0.0", "linux", "amd64")
+		require.NoError(t, err)
+		assert.False(t, result.Available)
+		mu.Lock()
+		assert.Empty(t, pendingURL)
+		assert.Empty(t, pendingChecksumURL)
+		mu.Unlock()
+	})
+
+	t.Run("failed check", func(t *testing.T) {
+		resetUpdaterGlobals(t)
+		setPendingUpdate("https://download.invalid/old", "https://download.invalid/old.sha256")
+		apiClient = &http.Client{Transport: updaterRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return updaterResponse(http.StatusBadGateway, ""), nil
+		})}
+
+		_, err := checkForPlatform("v1.0.0", "windows", "amd64")
+		require.Error(t, err)
+		mu.Lock()
+		assert.Empty(t, pendingURL)
+		assert.Empty(t, pendingChecksumURL)
+		mu.Unlock()
+	})
+}
+
 func TestFetchChecksumValidatesAndNormalizesDigest(t *testing.T) {
 	digest := strings.Repeat("AB", sha256.Size)
 	tests := []struct {
@@ -335,6 +365,60 @@ func TestApplyUpdateVerifiesExtractsAndSchedulesRestart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new ui", string(web))
 	assert.True(t, restartScheduled.Load())
+	mu.Lock()
+	assert.Empty(t, pendingURL)
+	assert.Empty(t, pendingChecksumURL)
+	mu.Unlock()
+}
+
+func TestApplyUpdateRejectsConcurrentApply(t *testing.T) {
+	resetUpdaterGlobals(t)
+	dest := t.TempDir()
+	execName := "cove"
+	var archive []byte
+	if runtime.GOOS == "windows" {
+		execName = "cove.exe"
+		zipPath := writeZip(t, []archiveEntry{
+			{name: execName, body: "new binary", mode: 0o755},
+		})
+		var err error
+		archive, err = os.ReadFile(zipPath)
+		require.NoError(t, err)
+	} else {
+		archive = tarGz(t, []archiveEntry{
+			{name: execName, body: "new binary", mode: 0o755},
+		})
+	}
+	sum := sha256.Sum256(archive)
+	digest := hex.EncodeToString(sum[:])
+	setPendingUpdate("https://download.invalid/archive", "https://download.invalid/checksum")
+
+	checksumStarted := make(chan struct{})
+	releaseChecksum := make(chan struct{})
+	apiClient = &http.Client{Transport: updaterRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		close(checksumStarted)
+		<-releaseChecksum
+		return updaterResponse(http.StatusOK, digest), nil
+	})}
+	downloadClient = &http.Client{Transport: updaterRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return updaterResponse(http.StatusOK, string(archive)), nil
+	})}
+	executablePath = func() (string, error) {
+		return filepath.Join(dest, execName), nil
+	}
+	scheduleRestart = func() {}
+
+	firstResult := make(chan error, 1)
+	go func() {
+		firstResult <- applyUpdate()
+	}()
+	<-checksumStarted
+
+	err := applyUpdate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already in progress")
+	close(releaseChecksum)
+	require.NoError(t, <-firstResult)
 }
 
 func TestUpdateHandlersEnforceMethodsAndReportState(t *testing.T) {

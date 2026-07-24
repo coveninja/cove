@@ -50,6 +50,29 @@ type diskStore struct {
 	Backfilled bool `json:"backfilled"`
 }
 
+func cloneDiskStore(source diskStore) diskStore {
+	cloned := diskStore{
+		Days:       make(map[string]*DayEntry, len(source.Days)),
+		LastPos:    make(map[string]float64, len(source.LastPos)),
+		Backfilled: source.Backfilled,
+	}
+	for date, day := range source.Days {
+		if day == nil {
+			continue
+		}
+		copyDay := *day
+		copyDay.ByTitle = make(map[string]int64, len(day.ByTitle))
+		for key, value := range day.ByTitle {
+			copyDay.ByTitle[key] = value
+		}
+		cloned.Days[date] = &copyDay
+	}
+	for key, value := range source.LastPos {
+		cloned.LastPos[key] = value
+	}
+	return cloned
+}
+
 // LibraryLookup is the slice of *library.Library the activity handler needs
 // to enrich TitlesWatchedThisYear with display metadata. *library.Library
 // satisfies it. Keeping it as an interface lets tests inject a stub without
@@ -163,6 +186,7 @@ func (s *Store) MergeFromJSON(data []byte) error {
 	}
 
 	s.mu.Lock()
+	previous := cloneDiskStore(s.db)
 	for dateStr, rd := range remote.Days {
 		if rd == nil {
 			continue
@@ -197,6 +221,9 @@ func (s *Store) MergeFromJSON(data []byte) error {
 	s.db.Backfilled = s.db.Backfilled || remote.Backfilled
 
 	err := s.writeNow()
+	if err != nil {
+		s.db = previous
+	}
 	s.mu.Unlock()
 	return err
 }

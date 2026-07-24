@@ -158,9 +158,20 @@ func (c *Client) catalogCacheGet(key string) ([]Media, int, bool) {
 	if !ok || time.Now().After(e.expires) {
 		return nil, 0, false
 	}
-	cp := make([]Media, len(e.medias))
-	copy(cp, e.medias)
-	return cp, e.nextSkip, true
+	return cloneMedias(e.medias), e.nextSkip, true
+}
+
+func cloneMedias(medias []Media) []Media {
+	if medias == nil {
+		return nil
+	}
+	cp := make([]Media, len(medias))
+	for i, media := range medias {
+		cp[i] = media
+		cp[i].Images = append([]string(nil), media.Images...)
+		cp[i].GenreIDs = append([]int(nil), media.GenreIDs...)
+	}
+	return cp
 }
 
 // catalogCacheSet stores a resolved page and sweeps expired entries while
@@ -174,7 +185,9 @@ func (c *Client) catalogCacheSet(key string, medias []Media, nextSkip int) {
 			delete(c.catalogCache, k)
 		}
 	}
-	c.catalogCache[key] = catalogPageEntry{medias: medias, nextSkip: nextSkip, expires: now.Add(catalogCacheTTL)}
+	c.catalogCache[key] = catalogPageEntry{
+		medias: cloneMedias(medias), nextSkip: nextSkip, expires: now.Add(catalogCacheTTL),
+	}
 }
 
 // New returns a TMDB client. The 15s timeout matters because http.DefaultClient
@@ -591,7 +604,7 @@ func queryVariants(q string) []string {
 func (c *Client) Search(query string) ([]Media, error) {
 	variantBoost := []float64{3.0, 1.5, 1.0}
 
-	seen := make(map[int]bool)
+	seen := make(map[string]bool)
 	var scored []scoredMedia
 
 	for vi, variant := range queryVariants(query) {
@@ -620,10 +633,11 @@ func (c *Client) Search(query string) ([]Media, error) {
 					data.Results[i].MediaType = mediaType
 				}
 				for _, m := range data.Results {
-					if m.PosterURL == "" || seen[m.ID] {
+					key := fmt.Sprintf("%s:%d", m.MediaType, m.ID)
+					if m.PosterURL == "" || seen[key] {
 						continue
 					}
-					seen[m.ID] = true
+					seen[key] = true
 					scored = append(scored, scoredMedia{
 						media: m,
 						score: m.Popularity * boost,
@@ -827,12 +841,13 @@ func (c *Client) GetPerson(id int) (PersonDetails, error) {
 		pd.ProfileURL = imgURL("w500", data.ProfilePath)
 	}
 
-	seen := make(map[int]bool)
+	seen := make(map[string]bool)
 	for _, m := range data.CombinedCredits.Cast {
-		if (m.MediaType != "movie" && m.MediaType != "tv") || m.PosterURL == "" || seen[m.ID] {
+		key := fmt.Sprintf("%s:%d", m.MediaType, m.ID)
+		if (m.MediaType != "movie" && m.MediaType != "tv") || m.PosterURL == "" || seen[key] {
 			continue
 		}
-		seen[m.ID] = true
+		seen[key] = true
 		m.PosterURL = imgURL("w500", m.PosterURL)
 		pd.Credits = append(pd.Credits, m)
 	}

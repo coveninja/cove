@@ -21,9 +21,16 @@ import (
 )
 
 var (
-	mu     sync.Mutex
-	handle *server.Handle
+	mu          sync.Mutex
+	handle      backendHandle
+	startServer = func(cfg server.Config) (backendHandle, error) {
+		return server.Start(cfg)
+	}
 )
+
+type backendHandle interface {
+	Stop()
+}
 
 // Start initialises and starts the Cove HTTP backend. It returns an error if
 // the server is already running or if server.Start fails.
@@ -46,7 +53,7 @@ func Start(bindAddr, dataDir, cacheDir, torrentDir, tmdbAPIKey, supabaseURL, sup
 		return fmt.Errorf("mobile: server is already running")
 	}
 
-	h, err := server.Start(server.Config{
+	h, err := startServer(server.Config{
 		BindAddr:          bindAddr,
 		DataDir:           dataDir,
 		CacheDir:          cacheDir,

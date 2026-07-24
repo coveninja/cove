@@ -86,6 +86,13 @@ func TestSafeTransportRefusesLiteralPrivateAddresses(t *testing.T) {
 	}
 }
 
+func TestSafeTransportDoesNotUseEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1234")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1234")
+	transport := SafeTransport()
+	assert.Nil(t, transport.Proxy)
+}
+
 func TestSafeTransportRejectsMalformedAddress(t *testing.T) {
 	transport := SafeTransport()
 	_, err := transport.DialContext(context.Background(), "tcp", "missing-port")

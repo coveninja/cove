@@ -50,6 +50,12 @@ var (
 // the backend's finished signal and calls QProcess::startDetached on this code.
 const RestartExitCode = 42
 
+const (
+	maxArchiveBytes   int64 = 512 << 20 // 512 MiB compressed download
+	maxExtractedBytes int64 = 1 << 30   // 1 GiB across all extracted files
+	maxArchiveEntries       = 10_000
+)
+
 // assetName is the filename this build looks for in GitHub release assets.
 // The CI packaging job MUST emit an asset with exactly this name or check()
 // silently returns available=false. Both sides are pinned here as the source
@@ -74,6 +80,8 @@ func assetNameFor(goos, goarch string) string {
 // download URL (SSRF risk).
 var (
 	mu                 sync.Mutex
+	checkMu            sync.Mutex
+	applyMu            sync.Mutex
 	pendingURL         string
 	pendingChecksumURL string
 )
@@ -166,6 +174,16 @@ func check(currentVersion string) (*CheckResult, error) {
 }
 
 func checkForPlatform(currentVersion, goos, goarch string) (*CheckResult, error) {
+	// Serialize checks and invalidate any previously offered release before
+	// doing work. A failed/unavailable check must not leave an older asset
+	// eligible for /api/update/apply.
+	checkMu.Lock()
+	defer checkMu.Unlock()
+	mu.Lock()
+	pendingURL = ""
+	pendingChecksumURL = ""
+	mu.Unlock()
+
 	result := &CheckResult{CurrentVersion: currentVersion}
 
 	// Linux has no portable/self-contained distribution channel — only
@@ -257,6 +275,11 @@ func fetchChecksum(url string) (string, error) {
 }
 
 func applyUpdate() error {
+	if !applyMu.TryLock() {
+		return fmt.Errorf("update already in progress")
+	}
+	defer applyMu.Unlock()
+
 	mu.Lock()
 	url := pendingURL
 	checksumURL := pendingChecksumURL
@@ -296,7 +319,7 @@ func applyUpdate() error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	hasher := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body); err != nil {
+	if _, err := copyWithLimit(io.MultiWriter(tmp, hasher), resp.Body, maxArchiveBytes); err != nil {
 		tmp.Close()
 		return fmt.Errorf("download: %w", err)
 	}
@@ -324,12 +347,32 @@ func applyUpdate() error {
 		}
 	}
 
+	// Consume only the release that was applied. Do not erase a newer release
+	// discovered by a check that happened while this download was running.
+	mu.Lock()
+	if pendingURL == url && pendingChecksumURL == checksumURL {
+		pendingURL = ""
+		pendingChecksumURL = ""
+	}
+	mu.Unlock()
+
 	log.Println("[updater] done — restarting")
 	// Delay exit slightly so the HTTP response is flushed to the client before
 	// the process disappears. The Qt shell detects RestartExitCode and re-execs
 	// itself; on Windows it also renames cove.exe.new → cove.exe first.
 	scheduleRestart()
 	return nil
+}
+
+func copyWithLimit(dst io.Writer, src io.Reader, limit int64) (int64, error) {
+	n, err := io.Copy(dst, io.LimitReader(src, limit+1))
+	if err != nil {
+		return n, err
+	}
+	if n > limit {
+		return n, fmt.Errorf("content exceeds %d byte limit", limit)
+	}
+	return n, nil
 }
 
 // securePath joins an archive entry name into destDir, erroring on any entry
@@ -355,8 +398,19 @@ func extractZip(zipPath, destDir, selfName string) error {
 	}
 	defer r.Close()
 
+	if len(r.File) > maxArchiveEntries {
+		return fmt.Errorf("archive contains too many entries")
+	}
+	stageDir, err := os.MkdirTemp(destDir, ".cove-update-stage-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stageDir)
+
+	files := make([]stagedFile, 0, len(r.File))
+	var extractedBytes int64
 	for _, f := range r.File {
-		target, err := securePath(destDir, f.Name)
+		target, err := securePath(stageDir, f.Name)
 		if err != nil {
 			return err
 		}
@@ -370,39 +424,52 @@ func extractZip(zipPath, destDir, selfName string) error {
 		if !f.FileInfo().Mode().IsRegular() {
 			return fmt.Errorf("archive contains non-regular entry: %s", f.Name)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		size := int64(f.UncompressedSize64)
+		if size < 0 || size > maxExtractedBytes-extractedBytes {
+			return fmt.Errorf("archive exceeds %d extracted byte limit", maxExtractedBytes)
+		}
+		extractedBytes += size
+
+		rel, err := filepath.Rel(stageDir, target)
+		if err != nil {
 			return err
 		}
-
-		// The running binary cannot be replaced in-place on Windows; write a
-		// .new sidecar so the Qt shell can rename it after we exit with 42.
-		dest := target
-		if filepath.Base(target) == selfName {
-			dest = target + ".new"
+		if filepath.Base(rel) == selfName {
+			rel += ".new"
+			target += ".new"
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
 		}
 
 		rc, err := f.Open()
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
 		if err != nil {
 			rc.Close()
 			return err
 		}
-		_, copyErr := io.Copy(out, rc)
+		n, copyErr := io.Copy(out, rc)
 		rc.Close()
-		out.Close()
+		closeErr := out.Close()
 		if copyErr != nil {
-			os.Remove(dest)
 			return copyErr
 		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if n != size {
+			return fmt.Errorf("archive entry %s size mismatch", f.Name)
+		}
+		files = append(files, stagedFile{rel: rel, path: target})
 	}
-	return nil
+	return commitStagedFiles(destDir, files)
 }
 
-// extractTarGz extracts a .tar.gz archive into destDir, writing each entry
-// atomically (temp file + rename) to avoid half-written files on failure.
+// extractTarGz extracts and validates a .tar.gz archive in a staging directory
+// before committing any files into destDir.
 func extractTarGz(r io.Reader, destDir string) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -410,7 +477,16 @@ func extractTarGz(r io.Reader, destDir string) error {
 	}
 	defer gz.Close()
 
+	stageDir, err := os.MkdirTemp(destDir, ".cove-update-stage-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stageDir)
+
 	tr := tar.NewReader(gz)
+	files := make([]stagedFile, 0)
+	var extractedBytes int64
+	entryCount := 0
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -419,8 +495,12 @@ func extractTarGz(r io.Reader, destDir string) error {
 		if err != nil {
 			return err
 		}
+		entryCount++
+		if entryCount > maxArchiveEntries {
+			return fmt.Errorf("archive contains too many entries")
+		}
 
-		target, err := securePath(destDir, hdr.Name)
+		target, err := securePath(stageDir, hdr.Name)
 		if err != nil {
 			return err
 		}
@@ -431,6 +511,10 @@ func extractTarGz(r io.Reader, destDir string) error {
 				return err
 			}
 		case tar.TypeReg:
+			if hdr.Size < 0 || hdr.Size > maxExtractedBytes-extractedBytes {
+				return fmt.Errorf("archive exceeds %d extracted byte limit", maxExtractedBytes)
+			}
+			extractedBytes += hdr.Size
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -440,27 +524,149 @@ func extractTarGz(r io.Reader, destDir string) error {
 			if hdr.Mode&0o111 != 0 {
 				perm = 0o755
 			}
-			tmp := target + ".new"
-			f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				os.Remove(tmp)
+			n, copyErr := io.Copy(f, tr)
+			closeErr := f.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if n != hdr.Size {
+				return fmt.Errorf("archive entry %s size mismatch", hdr.Name)
+			}
+			rel, err := filepath.Rel(stageDir, target)
+			if err != nil {
 				return err
 			}
-			if err := f.Close(); err != nil {
-				return err
-			}
-			if err := os.Rename(tmp, target); err != nil {
-				return err
-			}
+			files = append(files, stagedFile{rel: rel, path: target})
 		case tar.TypeSymlink, tar.TypeLink:
 			return fmt.Errorf("archive contains link entry: %s", hdr.Name)
 		default:
 			// PAX/global headers and other metadata entries carry no payload
 			// this extractor cares about — ignore them.
+		}
+	}
+	return commitStagedFiles(destDir, files)
+}
+
+type stagedFile struct {
+	rel  string
+	path string
+}
+
+type committedFile struct {
+	target string
+	backup string
+	hadOld bool
+}
+
+// commitStagedFiles preflights every destination, then installs the staged
+// files. Existing files are moved aside and restored if any later rename
+// fails, so a malformed archive or destination conflict cannot leave a mixed
+// release behind.
+func commitStagedFiles(destDir string, files []stagedFile) error {
+	for _, file := range files {
+		target, err := securePath(destDir, file.rel)
+		if err != nil {
+			return err
+		}
+		if err := validateDestinationPath(destDir, target); err != nil {
+			return err
+		}
+	}
+
+	backupDir, err := os.MkdirTemp(destDir, ".cove-update-backup-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(backupDir)
+
+	committed := make([]committedFile, 0, len(files))
+	rollback := func() {
+		for i := len(committed) - 1; i >= 0; i-- {
+			item := committed[i]
+			_ = os.Remove(item.target)
+			if item.hadOld {
+				_ = os.MkdirAll(filepath.Dir(item.target), 0o755)
+				_ = os.Rename(item.backup, item.target)
+			}
+		}
+	}
+
+	for _, file := range files {
+		target, _ := securePath(destDir, file.rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			rollback()
+			return err
+		}
+
+		item := committedFile{target: target}
+		if _, err := os.Lstat(target); err == nil {
+			item.hadOld = true
+			item.backup, err = securePath(backupDir, file.rel)
+			if err != nil {
+				rollback()
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(item.backup), 0o755); err != nil {
+				rollback()
+				return err
+			}
+			if err := os.Rename(target, item.backup); err != nil {
+				rollback()
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			rollback()
+			return err
+		}
+		committed = append(committed, item)
+
+		if err := os.Rename(file.path, target); err != nil {
+			rollback()
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDestinationPath(destDir, target string) error {
+	root, err := os.Lstat(destDir)
+	if err != nil {
+		return err
+	}
+	if root.Mode()&os.ModeSymlink != 0 || !root.IsDir() {
+		return fmt.Errorf("update destination is not a real directory")
+	}
+
+	rel, err := filepath.Rel(destDir, target)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := destDir
+	for i, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("update destination contains symlink: %s", current)
+		}
+		if i < len(parts)-1 && !info.IsDir() {
+			return fmt.Errorf("update destination parent is not a directory: %s", current)
+		}
+		if i == len(parts)-1 && !info.Mode().IsRegular() {
+			return fmt.Errorf("update destination is not a regular file: %s", current)
 		}
 	}
 	return nil

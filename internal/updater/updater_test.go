@@ -188,6 +188,24 @@ func TestExtractZipRejectsTraversalAndLinks(t *testing.T) {
 	}
 }
 
+func TestExtractZipRejectsPreexistingDestinationSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks may require elevated Windows privileges")
+	}
+	dest := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(dest, "web")))
+	archive := writeZip(t, []archiveEntry{
+		{name: "web/index.html", body: "escaped", mode: 0o644},
+	})
+
+	err := extractZip(archive, dest, "cove.exe")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+	_, err = os.Stat(filepath.Join(outside, "index.html"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestExtractTarGzWritesNestedFilesAndExecutableMode(t *testing.T) {
 	dest := t.TempDir()
 	archive := tarGz(t, []archiveEntry{
@@ -218,4 +236,28 @@ func TestExtractTarGzRejectsTraversalLinksAndInvalidInput(t *testing.T) {
 		})
 	}
 	assert.Error(t, extractTarGz(strings.NewReader("not gzip"), t.TempDir()))
+}
+
+func TestExtractTarGzValidationFailureLeavesExistingReleaseUntouched(t *testing.T) {
+	dest := t.TempDir()
+	target := filepath.Join(dest, "web", "index.html")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("old ui"), 0o644))
+	archive := tarGz(t, []archiveEntry{
+		{name: "web/index.html", body: "new ui", mode: 0o644},
+		{name: "../../escape", body: "bad", mode: 0o644},
+	})
+
+	require.Error(t, extractTarGz(bytes.NewReader(archive), dest))
+	got, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "old ui", string(got))
+}
+
+func TestCopyWithLimitRejectsOversizedContent(t *testing.T) {
+	var dst bytes.Buffer
+	n, err := copyWithLimit(&dst, strings.NewReader("12345"), 4)
+	require.Error(t, err)
+	assert.EqualValues(t, 5, n)
+	assert.Contains(t, err.Error(), "exceeds")
 }

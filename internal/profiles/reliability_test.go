@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -262,7 +263,10 @@ func TestActiveProfileFallbacks(t *testing.T) {
 func TestSetActiveSameIDIsNoOp(t *testing.T) {
 	called := make(chan string, 1)
 	s := newStore(t)
-	s.onChange = func(id string) { called <- id }
+	s.onChange = func(_ string, id string) error {
+		called <- id
+		return nil
+	}
 	forceProfileWriteFailure(t, s)
 
 	require.NoError(t, s.SetActive(s.ActiveProfileID()))
@@ -271,6 +275,60 @@ func TestSetActiveSameIDIsNoOp(t *testing.T) {
 		t.Fatalf("onChange called for no-op activation: %s", id)
 	default:
 	}
+}
+
+func TestSetActiveRollsBackWhenTransitionHookFails(t *testing.T) {
+	s := newStore(t)
+	primaryID := s.ActiveProfileID()
+	kid, err := s.Create("Kid")
+	require.NoError(t, err)
+
+	var transitions [][2]string
+	s.SetOnChange(func(previousID, profileID string) error {
+		transitions = append(transitions, [2]string{previousID, profileID})
+		if profileID == kid.ID {
+			return fmt.Errorf("corrupt target store")
+		}
+		return nil
+	})
+
+	err = s.SetActive(kid.ID)
+	require.ErrorContains(t, err, "corrupt target store")
+	assert.Equal(t, primaryID, s.ActiveProfileID())
+	assert.Equal(t, [][2]string{
+		{primaryID, kid.ID},
+		{kid.ID, primaryID},
+	}, transitions)
+
+	reloaded, reloadErr := New(nil)
+	require.NoError(t, reloadErr)
+	assert.Equal(t, primaryID, reloaded.ActiveProfileID(), "rollback must be persisted")
+}
+
+func TestDeleteActiveRollsBackBeforeRemovingFilesWhenTransitionFails(t *testing.T) {
+	s := newStore(t)
+	kid, err := s.Create("Kid")
+	require.NoError(t, err)
+	require.NoError(t, s.SetActive(kid.ID))
+
+	kidLibrary, err := utils.ConfigPath(ProfileFileName("library", kid.ID))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(kidLibrary, []byte(`{"entries":[]}`), 0o600))
+
+	s.SetOnChange(func(_, profileID string) error {
+		if profileID != kid.ID {
+			return fmt.Errorf("primary reload failed")
+		}
+		return nil
+	})
+
+	err = s.Delete(kid.ID)
+	require.ErrorContains(t, err, "primary reload failed")
+	assert.Equal(t, kid.ID, s.ActiveProfileID())
+	_, ok := s.Get(kid.ID)
+	assert.True(t, ok)
+	_, statErr := os.Stat(kidLibrary)
+	assert.NoError(t, statErr, "data files must survive a rolled-back deletion")
 }
 
 func TestMutationNotFoundErrors(t *testing.T) {
@@ -297,7 +355,10 @@ func TestMutationWriteFailuresRollBack(t *testing.T) {
 		kid, err := s.Create("Kid")
 		require.NoError(t, err)
 		called := make(chan string, 1)
-		s.onChange = func(id string) { called <- id }
+		s.onChange = func(_ string, id string) error {
+			called <- id
+			return nil
+		}
 		forceProfileWriteFailure(t, s)
 
 		assert.Error(t, s.SetActive(kid.ID))
@@ -432,7 +493,10 @@ func TestAdoptIDNonActiveProfileLeavesActiveProfileUnchanged(t *testing.T) {
 	kid, err := s.Create("Kid")
 	require.NoError(t, err)
 	called := make(chan string, 1)
-	s.onChange = func(id string) { called <- id }
+	s.onChange = func(_ string, id string) error {
+		called <- id
+		return nil
+	}
 
 	require.NoError(t, s.AdoptID(kid.ID, "adopted-kid-id"))
 	assert.Equal(t, primaryID, s.ActiveProfileID())

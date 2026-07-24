@@ -262,6 +262,27 @@ func TestSetProfile(t *testing.T) {
 	assert.Equal(t, defaultSettings.DefaultVolume, st.Get().DefaultVolume)
 }
 
+func TestSetProfileNotifiesDeviceLocalEffectsSynchronously(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	kid, err := New("kid")
+	require.NoError(t, err)
+	kidSettings := kid.Get()
+	kidSettings.RemoteAccessEnabled = true
+	kidSettings.RemoteAccessToken = "kid-token"
+	require.NoError(t, kid.Set(kidSettings))
+
+	st, err := New("primary")
+	require.NoError(t, err)
+	var notified Settings
+	st.SetOnChange(func(snapshot Settings) {
+		notified = snapshot
+	})
+
+	require.NoError(t, st.SetProfile("kid"))
+	assert.True(t, notified.RemoteAccessEnabled)
+	assert.Equal(t, "kid-token", notified.RemoteAccessToken)
+}
+
 func TestHandlers_GetSettings(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	st, err := New("test")

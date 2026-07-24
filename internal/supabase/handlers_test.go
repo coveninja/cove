@@ -317,6 +317,7 @@ func TestLoginFailsClosedWhenInitialPullFails(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	assert.Contains(t, rec.Body.String(), "signed in but initial sync failed")
 	assert.Contains(t, rec.Body.String(), "pull library_entries")
+	assert.Nil(t, server.profileStore.ActiveProfile().SupabaseUID)
 }
 
 func TestMeAndLogoutReflectProfileLink(t *testing.T) {
