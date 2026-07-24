@@ -51,6 +51,8 @@ type Server struct {
 	flowMu     sync.Mutex
 	flowState  string             // "idle" | "pending" | "authorized" | "expired" | "denied"
 	flowCancel context.CancelFunc // cancels an in-flight runDeviceFlow goroutine
+	// Zero means one second. Tests may shorten this on an isolated Server.
+	deviceFlowTimeUnit time.Duration
 }
 
 // New creates a Server for the given active profile. Errors loading the sidecar
@@ -59,7 +61,6 @@ func New(cfg Config, profileID string, lib *library.Library, st *settings.Store,
 	store, err := newStore(profileID)
 	if err != nil {
 		log.Println("trakt: load token store:", err)
-		store = &Store{} // fallback: in-memory only; writes will fail until path is set
 	}
 	client := newClient(cfg.ClientID, cfg.ClientSecret, store)
 	sw := newSyncWorker(client, store, lib, st, tmdbClient)
@@ -93,9 +94,9 @@ func (s *Server) RunSync(ctx context.Context) {
 // credentials are configured, all endpoints return 503 so the frontend can
 // show a clear error instead of a CORS failure or timeout.
 func (s *Server) SetupHandlers(mux *http.ServeMux) {
-	if s.cfg.ClientID == "" {
+	if s.cfg.ClientID == "" || s.cfg.ClientSecret == "" {
 		stub := utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "Trakt integration not configured (TRAKT_CLIENT_ID not set)", http.StatusServiceUnavailable)
+			http.Error(w, "Trakt integration not configured (credentials missing)", http.StatusServiceUnavailable)
 		})
 		for _, path := range []string{
 			"/api/trakt/device-code",
@@ -208,7 +209,8 @@ func (s *Server) handleUnlink(w http.ResponseWriter, r *http.Request) {
 	// Cancel any in-flight device flow before clearing the store.
 	s.cancelFlow("idle")
 	// Best-effort revoke — fire and forget; we clear locally regardless.
-	go s.client.RevokeToken()
+	accessToken := s.store.Get().AccessToken
+	go s.client.revokeAccessToken(accessToken)
 	if err := s.store.Clear(); err != nil {
 		log.Println("trakt: unlink clear store:", err)
 		http.Error(w, "could not clear token: "+err.Error(), http.StatusInternalServerError)
@@ -241,6 +243,19 @@ func (s *Server) handleScrobble(w http.ResponseWriter, r *http.Request) {
 	case "start", "pause", "stop":
 	default:
 		http.Error(w, "action must be start, pause, or stop", http.StatusBadRequest)
+		return
+	}
+	if req.TmdbID <= 0 || (req.MediaType != "movie" && req.MediaType != "tv") {
+		http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
+		return
+	}
+	if req.Progress < 0 || req.Progress > 100 {
+		http.Error(w, "progress must be between 0 and 100", http.StatusBadRequest)
+		return
+	}
+	if req.MediaType == "tv" &&
+		(req.Season == nil || req.Episode == nil || *req.Season < 0 || *req.Episode < 0) {
+		http.Error(w, "tv scrobbles require non-negative season and episode", http.StatusBadRequest)
 		return
 	}
 
@@ -295,8 +310,12 @@ func (s *Server) setFlowState(state string) {
 // own goroutine and updates flowState accordingly. Token saving is handled
 // inside PollDeviceFlow on a 200 response.
 func (s *Server) runDeviceFlow(ctx context.Context, deviceCode string, intervalSec, expiresInSec int) {
-	interval := time.Duration(max(intervalSec, 1)+1) * time.Second
-	deadline := time.NewTimer(time.Duration(expiresInSec) * time.Second)
+	timeUnit := s.deviceFlowTimeUnit
+	if timeUnit <= 0 {
+		timeUnit = time.Second
+	}
+	interval := time.Duration(max(intervalSec, 1)+1) * timeUnit
+	deadline := time.NewTimer(time.Duration(expiresInSec) * timeUnit)
 	defer deadline.Stop()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -326,9 +345,9 @@ func (s *Server) runDeviceFlow(ctx context.Context, deviceCode string, intervalS
 			case PollSlowDown:
 				// Trakt asked us to back off; increase interval by 5s, cap at 30s.
 				ticker.Stop()
-				interval += 5 * time.Second
-				if interval > 30*time.Second {
-					interval = 30 * time.Second
+				interval += 5 * timeUnit
+				if interval > 30*timeUnit {
+					interval = 30 * timeUnit
 				}
 				ticker = time.NewTicker(interval)
 			case PollExpired:

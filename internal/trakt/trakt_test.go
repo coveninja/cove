@@ -23,9 +23,10 @@ func testStore(t *testing.T) *Store {
 func testClient(baseURL string, store *Store) *Client {
 	c := newClient("test-client-id", "test-client-secret", store)
 	c.baseURL = baseURL
-	// Disable write rate-limiting in tests: set lastWrite to the zero value
-	// (time.Since(zero) is huge, so the sleep condition is never true).
-	c.lastWrite = time.Time{}
+	// Disable rate-limit and Retry-After sleeps; tests assert request ordering
+	// and retry behavior directly without paying production wall-clock delays.
+	c.writeInterval = 0
+	c.sleep = func(time.Duration) {}
 	return c
 }
 

@@ -53,6 +53,9 @@ func (c *Client) StartDeviceFlow() (*DeviceCodeResponse, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("trakt: device/code decode: %w", err)
 	}
+	if out.DeviceCode == "" || out.UserCode == "" || out.VerificationURL == "" || out.ExpiresIn <= 0 {
+		return nil, fmt.Errorf("trakt: device/code: incomplete response")
+	}
 	return &out, nil
 }
 
@@ -60,6 +63,7 @@ func (c *Client) StartDeviceFlow() (*DeviceCodeResponse, error) {
 // status to a PollStatus. On 200 it saves the token and fetches the username
 // from GET /users/me.
 func (c *Client) PollDeviceFlow(deviceCode string) (*PollResult, error) {
+	_, storeRevision := c.store.Snapshot()
 	resp, err := c.doWrite(http.MethodPost, "/oauth/device/token", map[string]string{
 		"code":          deviceCode,
 		"client_id":     c.clientID,
@@ -96,6 +100,9 @@ func (c *Client) PollDeviceFlow(deviceCode string) (*PollResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
 		return nil, fmt.Errorf("trakt: device/token decode: %w", err)
 	}
+	if tok.AccessToken == "" || tok.RefreshToken == "" || tok.ExpiresIn <= 0 {
+		return nil, fmt.Errorf("trakt: device/token: incomplete token response")
+	}
 
 	st := tokenState{
 		AccessToken:  tok.AccessToken,
@@ -106,7 +113,7 @@ func (c *Client) PollDeviceFlow(deviceCode string) (*PollResult, error) {
 	// degraded (the status endpoint will show username="" until next refresh).
 	st.Username = c.fetchUsername(tok.AccessToken)
 
-	if err := c.store.Save(st); err != nil {
+	if err := c.store.SaveIfRevision(st, storeRevision); err != nil {
 		return nil, fmt.Errorf("trakt: save token: %w", err)
 	}
 	return &PollResult{Status: PollAuthorized, Username: st.Username}, nil
@@ -145,7 +152,7 @@ func (c *Client) fetchUsername(accessToken string) string {
 // later callers re-check under the lock and skip if another goroutine already
 // refreshed.
 func (c *Client) EnsureValidToken() error {
-	st := c.store.Get()
+	st, _ := c.store.Snapshot()
 	if st.AccessToken == "" {
 		return fmt.Errorf("trakt: not connected")
 	}
@@ -156,16 +163,19 @@ func (c *Client) EnsureValidToken() error {
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
 	// Re-read after acquiring the lock — another goroutine may have refreshed.
-	st = c.store.Get()
+	st, storeRevision := c.store.Snapshot()
 	if time.Until(st.ExpiresAt) > time.Hour {
 		return nil
 	}
-	return c.doRefreshToken(st.RefreshToken)
+	return c.doRefreshToken(st.RefreshToken, storeRevision)
 }
 
 // doRefreshToken exchanges a refresh token for a new access/refresh pair.
 // Must be called with c.refreshMu held.
-func (c *Client) doRefreshToken(refreshToken string) error {
+func (c *Client) doRefreshToken(refreshToken string, storeRevision uint64) error {
+	if refreshToken == "" {
+		return fmt.Errorf("trakt: refresh token is missing")
+	}
 	resp, err := c.doWrite(http.MethodPost, "/oauth/token", map[string]string{
 		"refresh_token": refreshToken,
 		"client_id":     c.clientID,
@@ -188,6 +198,9 @@ func (c *Client) doRefreshToken(refreshToken string) error {
 	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
 		return fmt.Errorf("trakt: refresh token decode: %w", err)
 	}
+	if tok.AccessToken == "" || tok.ExpiresIn <= 0 {
+		return fmt.Errorf("trakt: refresh token: incomplete token response")
+	}
 
 	st := c.store.Get()
 	st.AccessToken = tok.AccessToken
@@ -195,19 +208,24 @@ func (c *Client) doRefreshToken(refreshToken string) error {
 		st.RefreshToken = tok.RefreshToken
 	}
 	st.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
-	return c.store.Save(st)
+	return c.store.SaveIfRevision(st, storeRevision)
 }
 
 // RevokeToken calls POST /oauth/revoke for the current access token.
 // Best-effort — errors are silently ignored (the sidecar file is cleared
 // regardless by the caller).
 func (c *Client) RevokeToken() {
-	st := c.store.Get()
-	if st.AccessToken == "" {
+	c.revokeAccessToken(c.store.Get().AccessToken)
+}
+
+// revokeAccessToken accepts a captured token so unlink can clear the local
+// store immediately without racing the asynchronous revoke goroutine.
+func (c *Client) revokeAccessToken(accessToken string) {
+	if accessToken == "" {
 		return
 	}
 	resp, err := c.doWrite(http.MethodPost, "/oauth/revoke", map[string]string{
-		"token":         st.AccessToken,
+		"token":         accessToken,
 		"client_id":     c.clientID,
 		"client_secret": c.clientSecret,
 	})

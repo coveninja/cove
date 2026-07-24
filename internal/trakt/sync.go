@@ -104,7 +104,7 @@ func (sw *SyncWorker) runCycle() {
 	}
 
 	cycleStart := time.Now()
-	tst := sw.store.Get()
+	tst, storeRevision := sw.store.Snapshot()
 	cursor := tst.LastSyncAt // zero on first sync
 
 	// GET /sync/last_activities — used to skip the pull when Trakt has
@@ -154,7 +154,7 @@ func (sw *SyncWorker) runCycle() {
 
 	// Advance the cursor only after every required leg succeeded.
 	tst.LastSyncAt = cycleStart
-	if err := sw.store.Save(tst); err != nil {
+	if err := sw.store.SaveIfRevision(tst, storeRevision); err != nil {
 		log.Println("trakt: sync save cursor:", err)
 	}
 	log.Println("trakt: sync cycle complete")

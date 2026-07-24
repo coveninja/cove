@@ -20,6 +20,7 @@ func syncLibraryAndSettings(t *testing.T) (*library.Library, *settings.Store) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	lib, err := library.New("trakt-sync")
 	require.NoError(t, err)
+	t.Cleanup(lib.Flush)
 	st, err := settings.New("trakt-sync")
 	require.NoError(t, err)
 	configured := st.Get()
