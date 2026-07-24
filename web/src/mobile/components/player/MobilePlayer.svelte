@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
-  import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
+  import type {
+    Stream,
+    TimestampData,
+    TimestampSegment,
+  } from "$lib/types/addons";
   import { Slider } from "$lib/components/ui/slider/index.js";
   import { onDestroy, untrack } from "svelte";
   import { api } from "$lib/api";
@@ -33,11 +37,14 @@
   // ── Props (same contract as desktop Player + mobile-specific additions) ──────
 
   let {
-    src,
+    src = "",
     media,
+    pendingMessage = undefined,
+    onCancelPending = undefined,
     externalSubtitles = [],
     season = undefined,
     episode = undefined,
+    fileIdx = undefined,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream: _onPlayStream = undefined,
@@ -45,11 +52,14 @@
     /** Parent registers a close-sheets callback for Escape priority handling. */
     onRegisterCloseSheets = undefined,
   }: {
-    src: string;
+    src?: string;
     media?: Media;
+    pendingMessage?: string;
+    onCancelPending?: () => void;
     externalSubtitles?: { id: string; url: string; lang: string }[];
     season?: number;
     episode?: number;
+    fileIdx?: number;
     onPlaybackFailed?: () => void;
     onPlayNext?: (season: number, episode: number) => void;
     onPlayStream?: (
@@ -63,10 +73,17 @@
     onRegisterCloseSheets?: (fn: () => boolean) => void;
   } = $props();
 
+  const streamDiscoveryPending = $derived(!src && pendingMessage !== undefined);
+
   // Register close-sheets with parent for Escape priority handling.
   $effect(() => {
     onRegisterCloseSheets?.(() => {
-      if (audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen) {
+      if (
+        audioSheetOpen ||
+        subsSheetOpen ||
+        speedSheetOpen ||
+        episodesSheetOpen
+      ) {
         audioSheetOpen = false;
         subsSheetOpen = false;
         speedSheetOpen = false;
@@ -121,7 +138,7 @@
         Player.setVolume(Math.round($settings.defaultVolume * 100));
       }
     });
-    Player.play(api.playUrl(src, { season, episode }));
+    Player.play(api.playUrl(src, { season, episode, fileIdx }));
     untrack(() => {
       Player.setAspectMode(media ? loadAspectMode(media.id) : "fit");
       showPrefs = media ? loadShowTrackPrefs(media.id) : {};
@@ -168,7 +185,8 @@
     if (!Player.available) return;
     try {
       if (media && Player.duration > 0) {
-        void progress.saveNow(Player.position, Player.duration, progressCtx, false)
+        void progress
+          .saveNow(Player.position, Player.duration, progressCtx, false)
           .then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
@@ -177,7 +195,9 @@
     Player.stop();
   });
 
-  const canPlay = $derived(!switching && Player.ready && Player.duration > 0);
+  const canPlay = $derived(
+    !!src && !switching && Player.ready && Player.duration > 0,
+  );
 
   // ── Playback-start watchdog ──────────────────────────────────────────────────
 
@@ -200,7 +220,9 @@
     const isHashSrc = !src.startsWith("http");
     const failTimeoutMs = isHashSrc ? 50_000 : 25_000;
     const failTimer = setTimeout(triggerPlaybackFailed, failTimeoutMs);
-    const slowTimer = setTimeout(() => { takingAWhile = true; }, 15_000);
+    const slowTimer = setTimeout(() => {
+      takingAWhile = true;
+    }, 15_000);
 
     return () => {
       clearTimeout(failTimer);
@@ -262,19 +284,20 @@
 
   $effect(() => {
     if (Player.ended && media) {
-      void progress.saveNow(Player.duration, Player.duration, progressCtx, true)
+      void progress
+        .saveNow(Player.duration, Player.duration, progressCtx, true)
         .then(() => libraryChanged.update((n) => n + 1));
     }
   });
 
   // ── Torrent download progress (hash sources) ─────────────────────────────────
 
-  const isHash = $derived(!src.startsWith("http"));
+  const isHash = $derived(!!src && !src.startsWith("http"));
   const torrent = new TorrentProgress();
 
   $effect(() => {
-    if (!isHash) return;
-    return torrent.start(src, { season, episode });
+    if (!src || !isHash) return;
+    return torrent.start(src, { season, episode, fileIdx });
   });
 
   // ── Background next-episode prefetch ─────────────────────────────────────────
@@ -292,7 +315,8 @@
       return;
     prefetchedNext = true;
     const m = media;
-    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const mode =
+      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
@@ -336,11 +360,13 @@
   });
 
   const loadingMessage = $derived(
-    isHash
-      ? torrent.peers > 0
-        ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
-        : "Connecting to peers…"
-      : "Buffering…",
+    streamDiscoveryPending
+      ? pendingMessage!
+      : isHash
+        ? torrent.peers > 0
+          ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
+          : "Connecting to peers…"
+        : "Buffering…",
   );
 
   // ── Logo ─────────────────────────────────────────────────────────────────────
@@ -349,11 +375,17 @@
 
   $effect(() => {
     const m = media;
-    if (!m) { logoUrl = null; return; }
+    if (!m) {
+      logoUrl = null;
+      return;
+    }
     logoUrl = null;
-    api.getLogos(m.id, m.media_type).then((logos) => {
-      logoUrl = logos[0] ?? null;
-    }).catch(() => {});
+    api
+      .getLogos(m.id, m.media_type)
+      .then((logos) => {
+        logoUrl = logos[0] ?? null;
+      })
+      .catch(() => {});
   });
 
   // ── IntroDB timestamps ────────────────────────────────────────────────────────
@@ -363,13 +395,19 @@
 
   $effect(() => {
     const m = media;
-    if (!m) { timestamps = null; return; }
+    if (!m) {
+      timestamps = null;
+      return;
+    }
     timestamps = null;
-    api.getTimestamps(m.id, { season, episode }).then((data) => {
-      timestamps = data;
-    }).catch((e) => {
-      console.warn("[introdb] fetch failed:", e);
-    });
+    api
+      .getTimestamps(m.id, { season, episode })
+      .then((data) => {
+        timestamps = data;
+      })
+      .catch((e) => {
+        console.warn("[introdb] fetch failed:", e);
+      });
   });
 
   const activeSegment = $derived.by(() => {
@@ -444,7 +482,9 @@
       targetLang = setting === "original" ? originalLang : setting;
     }
     appliedAudioDefault = true;
-    const match = Player.audioTracks.find((t) => langMatches(t.lang, targetLang));
+    const match = Player.audioTracks.find((t) =>
+      langMatches(t.lang, targetLang),
+    );
     if (match && !match.selected) Player.setAudioTrack(match.id);
   });
 
@@ -460,13 +500,17 @@
         selectSubtitle({ kind: "off" });
         return;
       }
-      const embMatch = Player.subtitleTracks.find((t) => langMatches(t.lang, pref.lang));
+      const embMatch = Player.subtitleTracks.find((t) =>
+        langMatches(t.lang, pref.lang),
+      );
       if (embMatch) {
         appliedSubDefault = true;
         selectSubtitle({ kind: "embedded", id: embMatch.id });
         return;
       }
-      const extMatch = externalSubtitles.find((s) => langMatches(s.lang, pref.lang));
+      const extMatch = externalSubtitles.find((s) =>
+        langMatches(s.lang, pref.lang),
+      );
       if (extMatch) {
         appliedSubDefault = true;
         selectSubtitle({ kind: "external", id: extMatch.id });
@@ -479,7 +523,9 @@
     }
     if (!$settings?.subtitlesEnabled) return;
     const lang = $settings.defaultSubtitleLang;
-    const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
+    const embedded = Player.subtitleTracks.find((t) =>
+      langMatches(t.lang, lang),
+    );
     if (embedded) {
       appliedSubDefault = true;
       selectSubtitle({ kind: "embedded", id: embedded.id });
@@ -490,7 +536,8 @@
     if (externalSubtitles.length === 0) return;
     appliedSubDefault = true;
     const ext =
-      externalSubtitles.find((s) => langMatches(s.lang, lang)) ?? externalSubtitles[0];
+      externalSubtitles.find((s) => langMatches(s.lang, lang)) ??
+      externalSubtitles[0];
     if (ext) selectSubtitle({ kind: "external", id: ext.id });
   });
 
@@ -542,7 +589,9 @@
       !upNextDismissed &&
       !!onPlayNext &&
       (activeSegment?.type === "credits" ||
-        (Player.duration > 0 && Player.duration - Player.position < 40 && canPlay) ||
+        (Player.duration > 0 &&
+          Player.duration - Player.position < 40 &&
+          canPlay) ||
         Player.ended),
   );
 
@@ -632,10 +681,14 @@
   function chooseSubtitle(sel: SubSel): void {
     selectSubtitle(sel);
     if (!media) return;
-    if (sel.kind === "off") { saveShowTrackPrefs(media.id, { sub: { kind: "off" } }); return; }
-    const lang = sel.kind === "embedded"
-      ? Player.subtitleTracks.find((x) => x.id === sel.id)?.lang
-      : externalSubtitles.find((x) => x.id === sel.id)?.lang;
+    if (sel.kind === "off") {
+      saveShowTrackPrefs(media.id, { sub: { kind: "off" } });
+      return;
+    }
+    const lang =
+      sel.kind === "embedded"
+        ? Player.subtitleTracks.find((x) => x.id === sel.id)?.lang
+        : externalSubtitles.find((x) => x.id === sel.id)?.lang;
     if (lang) saveShowTrackPrefs(media.id, { sub: { kind: "lang", lang } });
   }
 
@@ -657,7 +710,8 @@
   }): void {
     const size = patch.subtitleSize ?? $settings?.subtitleSize ?? 100;
     const pos = patch.subtitlePosition ?? $settings?.subtitlePosition ?? 8;
-    const bg = patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
+    const bg =
+      patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
     Player.setSubtitleStyle(size, pos, bg);
     clearTimeout(subStyleSaveTimer);
     subStyleSaveTimer = setTimeout(() => settings.save(patch), 400);
@@ -668,7 +722,9 @@
 
   function langName(code: string): string {
     try {
-      return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
+      return (
+        new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code
+      );
     } catch {
       return code;
     }
@@ -698,7 +754,11 @@
   const subtitleItems = $derived.by((): SubItem[] => {
     const items: SubItem[] = [{ kind: "off", id: "off", label: "Off" }];
     for (const t of Player.subtitleTracks) {
-      items.push({ kind: "embedded", id: t.id, label: trackLabel(t, "Subtitle") });
+      items.push({
+        kind: "embedded",
+        id: t.id,
+        label: trackLabel(t, "Subtitle"),
+      });
     }
     for (const s of externalSubtitles) {
       items.push({
@@ -711,7 +771,9 @@
   });
 
   // Subtitle source/language grouping helper (mirroring desktop groupByLang).
-  function groupByLang<T>(entries: { lang: string; item: T }[]): { label: string; items: T[] }[] {
+  function groupByLang<T>(
+    entries: { lang: string; item: T }[],
+  ): { label: string; items: T[] }[] {
     const OTHER = "Other";
     const groups = new SvelteMap<string, T[]>();
     for (const { lang, item } of entries) {
@@ -726,7 +788,12 @@
       .map(([label, items]) => ({ label, items }));
   }
 
-  type SubRowItem = { id: string | number; label: string; header?: boolean; indent?: boolean };
+  type SubRowItem = {
+    id: string | number;
+    label: string;
+    header?: boolean;
+    indent?: boolean;
+  };
 
   // Grouped subtitle list for the sheet: Off + per-source headers + per-lang headers + tracks.
   const subtitleRows = $derived.by((): SubRowItem[] => {
@@ -737,11 +804,19 @@
       const embGroups = groupByLang(
         Player.subtitleTracks.map((t) => ({
           lang: t.lang ? langName(t.lang) : t.title || "",
-          item: { id: t.id as string | number, label: trackLabel(t, "Subtitle") },
+          item: {
+            id: t.id as string | number,
+            label: trackLabel(t, "Subtitle"),
+          },
         })),
       );
       for (const g of embGroups) {
-        rows.push({ id: `hdr-embedded-${g.label}`, label: g.label, header: true, indent: true });
+        rows.push({
+          id: `hdr-embedded-${g.label}`,
+          label: g.label,
+          header: true,
+          indent: true,
+        });
         for (const item of g.items) rows.push(item);
       }
     }
@@ -751,11 +826,19 @@
       const extGroups = groupByLang(
         externalSubtitles.map((s) => ({
           lang: s.lang ? langName(s.lang) : "",
-          item: { id: s.id as string | number, label: langName(s.lang) || "Subtitle" },
+          item: {
+            id: s.id as string | number,
+            label: langName(s.lang) || "Subtitle",
+          },
         })),
       );
       for (const g of extGroups) {
-        rows.push({ id: `hdr-addons-${g.label}`, label: g.label, header: true, indent: true });
+        rows.push({
+          id: `hdr-addons-${g.label}`,
+          label: g.label,
+          header: true,
+          indent: true,
+        });
         for (const item of g.items) rows.push(item);
       }
     }
@@ -770,11 +853,16 @@
   });
 
   const title = $derived(
-    media ? (media.media_type === "tv" ? (media.name ?? "") : (media.title ?? "")) : "",
+    media
+      ? media.media_type === "tv"
+        ? (media.name ?? "")
+        : (media.title ?? "")
+      : "",
   );
 
   const episodeLabel = $derived.by(() => {
-    if (media?.media_type !== "tv" || season == null || episode == null) return "";
+    if (media?.media_type !== "tv" || season == null || episode == null)
+      return "";
     return `S${season}E${episode}`;
   });
 
@@ -810,7 +898,10 @@
   onDestroy(() => clearTimeout(seekFlashTimer));
 
   function nudgeSeek(delta: number): void {
-    const target = Math.max(0, Math.min(Player.duration || Infinity, Player.position + delta));
+    const target = Math.max(
+      0,
+      Math.min(Player.duration || Infinity, Player.position + delta),
+    );
     Player.seek(target);
   }
 
@@ -840,20 +931,40 @@
   // not yet playing. Sheet-open always keeps them active so scrims don't vanish
   // behind an open sheet.
   const controlsActive = $derived(
-    controlsVisible || Player.paused || !canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen,
+    controlsVisible ||
+      Player.paused ||
+      !canPlay ||
+      audioSheetOpen ||
+      subsSheetOpen ||
+      speedSheetOpen ||
+      episodesSheetOpen,
   );
 
   function showControls(): void {
     controlsVisible = true;
     clearTimeout(hideTimer);
-    if (!Player.paused && !scrubbing && !audioSheetOpen && !subsSheetOpen && !speedSheetOpen && !episodesSheetOpen) {
+    if (
+      !Player.paused &&
+      !scrubbing &&
+      !audioSheetOpen &&
+      !subsSheetOpen &&
+      !speedSheetOpen &&
+      !episodesSheetOpen
+    ) {
       hideTimer = setTimeout(() => (controlsVisible = false), 3000);
     }
   }
 
   // Keep controls visible while paused, buffering, or any sheet is open.
   $effect(() => {
-    if (Player.paused || !canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen) {
+    if (
+      Player.paused ||
+      !canPlay ||
+      audioSheetOpen ||
+      subsSheetOpen ||
+      speedSheetOpen ||
+      episodesSheetOpen
+    ) {
       clearTimeout(hideTimer);
       controlsVisible = true;
     }
@@ -890,7 +1001,11 @@
     const now = Date.now();
     const width = containerEl?.clientWidth ?? window.innerWidth;
 
-    if (tapState && now - tapState.time < 300 && Math.abs(x - tapState.x) < 12) {
+    if (
+      tapState &&
+      now - tapState.time < 300 &&
+      Math.abs(x - tapState.x) < 12
+    ) {
       // Double-tap: undo the first-tap toggle and apply seek
       tapState = null;
       // Revert the controls toggle that first tap applied
@@ -932,9 +1047,8 @@
   ontouchend={handleTouchEnd}
   onkeydown={() => {}}
 >
-
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
-  {#if !Player.available}
+  {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
       <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">
         Native player unavailable.
@@ -951,12 +1065,15 @@
       {chapterBars}
       {isHash}
       {torrent}
-      audioLabel={selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
+      audioLabel={selectedAudio?.title ||
+        langName(selectedAudio?.lang ?? "") ||
+        "Audio"}
       subLabel={subSelection.kind === "off"
         ? "Subs"
         : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? "Subs")}
       showAudio={Player.audioTracks.length > 0}
-      showSubs={Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
+      showSubs={Player.subtitleTracks.length > 0 ||
+        externalSubtitles.length > 0}
       hasNextEp={media?.media_type === "tv" && !!onPlayNext}
       bind:audioSheetOpen
       bind:subsSheetOpen
@@ -967,9 +1084,20 @@
       onSkipSegment={() => activeSegment && skipSegment(activeSegment)}
       onToggleMute={toggleMute}
       onCycleAspect={cycleAspect}
-      onNudgeBack={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
-      onNudgeForward={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
-      onScrub={(pos) => { scrubbing = pos !== null; if (pos !== null) showControls(); }}
+      onNudgeBack={() => {
+        nudgeSeek(-10);
+        showSeekFlash("left");
+        showControls();
+      }}
+      onNudgeForward={() => {
+        nudgeSeek(10);
+        showSeekFlash("right");
+        showControls();
+      }}
+      onScrub={(pos) => {
+        scrubbing = pos !== null;
+        if (pos !== null) showControls();
+      }}
       onShowControls={showControls}
     />
 
@@ -983,7 +1111,7 @@
         onAdvance={advance}
       />
     {/if}
-  {:else if Player.available}
+  {:else if streamDiscoveryPending || Player.available}
     <!-- ── Loading / buffering screen ─────────────────────────────────────── -->
     <MobileLoadingScreen
       {media}
@@ -991,8 +1119,11 @@
       {logoUrl}
       {loadingMessage}
       {takingAWhile}
-      {onclose}
-      onCancel={triggerPlaybackFailed}
+      cancelVisible={streamDiscoveryPending}
+      onclose={streamDiscoveryPending ? onCancelPending : onclose}
+      onCancel={streamDiscoveryPending
+        ? (onCancelPending ?? triggerPlaybackFailed)
+        : triggerPlaybackFailed}
     />
   {/if}
 
@@ -1000,7 +1131,6 @@
   {#if seekFlash}
     <SeekFlash {seekFlash} />
   {/if}
-
 </div>
 
 <!-- ── Track sheets (fixed, rendered outside the main div) ───────────────── -->
@@ -1008,7 +1138,10 @@
 {#if audioSheetOpen}
   <TrackSheet
     title="Audio"
-    items={sortedAudio.map((t) => ({ id: t.id, label: trackLabel(t, "Audio") }))}
+    items={sortedAudio.map((t) => ({
+      id: t.id,
+      label: trackLabel(t, "Audio"),
+    }))}
     selectedId={selectedAudio?.id ?? null}
     onSelect={(id) => chooseAudioTrack(id as number)}
     onClose={() => (audioSheetOpen = false)}
@@ -1017,7 +1150,9 @@
 
 {#snippet subStyleFooter()}
   <div class="border-t border-white/10 px-5 pb-3 pt-3">
-    <p class="pb-2 text-xs font-semibold uppercase tracking-widest text-white/40">
+    <p
+      class="pb-2 text-xs font-semibold uppercase tracking-widest text-white/40"
+    >
       Style
     </p>
     <div class="space-y-4">
@@ -1107,7 +1242,10 @@
 {#if speedSheetOpen}
   <TrackSheet
     title="Playback speed"
-    items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
+    items={SPEEDS.map((s) => ({
+      id: String(s),
+      label: s === 1 ? "Normal (1×)" : `${s}×`,
+    }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {
       chooseSpeed(parseFloat(id as string));

@@ -11,6 +11,7 @@
     logoUrl,
     loadingMessage,
     takingAWhile,
+    cancelVisible = false,
     onCancel,
     onClose,
   }: {
@@ -19,12 +20,15 @@
     logoUrl: string | null;
     loadingMessage: string;
     takingAWhile: boolean;
+    cancelVisible?: boolean;
     onCancel: () => void;
     onClose?: () => void;
   } = $props();
 </script>
 
-<div class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black">
+<div
+  class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black"
+>
   {#if onClose}
     <button
       type="button"
@@ -55,14 +59,21 @@
       class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
     />
   {:else if title}
-    <span class="relative z-10 px-8 text-center text-3xl font-bold text-white">{title}</span>
+    <span class="relative z-10 px-8 text-center text-3xl font-bold text-white"
+      >{title}</span
+    >
   {/if}
   <Spinner class="relative z-10 mt-6 size-10" />
   <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>
   {#if takingAWhile}
-    <p class="relative z-10 mt-2 text-xs text-white/40" transition:fade={{ duration: 150 }}>
+    <p
+      class="relative z-10 mt-2 text-xs text-white/40"
+      transition:fade={{ duration: 150 }}
+    >
       This is taking a while…
     </p>
+  {/if}
+  {#if cancelVisible || takingAWhile}
     <Button
       variant="outline"
       size="sm"

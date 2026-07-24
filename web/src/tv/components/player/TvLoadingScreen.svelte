@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Media } from "$lib/types/tmdb";
   import { Spinner } from "$lib/components/ui/spinner";
+  import { tick } from "svelte";
   import { fade } from "svelte/transition";
 
   let {
@@ -9,6 +10,7 @@
     logoUrl,
     loadingMessage,
     takingAWhile,
+    cancelVisible = false,
     onCancel,
   }: {
     media?: Media;
@@ -16,8 +18,17 @@
     logoUrl: string | null;
     loadingMessage: string;
     takingAWhile: boolean;
+    cancelVisible?: boolean;
     onCancel: () => void;
   } = $props();
+
+  let cancelButton = $state<HTMLButtonElement | null>(null);
+
+  $effect(() => {
+    if (cancelVisible && cancelButton) {
+      tick().then(() => cancelButton?.focus({ preventScroll: true }));
+    }
+  });
 </script>
 
 <div class="absolute inset-0 z-20 flex flex-col items-center justify-center">
@@ -41,7 +52,9 @@
       class="relative z-10 h-56 w-36 rounded-xl object-cover shadow-2xl"
     />
   {:else if title}
-    <span class="relative z-10 px-8 text-center text-3xl font-bold text-white">{title}</span>
+    <span class="relative z-10 px-8 text-center text-3xl font-bold text-white"
+      >{title}</span
+    >
   {/if}
   <Spinner class="relative z-10 mt-8 size-14 text-white" />
   <p class="relative z-10 mt-4 text-base text-white/50">{loadingMessage}</p>
@@ -53,7 +66,10 @@
     >
       This is taking a while…
     </p>
+  {/if}
+  {#if cancelVisible || takingAWhile}
     <button
+      bind:this={cancelButton}
       type="button"
       class="relative z-10 mt-5 rounded-xl border border-white/30 bg-white/10 px-6 py-3 text-base text-white hover:bg-white/20 focus:bg-white/20"
       onclick={onCancel}

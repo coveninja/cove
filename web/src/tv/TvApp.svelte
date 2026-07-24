@@ -25,11 +25,13 @@
   import { api, setTokenSource } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
   import { startAutoSync } from "$lib/sync";
-  import { Spinner } from "$lib/components/ui/spinner";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
-  import { navigate, focusFirst, editableKeepsArrow } from "./focus/focusStore.svelte";
-  import { X } from "lucide-svelte";
+  import {
+    navigate,
+    focusFirst,
+    editableKeepsArrow,
+  } from "./focus/focusStore.svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -188,15 +190,6 @@
     }
   }
 
-  // ── quickPlayPending cancel button ref (autofocus when overlay appears) ──────
-  let cancelBtn = $state<HTMLButtonElement | null>(null);
-
-  $effect(() => {
-    if (playback.quickPlayPending && cancelBtn) {
-      cancelBtn.focus();
-    }
-  });
-
   // ── TvPlayer sheet-close hook for Escape priority ────────────────────────────
   // TvPlayer (M6) registers this via onRegisterCloseSheets; returns true if it
   // closed a sheet (caller stops processing Escape further).
@@ -222,7 +215,10 @@
 
   function isEditable(el: Element): boolean {
     if (el instanceof HTMLTextAreaElement) return true;
-    if (el instanceof HTMLInputElement && EDITABLE_TYPES.has(el.type.toLowerCase()))
+    if (
+      el instanceof HTMLInputElement &&
+      EDITABLE_TYPES.has(el.type.toLowerCase())
+    )
       return true;
     if ((el as HTMLElement).isContentEditable) return true;
     return false;
@@ -397,7 +393,6 @@
   const activePlaybackEpisode = $derived(
     streamActiveForSelectedMedia ? playback.playerSession?.episode : undefined,
   );
-
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -410,7 +405,10 @@
     .tv-shell also carries the 10-foot base font-size and the D-pad focus ring
     via the scoped :global rules in <style>.
   -->
-  <div class="tv-shell flex h-screen overflow-hidden bg-[#0a0a0a] text-white" style="--tv-safe-inset: 32px;">
+  <div
+    class="tv-shell flex h-screen overflow-hidden bg-[#0a0a0a] text-white"
+    style="--tv-safe-inset: 32px;"
+  >
     <!-- Left rail: hidden while player or its loading overlay is up (mirrors
          BottomNav pattern in MobileApp). -->
     {#if !playback.playerSession && !playback.quickPlayPending}
@@ -434,7 +432,9 @@
       class="relative isolate min-h-0 flex-1 overflow-hidden"
       style="padding: var(--tv-safe-inset);"
       inert={showOnboarding ||
-        (!!selectedMedia && !playback.playerSession && !playback.quickPlayPending)}
+        (!!selectedMedia &&
+          !playback.playerSession &&
+          !playback.quickPlayPending)}
     >
       <!-- Pages: always mounted, shown/hidden via class:hidden so state and
            scroll positions survive tab switching.  invisible (not just hidden)
@@ -484,65 +484,21 @@
             catalogType={currentPage.type === "catalog"
               ? currentPage.catalogType
               : ""}
-            catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
+            catalogId={currentPage.type === "catalog"
+              ? currentPage.catalogId
+              : ""}
             name={currentPage.type === "catalog" ? currentPage.name : ""}
-            addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
+            addonUrl={currentPage.type === "catalog"
+              ? currentPage.addonUrl
+              : undefined}
             onSelectMedia={selectMedia}
             onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
           />
         </div>
       </div>
 
-      <!-- quickPlayPending overlay: covers the gap between a Watch press and
-           playerSession being set, before the player can show its own loading UI.
-           Poster image (or title text) + spinner — restyled slightly larger
-           than mobile for 10-foot viewing. -->
-      {#if playback.quickPlayPending && !playback.playerSession}
-        <div
-          class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black"
-          transition:fade={{ duration: 150 }}
-        >
-          {#if playback.quickPlayPending.media.poster_path}
-            <div
-              class="absolute inset-0 scale-110 bg-cover bg-center"
-              style="background-image: url('{playback.quickPlayPending.media
-                .poster_path}'); filter: blur(5px); opacity: 0.35;"
-            ></div>
-            <div class="absolute inset-0 bg-black/65"></div>
-            <img
-              src={playback.quickPlayPending.media.poster_path}
-              alt={playback.quickPlayPending.media.media_type === "tv"
-                ? playback.quickPlayPending.media.name
-                : playback.quickPlayPending.media.title}
-              class="relative z-10 h-72 w-48 rounded-xl object-cover shadow-2xl"
-            />
-          {:else}
-            <div class="absolute inset-0 bg-black/65"></div>
-            <span class="relative z-10 px-8 text-center text-4xl font-bold text-white">
-              {playback.quickPlayPending.media.media_type === "tv"
-                ? playback.quickPlayPending.media.name
-                : playback.quickPlayPending.media.title}
-            </span>
-          {/if}
-          <Spinner class="relative z-10 mt-8 size-12" />
-          <p class="relative z-10 mt-4 text-base text-white/50">
-            {playback.quickPlayPending.message}
-          </p>
-          <button
-            bind:this={cancelBtn}
-            type="button"
-            class="relative z-10 mt-8 flex items-center gap-2 rounded-full border border-white/25 px-6 py-3 text-base text-white/70 transition hover:bg-white/10 hover:text-white"
-            onclick={() => playback.cancelQuickPlay()}
-            aria-label="Cancel"
-          >
-            <X class="size-5" />
-            Cancel
-          </button>
-        </div>
-      {/if}
-
       <!-- TV Player (M6) -->
-      {#if playback.playerSession}
+      {#if playback.playerSession || (playback.quickPlayPending && !playback.playerSession)}
         <div
           class="absolute inset-0 z-30 overflow-hidden"
           transition:scale={{
@@ -553,15 +509,22 @@
           }}
         >
           <TvPlayer
-            src={playback.playerSession.stream.infoHash ||
-              (playback.playerSession.stream.headers
-                ? api.playProxyUrl(playback.playerSession.stream.url)
-                : playback.playerSession.stream.url)}
-            media={playback.playerSession.media}
-            externalSubtitles={playback.playerSession.subtitles}
-            season={playback.playerSession.season}
-            episode={playback.playerSession.episode}
-            fileIdx={playback.playerSession.stream.fileIdx}
+            src={playback.playerSession
+              ? playback.playerSession.stream.infoHash ||
+                (playback.playerSession.stream.headers
+                  ? api.playProxyUrl(playback.playerSession.stream.url)
+                  : playback.playerSession.stream.url)
+              : ""}
+            media={playback.playerSession?.media ??
+              playback.quickPlayPending?.media}
+            pendingMessage={!playback.playerSession
+              ? playback.quickPlayPending?.message
+              : undefined}
+            onCancelPending={() => playback.cancelQuickPlay()}
+            externalSubtitles={playback.playerSession?.subtitles ?? []}
+            season={playback.playerSession?.season}
+            episode={playback.playerSession?.episode}
+            fileIdx={playback.playerSession?.stream.fileIdx}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;
@@ -569,7 +532,16 @@
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
-              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+              if (m)
+                playback.startPlayback(
+                  m,
+                  stream,
+                  s,
+                  e,
+                  name,
+                  candidates ?? [],
+                  0,
+                );
             }}
             onclose={() => playback.closePlayer()}
             onRegisterCloseSheets={(fn) => (closePlayerSheets = fn)}
@@ -595,7 +567,15 @@
           onplaystream={(stream, season, episode, episodeName, candidates) => {
             const m = selectedMedia;
             if (m)
-              playback.startPlayback(m, stream, season, episode, episodeName, candidates, 0);
+              playback.startPlayback(
+                m,
+                stream,
+                season,
+                episode,
+                episodeName,
+                candidates,
+                0,
+              );
           }}
           onsimilar={(m) => selectMedia(m)}
           onclose={closeDetailOverlay}
