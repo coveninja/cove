@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coveninja/cove/internal/settings"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +49,14 @@ func addFakeHash(t *testing.T, p *Player, hash string, st *torrentState) {
 }
 
 // ─── New / Close ─────────────────────────────────────────────────────────────
+
+// TestCloseNilPlayerDoesNotPanic verifies that Close() on a nil *Player is a
+// safe no-op — the nil guard at the top of Close() runs before any field
+// access. This exercises lines 313-314 of player.go.
+func TestCloseNilPlayerDoesNotPanic(t *testing.T) {
+	var p *Player
+	p.Close() // must not panic
+}
 
 // TestNewAndClose verifies that New constructs a Player with a real torrent
 // client and that Close is idempotent (calling it twice must not panic).
@@ -705,6 +714,31 @@ func (r subtitleReadCloser) Read([]byte) (int, error) {
 
 func (r subtitleReadCloser) Close() error {
 	return r.closeErr
+}
+
+// TestSubtitleProxySuccessCallsWriteSubtitleResponse verifies that when the
+// upstream subtitle fetch succeeds, the handler passes the response body to
+// writeSubtitleResponse and the caller receives processed subtitle content.
+// utils.SafeHTTPClient is temporarily replaced with a plain *http.Client so
+// the local test server (127.0.0.1) is not rejected by SafeTransport's SSRF
+// check. This exercises line 1664 of player.go.
+func TestSubtitleProxySuccessCallsWriteSubtitleResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nTest subtitle"))
+	}))
+	defer upstream.Close()
+
+	// Swap SafeHTTPClient so the handler can reach the local test server; restore
+	// it when the test exits so other tests are unaffected.
+	old := utils.SafeHTTPClient
+	utils.SafeHTTPClient = &http.Client{}
+	defer func() { utils.SafeHTTPClient = old }()
+
+	_, mux := handlerPlayer(nil, nil, nil)
+	rec := serve(mux, http.MethodGet, "/api/subtitle-proxy?url="+upstream.URL+"/sub.vtt", "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/vtt; charset=utf-8", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Body.String(), "WEBVTT")
 }
 
 func TestWriteSubtitleResponseConvertsAndHandlesUpstreamIO(t *testing.T) {

@@ -138,3 +138,23 @@ func TestQueryVariants(t *testing.T) {
 	assert.Contains(t, variants2, "Spider Man") // normalized
 	assert.Contains(t, variants2, "spiderman")  // stripped
 }
+
+// TestCloneMediasNil covers the nil guard at the top of cloneMedias (tmdb.go
+// lines 165-167). The nil path is reached when catalogCacheGet retrieves an
+// entry that was stored with a nil medias slice.
+func TestCloneMediasNil(t *testing.T) {
+	got := cloneMedias(nil)
+	assert.Nil(t, got, "cloneMedias(nil) must return nil, not an empty slice")
+}
+
+// TestCatalogCacheNilMediasRoundTrip stores a nil medias slice via
+// catalogCacheSet and retrieves it via catalogCacheGet, exercising
+// cloneMedias(nil) through the public cache API.
+func TestCatalogCacheNilMediasRoundTrip(t *testing.T) {
+	c := New("key")
+	c.catalogCacheSet("nil-key", nil, 0)
+	medias, nextSkip, ok := c.catalogCacheGet("nil-key")
+	assert.True(t, ok, "cached nil-medias entry must be found")
+	assert.Nil(t, medias, "retrieved medias must remain nil")
+	assert.Equal(t, 0, nextSkip)
+}

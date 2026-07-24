@@ -254,3 +254,43 @@ func entryByID(entries []AddonEntry, id string) AddonEntry {
 	}
 	return AddonEntry{}
 }
+
+// TestAddStremioAddonUpdateInPlaceRollsBackOnPersistFailure covers the
+// update-existing branch of AddStremioAddon (manager.go lines 246-249): when a
+// re-add matches an existing addon URL but persisting the update fails, the
+// in-memory state is restored.
+func TestAddStremioAddonUpdateInPlaceRollsBackOnPersistFailure(t *testing.T) {
+	srv := httptest.NewServer(manifestHandler("remote", "Remote"))
+	defer srv.Close()
+
+	manager := newTestManager(nil)
+	manager.storePath = filepath.Join(t.TempDir(), "addons.json")
+	added, err := manager.AddStremioAddon(context.Background(), srv.URL)
+	require.NoError(t, err)
+	require.True(t, hasEntry(manager.GetEntries(), "remote"))
+
+	// Break persistence, then re-add the same URL so the update-in-place path
+	// runs and its save fails.
+	manager.storePath = filepath.Join(t.TempDir(), "missing", "addons.json")
+	before := manager.UpdatedAt()
+	_, err = manager.AddStremioAddon(context.Background(), added.URL)
+	require.Error(t, err)
+	assert.True(t, hasEntry(manager.GetEntries(), "remote"), "the addon must survive a failed update")
+	assert.Equal(t, before, manager.UpdatedAt())
+}
+
+// TestSetEnabledOfficialAddonSucceeds covers the success return of toggling an
+// official addon (manager.go line 304).
+func TestSetEnabledOfficialAddonSucceeds(t *testing.T) {
+	manager := newTestManager(nil)
+	require.NoError(t, manager.SetEnabled("cove.justwatch", "", true))
+	assert.True(t, entryByID(manager.GetEntries(), "cove.justwatch").Enabled)
+	require.NoError(t, manager.SetEnabled("cove.justwatch", "", false))
+	assert.False(t, entryByID(manager.GetEntries(), "cove.justwatch").Enabled)
+}
+
+// TestCloneStreamsNilReturnsNil covers the nil guard in cloneStreams
+// (manager.go lines 438-440).
+func TestCloneStreamsNilReturnsNil(t *testing.T) {
+	assert.Nil(t, cloneStreams(nil))
+}

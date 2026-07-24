@@ -198,6 +198,29 @@ func TestPlayAndProgressHandlersWithoutTorrentClient(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, serve(mux, http.MethodPost, "/api/prefetch-download?hash=bad", "").Code)
 }
 
+// TestSubtitlesHandlerDefaultsTypeToMovie verifies that omitting the ?type
+// param on /api/subtitles implicitly selects "movie" (lines 1237-1238),
+// causing GetIMDBId — not GetTVIMDBId — to be called and returning 200.
+func TestSubtitlesHandlerDefaultsTypeToMovie(t *testing.T) {
+	provider := &fakePlayerAddons{subtitles: []addons.Subtitle{{ID: "sub-1", URL: "https://subs.example/sub.vtt"}}}
+	_, mux := handlerPlayer(&fakePlayerTMDB{movieID: "tt0042"}, provider, nil)
+	// Omit ?type= — handler must default to "movie" and succeed.
+	rec := serve(mux, http.MethodGet, "/api/subtitles?id=42", "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "movie", provider.subtitleType)
+	assert.Equal(t, "tt0042", provider.subtitleID)
+}
+
+// TestSubtitlesHandlerRejectsInvalidSeasonForTV verifies that a non-numeric
+// ?season= value paired with a valid ?episode= returns 400 with "invalid
+// season" for TV subtitle requests, exercising lines 1267-1269.
+func TestSubtitlesHandlerRejectsInvalidSeasonForTV(t *testing.T) {
+	_, mux := handlerPlayer(&fakePlayerTMDB{tvID: "tt0099"}, &fakePlayerAddons{}, nil)
+	rec := serve(mux, http.MethodGet, "/api/subtitles?id=99&type=tv&season=bad&episode=2", "")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid season")
+}
+
 func TestPlayerSmallHelpers(t *testing.T) {
 	assert.Equal(t, 42, func() int { value, _ := positiveInt("42"); return value }())
 	_, ok := positiveInt("0")

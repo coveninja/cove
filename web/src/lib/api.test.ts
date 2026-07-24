@@ -412,6 +412,34 @@ describe("API boundary behavior", () => {
     );
   });
 
+  it("skips blank and whitespace-only lines within an NDJSON quality stream", async () => {
+    // Covers the emitLine early-exit (line 469): blank separators emitted by some
+    // NDJSON producers must be skipped without calling onEntry or throwing.
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Two valid frames separated by an empty line and a whitespace-only line.
+        controller.enqueue(
+          encoder.encode(
+            '{"id":"movie:1","quality":"4K"}\n\n  \n{"id":"tv:2","quality":"HD"}\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body)));
+    const entries: Array<[string, string]> = [];
+
+    await api.streamQualityBatch(["movie:1", "tv:2"], (id, quality) =>
+      entries.push([id, quality]),
+    );
+
+    expect(entries).toEqual([
+      ["movie:1", "4K"],
+      ["tv:2", "HD"],
+    ]);
+  });
+
   it("skips an empty quality batch without opening a request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

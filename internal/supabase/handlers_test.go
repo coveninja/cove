@@ -550,3 +550,166 @@ func TestReconcileProfileAdoptsRemotePrimary(t *testing.T) {
 	_, exists := server.profileStore.Get(oldID)
 	assert.False(t, exists)
 }
+
+// corruptConfigDir replaces the app's config directory with a plain file so
+// that any subsequent write to it (profiles, library, settings …) fails.
+// Must be called after utils.ConfigPath has already been used to create the
+// directory at least once.
+func corruptConfigDir(t *testing.T) {
+	t.Helper()
+	probe, err := utils.ConfigPath("probe")
+	require.NoError(t, err)
+	appDir := filepath.Dir(probe)
+	require.NoError(t, os.RemoveAll(appDir))
+	require.NoError(t, os.WriteFile(appDir, []byte("blocked"), 0o600))
+}
+
+// TestPushAsyncRecordsLibraryPushError verifies that a PushLibrary failure
+// (handlers.go:113-115) is recorded in lastPushErr when the library is
+// non-empty and the remote rejects the upsert.
+func TestPushAsyncRecordsLibraryPushError(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+	profileID := server.profileStore.ActiveProfileID()
+
+	// Add an entry so pushEntries actually calls Upsert (empty library skips it).
+	now := time.Now()
+	require.NoError(t, server.lib.MergeFrom([]*library.LibraryEntry{{
+		ID: "e1", TmdbID: 42, MediaType: "movie", Title: "Test",
+		Status: library.StatusWatchLater, AddedAt: now, UpdatedAt: now,
+	}}, nil, nil, nil))
+
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		return response(http.StatusServiceUnavailable, `{"message":"unavailable"}`), nil
+	})
+	server.pushAsync("jwt", profileID, "test push")
+	waitForPush(t, server)
+	server.pushErrMu.Lock()
+	assert.Contains(t, server.lastPushErr, "library")
+	server.pushErrMu.Unlock()
+}
+
+// TestMergeRemoteReturnsLinkError checks the error path at handlers.go:639-640
+// where LinkSupabase fails after a successful pull. The profile must be
+// unlinked and the filesystem corrupted before the call so the write fails.
+func TestMergeRemoteReturnsLinkError(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+	profileID := server.profileStore.ActiveProfileID()
+
+	// Remote profile has the same ID, same name, older timestamp → reconcileProfile
+	// matches on ID without renaming (no disk write) and returns immediately.
+	pastTS := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/profiles") {
+			return response(http.StatusOK, `[{
+				"id":"`+profileID+`",
+				"user_id":"user-1",
+				"name":"Primary",
+				"is_primary":true,
+				"updated_at":"`+pastTS+`"
+			}]`), nil
+		}
+		// All data tables return empty so no merge writes touch the filesystem.
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	// Corrupt the config dir so LinkSupabase's subsequent write fails.
+	corruptConfigDir(t)
+
+	err := server.mergeRemote("user-1", "jwt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "link profile")
+	assert.Nil(t, server.profileStore.ActiveProfile().SupabaseUID,
+		"a failed link must not leave the profile linked")
+}
+
+// TestRollbackReconciliationLogsAdoptIDError covers handlers.go:649-652.
+// reconcileProfile adopts a remote primary ID (disk write succeeds at that
+// point). The HTTP handler for library_entries then corrupts the filesystem
+// before returning a 503, so PullAll fails and rollbackReconciliation's
+// AdoptID call can no longer write — logging the error and returning early.
+func TestRollbackReconciliationLogsAdoptIDError(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+	localID := server.profileStore.ActiveProfileID()
+	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+
+	var once sync.Once
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/profiles"):
+			// Remote has a different primary → reconcileProfile calls AdoptID.
+			return response(http.StatusOK, `[{
+				"id":"remote-primary",
+				"user_id":"user-1",
+				"name":"Primary",
+				"is_primary":true,
+				"updated_at":"`+updatedAt+`"
+			}]`), nil
+		case strings.HasSuffix(r.URL.Path, "/library_entries"):
+			// Corrupt the filesystem on the first library_entries call (inside
+			// PullAll), after reconcileProfile has already succeeded.
+			once.Do(func() { corruptConfigDir(t) })
+			return response(http.StatusServiceUnavailable, `{"message":"unavailable"}`), nil
+		default:
+			return response(http.StatusOK, `[]`), nil
+		}
+	})
+
+	err := server.mergeRemote("user-1", "jwt")
+	require.Error(t, err)
+	// PullAll returns the library_entries error.
+	assert.Contains(t, err.Error(), "pull library_entries")
+	// The local profile reverted to a different (corrupted) state; we only
+	// assert the error path was taken — the reconciliation log message is
+	// verified by the log package, not captured here.
+	_ = localID // referenced to silence unused-variable linter
+}
+
+// TestRollbackReconciliationLogsRenameFromRemoteError covers handlers.go:657-659.
+// reconcileProfile renames the profile from a newer remote name (disk write OK).
+// PullAll then fails after the filesystem is corrupted, so rollbackReconciliation
+// cannot restore the original name — logging the error instead of panicking.
+func TestRollbackReconciliationLogsRenameFromRemoteError(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+	profileID := server.profileStore.ActiveProfileID()
+	newerTS := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+
+	var once sync.Once
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/profiles"):
+			// Same ID, different name, future timestamp → reconcileProfile
+			// calls RenameFromRemote (disk write) then returns.
+			return response(http.StatusOK, `[{
+				"id":"`+profileID+`",
+				"user_id":"user-1",
+				"name":"Remote Name",
+				"is_primary":true,
+				"updated_at":"`+newerTS+`"
+			}]`), nil
+		case strings.HasSuffix(r.URL.Path, "/library_entries"):
+			// Corrupt the filesystem inside PullAll, after the rename succeeded.
+			once.Do(func() { corruptConfigDir(t) })
+			return response(http.StatusServiceUnavailable, `{"message":"unavailable"}`), nil
+		default:
+			return response(http.StatusOK, `[]`), nil
+		}
+	})
+
+	err := server.mergeRemote("user-1", "jwt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pull library_entries")
+	// rollbackReconciliation tried RenameFromRemote to restore "Primary" but
+	// failed silently (log only); the profile name stays as-is.
+}

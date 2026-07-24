@@ -510,3 +510,75 @@ func TestItemDismissAndStatsRequestBoundaries(t *testing.T) {
 		assert.Equal(t, tc.status, rr.Code, "%s %s: %s", tc.method, tc.target, rr.Body.String())
 	}
 }
+
+// TestProgressPostRejectsInvalidTmdbIDAndMediaType covers the validation branch
+// in handleProgress's POST path (body.TmdbID <= 0 || !validMediaType(body.MediaType)).
+// The GET variant of this validation is already covered; the POST path was missing.
+func TestProgressPostRejectsInvalidTmdbIDAndMediaType(t *testing.T) {
+	l := newLib(t)
+
+	// TmdbID omitted (zero) with a valid media_type — left side of the OR fires.
+	rr := libraryRequest(t, l, http.MethodPost, "/api/library/progress",
+		`{"media_type":"movie","position_seconds":10,"duration_seconds":100}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code,
+		"missing tmdb_id must be rejected")
+
+	// TmdbID present but media_type is not movie or tv — right side of the OR fires.
+	rr = libraryRequest(t, l, http.MethodPost, "/api/library/progress",
+		`{"tmdb_id":1,"media_type":"album","position_seconds":10,"duration_seconds":100}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code,
+		"invalid media_type must be rejected")
+}
+
+// TestCloneNilGuards ensures each clone helper returns nil when given a nil
+// pointer. These nil paths are reached whenever a caller passes an optional nil
+// (e.g. cloneDiskStore encounters a nil map value before ensureMaps runs).
+func TestCloneNilGuards(t *testing.T) {
+	if got := cloneEntry(nil); got != nil {
+		t.Errorf("cloneEntry(nil) = %v, want nil", got)
+	}
+	if got := cloneProgress(nil); got != nil {
+		t.Errorf("cloneProgress(nil) = %v, want nil", got)
+	}
+	if got := cloneDismissal(nil); got != nil {
+		t.Errorf("cloneDismissal(nil) = %v, want nil", got)
+	}
+	if got := cloneRemoval(nil); got != nil {
+		t.Errorf("cloneRemoval(nil) = %v, want nil", got)
+	}
+}
+
+// TestMergeFromWriteFailureRollsBackState verifies that MergeFrom propagates
+// a disk-write error and rolls the in-memory store back to its pre-merge state
+// (lines 471-473 in library.go).
+func TestMergeFromWriteFailureRollsBackState(t *testing.T) {
+	l := newLib(t)
+	now := time.Now().UTC()
+
+	// Establish a known baseline that we expect to survive the failed merge.
+	baseline := &LibraryEntry{
+		ID: "baseline", TmdbID: 1, MediaType: "movie", Title: "Baseline",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, l.MergeFrom([]*LibraryEntry{baseline}, nil, nil, nil))
+	require.Len(t, l.AllEntries(), 1)
+
+	// Make the config directory read-only so AtomicWriteFile cannot create a
+	// temp file, forcing writeNow to return an error.
+	dir := filepath.Dir(l.path)
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	// Try to merge a new entry — must fail to persist.
+	incoming := &LibraryEntry{
+		ID: "incoming", TmdbID: 2, MediaType: "movie", Title: "Incoming",
+		Status: StatusWatchLater, AddedAt: now, UpdatedAt: now,
+	}
+	err := l.MergeFrom([]*LibraryEntry{incoming}, nil, nil, nil)
+	require.Error(t, err, "MergeFrom must propagate the write error")
+
+	// The in-memory store must be rolled back: the incoming entry must not appear.
+	entries := l.AllEntries()
+	require.Len(t, entries, 1, "rollback must restore the single baseline entry")
+	assert.Equal(t, "Baseline", entries[0].Title)
+}

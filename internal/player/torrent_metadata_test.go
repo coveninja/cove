@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -186,6 +187,56 @@ func TestStreamTorrentRejectsInvalidHashBeforeMetadataLookup(t *testing.T) {
 
 	assert.Equal(t, 404, rec.Code)
 	assert.Contains(t, rec.Body.String(), "invalid infohash")
+}
+
+// TestStreamTorrentReturns404WhenFileSelectionFails verifies that
+// StreamTorrent returns HTTP 404 when getTorrentFile fails with an error —
+// here because the torrent contains no video files. This exercises the error
+// path at line 1035-1038 of player.go.
+func TestStreamTorrentReturns404WhenFileSelectionFails(t *testing.T) {
+	p := newTestPlayer(t)
+	_, hash := addMetadataTestTorrent(t, p, "documents", []metadataTestFile{
+		{path: "notes.nfo", data: "notes only"},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/torrent/"+hash, nil)
+	p.StreamTorrent(hash, nil, nil, nil, rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), "no video files")
+}
+
+// TestGetTorrentFileMetadataFetchTimeout verifies the metadata-timeout path
+// in getTorrentFile's singleflight. The player's lifecycleCtx is replaced
+// with a short-deadline context so the internal 45-second wait fires almost
+// immediately. removeTorrentDataEntry is forced to fail (dataDir="") to cover
+// the error-log path at lines 815-816; the error returned to the caller
+// contains "timed out" (not "player closed") because the context expires via
+// DeadlineExceeded rather than Canceled, exercising line 820.
+func TestGetTorrentFileMetadataFetchTimeout(t *testing.T) {
+	p := newTestPlayer(t)
+
+	// Empty dataDir makes removeTorrentDataEntry return an error, covering the
+	// log statement at lines 815-816 that fires when cleanup of a timed-out
+	// torrent's on-disk data fails.
+	p.dataDir = ""
+
+	// Replace the lifecycle context with one that expires in 100 ms so the
+	// singleflight's internal context (derived from lifecycleCtx) times out
+	// quickly. The original lifecycleCancel is left in place; t.Cleanup will
+	// call p.Close() on the original context, which is harmless.
+	shortCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	p.lifecycleCtx = shortCtx
+
+	// Use a hash not in activeTorrents and not in the client: AddMagnet adds a
+	// new torrent with no peers and no metadata, so GotInfo() never fires and
+	// the internal context times out.
+	const hash = "2222222222222222222222222222222222222222"
+	_, err := p.getTorrentFile(context.Background(), hash, nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out fetching metadata")
 }
 
 func TestPrefetchTorrentSwitchesSingleDownloadSlot(t *testing.T) {

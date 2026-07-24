@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -322,4 +324,99 @@ func TestRepoLifecycleErrorsAndHTTPCreateRefresh(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, request(http.MethodPost, "/api/nuvio/repos/refresh?id=owner/repo", "").Code)
 	assert.Equal(t, http.StatusBadRequest, request(http.MethodPost, "/api/nuvio/repos/refresh", "").Code)
 	assert.Equal(t, http.StatusMethodNotAllowed, request(http.MethodGet, "/api/nuvio/repos/refresh?id=owner/repo", "").Code)
+}
+
+// TestSetScraperEnabledFetchFailurePersistErrorSkipsOtherRepos covers the
+// second apply loop in SetScraperEnabled: a non-matching repo is skipped
+// (repo.go line 249) and, when the code fetch fails, persisting the disabled
+// state also fails and the two errors are wrapped together (line 261).
+func TestSetScraperEnabledFetchFailurePersistErrorSkipsOtherRepos(t *testing.T) {
+	manager := testManager(t)
+	manager.repos = []Repo{
+		{ID: "owner/a", Owner: "owner", Name: "a", Branch: "main", Enabled: true,
+			Scrapers: []Scraper{{ID: "other", Name: "Other", Filename: "other.js"}}},
+		{ID: "owner/b", Owner: "owner", Name: "b", Branch: "main", Enabled: true,
+			Scrapers: []Scraper{{ID: "target", Name: "Target", Filename: "target.js"}}},
+	}
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nuvioResponse(http.StatusInternalServerError, "boom"), nil
+	})}
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocker, []byte("blocked"), 0o600))
+	manager.storePath = filepath.Join(blocker, "nuvio.json")
+
+	err := manager.SetScraperEnabled(context.Background(), "owner/b", "target", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not fetch scraper code")
+	assert.Contains(t, err.Error(), "save state")
+}
+
+// TestRefreshRepoAbortsWhenRegistryChangesMidFlight covers the revision guard
+// in RefreshRepo's apply phase (repo.go lines 335-336): switching profiles
+// while the manifest fetch is in flight bumps the config revision, so the
+// captured refresh is rejected instead of writing into the new profile.
+func TestRefreshRepoAbortsWhenRegistryChangesMidFlight(t *testing.T) {
+	manager := testManager(t)
+	manager.repos = []Repo{{
+		ID: "owner/repo", Owner: "owner", Name: "repo", Branch: "main", Enabled: true,
+		Scrapers: []Scraper{{ID: "s", Name: "S", Filename: "s.js"}},
+	}}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+		return nuvioResponse(http.StatusOK, scraperManifest("2.0.0", "s.js")), nil
+	})}
+
+	result := make(chan error, 1)
+	go func() { result <- manager.RefreshRepo(context.Background(), "owner/repo") }()
+	<-started
+	require.NoError(t, manager.SetProfile("second"))
+	close(release)
+	require.ErrorIs(t, <-result, errRegistryChanged)
+}
+
+// TestRecordRepoRefreshErrorAbortsWhenRegistryChangesMidFlight covers the
+// revision guard in recordRepoRefreshError (repo.go lines 357-358): when the
+// manifest fetch fails and the registry has since changed, the error is not
+// persisted onto a stale repo.
+func TestRecordRepoRefreshErrorAbortsWhenRegistryChangesMidFlight(t *testing.T) {
+	manager := testManager(t)
+	manager.repos = []Repo{{ID: "owner/repo", Owner: "owner", Name: "repo", Branch: "main", Enabled: true}}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+		return nuvioResponse(http.StatusServiceUnavailable, "offline"), nil
+	})}
+
+	result := make(chan error, 1)
+	go func() { result <- manager.RefreshRepo(context.Background(), "owner/repo") }()
+	<-started
+	require.NoError(t, manager.SetProfile("second"))
+	close(release)
+	require.ErrorIs(t, <-result, errRegistryChanged)
+}
+
+// TestRecordRepoRefreshErrorPersistFailureSkipsOtherRepos covers
+// recordRepoRefreshError skipping a non-matching repo (repo.go line 361) and
+// wrapping a persistence failure alongside the refresh error (line 367).
+func TestRecordRepoRefreshErrorPersistFailureSkipsOtherRepos(t *testing.T) {
+	manager := testManager(t)
+	manager.repos = []Repo{
+		{ID: "owner/a", Owner: "owner", Name: "a", Branch: "main", Enabled: true},
+		{ID: "owner/b", Owner: "owner", Name: "b", Branch: "main", Enabled: true},
+	}
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nuvioResponse(http.StatusServiceUnavailable, "offline"), nil
+	})}
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocker, []byte("blocked"), 0o600))
+	manager.storePath = filepath.Join(blocker, "nuvio.json")
+
+	err := manager.RefreshRepo(context.Background(), "owner/b")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "save state")
 }

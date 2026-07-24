@@ -358,6 +358,29 @@ func TestCommitStagedFilesRollsBackCompletedReplacements(t *testing.T) {
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+// TestCommitStagedFilesFailsWhenBackupDirCannotBeCreated covers the
+// backup-staging failure in commitStagedFiles (updater.go lines 583-585): a
+// read-only destination directory prevents creating the temporary backup
+// directory, so the commit aborts before touching any target file.
+func TestCommitStagedFilesFailsWhenBackupDirCannotBeCreated(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only directory denial does not apply to root")
+	}
+	dest := t.TempDir()
+	stage := t.TempDir()
+	replacement := filepath.Join(stage, "file")
+	require.NoError(t, os.WriteFile(replacement, []byte("new"), 0o755))
+
+	require.NoError(t, os.Chmod(dest, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dest, 0o755) })
+
+	err := commitStagedFiles(dest, []stagedFile{{rel: "file", path: replacement}})
+	require.Error(t, err)
+	// The staged replacement must be left untouched in place.
+	_, statErr := os.Stat(filepath.Join(dest, "file"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func TestCommitAndDestinationValidationErrors(t *testing.T) {
 	dest := t.TempDir()
 	assert.Error(t, commitStagedFiles(dest, []stagedFile{{

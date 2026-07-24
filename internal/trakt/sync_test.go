@@ -162,6 +162,53 @@ func TestSyncCycleRetainsCursorWhenAnyLegFails(t *testing.T) {
 	assert.Equal(t, cursor, store.Get().LastSyncAt)
 }
 
+// TestSyncCycleLogsWatchlistPullAndPushFailures drives the pull-watchlist and
+// push-watchlist error legs of runCycle (sync.go lines 140-142 and 152-155):
+// the watchlist endpoint fails for both GET and POST while history succeeds,
+// so those two legs record failures and the cursor is not advanced.
+func TestSyncCycleLogsWatchlistPullAndPushFailures(t *testing.T) {
+	lib, st := syncLibraryAndSettings(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	cursor := now.Add(-time.Hour)
+	localNew := now.Add(-10 * time.Minute)
+	// A local watchlist delta after the cursor gives pushWatchlist something to
+	// send, so its POST actually reaches the failing endpoint.
+	lib.MergeFrom(
+		[]*library.LibraryEntry{
+			{ID: "new-watchlist", TmdbID: 301, MediaType: "movie", Status: library.StatusWatchLater, AddedAt: localNew, UpdatedAt: localNew},
+		}, nil, nil, nil,
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/sync/last_activities":
+			fmt.Fprintf(w, `{"movies":{"watched_at":%q,"watchlisted_at":%q}}`, now.Format(time.RFC3339), now.Format(time.RFC3339))
+		case r.URL.Path == "/sync/history":
+			// Both GET (pull) and POST (push) succeed.
+			if r.Method == http.MethodGet {
+				fmt.Fprint(w, `[]`)
+			} else {
+				w.WriteHeader(http.StatusCreated)
+			}
+		case r.URL.Path == "/sync/watchlist":
+			http.Error(w, "temporary failure", http.StatusBadGateway)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	store := testStore(t)
+	require.NoError(t, store.Save(tokenState{
+		AccessToken: "token", ExpiresAt: now.Add(24 * time.Hour), LastSyncAt: cursor,
+	}))
+	worker := newSyncWorker(testClient(srv.URL, store), store, lib, st, nil)
+	worker.runCycle()
+
+	assert.Equal(t, cursor, store.Get().LastSyncAt, "a failed leg must not advance the cursor")
+}
+
 func TestSyncNotifyCoalesces(t *testing.T) {
 	worker := &SyncWorker{notify: make(chan struct{}, 1)}
 	worker.Notify()

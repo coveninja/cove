@@ -480,3 +480,38 @@ func TestDeleteProfileDataStopsBeforeParentWhenChildDeleteFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "delete watch_progress")
 	assert.Equal(t, []string{"library_entries", "watch_progress"}, tables)
 }
+
+// TestPullAllRejectsNullNuvioPayload checks that a profile_nuvio row whose
+// data column is the JSON literal "null" is rejected. The decoder cannot
+// distinguish null from a missing object, so PullAll treats it as invalid.
+func TestPullAllRejectsNullNuvioPayload(t *testing.T) {
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/profile_nuvio") {
+			// "null" decodes successfully into a *struct but leaves the pointer
+			// nil — treated as a missing required object.
+			return response(http.StatusOK, `[{"data":null,"updated_at":"2026-01-01T00:00:00Z"}]`), nil
+		}
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	cfg := &Config{URL: "https://project.invalid", AnonKey: "anon"}
+	_, err := cfg.PullAll("jwt", "profile")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode profile_nuvio data: object is required")
+}
+
+// TestPullAllRejectsNullActivityPayload mirrors TestPullAllRejectsNullNuvioPayload
+// for the profile_activity table (the other pointer-typed payload).
+func TestPullAllRejectsNullActivityPayload(t *testing.T) {
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/profile_activity") {
+			return response(http.StatusOK, `[{"data":null}]`), nil
+		}
+		return response(http.StatusOK, `[]`), nil
+	})
+
+	cfg := &Config{URL: "https://project.invalid", AnonKey: "anon"}
+	_, err := cfg.PullAll("jwt", "profile")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode profile_activity data: object is required")
+}
