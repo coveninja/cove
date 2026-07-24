@@ -280,18 +280,11 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 	}
 	data, err := m.fetchRaw(ctx, repo.Owner, repo.Name, repo.Branch, manifestPath)
 	if err != nil {
-		m.mu.Lock()
-		for i, r := range m.repos {
-			if r.ID == id {
-				m.repos[i].FetchErr = err.Error()
-			}
-		}
-		m.mu.Unlock()
-		return err
+		return m.recordRepoRefreshError(id, err)
 	}
 	entries, err := parseManifest(data)
 	if err != nil {
-		return err
+		return m.recordRepoRefreshError(id, fmt.Errorf("could not parse manifest.json: %w", err))
 	}
 
 	// Preserve Enabled/Code for scrapers that still exist; refetch code for
@@ -329,4 +322,23 @@ func (m *Manager) RefreshRepo(ctx context.Context, id string) error {
 	}
 	m.invalidateStreamCache()
 	return m.saveL()
+}
+
+// recordRepoRefreshError keeps refresh failures visible after restart. FetchErr
+// is user-facing state, so updating it only in memory would make the error
+// disappear as soon as Cove or the active profile restarted.
+func (m *Manager) recordRepoRefreshError(id string, refreshErr error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.repos {
+		if m.repos[i].ID != id {
+			continue
+		}
+		m.repos[i].FetchErr = refreshErr.Error()
+		if saveErr := m.saveL(); saveErr != nil {
+			return fmt.Errorf("%w; save state: %v", refreshErr, saveErr)
+		}
+		return refreshErr
+	}
+	return refreshErr
 }

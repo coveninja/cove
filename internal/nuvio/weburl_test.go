@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRunScraper_CompressedResponses covers the exact real-world failure
@@ -28,13 +31,7 @@ func TestRunScraper_CompressedResponses(t *testing.T) {
 	// for the duration of the test. Also reset the shared client so the new
 	// transport takes effect (sharedScraperClient is built lazily from
 	// scraperTransport; without the reset the cached production client persists).
-	orig := scraperTransport
-	scraperTransport = func() *http.Transport { return &http.Transport{} }
-	resetSharedScraperClient()
-	t.Cleanup(func() {
-		scraperTransport = orig
-		resetSharedScraperClient()
-	})
+	useLocalScraperTransport(t)
 
 	body := `{"ok":true,"streams":[{"name":"n","title":"t","url":"http://example.com/s.m3u8"}]}`
 
@@ -101,6 +98,38 @@ func TestRunScraper_CompressedResponses(t *testing.T) {
 	}
 }
 
+func TestDecodeBodyNormalizesEncodingAndReportsCorruption(t *testing.T) {
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write([]byte(`{"ok":true}`))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	decoded, err := decodeBody(&http.Response{
+		Body:   io.NopCloser(bytes.NewReader(compressed.Bytes())),
+		Header: http.Header{"Content-Encoding": []string{" GZip "}},
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true}`, string(decoded))
+
+	for _, testCase := range []struct {
+		name     string
+		encoding string
+	}{
+		{"gzip", "gzip"},
+		{"deflate", "deflate"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, decodeErr := decodeBody(&http.Response{
+				Body:   io.NopCloser(strings.NewReader("not compressed")),
+				Header: http.Header{"Content-Encoding": []string{testCase.encoding}},
+			})
+			require.Error(t, decodeErr)
+			assert.Contains(t, decodeErr.Error(), testCase.name+" decode")
+		})
+	}
+}
+
 // TestRunScraper_WebGlobals covers URL, URLSearchParams, and the `global`
 // alias that real scrapers reference (e.g. Castle's `URLSearchParams is not
 // defined`, mallumv/dvdplay's `global is not defined` from production logs)
@@ -110,21 +139,55 @@ func TestRunScraper_WebGlobals(t *testing.T) {
 		function getStreams() {
 			var results = [];
 
-			var u = new URL("/path?a=1&b=2", "https://example.com");
+			var u = new URL("/path?a=1&b=2#frag", "https://example.com:8443");
 			results.push(u.hostname === "example.com");
+			results.push(u.protocol === "https:");
+			results.push(u.host === "example.com:8443");
+			results.push(u.port === "8443");
 			results.push(u.pathname === "/path");
+			results.push(u.search === "?a=1&b=2");
+			results.push(u.hash === "#frag");
+			results.push(u.origin === "https://example.com:8443");
+			results.push(u.href === "https://example.com:8443/path?a=1&b=2#frag");
+			results.push(u.toString() === u.href);
+			results.push(u.toJSON() === u.href);
 			results.push(u.searchParams.get("a") === "1");
 
 			var p = new URLSearchParams("x=1&y=2");
 			p.append("z", "3");
+			p.append("z", "4");
 			results.push(p.get("x") === "1");
 			results.push(p.get("z") === "3");
+			results.push(p.getAll("z").join(",") === "3,4");
 			results.push(p.has("y") === true);
+			p.set("x", "updated");
+			results.push(p.get("x") === "updated");
+			p.delete("y");
+			results.push(p.has("y") === false);
+			results.push(p.get("missing") === null);
+			results.push(p.toString() === "x=updated&z=3&z=4");
+
+			var fromObject = new URLSearchParams({page: 2});
+			results.push(fromObject.get("page") === "2");
+
+			var empty = new URL("https://example.com");
+			results.push(empty.search === "");
+			results.push(empty.hash === "");
+
+			var controller = new AbortController();
+			results.push(controller.signal.aborted === false);
+			controller.abort();
+			results.push(controller.signal.aborted === true);
 
 			results.push(typeof global !== "undefined");
 
 			results.push(btoa("hello") === "aGVsbG8=");
 			results.push(atob("aGVsbG8=") === "hello");
+			results.push(atob("not-base64") === "");
+
+			var invalidRejected = false;
+			try { new URL("http://[invalid"); } catch (_) { invalidRejected = true; }
+			results.push(invalidRejected);
 
 			var ok = results.every(function (r) { return r === true; });
 			return [{ name: ok ? "PASS" : "FAIL", title: JSON.stringify(results), url: "http://example.com/x" }];

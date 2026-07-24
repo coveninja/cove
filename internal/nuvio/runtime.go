@@ -184,8 +184,13 @@ func runScraper(parent context.Context, scraperID, code string, timeout time.Dur
 			return
 		}
 
-		exportsVal := module.Get("exports").ToObject(vm)
-		entry, entryKind, err := findEntryPoint(exportsVal)
+		exportsVal := module.Get("exports")
+		if exportsVal == nil || goja.IsUndefined(exportsVal) || goja.IsNull(exportsVal) {
+			send(result{err: fmt.Errorf("no getStreams or scrape export")})
+			return
+		}
+		moduleExports := exportsVal.ToObject(vm)
+		entry, entryKind, err := findEntryPoint(moduleExports)
 		if err != nil {
 			send(result{err: err})
 			return
@@ -200,20 +205,25 @@ func runScraper(parent context.Context, scraperID, code string, timeout time.Dur
 			if episode != nil {
 				episodeArg = vm.ToValue(*episode)
 			}
-			resultVal, err = entry(exportsVal, vm.ToValue(tmdbID), vm.ToValue(mediaType), seasonArg, episodeArg)
+			resultVal, err = entry(moduleExports, vm.ToValue(tmdbID), vm.ToValue(mediaType), seasonArg, episodeArg)
 		} else {
 			metadata := vm.NewObject()
 			metadata.Set("title", title)
 			metadata.Set("year", year)
 			metadata.Set("type", mediaType)
 			metadata.Set("imdbId", imdbID)
-			resultVal, err = entry(exportsVal, metadata, vm.NewObject())
+			resultVal, err = entry(moduleExports, metadata, vm.NewObject())
 		}
 		if err != nil {
 			send(result{err: fmt.Errorf("call error: %w", err)})
 			return
 		}
 
+		if resultVal == nil || goja.IsUndefined(resultVal) || goja.IsNull(resultVal) {
+			streams, err := exportStreams(resultVal)
+			send(result{streams: streams, err: err})
+			return
+		}
 		thenFn, ok := goja.AssertFunction(resultVal.ToObject(vm).Get("then"))
 		if !ok {
 			// Some scrapers might resolve synchronously; accept that too.
@@ -479,7 +489,7 @@ func decodeBody(resp *http.Response) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch resp.Header.Get("Content-Encoding") {
+	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))) {
 	case "", "identity":
 		return raw, nil
 	case "gzip":

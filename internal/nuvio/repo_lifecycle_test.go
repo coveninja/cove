@@ -228,6 +228,19 @@ func TestRefreshRepoRecordsFailuresAndUpdatesEnabledScrapers(t *testing.T) {
 	err := manager.RefreshRepo(context.Background(), "owner/repo")
 	require.Error(t, err)
 	assert.Contains(t, manager.GetRepos()[0].FetchErr, "HTTP 503")
+	reloaded := New("manager-test")
+	require.Len(t, reloaded.GetRepos(), 1)
+	assert.Contains(t, reloaded.GetRepos()[0].FetchErr, "HTTP 503")
+
+	manager.client = &http.Client{Transport: nuvioRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nuvioResponse(http.StatusOK, "{invalid"), nil
+	})}
+	err = manager.RefreshRepo(context.Background(), "owner/repo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not parse manifest.json")
+	assert.Contains(t, manager.GetRepos()[0].FetchErr, "could not parse manifest.json")
+	reloaded = New("manager-test")
+	assert.Contains(t, reloaded.GetRepos()[0].FetchErr, "could not parse manifest.json")
 }
 
 func TestRepoLifecycleErrorsAndHTTPCreateRefresh(t *testing.T) {
