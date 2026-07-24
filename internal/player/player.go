@@ -135,10 +135,6 @@ const streamHeadersTTL = 30 * time.Minute
 // resolved path — it is stored on the Player struct after construction.
 var torrentDataDirDefault = filepath.Join(os.TempDir(), "cove-torrents")
 
-// Kept as a package variable so the subtitle proxy's upstream behavior can be
-// tested without weakening SafeHTTPClient to permit loopback test servers.
-var subtitleHTTPClient = utils.SafeHTTPClient
-
 // torrentIdleCutoff is the duration after which an idle torrent (readers == 0,
 // not the current prefetch target) becomes eligible for CleanupTorrents to
 // drop. Exposed as a package variable so tests can override it without
@@ -1660,47 +1656,51 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		resp, err := subtitleHTTPClient.Do(req)
+		resp, err := utils.SafeHTTPClient.Do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		defer func(Body io.ReadCloser) {
-			err := Body.Close()
-			if err != nil {
-				log.Println(err)
-			}
-		}(resp.Body)
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			http.Error(w, fmt.Sprintf("subtitle upstream returned HTTP %d", resp.StatusCode), http.StatusBadGateway)
-			return
-		}
-
-		// 10 MiB is far beyond any real subtitle file.
-		const maxSubtitleBytes = 10 << 20
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubtitleBytes+1))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		if len(body) > maxSubtitleBytes {
-			http.Error(w, "subtitle exceeds 10 MiB limit", http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-
-		// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
-		content := string(body)
-		if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
-			content = utils.SrtToVTT(content)
-		}
-		_, err = fmt.Fprint(w, content)
-		if err != nil {
-			log.Println(err)
-			return
-		}
+		writeSubtitleResponse(w, resp)
 	}))
+}
+
+// writeSubtitleResponse validates and emits an already-fetched subtitle
+// response. Keeping response processing separate lets tests exercise upstream
+// failures and size limits without replacing the SSRF-safe production client.
+func writeSubtitleResponse(w http.ResponseWriter, resp *http.Response) {
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Println(err)
+		}
+	}()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		http.Error(w, fmt.Sprintf("subtitle upstream returned HTTP %d", resp.StatusCode), http.StatusBadGateway)
+		return
+	}
+
+	// 10 MiB is far beyond any real subtitle file.
+	const maxSubtitleBytes = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubtitleBytes+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(body) > maxSubtitleBytes {
+		http.Error(w, "subtitle exceeds 10 MiB limit", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+
+	// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
+	content := string(body)
+	if !strings.HasPrefix(strings.TrimSpace(content), "WEBVTT") {
+		content = utils.SrtToVTT(content)
+	}
+	if _, err := fmt.Fprint(w, content); err != nil {
+		log.Println(err)
+	}
 }
 
 func firstNonEmpty(vals ...string) string {

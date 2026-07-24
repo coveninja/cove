@@ -56,9 +56,7 @@
       class="relative z-10 h-44 w-28 rounded-lg object-cover shadow-2xl"
     />
   {:else if title}
-    <span class="relative z-10 px-8 text-center text-2xl font-bold text-white"
-      >{title}</span
-    >
+    <span class="relative z-10 px-8 text-center text-2xl font-bold text-white">{title}</span>
   {/if}
   <Spinner class="relative z-10 mt-6 size-12 text-white" />
   <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>

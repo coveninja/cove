@@ -27,11 +27,7 @@
   import { startAutoSync } from "$lib/sync";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
-  import {
-    navigate,
-    focusFirst,
-    editableKeepsArrow,
-  } from "./focus/focusStore.svelte";
+  import { navigate, focusFirst, editableKeepsArrow } from "./focus/focusStore.svelte";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -215,10 +211,7 @@
 
   function isEditable(el: Element): boolean {
     if (el instanceof HTMLTextAreaElement) return true;
-    if (
-      el instanceof HTMLInputElement &&
-      EDITABLE_TYPES.has(el.type.toLowerCase())
-    )
+    if (el instanceof HTMLInputElement && EDITABLE_TYPES.has(el.type.toLowerCase()))
       return true;
     if ((el as HTMLElement).isContentEditable) return true;
     return false;
@@ -393,6 +386,7 @@
   const activePlaybackEpisode = $derived(
     streamActiveForSelectedMedia ? playback.playerSession?.episode : undefined,
   );
+
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -405,10 +399,7 @@
     .tv-shell also carries the 10-foot base font-size and the D-pad focus ring
     via the scoped :global rules in <style>.
   -->
-  <div
-    class="tv-shell flex h-screen overflow-hidden bg-[#0a0a0a] text-white"
-    style="--tv-safe-inset: 32px;"
-  >
+  <div class="tv-shell flex h-screen overflow-hidden bg-[#0a0a0a] text-white" style="--tv-safe-inset: 32px;">
     <!-- Left rail: hidden while player or its loading overlay is up (mirrors
          BottomNav pattern in MobileApp). -->
     {#if !playback.playerSession && !playback.quickPlayPending}
@@ -432,9 +423,7 @@
       class="relative isolate min-h-0 flex-1 overflow-hidden"
       style="padding: var(--tv-safe-inset);"
       inert={showOnboarding ||
-        (!!selectedMedia &&
-          !playback.playerSession &&
-          !playback.quickPlayPending)}
+        (!!selectedMedia && !playback.playerSession && !playback.quickPlayPending)}
     >
       <!-- Pages: always mounted, shown/hidden via class:hidden so state and
            scroll positions survive tab switching.  invisible (not just hidden)
@@ -484,13 +473,9 @@
             catalogType={currentPage.type === "catalog"
               ? currentPage.catalogType
               : ""}
-            catalogId={currentPage.type === "catalog"
-              ? currentPage.catalogId
-              : ""}
+            catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
             name={currentPage.type === "catalog" ? currentPage.name : ""}
-            addonUrl={currentPage.type === "catalog"
-              ? currentPage.addonUrl
-              : undefined}
+            addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
             onSelectMedia={selectMedia}
             onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
           />
@@ -532,16 +517,7 @@
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
-              if (m)
-                playback.startPlayback(
-                  m,
-                  stream,
-                  s,
-                  e,
-                  name,
-                  candidates ?? [],
-                  0,
-                );
+              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
             }}
             onclose={() => playback.closePlayer()}
             onRegisterCloseSheets={(fn) => (closePlayerSheets = fn)}
@@ -567,15 +543,7 @@
           onplaystream={(stream, season, episode, episodeName, candidates) => {
             const m = selectedMedia;
             if (m)
-              playback.startPlayback(
-                m,
-                stream,
-                season,
-                episode,
-                episodeName,
-                candidates,
-                0,
-              );
+              playback.startPlayback(m, stream, season, episode, episodeName, candidates, 0);
           }}
           onsimilar={(m) => selectMedia(m)}
           onclose={closeDetailOverlay}

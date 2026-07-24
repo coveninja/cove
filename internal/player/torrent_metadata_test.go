@@ -3,6 +3,7 @@ package player
 import (
 	"context"
 	"io"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -113,6 +114,78 @@ func TestGetTorrentFileReusesMetadataAndHonorsFileIdx(t *testing.T) {
 		_, err := p.getTorrentFile(context.Background(), "not-a-hash", nil, nil, nil)
 		return err
 	}())
+}
+
+func TestGetTorrentFileSlowPathAndCancellation(t *testing.T) {
+	t.Run("registers metadata already held by the torrent client", func(t *testing.T) {
+		p := newTestPlayer(t)
+		_, hash := addMetadataTestTorrent(t, p, "movie", []metadataTestFile{{
+			path: "Movie.mkv",
+			data: strings.Repeat("m", 32),
+		}})
+		p.activeTorrentsMu.Lock()
+		delete(p.activeTorrents, hash)
+		p.activeTorrentsMu.Unlock()
+
+		file, err := p.getTorrentFile(nil, hash, nil, nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "Movie.mkv", file.DisplayPath())
+		p.activeTorrentsMu.RLock()
+		_, registered := p.activeTorrents[hash]
+		p.activeTorrentsMu.RUnlock()
+		assert.True(t, registered)
+	})
+
+	t.Run("rejects an already canceled caller", func(t *testing.T) {
+		p := newTestPlayer(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := p.getTorrentFile(ctx, strings.Repeat("a", 40), nil, nil, nil)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("rejects work after close", func(t *testing.T) {
+		p := newTestPlayer(t)
+		p.Close()
+		_, err := p.getTorrentFile(
+			context.Background(),
+			strings.Repeat("b", 40),
+			nil,
+			nil,
+			nil,
+		)
+		require.ErrorContains(t, err, "player is closed")
+	})
+
+	t.Run("a canceled waiter does not wait for shared metadata", func(t *testing.T) {
+		p := newTestPlayer(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			_, err := p.getTorrentFile(
+				ctx,
+				strings.Repeat("c", 40),
+				nil,
+				nil,
+				nil,
+			)
+			result <- err
+		}()
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+		require.ErrorIs(t, <-result, context.Canceled)
+	})
+}
+
+func TestStreamTorrentRejectsInvalidHashBeforeMetadataLookup(t *testing.T) {
+	p := newTestPlayer(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/torrent/not-a-hash", nil)
+
+	p.StreamTorrent("not-a-hash", nil, nil, nil, rec, req)
+
+	assert.Equal(t, 404, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid infohash")
 }
 
 func TestPrefetchTorrentSwitchesSingleDownloadSlot(t *testing.T) {

@@ -168,6 +168,120 @@ func TestMergeRemoteFailsClosedWhenLocalPersistenceFails(t *testing.T) {
 	assert.Empty(t, server.lib.AllEntries(), "failed persistence must roll back the in-memory merge")
 }
 
+func TestMergeRemoteReturnsEveryProfileStorePersistenceFailure(t *testing.T) {
+	now := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	tests := []struct {
+		name    string
+		table   string
+		row     string
+		wantErr string
+	}{
+		{
+			name:    "settings",
+			table:   "profile_settings",
+			row:     `[{"data":{"hideSpoilers":true,"updatedAt":"` + now + `"}}]`,
+			wantErr: "settings",
+		},
+		{
+			name:  "addons",
+			table: "profile_addons",
+			row: `[{"data":[{"id":"addon-1","url":"https://addon.invalid/manifest.json",
+				"manifest":{"id":"addon-1","name":"Addon","version":"1.0.0"},
+				"kind":"provider","source":"stremio","enabled":true}],
+				"updated_at":"` + now + `"}]`,
+			wantErr: "addons",
+		},
+		{
+			name:    "nuvio",
+			table:   "profile_nuvio",
+			row:     `[{"data":{"repos":[]},"updated_at":"` + now + `"}]`,
+			wantErr: "merge nuvio",
+		},
+		{
+			name:    "activity",
+			table:   "profile_activity",
+			row:     `[{"data":{"days":{},"last_pos":{"movie:42":90},"backfilled":true}}]`,
+			wantErr: "merge activity",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newHandlerTestServer(t, &Config{
+				URL:     "https://project.invalid",
+				AnonKey: "anon",
+			})
+			profileID := server.profileStore.ActiveProfileID()
+			withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+				if restTable(r) == "profiles" {
+					return response(http.StatusOK, `[{
+						"id":"`+profileID+`","user_id":"user-1",
+						"name":"Primary","is_primary":true
+					}]`), nil
+				}
+				if restTable(r) == tt.table {
+					return response(http.StatusOK, tt.row), nil
+				}
+				return response(http.StatusOK, `[]`), nil
+			})
+
+			probe, err := utils.ConfigPath("probe")
+			require.NoError(t, err)
+			appDir := filepath.Dir(probe)
+			require.NoError(t, os.RemoveAll(appDir))
+			require.NoError(t, os.WriteFile(appDir, []byte("not a directory"), 0o600))
+
+			err = server.mergeRemote("user-1", "jwt")
+			require.ErrorContains(t, err, "apply remote data")
+			require.ErrorContains(t, err, tt.wantErr)
+			assert.Nil(t, server.profileStore.ActiveProfile().SupabaseUID)
+		})
+	}
+}
+
+func TestPushAsyncRejectsStaleProfilesAndRecordsDatasetErrors(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+	server.pushAsync("jwt", "not-active", "test push")
+	server.pushErrMu.Lock()
+	assert.Contains(t, server.lastPushErr, "profile changed before push started")
+	server.pushErrMu.Unlock()
+
+	profileID := server.profileStore.ActiveProfileID()
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		return response(http.StatusServiceUnavailable, `{"message":"unavailable"}`), nil
+	})
+	server.pushAsync("jwt", profileID, "test push")
+	waitForPush(t, server)
+	server.pushErrMu.Lock()
+	assert.Contains(t, server.lastPushErr, "settings")
+	assert.Contains(t, server.lastPushErr, "addons")
+	server.pushErrMu.Unlock()
+}
+
+func TestPushAsyncSkipsUnchangedLibraryGeneration(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+	profileID := server.profileStore.ActiveProfileID()
+	server.lastPushedGen = server.lib.Generation()
+	server.lastPushedGenOK = true
+	server.lastPushedProfile = profileID
+
+	var tables []string
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		tables = append(tables, restTable(r))
+		return response(http.StatusOK, `[]`), nil
+	})
+	server.pushAsync("jwt", profileID, "test push")
+	waitForPush(t, server)
+	assert.NotContains(t, tables, "library_entries")
+	assert.NotContains(t, tables, "watch_progress")
+}
+
 func TestAsyncPushCannotContinueAcrossProfileSwitch(t *testing.T) {
 	server := newHandlerTestServer(t, &Config{URL: "https://project.invalid", AnonKey: "anon"})
 	primaryID := server.profileStore.ActiveProfileID()

@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,7 @@ import (
 	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/profiles"
 	"github.com/coveninja/cove/internal/settings"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -180,6 +183,51 @@ func TestAuthRoutesRejectMalformedInput(t *testing.T) {
 			assert.Contains(t, rec.Body.String(), tt.want)
 		})
 	}
+}
+
+func TestRegistrationAndLogoutFailClosedOnProfilePersistenceErrors(t *testing.T) {
+	t.Run("registration link", func(t *testing.T) {
+		server := newHandlerTestServer(t, &Config{
+			URL:     "https://project.invalid",
+			AnonKey: "anon",
+		})
+		withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+			if r.Method == http.MethodPost {
+				return response(http.StatusOK, `[]`), nil
+			}
+			return response(http.StatusServiceUnavailable, `{"message":"cleanup failed"}`), nil
+		})
+
+		probe, err := utils.ConfigPath("probe")
+		require.NoError(t, err)
+		appDir := filepath.Dir(probe)
+		require.NoError(t, os.RemoveAll(appDir))
+		require.NoError(t, os.WriteFile(appDir, []byte("not a directory"), 0o600))
+
+		rec := httptest.NewRecorder()
+		server.finishRegistration(rec, "user-1", "jwt", "refresh", "Primary")
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "could not link local profile")
+	})
+
+	t.Run("logout unlink", func(t *testing.T) {
+		server := newHandlerTestServer(t, &Config{
+			URL:     "https://project.invalid",
+			AnonKey: "anon",
+		})
+		profileID := server.profileStore.ActiveProfileID()
+		require.NoError(t, server.profileStore.LinkSupabase(profileID, "user-1"))
+
+		probe, err := utils.ConfigPath("probe")
+		require.NoError(t, err)
+		appDir := filepath.Dir(probe)
+		require.NoError(t, os.RemoveAll(appDir))
+		require.NoError(t, os.WriteFile(appDir, []byte("not a directory"), 0o600))
+
+		rec := authRequest(t, server, http.MethodPost, "/api/auth/logout", "", nil)
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "could not unlink local profile")
+	})
 }
 
 func TestRegisterConfirmationAndOTPRoutes(t *testing.T) {

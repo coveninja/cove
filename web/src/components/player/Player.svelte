@@ -1,10 +1,6 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
-  import type {
-    Stream,
-    TimestampData,
-    TimestampSegment,
-  } from "$lib/types/addons";
+  import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
   import { onDestroy, untrack } from "svelte";
   import { fade } from "svelte/transition";
   import SkipSegmentButton from "./SkipSegmentButton.svelte";
@@ -17,11 +13,7 @@
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
   import { Player } from "$lib/player/player.svelte";
-  import {
-    loadAspectMode,
-    saveAspectMode,
-    ASPECT_LABELS,
-  } from "$lib/player/aspectRatio";
+  import { loadAspectMode, saveAspectMode, ASPECT_LABELS } from "$lib/player/aspectRatio";
   import {
     loadShowTrackPrefs,
     saveShowTrackPrefs,
@@ -240,9 +232,12 @@
         // which would make every libraryChanged subscriber refetch during
         // playback. The bump waits for the save to land so the refetch it
         // triggers can't race the POST and read pre-save state.
-        void progress
-          .saveNow(Player.position, Player.duration, progressCtx, Player.ended)
-          .then(() => libraryChanged.update((n) => n + 1));
+        void progress.saveNow(
+                Player.position,
+                Player.duration,
+                progressCtx,
+                Player.ended,
+        ).then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
       console.error(e);
@@ -251,9 +246,7 @@
   });
   let switching = $state(false);
 
-  const canPlay = $derived(
-    !!src && !switching && Player.ready && Player.duration > 0,
-  );
+  const canPlay = $derived(!!src && !switching && Player.ready && Player.duration > 0)
 
   // ─── Playback-start watchdog (B2) ───────────────────────────────────────────
   // If a stream never actually starts — a dead torrent with no peers, a dead
@@ -360,9 +353,12 @@
   // Mark complete at end of file.
   $effect(() => {
     if (Player.ended && media) {
-      void progress
-        .saveNow(Player.duration, Player.duration, progressCtx, true)
-        .then(() => libraryChanged.update((n) => n + 1));
+      void progress.saveNow(
+              Player.duration,
+              Player.duration,
+              progressCtx,
+              true,
+      ).then(() => libraryChanged.update((n) => n + 1));
       // Trakt: stop at 100% — registers as watched on Trakt's side (≥80%).
       if (traktState !== "stopped") {
         traktState = "stopped";
@@ -447,8 +443,7 @@
       return;
     prefetchedNext = true;
     const m = media;
-    const mode =
-      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
@@ -501,32 +496,26 @@
   });
 
   const loadingMessage = $derived(
-    streamDiscoveryPending
-      ? pendingMessage!
-      : isHash
-        ? torrent.peers > 0
-          ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
-          : "Connecting to peers…"
-        : "Buffering…",
+          streamDiscoveryPending
+            ? pendingMessage!
+            : isHash
+              ? torrent.peers > 0
+                ? `Connecting · ${torrent.peers} peers · ${torrent.speed}`
+                : "Connecting to peers…"
+              : "Buffering…",
   );
 
   let logoUrl = $state<string | null>(null);
 
   $effect(() => {
     const m = media;
-    if (!m) {
-      logoUrl = null;
-      return;
-    }
+    if (!m) { logoUrl = null; return; }
     logoUrl = null;
     const requestedId = m.id; // guard against stale response after media changes
-    api
-      .getLogos(m.id, m.media_type)
-      .then((logos) => {
-        if (media?.id !== requestedId) return;
-        logoUrl = logos[0] ?? null;
-      })
-      .catch(() => {});
+    api.getLogos(m.id, m.media_type).then((logos) => {
+      if (media?.id !== requestedId) return;
+      logoUrl = logos[0] ?? null;
+    }).catch(() => {});
   });
 
   // ─── IntroDB timestamps ──────────────────────────────────────────────────────
@@ -536,21 +525,15 @@
 
   $effect(() => {
     const m = media;
-    if (!m) {
-      timestamps = null;
-      return;
-    }
+    if (!m) { timestamps = null; return; }
     timestamps = null;
     const requestedSrc = src; // guard against stale response after switching src
-    api
-      .getTimestamps(m.id, { season, episode })
-      .then((data) => {
-        if (src !== requestedSrc) return;
-        timestamps = data;
-      })
-      .catch((e) => {
-        console.warn("[introdb] fetch failed:", e);
-      });
+    api.getTimestamps(m.id, { season, episode }).then((data) => {
+      if (src !== requestedSrc) return;
+      timestamps = data;
+    }).catch((e) => {
+      console.warn("[introdb] fetch failed:", e);
+    });
   });
 
   // The segment the player is currently inside (checked by position in ms).
@@ -641,9 +624,7 @@
       targetLang = setting === "original" ? originalLang : setting;
     }
     appliedAudioDefault = true;
-    const match = Player.audioTracks.find((t) =>
-      langMatches(t.lang, targetLang),
-    );
+    const match = Player.audioTracks.find((t) => langMatches(t.lang, targetLang));
     if (match && !match.selected) Player.setAudioTrack(match.id);
   });
 
@@ -663,17 +644,13 @@
         selectSubtitle({ kind: "off" });
         return;
       }
-      const embMatch = Player.subtitleTracks.find((t) =>
-        langMatches(t.lang, pref.lang),
-      );
+      const embMatch = Player.subtitleTracks.find((t) => langMatches(t.lang, pref.lang));
       if (embMatch) {
         appliedSubDefault = true;
         selectSubtitle({ kind: "embedded", id: embMatch.id });
         return;
       }
-      const extMatch = externalSubtitles.find((s) =>
-        langMatches(s.lang, pref.lang),
-      );
+      const extMatch = externalSubtitles.find((s) => langMatches(s.lang, pref.lang));
       if (extMatch) {
         appliedSubDefault = true;
         selectSubtitle({ kind: "external", id: extMatch.id });
@@ -686,9 +663,7 @@
     }
     if (!$settings?.subtitlesEnabled) return;
     const lang = $settings.defaultSubtitleLang;
-    const embedded = Player.subtitleTracks.find((t) =>
-      langMatches(t.lang, lang),
-    );
+    const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
     if (embedded) {
       appliedSubDefault = true;
       selectSubtitle({ kind: "embedded", id: embedded.id });
@@ -699,8 +674,7 @@
     if (externalSubtitles.length === 0) return;
     appliedSubDefault = true;
     const ext =
-      externalSubtitles.find((s) => langMatches(s.lang, lang)) ??
-      externalSubtitles[0];
+            externalSubtitles.find((s) => langMatches(s.lang, lang)) ?? externalSubtitles[0];
     if (ext) selectSubtitle({ kind: "external", id: ext.id });
   });
 
@@ -760,9 +734,7 @@
       !upNextDismissed &&
       !!onPlayNext &&
       (activeSegment?.type === "credits" ||
-        (Player.duration > 0 &&
-          Player.duration - Player.position < 40 &&
-          canPlay) ||
+        (Player.duration > 0 && Player.duration - Player.position < 40 && canPlay) ||
         Player.ended),
   );
 
@@ -864,8 +836,8 @@
   }
   function nudgeSeek(delta: number): void {
     const target = Math.max(
-      0,
-      Math.min(Player.duration || Infinity, Player.position + delta),
+            0,
+            Math.min(Player.duration || Infinity, Player.position + delta),
     );
     Player.seek(target);
     flash(`${delta > 0 ? "+" : "−"}${Math.abs(delta)}s`);
@@ -917,10 +889,10 @@
     const el = t as HTMLElement | null;
     if (!el || !el.tagName) return false;
     return (
-      el.tagName === "INPUT" ||
-      el.tagName === "TEXTAREA" ||
-      el.tagName === "SELECT" ||
-      el.isContentEditable
+            el.tagName === "INPUT" ||
+            el.tagName === "TEXTAREA" ||
+            el.tagName === "SELECT" ||
+            el.isContentEditable
     );
   }
 
@@ -1019,9 +991,9 @@
     } else {
       addedExternal.add(ext.id);
       Player.addSubtitle(
-        api.subtitleProxyUrl(ext.url),
-        ext.lang.toUpperCase(),
-        ext.lang,
+              api.subtitleProxyUrl(ext.url),
+              ext.lang.toUpperCase(),
+              ext.lang,
       );
     }
   }
@@ -1041,8 +1013,7 @@
   }): void {
     const size = patch.subtitleSize ?? $settings?.subtitleSize ?? 100;
     const pos = patch.subtitlePosition ?? $settings?.subtitlePosition ?? 8;
-    const bg =
-      patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
+    const bg = patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
     Player.setSubtitleStyle(size, pos, bg);
     clearTimeout(subStyleSaveTimer);
     subStyleSaveTimer = setTimeout(() => settings.save(patch), 400);
@@ -1056,8 +1027,7 @@
   // re-match on the next episode; speed is stored verbatim.
   function chooseAudioTrack(track: { id: number; lang: string }): void {
     Player.setAudioTrack(track.id);
-    if (media)
-      saveShowTrackPrefs(media.id, { audioLang: track.lang || undefined });
+    if (media) saveShowTrackPrefs(media.id, { audioLang: track.lang || undefined });
   }
 
   function chooseSubtitle(sel: SubSel): void {
@@ -1083,7 +1053,7 @@
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
   const title = $derived(
-    media ? (media.media_type === "tv" ? media.name : media.title) : "",
+          media ? (media.media_type === "tv" ? media.name : media.title) : "",
   );
 
   // ─── Controls auto-hide ──────────────────────────────────────────────────────
@@ -1108,13 +1078,11 @@
      video region must also be transparent — see integration notes. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="relative h-full w-full overflow-hidden"
-  onmousemove={showControls}
-  onclick={() => Player.togglePause()}
-  onkeydown={() => {}}
-  onwheel={(e) => {
-    if (!menuOpen) nudgeVolume(e.deltaY < 0 ? 5 : -5);
-  }}
+        class="relative h-full w-full overflow-hidden"
+        onmousemove={showControls}
+        onclick={() => Player.togglePause()}
+        onkeydown={() => {}}
+        onwheel={(e) => { if (!menuOpen) nudgeVolume(e.deltaY < 0 ? 5 : -5); }}
 >
   <!-- ── Bridge unavailable (running outside the Cove shell) ─────────────────── -->
   {#if !Player.available && !streamDiscoveryPending}
@@ -1127,12 +1095,10 @@
 
   <!-- ── Keyboard/action feedback flash ──────────────────────────────────────── -->
   {#if feedback}
-    <div
-      class="pointer-events-none absolute inset-0 z-20 grid place-items-center"
-    >
+    <div class="pointer-events-none absolute inset-0 z-20 grid place-items-center">
       <div
-        class="rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"
-        transition:fade={{ duration: 150 }}
+              class="rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"
+              transition:fade={{ duration: 150 }}
       >
         {feedback}
       </div>
@@ -1142,7 +1108,7 @@
   <!-- ── Controls ───────────────────────────────────────────────────────────── -->
   {#if canPlay}
     <div
-      class="absolute inset-0 z-10 flex flex-col justify-end bg-linear-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-200 {controlsVisible ||
+            class="absolute inset-0 z-10 flex flex-col justify-end bg-linear-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-200 {controlsVisible ||
       Player.paused
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"

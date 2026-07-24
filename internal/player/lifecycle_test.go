@@ -662,26 +662,92 @@ func TestSubtitleProxyHandlerValidation(t *testing.T) {
 }
 
 func TestSubtitleProxyRejectsUpstreamErrorsAndOversizedBodies(t *testing.T) {
-	oldClient := subtitleHTTPClient
-	t.Cleanup(func() { subtitleHTTPClient = oldClient })
-	var status = http.StatusNotFound
-	var body io.Reader = strings.NewReader("missing")
-	subtitleHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: status,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(body),
-			Request:    r,
-		}, nil
-	})}
-	_, mux := handlerPlayer(nil, nil, nil)
-
-	rec := serve(mux, http.MethodGet, "/api/subtitle-proxy?url=https://subs.example/sub.vtt", "")
+	rec := httptest.NewRecorder()
+	writeSubtitleResponse(rec, &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("missing")),
+	})
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	assert.Contains(t, rec.Body.String(), "HTTP 404")
 
-	status = http.StatusOK
-	body = io.LimitReader(strings.NewReader(strings.Repeat("x", (10<<20)+1)), (10<<20)+1)
-	rec = serve(mux, http.MethodGet, "/api/subtitle-proxy?url=https://subs.example/sub.vtt", "")
+	rec = httptest.NewRecorder()
+	writeSubtitleResponse(rec, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", (10<<20)+1))),
+	})
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
+type subtitleReadCloser struct {
+	readErr  error
+	closeErr error
+}
+
+type subtitleErrorWriter struct {
+	header http.Header
+}
+
+func (w *subtitleErrorWriter) Header() http.Header {
+	return w.header
+}
+
+func (*subtitleErrorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("client write failed")
+}
+
+func (*subtitleErrorWriter) WriteHeader(int) {}
+
+func (r subtitleReadCloser) Read([]byte) (int, error) {
+	return 0, r.readErr
+}
+
+func (r subtitleReadCloser) Close() error {
+	return r.closeErr
+}
+
+func TestWriteSubtitleResponseConvertsAndHandlesUpstreamIO(t *testing.T) {
+	t.Run("keeps WebVTT", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeSubtitleResponse(rec, &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("WEBVTT\n\n00:00.000 --> 00:01.000\nHi")),
+		})
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "text/vtt; charset=utf-8", rec.Header().Get("Content-Type"))
+		assert.Equal(t, "WEBVTT\n\n00:00.000 --> 00:01.000\nHi", rec.Body.String())
+	})
+
+	t.Run("converts SRT", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeSubtitleResponse(rec, &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("1\n00:00:00,000 --> 00:00:01,000\nHi")),
+		})
+		assert.Contains(t, rec.Body.String(), "WEBVTT")
+		assert.Contains(t, rec.Body.String(), "00:00:00.000 --> 00:00:01.000")
+	})
+
+	t.Run("read and close errors", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		writeSubtitleResponse(rec, &http.Response{
+			StatusCode: http.StatusOK,
+			Body: subtitleReadCloser{
+				readErr:  errors.New("upstream read failed"),
+				closeErr: errors.New("upstream close failed"),
+			},
+		})
+		assert.Equal(t, http.StatusBadGateway, rec.Code)
+		assert.Contains(t, rec.Body.String(), "upstream read failed")
+	})
+
+	t.Run("client write error", func(t *testing.T) {
+		writer := &subtitleErrorWriter{header: make(http.Header)}
+		writeSubtitleResponse(writer, &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("WEBVTT")),
+		})
+		assert.Equal(t, "text/vtt; charset=utf-8", writer.header.Get("Content-Type"))
+	})
 }

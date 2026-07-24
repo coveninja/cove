@@ -260,6 +260,44 @@ func TestActiveProfileFallbacks(t *testing.T) {
 	assert.Equal(t, Profile{}, s.ActiveProfile())
 }
 
+func TestActiveSnapshotRejectsStaleTransitions(t *testing.T) {
+	s := newStore(t)
+	active, revision := s.ActiveSnapshot()
+	assert.Equal(t, s.ActiveProfileID(), active.ID)
+
+	called := false
+	require.NoError(t, s.WithActiveSnapshot(active.ID, revision, func() error {
+		called = true
+		return nil
+	}))
+	assert.True(t, called)
+	require.ErrorIs(
+		t,
+		s.WithActiveSnapshot("other-profile", revision, func() error {
+			t.Fatal("stale snapshot callback must not run")
+			return nil
+		}),
+		ErrActiveProfileChanged,
+	)
+
+	kid, err := s.Create("Kid")
+	require.NoError(t, err)
+	require.NoError(t, s.SetActive(kid.ID))
+	require.ErrorIs(
+		t,
+		s.WithActiveSnapshot(active.ID, revision, func() error {
+			t.Fatal("superseded revision callback must not run")
+			return nil
+		}),
+		ErrActiveProfileChanged,
+	)
+
+	empty := &Store{}
+	got, gotRevision := empty.ActiveSnapshot()
+	assert.Equal(t, Profile{}, got)
+	assert.Zero(t, gotRevision)
+}
+
 func TestSetActiveSameIDIsNoOp(t *testing.T) {
 	called := make(chan string, 1)
 	s := newStore(t)
@@ -509,4 +547,55 @@ func TestAdoptIDNonActiveProfileLeavesActiveProfileUnchanged(t *testing.T) {
 		t.Fatalf("onChange called for non-active adoption: %s", id)
 	default:
 	}
+}
+
+func TestTransitionRollbackReportsPersistenceAndReloadFailures(t *testing.T) {
+	breakRollback := func(t *testing.T, s *Store) {
+		t.Helper()
+		blocker := filepath.Join(t.TempDir(), "not-a-directory")
+		require.NoError(t, os.WriteFile(blocker, []byte("blocked"), 0o600))
+		s.path = filepath.Join(blocker, "profiles.json")
+	}
+
+	t.Run("set active", func(t *testing.T) {
+		s := newStore(t)
+		kid, err := s.Create("Kid")
+		require.NoError(t, err)
+		s.SetOnChange(func(_, _ string) error {
+			breakRollback(t, s)
+			return fmt.Errorf("reload failed")
+		})
+
+		err = s.SetActive(kid.ID)
+		require.ErrorContains(t, err, "rollback store")
+		require.ErrorContains(t, err, "rollback reload")
+	})
+
+	t.Run("delete active", func(t *testing.T) {
+		s := newStore(t)
+		kid, err := s.Create("Kid")
+		require.NoError(t, err)
+		require.NoError(t, s.SetActive(kid.ID))
+		s.SetOnChange(func(_, _ string) error {
+			breakRollback(t, s)
+			return fmt.Errorf("reload failed")
+		})
+
+		err = s.Delete(kid.ID)
+		require.ErrorContains(t, err, "rollback store")
+		require.ErrorContains(t, err, "rollback reload")
+	})
+
+	t.Run("adopt active ID", func(t *testing.T) {
+		s := newStore(t)
+		oldID := s.ActiveProfileID()
+		s.SetOnChange(func(_, _ string) error {
+			breakRollback(t, s)
+			return fmt.Errorf("reload failed")
+		})
+
+		err := s.AdoptID(oldID, "remote-profile-id")
+		require.ErrorContains(t, err, "rollback store")
+		require.ErrorContains(t, err, "rollback reload")
+	})
 }

@@ -64,11 +64,7 @@
   let currentPage = $state<Page>({ type: "home" });
   let pageHistory = $state<Page[]>([]);
 
-  const canGoBack = $derived(
-    playback.playerMode === "full" ||
-      pageHistory.length > 0 ||
-      !!playback.quickPlayPending,
-  );
+  const canGoBack = $derived(playback.playerMode === "full" || pageHistory.length > 0 || !!playback.quickPlayPending);
 
   // Whether the active/floating stream belongs to the media page currently
   // on screen — used to stop the trailer from playing underneath it, and to
@@ -154,14 +150,8 @@
       // Vidstack rejects pending media requests with "provider destroyed"
       // when a player is torn down mid-flight. These are harmless; swallow
       // only this exact message so real rejections still surface.
-      const msg =
-        typeof e.reason === "string"
-          ? e.reason
-          : (e.reason as { message?: string } | null)?.message;
-      if (msg === "provider destroyed") {
-        e.preventDefault();
-        return;
-      }
+      const msg = typeof e.reason === "string" ? e.reason : (e.reason as { message?: string } | null)?.message;
+      if (msg === "provider destroyed") { e.preventDefault(); return; }
       if (isAbort(e.reason)) e.preventDefault();
     };
     const onError = (e: ErrorEvent) => {
@@ -443,12 +433,7 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
-            <HomePage
-              onSelectMedia={selectMedia}
-              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
-              visible={currentPage.type === "home"}
-              onChangePage={changePage}
-            />
+            <HomePage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} visible={currentPage.type === "home"} onChangePage={changePage} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "account"}>
             <MyAccountPage
@@ -457,32 +442,18 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
-            <MyListPage
-              onSelectMedia={selectMedia}
-              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
-            />
+            <MyListPage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
-            <ExplorePage
-              onSelectMedia={selectMedia}
-              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
-            />
+            <ExplorePage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "catalog"}>
             <CatalogGridPage
-              addonId={currentPage.type === "catalog"
-                ? currentPage.addonId
-                : ""}
-              catalogType={currentPage.type === "catalog"
-                ? currentPage.catalogType
-                : ""}
-              catalogId={currentPage.type === "catalog"
-                ? currentPage.catalogId
-                : ""}
+              addonId={currentPage.type === "catalog" ? currentPage.addonId : ""}
+              catalogType={currentPage.type === "catalog" ? currentPage.catalogType : ""}
+              catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
               name={currentPage.type === "catalog" ? currentPage.name : ""}
-              addonUrl={currentPage.type === "catalog"
-                ? currentPage.addonUrl
-                : undefined}
+              addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
               onSelectMedia={selectMedia}
               onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
             />
@@ -533,16 +504,7 @@
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
-              if (m)
-                playback.startPlayback(
-                  m,
-                  stream,
-                  s,
-                  e,
-                  name,
-                  candidates ?? [],
-                  0,
-                );
+              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
             }}
             onclose={() => playback.closePlayer()}
           />

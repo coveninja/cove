@@ -1,10 +1,6 @@
 <script lang="ts">
   import type { Media, TVEpisode } from "$lib/types/tmdb";
-  import type {
-    Stream,
-    TimestampData,
-    TimestampSegment,
-  } from "$lib/types/addons";
+  import type { Stream, TimestampData, TimestampSegment } from "$lib/types/addons";
   import { onDestroy, onMount, untrack, tick } from "svelte";
   import { api } from "$lib/api";
   import { settings } from "$lib/stores/settings";
@@ -79,12 +75,7 @@
   // Register close-sheets with parent for Escape priority handling.
   $effect(() => {
     onRegisterCloseSheets?.(() => {
-      if (
-        audioPanelOpen ||
-        subsPanelOpen ||
-        speedPanelOpen ||
-        episodesPanelOpen
-      ) {
+      if (audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen) {
         audioPanelOpen = false;
         subsPanelOpen = false;
         speedPanelOpen = false;
@@ -192,8 +183,7 @@
         // Pass the actual ended state so onDestroy and the "ended" effect firing
         // in the same tick don't race — #completedSaved prevents downgrade.
         // The bump waits for the save to land so the refetch can't race the POST.
-        void progress
-          .saveNow(Player.position, Player.duration, progressCtx, Player.ended)
+        void progress.saveNow(Player.position, Player.duration, progressCtx, Player.ended)
           .then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
@@ -202,9 +192,7 @@
     Player.stop();
   });
 
-  const canPlay = $derived(
-    !!src && !switching && Player.ready && Player.duration > 0,
-  );
+  const canPlay = $derived(!!src && !switching && Player.ready && Player.duration > 0);
 
   // ── Playback-start watchdog ──────────────────────────────────────────────────
 
@@ -227,9 +215,7 @@
     const isHashSrc = !src.startsWith("http");
     const failTimeoutMs = isHashSrc ? 50_000 : 25_000;
     const failTimer = setTimeout(triggerPlaybackFailed, failTimeoutMs);
-    const slowTimer = setTimeout(() => {
-      takingAWhile = true;
-    }, 15_000);
+    const slowTimer = setTimeout(() => { takingAWhile = true; }, 15_000);
 
     return () => {
       clearTimeout(failTimer);
@@ -291,8 +277,7 @@
 
   $effect(() => {
     if (Player.ended && media) {
-      void progress
-        .saveNow(Player.duration, Player.duration, progressCtx, true)
+      void progress.saveNow(Player.duration, Player.duration, progressCtx, true)
         .then(() => libraryChanged.update((n) => n + 1));
     }
   });
@@ -322,8 +307,7 @@
       return;
     prefetchedNext = true;
     const m = media;
-    const mode =
-      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
@@ -377,19 +361,13 @@
 
   $effect(() => {
     const m = media;
-    if (!m) {
-      logoUrl = null;
-      return;
-    }
+    if (!m) { logoUrl = null; return; }
     logoUrl = null;
     const requestedId = m.id; // guard against stale response after media changes
-    api
-      .getLogos(m.id, m.media_type)
-      .then((logos) => {
-        if (media?.id !== requestedId) return;
-        logoUrl = logos[0] ?? null;
-      })
-      .catch(() => {});
+    api.getLogos(m.id, m.media_type).then((logos) => {
+      if (media?.id !== requestedId) return;
+      logoUrl = logos[0] ?? null;
+    }).catch(() => {});
   });
 
   // ── IntroDB timestamps ────────────────────────────────────────────────────────
@@ -399,21 +377,15 @@
 
   $effect(() => {
     const m = media;
-    if (!m) {
-      timestamps = null;
-      return;
-    }
+    if (!m) { timestamps = null; return; }
     timestamps = null;
     const requestedSrc = src; // guard against stale response after switching src
-    api
-      .getTimestamps(m.id, { season, episode })
-      .then((data) => {
-        if (src !== requestedSrc) return;
-        timestamps = data;
-      })
-      .catch((e) => {
-        console.warn("[introdb] fetch failed:", e);
-      });
+    api.getTimestamps(m.id, { season, episode }).then((data) => {
+      if (src !== requestedSrc) return;
+      timestamps = data;
+    }).catch((e) => {
+      console.warn("[introdb] fetch failed:", e);
+    });
   });
 
   const activeSegment = $derived.by(() => {
@@ -486,11 +458,7 @@
     const named: { startMs: number; endMs: number; type: string }[] = [];
     const addAll = (arr: TimestampSegment[] | undefined, type: string) =>
       arr?.forEach((s) =>
-        named.push({
-          startMs: s.start_ms ?? 0,
-          endMs: s.end_ms ?? durMs,
-          type,
-        }),
+        named.push({ startMs: s.start_ms ?? 0, endMs: s.end_ms ?? durMs, type }),
       );
     addAll(timestamps.intro, "intro");
     addAll(timestamps.recap, "recap");
@@ -504,11 +472,7 @@
     let pos = 0;
     for (const seg of named) {
       if (seg.startMs > pos)
-        bars.push({
-          startFrac: pos / durMs,
-          endFrac: seg.startMs / durMs,
-          type: "content",
-        });
+        bars.push({ startFrac: pos / durMs, endFrac: seg.startMs / durMs, type: "content" });
       bars.push({
         startFrac: seg.startMs / durMs,
         endFrac: Math.min(seg.endMs / durMs, 1),
@@ -516,8 +480,7 @@
       });
       pos = seg.endMs;
     }
-    if (pos < durMs)
-      bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
+    if (pos < durMs) bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
 
     return bars.length > 1 ? bars : null;
   });
@@ -542,9 +505,7 @@
       targetLang = setting === "original" ? originalLang : setting;
     }
     appliedAudioDefault = true;
-    const match = Player.audioTracks.find((t) =>
-      langMatches(t.lang, targetLang),
-    );
+    const match = Player.audioTracks.find((t) => langMatches(t.lang, targetLang));
     if (match && !match.selected) Player.setAudioTrack(match.id);
   });
 
@@ -560,17 +521,13 @@
         selectSubtitle({ kind: "off" });
         return;
       }
-      const embMatch = Player.subtitleTracks.find((t) =>
-        langMatches(t.lang, pref.lang),
-      );
+      const embMatch = Player.subtitleTracks.find((t) => langMatches(t.lang, pref.lang));
       if (embMatch) {
         appliedSubDefault = true;
         selectSubtitle({ kind: "embedded", id: embMatch.id });
         return;
       }
-      const extMatch = externalSubtitles.find((s) =>
-        langMatches(s.lang, pref.lang),
-      );
+      const extMatch = externalSubtitles.find((s) => langMatches(s.lang, pref.lang));
       if (extMatch) {
         appliedSubDefault = true;
         selectSubtitle({ kind: "external", id: extMatch.id });
@@ -583,9 +540,7 @@
     }
     if (!$settings?.subtitlesEnabled) return;
     const lang = $settings.defaultSubtitleLang;
-    const embedded = Player.subtitleTracks.find((t) =>
-      langMatches(t.lang, lang),
-    );
+    const embedded = Player.subtitleTracks.find((t) => langMatches(t.lang, lang));
     if (embedded) {
       appliedSubDefault = true;
       selectSubtitle({ kind: "embedded", id: embedded.id });
@@ -596,8 +551,7 @@
     if (externalSubtitles.length === 0) return;
     appliedSubDefault = true;
     const ext =
-      externalSubtitles.find((s) => langMatches(s.lang, lang)) ??
-      externalSubtitles[0];
+      externalSubtitles.find((s) => langMatches(s.lang, lang)) ?? externalSubtitles[0];
     if (ext) selectSubtitle({ kind: "external", id: ext.id });
   });
 
@@ -649,9 +603,7 @@
       !upNextDismissed &&
       !!onPlayNext &&
       (activeSegment?.type === "credits" ||
-        (Player.duration > 0 &&
-          Player.duration - Player.position < 40 &&
-          canPlay) ||
+        (Player.duration > 0 && Player.duration - Player.position < 40 && canPlay) ||
         Player.ended),
   );
 
@@ -741,14 +693,10 @@
   function chooseSubtitle(sel: SubSel): void {
     selectSubtitle(sel);
     if (!media) return;
-    if (sel.kind === "off") {
-      saveShowTrackPrefs(media.id, { sub: { kind: "off" } });
-      return;
-    }
-    const lang =
-      sel.kind === "embedded"
-        ? Player.subtitleTracks.find((x) => x.id === sel.id)?.lang
-        : externalSubtitles.find((x) => x.id === sel.id)?.lang;
+    if (sel.kind === "off") { saveShowTrackPrefs(media.id, { sub: { kind: "off" } }); return; }
+    const lang = sel.kind === "embedded"
+      ? Player.subtitleTracks.find((x) => x.id === sel.id)?.lang
+      : externalSubtitles.find((x) => x.id === sel.id)?.lang;
     if (lang) saveShowTrackPrefs(media.id, { sub: { kind: "lang", lang } });
   }
 
@@ -761,9 +709,7 @@
 
   function langName(code: string): string {
     try {
-      return (
-        new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code
-      );
+      return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
     } catch {
       return code;
     }
@@ -792,11 +738,7 @@
   const subtitleItems = $derived.by((): SubItem[] => {
     const items: SubItem[] = [{ kind: "off", id: "off", label: "Off" }];
     for (const t of Player.subtitleTracks) {
-      items.push({
-        kind: "embedded",
-        id: t.id,
-        label: trackLabel(t, "Subtitle"),
-      });
+      items.push({ kind: "embedded", id: t.id, label: trackLabel(t, "Subtitle") });
     }
     for (const s of externalSubtitles) {
       items.push({
@@ -809,9 +751,7 @@
   });
 
   // Subtitle source/language grouping helper (mirroring desktop groupByLang).
-  function groupByLang<T>(
-    entries: { lang: string; item: T }[],
-  ): { label: string; items: T[] }[] {
+  function groupByLang<T>(entries: { lang: string; item: T }[]): { label: string; items: T[] }[] {
     const OTHER = "Other";
     const groups = new SvelteMap<string, T[]>();
     for (const { lang, item } of entries) {
@@ -826,12 +766,7 @@
       .map(([label, items]) => ({ label, items }));
   }
 
-  type SubRowItem = {
-    id: string | number;
-    label: string;
-    header?: boolean;
-    indent?: boolean;
-  };
+  type SubRowItem = { id: string | number; label: string; header?: boolean; indent?: boolean };
 
   // Grouped subtitle list for the panel: Off + per-source headers + per-lang headers + tracks.
   const subtitleRows = $derived.by((): SubRowItem[] => {
@@ -842,19 +777,11 @@
       const embGroups = groupByLang(
         Player.subtitleTracks.map((t) => ({
           lang: t.lang ? langName(t.lang) : t.title || "",
-          item: {
-            id: t.id as string | number,
-            label: trackLabel(t, "Subtitle"),
-          },
+          item: { id: t.id as string | number, label: trackLabel(t, "Subtitle") },
         })),
       );
       for (const g of embGroups) {
-        rows.push({
-          id: `hdr-embedded-${g.label}`,
-          label: g.label,
-          header: true,
-          indent: true,
-        });
+        rows.push({ id: `hdr-embedded-${g.label}`, label: g.label, header: true, indent: true });
         for (const item of g.items) rows.push(item);
       }
     }
@@ -864,19 +791,11 @@
       const extGroups = groupByLang(
         externalSubtitles.map((s) => ({
           lang: s.lang ? langName(s.lang) : "",
-          item: {
-            id: s.id as string | number,
-            label: langName(s.lang) || "Subtitle",
-          },
+          item: { id: s.id as string | number, label: langName(s.lang) || "Subtitle" },
         })),
       );
       for (const g of extGroups) {
-        rows.push({
-          id: `hdr-addons-${g.label}`,
-          label: g.label,
-          header: true,
-          indent: true,
-        });
+        rows.push({ id: `hdr-addons-${g.label}`, label: g.label, header: true, indent: true });
         for (const item of g.items) rows.push(item);
       }
     }
@@ -891,16 +810,11 @@
   });
 
   const title = $derived(
-    media
-      ? media.media_type === "tv"
-        ? (media.name ?? "")
-        : (media.title ?? "")
-      : "",
+    media ? (media.media_type === "tv" ? (media.name ?? "") : (media.title ?? "")) : "",
   );
 
   const episodeLabel = $derived.by(() => {
-    if (media?.media_type !== "tv" || season == null || episode == null)
-      return "";
+    if (media?.media_type !== "tv" || season == null || episode == null) return "";
     return `S${season}E${episode}`;
   });
 
@@ -923,10 +837,7 @@
   onDestroy(() => clearTimeout(seekFlashTimer));
 
   function nudgeSeek(delta: number): void {
-    const target = Math.max(
-      0,
-      Math.min(Player.duration || Infinity, Player.position + delta),
-    );
+    const target = Math.max(0, Math.min(Player.duration || Infinity, Player.position + delta));
     Player.seek(target);
   }
 
@@ -948,9 +859,7 @@
   let speedPanelOpen = $state(false);
   let episodesPanelOpen = $state(false);
 
-  const anyPanelOpen = $derived(
-    audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen,
-  );
+  const anyPanelOpen = $derived(audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen);
 
   // ── Controls auto-hide ────────────────────────────────────────────────────────
 
@@ -1153,6 +1062,7 @@
   Root: fully transparent — mpv renders behind the WebView and shows through.
 -->
 <div class="relative h-full w-full overflow-hidden">
+
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
   {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
@@ -1176,27 +1086,15 @@
       torrentProgress={torrent.progress}
       {displayPos}
       onSeekbarKeydown={handleSeekbarKeydown}
-      onSeekBack={() => {
-        nudgeSeek(-10);
-        showSeekFlash("left");
-        showControls();
-      }}
+      onSeekBack={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
       bind:playPauseBtn
-      onPlayPause={() => {
-        Player.togglePause();
-        showControls();
-      }}
-      onSeekForward={() => {
-        nudgeSeek(10);
-        showSeekFlash("right");
-        showControls();
-      }}
+      onPlayPause={() => { Player.togglePause(); showControls(); }}
+      onSeekForward={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
       bind:audioPanelOpen
       {subtitleItems}
       {selectedSubId}
       {subSelection}
-      hasSubtitles={Player.subtitleTracks.length > 0 ||
-        externalSubtitles.length > 0}
+      hasSubtitles={Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
       bind:subsPanelOpen
       bind:speedPanelOpen
       onCycleAspect={cycleAspect}
@@ -1219,6 +1117,7 @@
         bind:watchNowBtnEl={upNextPlayBtnEl}
       />
     {/if}
+
   {:else}
     <!-- ── Loading / buffering screen ───────────────────────────────────────── -->
     {#if streamDiscoveryPending || Player.available}
@@ -1240,6 +1139,7 @@
   {#if seekFlash}
     <TvSeekFlash {seekFlash} />
   {/if}
+
 </div>
 
 <!-- ── Track panels (fixed, rendered outside the main div) ───────────────── -->
@@ -1247,10 +1147,7 @@
 {#if audioPanelOpen}
   <TvTrackPanel
     title="Audio"
-    items={sortedAudio.map((t) => ({
-      id: t.id,
-      label: trackLabel(t, "Audio"),
-    }))}
+    items={sortedAudio.map((t) => ({ id: t.id, label: trackLabel(t, "Audio") }))}
     selectedId={selectedAudio?.id ?? null}
     onSelect={(id) => chooseAudioTrack(id as number)}
     onClose={() => (audioPanelOpen = false)}
@@ -1281,10 +1178,7 @@
 {#if speedPanelOpen}
   <TvTrackPanel
     title="Playback speed"
-    items={SPEEDS.map((s) => ({
-      id: String(s),
-      label: s === 1 ? "Normal (1×)" : `${s}×`,
-    }))}
+    items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {
       chooseSpeed(parseFloat(id as string));
@@ -1299,9 +1193,6 @@
     activeSeason={season}
     activeEpisode={episode}
     onClose={() => (episodesPanelOpen = false)}
-    onSelect={(s, e) => {
-      episodesPanelOpen = false;
-      onPlayNext?.(s, e);
-    }}
+    onSelect={(s, e) => { episodesPanelOpen = false; onPlayNext?.(s, e); }}
   />
 {/if}
