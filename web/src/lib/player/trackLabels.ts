@@ -3,6 +3,7 @@
 
 /** English display name for an ISO language code, falling back to the code. */
 export function langName(code: string): string {
+  if (!code) return code;
   try {
     return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
   } catch {
