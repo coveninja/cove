@@ -161,4 +161,52 @@ describe("geometricNavigate", () => {
     expect(geometricNavigate("right", from)).toBe(true);
     expect(document.activeElement).toBe(target);
   });
+
+  it("skips hidden, zero-sized, inert, and disabled candidates", () => {
+    const from = makeEl(0, 0);
+
+    const detachedLayout = makeEl(40, 0);
+    detachedLayout.getClientRects = () => ({ length: 0 }) as DOMRectList;
+
+    makeEl(60, 0, 0, 40);
+    makeEl(80, 0, 40, 0);
+
+    const visibilityHidden = makeEl(100, 0);
+    visibilityHidden.checkVisibility = vi.fn(() => false);
+
+    const ariaParent = document.createElement("div");
+    ariaParent.setAttribute("aria-hidden", "true");
+    document.body.append(ariaParent);
+    makeEl(120, 0, 40, 40, ariaParent);
+
+    const inertParent = document.createElement("div");
+    inertParent.inert = true;
+    document.body.append(inertParent);
+    makeEl(140, 0, 40, 40, inertParent);
+
+    const disabled = makeEl(160, 0);
+    disabled.disabled = true;
+
+    const visible = makeEl(200, 0);
+
+    expect(geometricNavigate("right", from)).toBe(true);
+    expect(document.activeElement).toBe(visible);
+  });
+
+  it("scrolls an enclosing TV anchor instead of only the focused control", () => {
+    const from = makeEl(0, 0);
+    const anchor = document.createElement("div");
+    anchor.setAttribute("data-tv-scroll-anchor", "");
+    document.body.append(anchor);
+    const target = makeEl(100, 0, 40, 40, anchor);
+    const anchorScroll = vi.fn();
+    const targetScroll = vi.fn();
+    anchor.scrollIntoView = anchorScroll;
+    target.scrollIntoView = targetScroll;
+
+    expect(geometricNavigate("right", from)).toBe(true);
+
+    expect(anchorScroll).toHaveBeenCalledOnce();
+    expect(targetScroll).not.toHaveBeenCalled();
+  });
 });

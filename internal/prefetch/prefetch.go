@@ -31,6 +31,15 @@ import (
 const (
 	// maxCandidates caps how many titles get warmed per cycle.
 	maxCandidates = 10
+	// nearCompleteFrac is the position/duration fraction at which an
+	// in-progress title is treated as "basically done" — worth prefetching
+	// the *next* episode for, rather than the one already being watched.
+	nearCompleteFrac = 0.9
+)
+
+// Durations are variables so the worker loop and cancellation paths can be
+// exercised deterministically in tests without waiting real minutes.
+var (
 	// perCandidateTimeout bounds one candidate's addon+nuvio fan-out.
 	perCandidateTimeout = 30 * time.Second
 	// candidateSpacing is the politeness delay between candidates — the
@@ -46,10 +55,6 @@ const (
 	// debounceDelay batches rapid-fire progress writes (a tick every ~10s
 	// during playback) into a single re-run after they settle.
 	debounceDelay = 15 * time.Second
-	// nearCompleteFrac is the position/duration fraction at which an
-	// in-progress title is treated as "basically done" — worth prefetching
-	// the *next* episode for, rather than the one already being watched.
-	nearCompleteFrac = 0.9
 )
 
 // Worker owns the background prefetch loop. Construct with New and start it
@@ -139,6 +144,9 @@ func (w *Worker) Run(ctx context.Context) {
 }
 
 func (w *Worker) runCycle(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	if w.settings != nil && !w.settings.Get().PrefetchStreams {
 		return
 	}
@@ -216,6 +224,9 @@ func (w *Worker) buildCandidates() []candidate {
 		if e.Status != library.StatusWatching {
 			continue
 		}
+		if e.MediaType != "movie" && e.MediaType != "tv" {
+			continue
+		}
 
 		touchedAt := e.UpdatedAt
 		if e.LastWatchedAt != nil && e.LastWatchedAt.After(touchedAt) {
@@ -223,10 +234,18 @@ func (w *Worker) buildCandidates() []candidate {
 		}
 
 		p := latestProgress[progKey{e.TmdbID, e.MediaType}]
+		if p != nil && p.WatchedAt.After(touchedAt) {
+			touchedAt = p.WatchedAt
+		}
 
 		switch {
 		case p != nil && !p.Completed && fraction(p) < nearCompleteFrac:
 			// Still mid-episode/movie — prefetch exactly what's in progress.
+			// A TV stream key requires both coordinates; malformed/legacy
+			// progress must not warm a series-level key that cannot play.
+			if e.MediaType == "tv" && (p.Season == nil || p.Episode == nil) {
+				continue
+			}
 			out = append(out, candidate{
 				tmdbID: e.TmdbID, mediaType: e.MediaType,
 				season: p.Season, episode: p.Episode, touchedAt: touchedAt,
@@ -288,26 +307,38 @@ func (w *Worker) nextEpisode(tmdbID, season, episode int) *episodeRef {
 	if err != nil || len(eps) == 0 {
 		return nil
 	}
-	maxEp := 0
+	nextEp := 0
 	for _, e := range eps {
-		if e.EpisodeNumber > maxEp {
-			maxEp = e.EpisodeNumber
+		if e.EpisodeNumber > episode && (nextEp == 0 || e.EpisodeNumber < nextEp) {
+			nextEp = e.EpisodeNumber
 		}
 	}
-	if episode < maxEp {
-		return &episodeRef{season, episode + 1}
+	if nextEp != 0 {
+		return &episodeRef{season, nextEp}
 	}
 	nextSeasonEps, err := w.tmdb.GetEpisodes(tmdbID, season+1)
 	if err != nil || len(nextSeasonEps) == 0 {
 		return nil // no next season (yet) — nothing to prefetch
 	}
-	return &episodeRef{season + 1, 1}
+	firstEp := 0
+	for _, e := range nextSeasonEps {
+		if e.EpisodeNumber > 0 && (firstEp == 0 || e.EpisodeNumber < firstEp) {
+			firstEp = e.EpisodeNumber
+		}
+	}
+	if firstEp == 0 {
+		return nil
+	}
+	return &episodeRef{season + 1, firstEp}
 }
 
 // prefetchOne warms one candidate's addon + (if enabled) Nuvio caches.
 // IMDB-id resolution goes through A1's cached getters, which is itself a
 // permanent warm the very next live /api/streams request benefits from too.
 func (w *Worker) prefetchOne(ctx context.Context, c candidate) {
+	if ctx.Err() != nil || w.tmdb == nil {
+		return
+	}
 	cctx, cancel := context.WithTimeout(ctx, perCandidateTimeout)
 	defer cancel()
 
@@ -327,8 +358,10 @@ func (w *Worker) prefetchOne(ctx context.Context, c candidate) {
 		stremioID = fmt.Sprintf("%s:%d:%d", imdbID, *c.season, *c.episode)
 	}
 
-	if _, err := w.addonMgr.GetAllStreamsPrefetch(cctx, c.mediaType, stremioID); err != nil {
-		log.Println("prefetch: addon fan-out:", err)
+	if w.addonMgr != nil {
+		if _, err := w.addonMgr.GetAllStreamsPrefetch(cctx, c.mediaType, stremioID); err != nil {
+			log.Println("prefetch: addon fan-out:", err)
+		}
 	}
 
 	// Only run scrapers if the user already opted into background JS by

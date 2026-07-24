@@ -49,6 +49,8 @@ export const pressable: Action<HTMLElement, PressableOptions | undefined> = (
       node.removeEventListener("pointerup", onPointerUp);
       node.removeEventListener("pointercancel", onPointerUp);
       node.removeEventListener("pointerleave", onPointerUp);
+      node.style.transform = "";
+      node.style.transition = "";
     },
   };
 };

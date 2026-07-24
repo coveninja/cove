@@ -23,7 +23,7 @@ func TestValidatePublicURL(t *testing.T) {
 
 	for _, raw := range []string{
 		"", "example.com/path", "file:///etc/passwd", "ftp://example.com/file",
-		"javascript:alert(1)", "https:///missing-host",
+		"javascript:alert(1)", "https:///missing-host", "https://example.com/%zz",
 	} {
 		t.Run("reject_"+raw, func(t *testing.T) {
 			_, err := ValidatePublicURL(raw)
@@ -50,13 +50,24 @@ func TestIsPublicAddr(t *testing.T) {
 		{"224.0.0.1", false},
 		{"ff02::1", false},
 		{"0.0.0.0", false},
+		{"0.1.2.3", false},
 		{"::", false},
+		{"100.64.0.1", false},
+		{"192.0.2.1", false},
+		{"198.18.0.1", false},
+		{"198.51.100.1", false},
+		{"203.0.113.1", false},
+		{"240.0.0.1", false},
+		{"100::1", false},
+		{"2001:db8::1", false},
 	}
 	for _, test := range tests {
 		t.Run(test.address, func(t *testing.T) {
 			assert.Equal(t, test.public, isPublicAddr(netip.MustParseAddr(test.address)))
 		})
 	}
+
+	assert.False(t, isPublicAddr(netip.Addr{}))
 }
 
 func TestSafeTransportRefusesLiteralPrivateAddresses(t *testing.T) {
@@ -79,4 +90,18 @@ func TestSafeTransportRejectsMalformedAddress(t *testing.T) {
 	transport := SafeTransport()
 	_, err := transport.DialContext(context.Background(), "tcp", "missing-port")
 	assert.Error(t, err)
+}
+
+func TestSafeTransportPropagatesResolutionAndDialErrors(t *testing.T) {
+	transport := SafeTransport()
+	defer transport.CloseIdleConnections()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := transport.DialContext(ctx, "tcp", "does-not-matter.invalid:80")
+	require.Error(t, err)
+
+	_, err = transport.DialContext(context.Background(), "unsupported-network", "8.8.8.8:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported-network")
 }

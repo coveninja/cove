@@ -84,7 +84,7 @@ declare global {
   }
 }
 
-class MpvPlayer {
+export class MpvPlayer {
   /** Running inside the Cove shell (the bridge globals are present). */
   available = $state(false);
   /** Channel handshake finished; controls are live. */
@@ -221,6 +221,7 @@ class MpvPlayer {
   }
 
   setPlaybackSpeed(speed: number): void {
+    if (!Number.isFinite(speed) || speed <= 0) return;
     this.playbackSpeed = speed;
     this.#mpv?.setMpvProperty("speed", String(speed));
   }
@@ -300,6 +301,7 @@ class MpvPlayer {
   }
 
   seek(seconds: number): void {
+    if (!Number.isFinite(seconds)) return;
     const clamped = this.duration
       ? Math.max(0, Math.min(seconds, this.duration))
       : Math.max(0, seconds);
@@ -309,6 +311,7 @@ class MpvPlayer {
   }
 
   setVolume(volume: number): void {
+    if (!Number.isFinite(volume)) return;
     const clamped = Math.max(0, Math.min(volume, 100));
     this.volume = clamped;
     this.#mpv?.setVolume(clamped);
@@ -353,9 +356,10 @@ class MpvPlayer {
 // both channels (positionChanged stops reaching JS even though C++ emits it).
 // import.meta.hot.data persists across HMR boundary; reuse the same instance.
 function makeOrReusePlayer(): MpvPlayer {
-  if (import.meta.hot) {
-    import.meta.hot.data.player ??= new MpvPlayer();
-    return import.meta.hot.data.player as MpvPlayer;
+  const hotData = import.meta.hot?.data;
+  if (hotData) {
+    hotData.player ??= new MpvPlayer();
+    return hotData.player as MpvPlayer;
   }
   return new MpvPlayer();
 }

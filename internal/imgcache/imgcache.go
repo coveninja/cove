@@ -199,14 +199,13 @@ func (c *Cache) handle(w http.ResponseWriter, r *http.Request) {
 	// are harmless here: AtomicWriteFile's rename is atomic, so the loser
 	// just overwrites with byte-identical content (TMDB paths are
 	// content-addressed) — no torn file, no need for a singleflight guard.
-	if err := utils.AtomicWriteFile(cachePath, data, 0o644); err != nil {
+	if err := c.writeCacheFile(cachePath, data); err != nil {
 		log.Println("imgcache: write failed:", err)
 		// Caching is an optimization, not a correctness requirement — still
 		// serve the bytes we already fetched even though persisting failed.
 		serveBytes(w, r, file, data)
 		return
 	}
-	c.recordWrite(int64(len(data)))
 	if !serveFromDisk(w, r, cachePath, file) {
 		// Vanishingly unlikely (would mean the file we just wrote vanished
 		// before we could re-open it) — fall back to the in-memory bytes.
@@ -266,25 +265,43 @@ func fetchUpstream(size, file string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb image fetch: HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes))
+	// Read one byte beyond the limit so an oversized response is rejected
+	// rather than silently truncated and then cached as a corrupt image.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(data) > maxImageBytes {
+		return nil, fmt.Errorf("tmdb image fetch: body exceeds %d bytes", maxImageBytes)
 	}
 	return data, nil
 }
 
-// recordWrite updates the running size estimate and kicks off eviction in the
-// background when it crosses maxCacheBytes — off the request goroutine, since
-// a directory scan + a batch of removes is not something a client waiting on
-// an image response should be blocked on.
-func (c *Cache) recordWrite(n int64) {
+// writeCacheFile atomically persists data and updates the running size
+// estimate by the change in file size. Accounting the delta (rather than
+// always adding len(data)) matters when concurrent misses both fetch and
+// write the same content-addressed TMDB path.
+//
+// The write and accounting update share c.mu so duplicate writes cannot both
+// observe a missing old file and double-count it.
+func (c *Cache) writeCacheFile(path string, data []byte) error {
 	c.mu.Lock()
-	c.totalBytes += n
+	var oldSize int64
+	if info, err := os.Stat(path); err == nil {
+		oldSize = info.Size()
+	}
+	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	c.totalBytes += int64(len(data)) - oldSize
 	over := c.totalBytes > maxCacheBytes
 	c.mu.Unlock()
+
 	if over {
 		go c.evict()
 	}
+	return nil
 }
 
 // evict scans the cache directory and removes the oldest-mtime files until
@@ -294,8 +311,10 @@ func (c *Cache) recordWrite(n int64) {
 // difference that matters if the process restarted without evicting first.
 //
 // The lock is held for the scan + victim selection, released during the
-// os.Remove loop (I/O must not block concurrent recordWrite callers), then
-// re-acquired to update totalBytes.
+// os.Remove loop (I/O must not block concurrent cache writes), then
+// re-acquired to subtract successfully removed bytes. Seeding totalBytes from
+// the scan before unlocking preserves writes that finish while removal is in
+// progress.
 func (c *Cache) evict() {
 	c.mu.Lock()
 
@@ -344,7 +363,8 @@ func (c *Cache) evict() {
 		running -= f.size
 	}
 
-	c.mu.Unlock() // release before I/O so recordWrite isn't blocked during removes
+	c.totalBytes = total
+	c.mu.Unlock() // release before I/O so cache writes aren't blocked during removes
 
 	var removed int64
 	for _, f := range victims {
@@ -356,6 +376,9 @@ func (c *Cache) evict() {
 	}
 
 	c.mu.Lock()
-	c.totalBytes = total - removed
+	c.totalBytes -= removed
+	if c.totalBytes < 0 {
+		c.totalBytes = 0
+	}
 	c.mu.Unlock()
 }

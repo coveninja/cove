@@ -2,7 +2,7 @@ import type { Profile, AuthSession } from "$lib/types/auth";
 import { supabase } from "$lib/supabase";
 import { api } from "$lib/api";
 
-class AuthStore {
+export class AuthStore {
   session = $state<AuthSession | null>(null);
   profiles = $state<Profile[]>([]);
   activeProfile = $state<Profile | null>(null);

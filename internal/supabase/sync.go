@@ -95,6 +95,9 @@ func (c *Config) fetchRemoteRowIDs(userJWT, table, profileID string, withSeasonE
 		if err := json.Unmarshal(r, &row); err != nil {
 			return nil, fmt.Errorf("decode remote %s row ID: %w", table, err)
 		}
+		if row.ID == "" || row.TmdbID <= 0 || row.MediaType == "" {
+			return nil, fmt.Errorf("invalid remote %s row ID: id, tmdb_id, and media_type are required", table)
+		}
 		out = append(out, library.RemoteRowID{
 			ID: row.ID, TmdbID: row.TmdbID, MediaType: row.MediaType,
 			Season: row.Season, Episode: row.Episode,
@@ -116,9 +119,13 @@ func (c *Config) fetchOwnedIDs(userJWT, table, profileID string) (map[string]boo
 		var row struct {
 			ID string `json:"id"`
 		}
-		if err := json.Unmarshal(r, &row); err == nil && row.ID != "" {
-			owned[row.ID] = true
+		if err := json.Unmarshal(r, &row); err != nil {
+			return nil, fmt.Errorf("decode owned %s row ID: %w", table, err)
 		}
+		if row.ID == "" {
+			return nil, fmt.Errorf("invalid owned %s row ID: id is required", table)
+		}
+		owned[row.ID] = true
 	}
 	return owned, nil
 }
@@ -303,9 +310,16 @@ func buildProgressRows(progress []*library.WatchProgress, profileID string) []ma
 	return rows
 }
 
-// PushSettings uploads current settings for the profile.
+// PushSettings uploads roaming settings for the profile. Network-exposure
+// settings are device-local and deliberately redacted before serialization:
+// syncing them could open a listener, disclose its bearer token, or enable LAN
+// stream proxying on another device without that device's consent.
 func (c *Config) PushSettings(userJWT, profileID string, st *settings.Store) error {
-	data, err := json.Marshal(st.Get())
+	snapshot := st.Get()
+	snapshot.RemoteAccessEnabled = false
+	snapshot.RemoteAccessToken = ""
+	snapshot.AllowLanStreamSources = false
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}
@@ -401,6 +415,9 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		if err := json.Unmarshal(r, &e); err != nil {
 			return nil, fmt.Errorf("decode library_entry: %w", err)
 		}
+		if e.ID == "" || e.TmdbID <= 0 || e.MediaType == "" {
+			return nil, fmt.Errorf("invalid library_entry: id, tmdb_id, and media_type are required")
+		}
 		out.Entries = append(out.Entries, &e)
 	}
 
@@ -413,6 +430,9 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		var p library.WatchProgress
 		if err := json.Unmarshal(r, &p); err != nil {
 			return nil, fmt.Errorf("decode watch_progress: %w", err)
+		}
+		if p.ID == "" || p.TmdbID <= 0 || p.MediaType == "" {
+			return nil, fmt.Errorf("invalid watch_progress: id, tmdb_id, and media_type are required")
 		}
 		out.Progress = append(out.Progress, &p)
 	}
@@ -427,6 +447,9 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		if err := json.Unmarshal(r, &d); err != nil {
 			return nil, fmt.Errorf("decode dismissal: %w", err)
 		}
+		if d.TmdbID <= 0 || d.MediaType == "" {
+			return nil, fmt.Errorf("invalid dismissal: tmdb_id and media_type are required")
+		}
 		out.Dismissals = append(out.Dismissals, &d)
 	}
 
@@ -438,6 +461,9 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		var removal library.Removal
 		if err := json.Unmarshal(r, &removal); err != nil {
 			return nil, fmt.Errorf("decode library_removal: %w", err)
+		}
+		if removal.TmdbID <= 0 || removal.MediaType == "" {
+			return nil, fmt.Errorf("invalid library_removal: tmdb_id and media_type are required")
 		}
 		out.Removals = append(out.Removals, &removal)
 	}
@@ -494,8 +520,15 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		if err := json.Unmarshal(nuvioRows[0], &row); err != nil {
 			return nil, fmt.Errorf("decode profile_nuvio row: %w", err)
 		}
-		if !json.Valid(row.Data) {
-			return nil, fmt.Errorf("decode profile_nuvio data: invalid JSON")
+		var payload *struct {
+			Repos     []nuvio.Repo `json:"repos"`
+			UpdatedAt time.Time    `json:"updatedAt"`
+		}
+		if err := json.Unmarshal(row.Data, &payload); err != nil {
+			return nil, fmt.Errorf("decode profile_nuvio data: %w", err)
+		}
+		if payload == nil {
+			return nil, fmt.Errorf("decode profile_nuvio data: object is required")
 		}
 		out.NuvioData, out.NuvioUpdatedAt, out.NuvioPresent = row.Data, row.UpdatedAt, true
 	}
@@ -512,8 +545,16 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 		if err := json.Unmarshal(actRows[0], &row); err != nil {
 			return nil, fmt.Errorf("decode profile_activity row: %w", err)
 		}
-		if !json.Valid(row.Data) {
-			return nil, fmt.Errorf("decode profile_activity data: invalid JSON")
+		var payload *struct {
+			Days       map[string]*activity.DayEntry `json:"days"`
+			LastPos    map[string]float64            `json:"last_pos"`
+			Backfilled bool                          `json:"backfilled"`
+		}
+		if err := json.Unmarshal(row.Data, &payload); err != nil {
+			return nil, fmt.Errorf("decode profile_activity data: %w", err)
+		}
+		if payload == nil {
+			return nil, fmt.Errorf("decode profile_activity data: object is required")
 		}
 		out.ActivityData, out.ActivityPresent = row.Data, true
 	}

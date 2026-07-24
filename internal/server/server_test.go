@@ -153,6 +153,24 @@ func TestLAN_EmptyExpectedToken(t *testing.T) {
 	}
 }
 
+func TestLAN_DisabledSettingRejectsValidToken(t *testing.T) {
+	st := storeWithRemoteAccess(t, "secret")
+	s := st.Get()
+	s.RemoteAccessEnabled = false
+	if err := st.Set(s); err != nil {
+		t.Fatal("disable remote access:", err)
+	}
+
+	h := lanTokenMiddleware(st, okHandler)
+	req := newLANRequest(http.MethodGet, "/api/ping")
+	req.Header.Set("X-Cove-Token", "secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("disabled remote access: want 401, got %d", rec.Code)
+	}
+}
+
 func TestRemoteListenAddr(t *testing.T) {
 	tests := []struct {
 		name string

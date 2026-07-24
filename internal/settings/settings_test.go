@@ -2,9 +2,11 @@ package settings
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -107,11 +109,9 @@ func TestMergeFrom_AcceptsNewer(t *testing.T) {
 	assert.True(t, st.Get().OnboardingDone, "a genuinely newer incoming merge must be accepted")
 }
 
-// TestMergeFrom_PreservesRemoteAccessFields verifies that a Supabase pull
-// (MergeFrom) never overwrites the local device's RemoteAccessEnabled and
-// RemoteAccessToken — propagating these via sync would silently open a LAN
-// listener on every synced device, which is a security and correctness bug.
-func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
+// TestMergeFrom_PreservesDeviceLocalNetworkFields verifies that a Supabase
+// pull never overwrites settings controlling this device's LAN exposure.
+func TestMergeFrom_PreservesDeviceLocalNetworkFields(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	st, err := New("test")
 	require.NoError(t, err)
@@ -123,14 +123,17 @@ func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
 	local := st.Get()
 	local.RemoteAccessEnabled = true
 	local.RemoteAccessToken = "local-device-token"
+	local.AllowLanStreamSources = true
 	require.NoError(t, st.Set(local))
 	require.True(t, st.Get().RemoteAccessEnabled)
 	require.Equal(t, "local-device-token", st.Get().RemoteAccessToken)
+	require.True(t, st.Get().AllowLanStreamSources)
 
 	// A newer remote pull with different remote-access values arrives.
 	remote := st.Get()
 	remote.RemoteAccessEnabled = false        // remote device has it disabled
 	remote.RemoteAccessToken = "remote-token" // remote device's token
+	remote.AllowLanStreamSources = false      // remote device rejects LAN sources
 	remote.HideSpoilers = true                // some regular setting that should merge
 	remote.UpdatedAt = st.Get().UpdatedAt.Add(time.Hour)
 	st.MergeFrom(remote)
@@ -141,6 +144,104 @@ func TestMergeFrom_PreservesRemoteAccessFields(t *testing.T) {
 	// Device-local remote-access config must NOT have been overwritten.
 	assert.True(t, s.RemoteAccessEnabled, "RemoteAccessEnabled must be preserved from local")
 	assert.Equal(t, "local-device-token", s.RemoteAccessToken, "RemoteAccessToken must be preserved from local")
+	assert.True(t, s.AllowLanStreamSources, "AllowLanStreamSources must be preserved from local")
+}
+
+func TestDeviceLocalChangesDoNotAdvanceRoamingTimestamp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	roaming := st.Get()
+	roaming.HideSpoilers = true
+	require.NoError(t, st.Set(roaming))
+	roamingUpdatedAt := st.Get().UpdatedAt
+	require.False(t, roamingUpdatedAt.IsZero())
+
+	deviceLocal := st.Get()
+	deviceLocal.RemoteAccessEnabled = true
+	deviceLocal.RemoteAccessToken = "local-token"
+	deviceLocal.AllowLanStreamSources = true
+	require.NoError(t, st.Set(deviceLocal))
+	assert.Equal(t, roamingUpdatedAt, st.Get().UpdatedAt)
+
+	nextRoaming := st.Get()
+	nextRoaming.AutoPlay = true
+	require.NoError(t, st.Set(nextRoaming))
+	assert.True(t, st.Get().UpdatedAt.After(roamingUpdatedAt))
+}
+
+func TestRemoteAccessTokenPolicy(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	enabled := st.Get()
+	enabled.RemoteAccessEnabled = true
+	require.NoError(t, st.Set(enabled))
+
+	generated := st.Get().RemoteAccessToken
+	require.Len(t, generated, 64)
+	_, err = hex.DecodeString(generated)
+	require.NoError(t, err)
+	assert.True(t, st.Get().UpdatedAt.IsZero(), "device-local changes must not advance roaming state")
+
+	withoutToken := st.Get()
+	withoutToken.RemoteAccessToken = ""
+	require.NoError(t, st.Set(withoutToken))
+	assert.Equal(t, generated, st.Get().RemoteAccessToken, "an omitted token must preserve the generated secret")
+
+	disabledMasked := st.Get()
+	disabledMasked.RemoteAccessEnabled = false
+	disabledMasked.RemoteAccessToken = "***"
+	require.NoError(t, st.Set(disabledMasked))
+	assert.Equal(t, generated, st.Get().RemoteAccessToken, "the GET sentinel must never be persisted")
+
+	explicit := st.Get()
+	explicit.RemoteAccessEnabled = true
+	explicit.RemoteAccessToken = "explicit-device-token"
+	require.NoError(t, st.Set(explicit))
+	assert.Equal(t, "explicit-device-token", st.Get().RemoteAccessToken)
+}
+
+func TestSetOnChangeReceivesSuccessfulSnapshot(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	changed := make(chan Settings, 1)
+	st.SetOnChange(func(snapshot Settings) {
+		changed <- snapshot
+	})
+
+	next := st.Get()
+	next.AutoPlay = true
+	require.NoError(t, st.Set(next))
+
+	select {
+	case snapshot := <-changed:
+		assert.True(t, snapshot.AutoPlay)
+	case <-time.After(time.Second):
+		t.Fatal("settings onChange hook did not run")
+	}
+
+	st.SetOnChange(nil)
+}
+
+func TestWriteFailuresRollbackCachedSettings(t *testing.T) {
+	missingParent := filepath.Join(t.TempDir(), "missing", "settings.json")
+	st := &Store{cached: defaultSettings, path: missingParent}
+
+	next := st.Get()
+	next.AutoPlay = true
+	require.Error(t, st.Set(next))
+	assert.False(t, st.Get().AutoPlay, "Set must not expose settings that failed to persist")
+
+	remote := st.Get()
+	remote.HideSpoilers = true
+	remote.UpdatedAt = time.Now().Add(time.Hour)
+	st.MergeFrom(remote)
+	assert.False(t, st.Get().HideSpoilers, "MergeFrom must roll back a failed persistence attempt")
 }
 
 func TestSetProfile(t *testing.T) {
@@ -202,6 +303,83 @@ func TestHandlers_PutSettings(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.True(t, st.Get().AutoPlay)
 	assert.Equal(t, 0.7, st.Get().DefaultVolume)
+}
+
+func TestHandlers_TokenMaskRevealAndOnboardingRatchet(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	initial := st.Get()
+	initial.OnboardingDone = true
+	initial.RemoteAccessEnabled = true
+	initial.RemoteAccessToken = "real-device-token"
+	require.NoError(t, st.Set(initial))
+
+	mux := http.NewServeMux()
+	st.SetupHandlers(mux)
+
+	get := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	getResult := httptest.NewRecorder()
+	mux.ServeHTTP(getResult, get)
+	require.Equal(t, http.StatusOK, getResult.Code)
+	var masked Settings
+	require.NoError(t, json.NewDecoder(getResult.Body).Decode(&masked))
+	assert.Equal(t, "***", masked.RemoteAccessToken)
+
+	reveal := httptest.NewRequest(http.MethodPost, "/api/settings/reveal-token", nil)
+	revealResult := httptest.NewRecorder()
+	mux.ServeHTTP(revealResult, reveal)
+	require.Equal(t, http.StatusOK, revealResult.Code)
+	var tokenResponse map[string]string
+	require.NoError(t, json.NewDecoder(revealResult.Body).Decode(&tokenResponse))
+	assert.Equal(t, "real-device-token", tokenResponse["token"])
+
+	wrongRevealMethod := httptest.NewRequest(http.MethodGet, "/api/settings/reveal-token", nil)
+	wrongRevealResult := httptest.NewRecorder()
+	mux.ServeHTTP(wrongRevealResult, wrongRevealMethod)
+	assert.Equal(t, http.StatusMethodNotAllowed, wrongRevealResult.Code)
+
+	stale := masked
+	stale.OnboardingDone = false
+	body, err := json.Marshal(stale)
+	require.NoError(t, err)
+	put := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body))
+	putResult := httptest.NewRecorder()
+	mux.ServeHTTP(putResult, put)
+	require.Equal(t, http.StatusOK, putResult.Code)
+	assert.True(t, st.Get().OnboardingDone)
+	assert.Equal(t, "real-device-token", st.Get().RemoteAccessToken)
+}
+
+func TestHandlers_SettingsErrorsDoNotMutateCache(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st := &Store{
+		cached: defaultSettings,
+		path:   filepath.Join(t.TempDir(), "missing", "settings.json"),
+	}
+	mux := http.NewServeMux()
+	st.SetupHandlers(mux)
+
+	invalid := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader("{"))
+	invalidResult := httptest.NewRecorder()
+	mux.ServeHTTP(invalidResult, invalid)
+	assert.Equal(t, http.StatusBadRequest, invalidResult.Code)
+
+	wrongMethod := httptest.NewRequest(http.MethodDelete, "/api/settings", nil)
+	wrongMethodResult := httptest.NewRecorder()
+	mux.ServeHTTP(wrongMethodResult, wrongMethod)
+	assert.Equal(t, http.StatusMethodNotAllowed, wrongMethodResult.Code)
+
+	next := defaultSettings
+	next.AutoPlay = true
+	body, err := json.Marshal(next)
+	require.NoError(t, err)
+	failedWrite := httptest.NewRequest(http.MethodPut, "/api/settings", bytes.NewReader(body))
+	failedWriteResult := httptest.NewRecorder()
+	mux.ServeHTTP(failedWriteResult, failedWrite)
+	assert.Equal(t, http.StatusInternalServerError, failedWriteResult.Code)
+	assert.False(t, st.Get().AutoPlay, "handler must roll back settings after a failed write")
 }
 
 // TestHandlers_MpvConf covers GET (no file), PUT+GET round-trip, and oversize body.

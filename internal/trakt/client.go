@@ -14,8 +14,8 @@ import (
 const (
 	defaultBaseURL = "https://api.trakt.tv"
 	apiVersion     = "2"
-	// writeInterval enforces Trakt's 1 write/sec rate limit with a small pad.
-	writeInterval = 1100 * time.Millisecond
+	// defaultWriteInterval enforces Trakt's 1 write/sec rate limit with a small pad.
+	defaultWriteInterval = 1100 * time.Millisecond
 )
 
 // Client is an authenticated HTTP client for the Trakt API.
@@ -29,6 +29,10 @@ type Client struct {
 	// writeMu serializes write requests to respect Trakt's 1/sec write limit.
 	writeMu   sync.Mutex
 	lastWrite time.Time
+	// Per-client timing controls keep tests deterministic without introducing
+	// package-global races with asynchronous scrobble/device-flow goroutines.
+	writeInterval time.Duration
+	sleep         func(time.Duration)
 
 	// refreshMu prevents concurrent token refreshes — only one should proceed.
 	refreshMu sync.Mutex
@@ -36,11 +40,13 @@ type Client struct {
 
 func newClient(clientID, clientSecret string, store *Store) *Client {
 	return &Client{
-		clientID:     clientID,
-		clientSecret: clientSecret,
-		store:        store,
-		baseURL:      defaultBaseURL,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		clientID:      clientID,
+		clientSecret:  clientSecret,
+		store:         store,
+		baseURL:       defaultBaseURL,
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		writeInterval: defaultWriteInterval,
+		sleep:         time.Sleep,
 	}
 }
 
@@ -92,7 +98,7 @@ func (c *Client) doRequest(method, path string, body any) (*http.Response, error
 				wait = time.Duration(secs) * time.Second
 			}
 		}
-		time.Sleep(wait)
+		c.sleep(wait)
 		req2, err := build()
 		if err != nil {
 			return nil, err
@@ -106,8 +112,8 @@ func (c *Client) doRequest(method, path string, body any) (*http.Response, error
 // to doRequest. Use this for all state-changing Trakt API calls (POST/DELETE).
 func (c *Client) doWrite(method, path string, body any) (*http.Response, error) {
 	c.writeMu.Lock()
-	if elapsed := time.Since(c.lastWrite); elapsed < writeInterval {
-		time.Sleep(writeInterval - elapsed)
+	if elapsed := time.Since(c.lastWrite); elapsed < c.writeInterval {
+		c.sleep(c.writeInterval - elapsed)
 	}
 	c.lastWrite = time.Now()
 	c.writeMu.Unlock()

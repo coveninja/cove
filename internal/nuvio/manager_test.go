@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coveninja/cove/internal/addons"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -122,6 +124,18 @@ func TestStreamCacheCopiesAndExpires(t *testing.T) {
 	m.streamCacheMu.Unlock()
 	_, ok = m.streamCacheGet(key)
 	assert.False(t, ok)
+
+	m.streamCacheSet("expired", []addons.Stream{{Name: "old"}})
+	m.streamCacheMu.Lock()
+	expired := m.streamCache["expired"]
+	expired.expires = time.Now().Add(-time.Second)
+	m.streamCache["expired"] = expired
+	m.streamCacheMu.Unlock()
+	m.streamCacheSet("fresh", []addons.Stream{{Name: "new"}})
+	m.streamCacheMu.Lock()
+	_, expiredStillPresent := m.streamCache["expired"]
+	m.streamCacheMu.Unlock()
+	assert.False(t, expiredStillPresent)
 }
 
 func TestInvalidationRejectsInFlightCacheWrite(t *testing.T) {
@@ -131,6 +145,55 @@ func TestInvalidationRejectsInFlightCacheWrite(t *testing.T) {
 	m.streamCacheSetIfCurrent("movie|9|-|-", []addons.Stream{{Name: "obsolete"}}, generation)
 	_, ok := m.streamCacheGet("movie|9|-|-")
 	assert.False(t, ok)
+}
+
+func TestGetStreamsDoesNotCacheResultsAfterRepoDisabledInFlight(t *testing.T) {
+	useLocalScraperTransport(t)
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseResponse
+		_, _ = w.Write([]byte(`{"url":"https://example.com/in-flight"}`))
+	}))
+	defer server.Close()
+
+	m := testManager(t)
+	repo := enabledRepo()
+	repo.Scrapers[0].Code = `
+		async function getStreams() {
+			const response = await fetch("` + server.URL + `");
+			const stream = await response.json();
+			return [{name: "in-flight", url: stream.url}];
+		}
+		module.exports = {getStreams};
+	`
+	m.repos = []Repo{repo}
+
+	results := make(chan []addons.Stream, 1)
+	go func() {
+		results <- m.GetStreams(context.Background(), "movie", 44, "", "Example", 2025, nil, nil)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scraper did not begin its request")
+	}
+	require.NoError(t, m.SetRepoEnabled(repo.ID, false))
+	close(releaseResponse)
+
+	select {
+	case streams := <-results:
+		require.Len(t, streams, 1, "the already-running caller may still receive its completed result")
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetStreams did not finish after the scraper response was released")
+	}
+
+	key := nuvioCacheKey("movie", 44, nil, nil)
+	_, cached := m.streamCacheGet(key)
+	assert.False(t, cached, "results from the disabled repo must not repopulate the invalidated cache")
+	assert.Empty(t, m.GetStreams(context.Background(), "movie", 44, "", "Example", 2025, nil, nil))
 }
 
 func TestGetStreamsRunsEnabledScraperAndCachesResult(t *testing.T) {
@@ -190,6 +253,84 @@ func TestNuvioHandlersListPatchDeleteAndValidation(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, request(http.MethodPatch, "/api/nuvio/scrapers?repoId=owner/repo&scraperId=working", `{"enabled":false}`).Code)
 	assert.Equal(t, http.StatusMethodNotAllowed, request(http.MethodPut, "/api/nuvio/repos", "").Code)
 	assert.Equal(t, http.StatusNoContent, request(http.MethodDelete, "/api/nuvio/repos?id=owner/repo", "").Code)
+}
+
+func TestNuvioHandlersRejectInvalidRequestsAndSurfaceLifecycleErrors(t *testing.T) {
+	m := testManager(t)
+	mux := http.NewServeMux()
+	m.SetupHandlers(mux)
+
+	tests := []struct {
+		name   string
+		method string
+		target string
+		body   string
+		status int
+	}{
+		{"post missing URL", http.MethodPost, "/api/nuvio/repos", `{}`, http.StatusBadRequest},
+		{"post unsupported URL", http.MethodPost, "/api/nuvio/repos", `{"url":"https://example.com/repo"}`, http.StatusBadRequest},
+		{"patch invalid body", http.MethodPatch, "/api/nuvio/repos?id=missing", `{`, http.StatusBadRequest},
+		{"patch missing repo", http.MethodPatch, "/api/nuvio/repos?id=missing", `{"enabled":true}`, http.StatusNotFound},
+		{"delete missing ID", http.MethodDelete, "/api/nuvio/repos", "", http.StatusBadRequest},
+		{"delete missing repo", http.MethodDelete, "/api/nuvio/repos?id=missing", "", http.StatusBadRequest},
+		{"refresh missing repo", http.MethodPost, "/api/nuvio/repos/refresh?id=missing", "", http.StatusBadRequest},
+		{"scraper wrong method", http.MethodGet, "/api/nuvio/scrapers", "", http.StatusMethodNotAllowed},
+		{"scraper missing IDs", http.MethodPatch, "/api/nuvio/scrapers?repoId=missing", `{"enabled":true}`, http.StatusBadRequest},
+		{"scraper invalid body", http.MethodPatch, "/api/nuvio/scrapers?repoId=missing&scraperId=missing", `{`, http.StatusBadRequest},
+		{"scraper missing", http.MethodPatch, "/api/nuvio/scrapers?repoId=missing&scraperId=missing", `{"enabled":true}`, http.StatusBadRequest},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(testCase.method, testCase.target, strings.NewReader(testCase.body))
+			mux.ServeHTTP(recorder, request)
+			assert.Equal(t, testCase.status, recorder.Code)
+		})
+	}
+}
+
+func TestManagerRejectsCorruptProfileAndRemoteStoresWithoutMutation(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := New("good")
+	m.repos = []Repo{enabledRepo()}
+	m.updatedAt = time.Now().UTC()
+	key := nuvioCacheKey("movie", 1, nil, nil)
+	m.streamCacheSet(key, []addons.Stream{{Name: "cached"}})
+
+	corruptPath, err := utils.ConfigPath("nuvio-corrupt.json")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(corruptPath, []byte("{invalid"), 0o644))
+	require.Error(t, m.SetProfile("corrupt"))
+	require.Len(t, m.GetRepos(), 1)
+	_, cached := m.streamCacheGet(key)
+	assert.True(t, cached)
+
+	require.Error(t, m.MergeFromJSON([]byte("{invalid"), m.updatedAt.Add(time.Minute)))
+	require.Len(t, m.GetRepos(), 1)
+	_, cached = m.streamCacheGet(key)
+	assert.True(t, cached)
+}
+
+func TestManifestShapesAndManagerPredicates(t *testing.T) {
+	bare, err := parseManifest([]byte(`[{"id":"bare","filename":"bare.js"}]`))
+	require.NoError(t, err)
+	require.Len(t, bare, 1)
+	assert.Equal(t, "bare", bare[0].ID)
+
+	providers, err := parseManifest([]byte(`{"providers":[{"id":"provider","filename":"provider.js"}]}`))
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	assert.Equal(t, "provider", providers[0].ID)
+	_, err = parseManifest([]byte("{invalid"))
+	require.Error(t, err)
+
+	m := testManager(t)
+	m.repos = []Repo{
+		{Enabled: false, Scrapers: []Scraper{{Enabled: true, Code: "code"}}},
+		{Enabled: true, Scrapers: []Scraper{{Enabled: true}}},
+	}
+	assert.False(t, m.HasEnabledScrapers())
+	assert.Equal(t, "", firstNonEmpty("", ""))
 }
 
 func intPtr(value int) *int { return &value }

@@ -31,6 +31,7 @@ type fakeTMDB struct {
 	tvIMDB     string
 	idErr      error
 	media      *tmdb.Media
+	mediaErr   error
 }
 
 func (f *fakeTMDB) GetEpisodes(id, season int) ([]tmdb.TVEpisode, error) {
@@ -38,9 +39,11 @@ func (f *fakeTMDB) GetEpisodes(id, season int) ([]tmdb.TVEpisode, error) {
 	return f.episodes[key], f.episodeErr[key]
 }
 
-func (f *fakeTMDB) GetTVIMDBId(int) (string, error)               { return f.tvIMDB, f.idErr }
-func (f *fakeTMDB) GetIMDBId(int) (string, error)                 { return f.movieIMDB, f.idErr }
-func (f *fakeTMDB) GetMediaByID(int, string) (*tmdb.Media, error) { return f.media, nil }
+func (f *fakeTMDB) GetTVIMDBId(int) (string, error) { return f.tvIMDB, f.idErr }
+func (f *fakeTMDB) GetIMDBId(int) (string, error)   { return f.movieIMDB, f.idErr }
+func (f *fakeTMDB) GetMediaByID(int, string) (*tmdb.Media, error) {
+	return f.media, f.mediaErr
+}
 
 type fakeAddonPrefetcher struct {
 	calls []struct{ mediaType, stremioID string }
@@ -64,6 +67,15 @@ type nuvioCall struct {
 type fakeNuvioPrefetcher struct {
 	enabled bool
 	calls   []nuvioCall
+}
+
+type channelAddonPrefetcher struct {
+	calls chan string
+}
+
+func (f *channelAddonPrefetcher) GetAllStreamsPrefetch(_ context.Context, _ string, stremioID string) ([]addons.Stream, error) {
+	f.calls <- stremioID
+	return nil, nil
 }
 
 func (f *fakeNuvioPrefetcher) HasEnabledScrapers() bool { return f.enabled }
@@ -179,6 +191,107 @@ func TestBuildCandidates_WatchingNoProgressRowUsesLastWatched(t *testing.T) {
 	assert.Equal(t, 5, *candidates[0].episode)
 }
 
+func TestBuildCandidatesSkipsFinishedLastWatchedEpisode(t *testing.T) {
+	lib := newTestLib(t)
+	now := time.Now()
+	s, e := 3, 4
+	lib.MergeFrom([]*library.LibraryEntry{{
+		ID: "a", TmdbID: 5, MediaType: "tv", Status: library.StatusWatching,
+		LastWatchedSeason: &s, LastWatchedEpisode: &e,
+		AddedAt: now, UpdatedAt: now,
+	}}, nil, nil, nil)
+
+	w := &Worker{lib: lib, tmdb: &fakeTMDB{}}
+	assert.Empty(t, w.buildCandidates())
+}
+
+func TestBuildCandidatesSkipsInvalidMediaAndMalformedTVProgress(t *testing.T) {
+	lib := newTestLib(t)
+	now := time.Now()
+	lib.MergeFrom([]*library.LibraryEntry{
+		{ID: "invalid", TmdbID: 1, MediaType: "podcast", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
+		{ID: "tv", TmdbID: 2, MediaType: "tv", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
+	}, []*library.WatchProgress{
+		{
+			ID: "progress", TmdbID: 2, MediaType: "tv",
+			PositionSeconds: 10, DurationSeconds: 100, WatchedAt: now,
+		},
+	}, nil, nil)
+
+	w := New(lib, nil, nil, nil, nil)
+	assert.Empty(t, w.buildCandidates())
+}
+
+func TestBuildCandidatesSortsByLatestProgressTimestamp(t *testing.T) {
+	lib := newTestLib(t)
+	base := time.Now()
+	lib.MergeFrom([]*library.LibraryEntry{
+		{
+			ID: "progress-newer", TmdbID: 1, MediaType: "movie",
+			Status: library.StatusWatching, AddedAt: base, UpdatedAt: base,
+		},
+		{
+			ID: "entry-newer", TmdbID: 2, MediaType: "movie",
+			Status: library.StatusWatching, AddedAt: base, UpdatedAt: base.Add(time.Minute),
+		},
+	}, []*library.WatchProgress{
+		{
+			ID: "progress", TmdbID: 1, MediaType: "movie",
+			PositionSeconds: 10, DurationSeconds: 100, WatchedAt: base.Add(2 * time.Minute),
+		},
+	}, nil, nil)
+
+	w := New(lib, nil, nil, nil, nil)
+	candidates := w.buildCandidates()
+	require.Len(t, candidates, 2)
+	assert.Equal(t, 1, candidates[0].tmdbID)
+	assert.Equal(t, 2, candidates[1].tmdbID)
+}
+
+func TestBuildCandidatesSortsByLastWatchedTimestamp(t *testing.T) {
+	lib := newTestLib(t)
+	base := time.Now()
+	lastWatched := base.Add(2 * time.Minute)
+	lib.MergeFrom([]*library.LibraryEntry{
+		{
+			ID: "last-watched-newer", TmdbID: 1, MediaType: "movie",
+			Status: library.StatusWatching, AddedAt: base, UpdatedAt: base,
+			LastWatchedAt: &lastWatched,
+		},
+		{
+			ID: "entry-newer", TmdbID: 2, MediaType: "movie",
+			Status: library.StatusWatching, AddedAt: base, UpdatedAt: base.Add(time.Minute),
+		},
+	}, nil, nil, nil)
+
+	w := New(lib, nil, nil, nil, nil)
+	candidates := w.buildCandidates()
+	require.Len(t, candidates, 2)
+	assert.Equal(t, 1, candidates[0].tmdbID)
+	assert.Equal(t, 2, candidates[1].tmdbID)
+}
+
+func TestBuildCandidatesCompletedTVUsesNextEpisode(t *testing.T) {
+	lib := newTestLib(t)
+	now := time.Now()
+	lib.MergeFrom([]*library.LibraryEntry{
+		{ID: "tv", TmdbID: 9, MediaType: "tv", Status: library.StatusWatching, AddedAt: now, UpdatedAt: now},
+	}, []*library.WatchProgress{
+		{
+			ID: "progress", TmdbID: 9, MediaType: "tv", Season: intp(1), Episode: intp(1),
+			PositionSeconds: 100, DurationSeconds: 100, Completed: true, WatchedAt: now,
+		},
+	}, nil, nil)
+	w := &Worker{lib: lib, tmdb: &fakeTMDB{episodes: map[[2]int][]tmdb.TVEpisode{
+		{9, 1}: {{EpisodeNumber: 1}, {EpisodeNumber: 2}},
+	}}}
+
+	candidates := w.buildCandidates()
+	require.Len(t, candidates, 1)
+	assert.Equal(t, 1, *candidates[0].season)
+	assert.Equal(t, 2, *candidates[0].episode)
+}
+
 func TestNextEpisodeWithinSeasonRolloverAndFinale(t *testing.T) {
 	w := &Worker{tmdb: &fakeTMDB{episodes: map[[2]int][]tmdb.TVEpisode{
 		{10, 1}: {{EpisodeNumber: 1}, {EpisodeNumber: 3}},
@@ -201,6 +314,25 @@ func TestNextEpisodeHandlesMetadataFailures(t *testing.T) {
 	}}
 	assert.Nil(t, w.nextEpisode(99, 1, 1))
 	assert.Nil(t, w.nextEpisode(11, 1, 2))
+}
+
+func TestNextEpisodeUsesAvailableEpisodeNumbers(t *testing.T) {
+	w := &Worker{tmdb: &fakeTMDB{episodes: map[[2]int][]tmdb.TVEpisode{
+		{12, 1}: {{EpisodeNumber: 1}, {EpisodeNumber: 3}},
+		{12, 2}: {{EpisodeNumber: 4}, {EpisodeNumber: 2}},
+		{13, 1}: {{EpisodeNumber: 1}},
+		{13, 2}: {{EpisodeNumber: 0}},
+	}}}
+
+	next := w.nextEpisode(12, 1, 1)
+	require.NotNil(t, next)
+	assert.Equal(t, episodeRef{season: 1, episode: 3}, *next)
+
+	next = w.nextEpisode(12, 1, 3)
+	require.NotNil(t, next)
+	assert.Equal(t, episodeRef{season: 2, episode: 2}, *next)
+
+	assert.Nil(t, w.nextEpisode(13, 1, 1))
 }
 
 func TestPrefetchOneWarmsAddonAndEnabledNuvio(t *testing.T) {
@@ -235,6 +367,47 @@ func TestPrefetchOneStopsWhenIMDBResolutionFails(t *testing.T) {
 	assert.Empty(t, addon.calls)
 }
 
+func TestPrefetchOneHandlesCancellationAddonFailureAndMissingAddon(t *testing.T) {
+	t.Run("already canceled", func(t *testing.T) {
+		addon := &fakeAddonPrefetcher{}
+		w := &Worker{tmdb: &fakeTMDB{movieIMDB: "tt123"}, addonMgr: addon}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		w.prefetchOne(ctx, candidate{tmdbID: 1, mediaType: "movie"})
+		assert.Empty(t, addon.calls)
+	})
+
+	t.Run("addon failure does not block Nuvio", func(t *testing.T) {
+		addon := &fakeAddonPrefetcher{err: errors.New("addon failed")}
+		nuvio := &fakeNuvioPrefetcher{enabled: true}
+		w := &Worker{
+			tmdb:     &fakeTMDB{movieIMDB: "tt456", mediaErr: errors.New("metadata failed")},
+			addonMgr: addon,
+			nuvioMgr: nuvio,
+		}
+
+		w.prefetchOne(context.Background(), candidate{tmdbID: 2, mediaType: "movie"})
+		require.Len(t, addon.calls, 1)
+		require.Len(t, nuvio.calls, 1)
+		assert.Empty(t, nuvio.calls[0].title)
+		assert.Zero(t, nuvio.calls[0].year)
+	})
+
+	t.Run("Nuvio can warm without addon manager", func(t *testing.T) {
+		nuvio := &fakeNuvioPrefetcher{enabled: true}
+		w := &Worker{
+			tmdb:     &fakeTMDB{movieIMDB: "tt789", media: &tmdb.Media{Title: "Movie", Released: "2023-01-02"}},
+			nuvioMgr: nuvio,
+		}
+
+		w.prefetchOne(context.Background(), candidate{tmdbID: 3, mediaType: "movie"})
+		require.Len(t, nuvio.calls, 1)
+		assert.Equal(t, "Movie", nuvio.calls[0].title)
+		assert.Equal(t, 2023, nuvio.calls[0].year)
+	})
+}
+
 func TestRunCycleHonorsPrefetchSetting(t *testing.T) {
 	lib := newTestLib(t)
 	now := time.Now()
@@ -262,6 +435,155 @@ func TestRunCycleHonorsPrefetchSetting(t *testing.T) {
 	w.runCycle(context.Background())
 	require.Len(t, addon.calls, 1)
 	assert.Equal(t, "tt050", addon.calls[0].stremioID)
+}
+
+func setWorkerTimingsForTest(t *testing.T, startup, ticker, debounce, spacing time.Duration) {
+	t.Helper()
+	origStartup, origTicker := startupDelay, tickerInterval
+	origDebounce, origSpacing := debounceDelay, candidateSpacing
+	origTimeout := perCandidateTimeout
+	startupDelay, tickerInterval = startup, ticker
+	debounceDelay, candidateSpacing = debounce, spacing
+	perCandidateTimeout = time.Second
+	t.Cleanup(func() {
+		startupDelay, tickerInterval = origStartup, origTicker
+		debounceDelay, candidateSpacing = origDebounce, origSpacing
+		perCandidateTimeout = origTimeout
+	})
+}
+
+func newRunWorker(t *testing.T, addon addonPrefetcher) *Worker {
+	t.Helper()
+	lib := newTestLib(t)
+	now := time.Now()
+	lib.MergeFrom([]*library.LibraryEntry{{
+		ID: "movie", TmdbID: 77, MediaType: "movie", Status: library.StatusWatching,
+		AddedAt: now, UpdatedAt: now,
+	}}, nil, nil, nil)
+	return &Worker{
+		lib: lib, tmdb: &fakeTMDB{movieIMDB: "tt077"},
+		addonMgr: addon, notify: make(chan struct{}, 1),
+	}
+}
+
+func waitForPrefetchCall(t *testing.T, calls <-chan string) string {
+	t.Helper()
+	select {
+	case call := <-calls:
+		return call
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for prefetch call")
+		return ""
+	}
+}
+
+func waitForWorkerStop(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+}
+
+func TestRunHandlesStartupTickerNotifyAndCancellation(t *testing.T) {
+	t.Run("startup and ticker", func(t *testing.T) {
+		setWorkerTimingsForTest(t, 5*time.Millisecond, 15*time.Millisecond, 5*time.Millisecond, time.Millisecond)
+		addon := &channelAddonPrefetcher{calls: make(chan string, 4)}
+		w := newRunWorker(t, addon)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			w.Run(ctx)
+			close(done)
+		}()
+
+		assert.Equal(t, "tt077", waitForPrefetchCall(t, addon.calls))
+		assert.Equal(t, "tt077", waitForPrefetchCall(t, addon.calls))
+		cancel()
+		waitForWorkerStop(t, done)
+	})
+
+	t.Run("debounced notification", func(t *testing.T) {
+		setWorkerTimingsForTest(t, time.Hour, time.Hour, 5*time.Millisecond, time.Millisecond)
+		addon := &channelAddonPrefetcher{calls: make(chan string, 4)}
+		w := newRunWorker(t, addon)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			w.Run(ctx)
+			close(done)
+		}()
+
+		w.Notify()
+		assert.Equal(t, "tt077", waitForPrefetchCall(t, addon.calls))
+		cancel()
+		waitForWorkerStop(t, done)
+	})
+
+	t.Run("already canceled", func(t *testing.T) {
+		setWorkerTimingsForTest(t, time.Hour, time.Hour, time.Hour, time.Millisecond)
+		w := &Worker{notify: make(chan struct{}, 1)}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		done := make(chan struct{})
+		go func() {
+			w.Run(ctx)
+			close(done)
+		}()
+		waitForWorkerStop(t, done)
+	})
+}
+
+func TestRunCycleSpacingAndCancellation(t *testing.T) {
+	t.Run("spaces multiple candidates", func(t *testing.T) {
+		setWorkerTimingsForTest(t, time.Hour, time.Hour, time.Hour, time.Millisecond)
+		addon := &channelAddonPrefetcher{calls: make(chan string, 4)}
+		w := newRunWorker(t, addon)
+		now := time.Now().Add(time.Minute)
+		w.lib.MergeFrom([]*library.LibraryEntry{{
+			ID: "movie-two", TmdbID: 78, MediaType: "movie", Status: library.StatusWatching,
+			AddedAt: now, UpdatedAt: now,
+		}}, nil, nil, nil)
+
+		w.runCycle(context.Background())
+		assert.Len(t, addon.calls, 2)
+	})
+
+	t.Run("cancellation interrupts spacing", func(t *testing.T) {
+		setWorkerTimingsForTest(t, time.Hour, time.Hour, time.Hour, time.Hour)
+		addon := &channelAddonPrefetcher{calls: make(chan string, 4)}
+		w := newRunWorker(t, addon)
+		now := time.Now().Add(time.Minute)
+		w.lib.MergeFrom([]*library.LibraryEntry{{
+			ID: "movie-two", TmdbID: 78, MediaType: "movie", Status: library.StatusWatching,
+			AddedAt: now, UpdatedAt: now,
+		}}, nil, nil, nil)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			w.runCycle(ctx)
+			close(done)
+		}()
+		waitForPrefetchCall(t, addon.calls)
+		cancel()
+		waitForWorkerStop(t, done)
+		assert.Empty(t, addon.calls)
+	})
+
+	t.Run("already canceled", func(t *testing.T) {
+		w := newRunWorker(t, &fakeAddonPrefetcher{})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		w.runCycle(ctx)
+	})
+
+	t.Run("no candidates", func(t *testing.T) {
+		lib := newTestLib(t)
+		w := &Worker{lib: lib}
+		w.runCycle(context.Background())
+	})
 }
 
 func TestNotifyCoalescesAndHelpers(t *testing.T) {

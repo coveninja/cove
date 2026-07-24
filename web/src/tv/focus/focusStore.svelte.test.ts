@@ -11,6 +11,7 @@ import {
 
 import {
   editableKeepsArrow,
+  focusAfterKeyRelease,
   focusFirst,
   navigate,
   registerFocusable,
@@ -117,6 +118,15 @@ describe("editableKeepsArrow", () => {
     const div = document.createElement("div");
     for (const dir of ["left", "right", "up", "down"] as const) {
       expect(editableKeepsArrow(div, dir)).toBe(false);
+    }
+  });
+
+  it("keeps every arrow inside contenteditable controls", () => {
+    const div = document.createElement("div");
+    Object.defineProperty(div, "isContentEditable", { value: true });
+
+    for (const dir of ["left", "right", "up", "down"] as const) {
+      expect(editableKeepsArrow(div, dir)).toBe(true);
     }
   });
 });
@@ -229,6 +239,15 @@ describe("navigate inside a row group", () => {
   it("does not move right at the end of the row (stays on c)", () => {
     c.focus();
     navigate("right");
+    expect(document.activeElement).toBe(c);
+  });
+
+  it("skips a registered member that becomes disabled", () => {
+    b.setAttribute("disabled", "");
+    a.focus();
+
+    navigate("right");
+
     expect(document.activeElement).toBe(c);
   });
 });
@@ -364,5 +383,350 @@ describe("navigate inside a grid group", () => {
     c.focus();
     navigate("down");
     expect(document.activeElement).toBe(c);
+  });
+
+  it("moves left and up within the grid", () => {
+    d.focus();
+    navigate("left");
+    expect(document.activeElement).toBe(c);
+
+    navigate("up");
+    expect(document.activeElement).toBe(a);
+  });
+});
+
+// ── focusAfterKeyRelease ─────────────────────────────────────────────────────
+
+describe("focusAfterKeyRelease", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("focuses after keyup has finished dispatching", () => {
+    const target = makeEl(0, 0);
+    const getEl = vi.fn(() => target);
+    focusAfterKeyRelease(getEl);
+
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter" }));
+    expect(document.activeElement).not.toBe(target);
+    vi.advanceTimersByTime(0);
+
+    expect(document.activeElement).toBe(target);
+    expect(getEl).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(300);
+    expect(getEl).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the fallback timer when no keyup arrives", () => {
+    const target = makeEl(0, 0);
+    focusAfterKeyRelease(() => target);
+
+    vi.advanceTimersByTime(299);
+    expect(document.activeElement).not.toBe(target);
+    vi.advanceTimersByTime(1);
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("cleanup prevents pending focus", () => {
+    const target = makeEl(0, 0);
+    const getEl = vi.fn(() => target);
+    const cleanup = focusAfterKeyRelease(getEl);
+
+    cleanup();
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter" }));
+    vi.runAllTimers();
+
+    expect(getEl).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(target);
+  });
+});
+
+// ── Native and free-policy group navigation ──────────────────────────────────
+
+describe("native and free-policy group members", () => {
+  it("navigates native buttons without explicit focusable registration", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, 0, 200, 40);
+    const first = makeEl(0, 0, 40, 40, container);
+    const second = makeEl(80, 0, 40, 40, container);
+    registerGroup(container, {
+      id: "native-row",
+      policy: { type: "row" },
+    });
+
+    first.focus();
+    navigate("right");
+    expect(document.activeElement).toBe(second);
+
+    unregisterGroup("native-row");
+  });
+
+  it("uses scoped geometric navigation for a free group", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, 0, 200, 200);
+    const first = makeEl(0, 0, 40, 40, container);
+    const diagonal = makeEl(100, 80, 40, 40, container);
+    registerGroup(container, {
+      id: "free",
+      policy: { type: "free" },
+      trapFocus: true,
+    });
+
+    first.focus();
+    navigate("right");
+    expect(document.activeElement).toBe(diagonal);
+
+    unregisterGroup("free");
+  });
+
+  it("sorts reverse-registered members back into document order", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, 0, 200, 40);
+    const first = makeEl(0, 0, 40, 40, container);
+    const second = makeEl(80, 0, 40, 40, container);
+    registerFocusable(second, "reverse-row");
+    registerFocusable(first, "reverse-row");
+    registerGroup(container, {
+      id: "reverse-row",
+      policy: { type: "row" },
+    });
+    first.focus();
+
+    navigate("right");
+
+    expect(document.activeElement).toBe(second);
+    unregisterFocusable(first);
+    unregisterFocusable(second);
+    unregisterGroup("reverse-row");
+  });
+});
+
+// ── Cross-group routing and rememberFocus ─────────────────────────────────────
+
+describe("cross-group vertical navigation", () => {
+  const registeredElements: HTMLElement[] = [];
+  const registeredGroups: string[] = [];
+
+  function group(
+    id: string,
+    y: number,
+    rememberFocus = true,
+  ): {
+    container: HTMLElement;
+    left: HTMLElement;
+    right: HTMLElement;
+  } {
+    const container = document.createElement("div");
+    document.body.append(container);
+    mockRect(container, 0, y, 240, 40);
+    const left = makeEl(0, y, 40, 40, container);
+    const right = makeEl(120, y, 40, 40, container);
+    for (const element of [left, right]) {
+      registerFocusable(element, id);
+      registeredElements.push(element);
+    }
+    registerGroup(container, {
+      id,
+      policy: { type: "row" },
+      rememberFocus,
+    });
+    registeredGroups.push(id);
+    return { container, left, right };
+  }
+
+  afterEach(() => {
+    for (const element of registeredElements.splice(0)) {
+      unregisterFocusable(element);
+    }
+    for (const id of registeredGroups.splice(0)) unregisterGroup(id);
+  });
+
+  it("restores the target row's last focused member", () => {
+    const top = group("top", 0);
+    const bottom = group("bottom", 100);
+    bottom.right.focus();
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.right);
+  });
+
+  it("preserves remembered focus when a group is re-registered", () => {
+    const top = group("top-update", 0);
+    const bottom = group("bottom-update", 100);
+    bottom.right.focus();
+    registerGroup(bottom.container, {
+      id: "bottom-update",
+      policy: { type: "row" },
+      trapFocus: false,
+    });
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.right);
+  });
+
+  it("chooses the closest horizontal lane when remembering is disabled", () => {
+    const top = group("top-lane", 0);
+    const bottom = group("bottom-lane", 100, false);
+    bottom.right.focus();
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.left);
+  });
+
+  it("moves upward into the closest group", () => {
+    const top = group("top-up", 0, false);
+    const bottom = group("bottom-up", 100, false);
+    bottom.right.focus();
+
+    navigate("up");
+
+    expect(document.activeElement).toBe(top.right);
+  });
+
+  it("routes an ungrouped hero control into the first row", () => {
+    const hero = makeEl(120, 0);
+    const row = group("hero-target", 100, false);
+    hero.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(row.right);
+  });
+
+  it("does not restore a remembered carousel item that is clipped off-screen", () => {
+    const top = group("clip-top", 0);
+    const bottom = group("clip-bottom", 100);
+    bottom.container.style.overflowX = "hidden";
+    Object.defineProperty(bottom.container, "scrollWidth", {
+      configurable: true,
+      value: 240,
+    });
+    Object.defineProperty(bottom.container, "clientWidth", {
+      configurable: true,
+      value: 100,
+    });
+    vi.mocked(bottom.container.getBoundingClientRect).mockReturnValue({
+      left: 0,
+      top: 100,
+      right: 100,
+      bottom: 140,
+      width: 100,
+      height: 40,
+      x: 0,
+      y: 100,
+      toJSON: () => ({}),
+    } as DOMRect);
+    bottom.right.focus();
+    top.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(bottom.left);
+  });
+
+  it("breaks equal-distance group ties by horizontal overlap", () => {
+    const source = group("tie-source", 0, false);
+    const aligned = group("tie-aligned", 100, false);
+    const offset = group("tie-offset", 100, false);
+    mockRect(offset.container, 300, 100, 240, 40);
+    mockRect(offset.left, 300, 100, 40, 40);
+    mockRect(offset.right, 420, 100, 40, 40);
+    source.left.focus();
+
+    navigate("down");
+
+    expect(document.activeElement).toBe(aligned.left);
+  });
+});
+
+describe("cross-group geometric fallback", () => {
+  it("redirects geometric entry to the target group's remembered member", () => {
+    const sourceContainer = document.createElement("div");
+    const targetContainer = document.createElement("div");
+    document.body.append(sourceContainer, targetContainer);
+    mockRect(sourceContainer, 0, 0, 40, 40);
+    mockRect(targetContainer, 100, 0, 200, 40);
+    const source = makeEl(0, 0, 40, 40, sourceContainer);
+    const nearest = makeEl(100, 0, 40, 40, targetContainer);
+    const remembered = makeEl(180, 0, 40, 40, targetContainer);
+    registerFocusable(source, "source-column");
+    registerFocusable(nearest, "target-row");
+    registerFocusable(remembered, "target-row");
+    registerGroup(sourceContainer, {
+      id: "source-column",
+      policy: { type: "column" },
+    });
+    registerGroup(targetContainer, {
+      id: "target-row",
+      policy: { type: "row" },
+    });
+    remembered.focus();
+    source.focus();
+
+    navigate("right");
+
+    expect(document.activeElement).toBe(remembered);
+
+    unregisterFocusable(source);
+    unregisterFocusable(nearest);
+    unregisterFocusable(remembered);
+    unregisterGroup("source-column");
+    unregisterGroup("target-row");
+  });
+});
+
+describe("focus visibility guards", () => {
+  it("skips focusables inside aria-hidden and inert ancestors", () => {
+    const hidden = document.createElement("div");
+    hidden.setAttribute("aria-hidden", "true");
+    document.body.append(hidden);
+    makeEl(0, 0, 40, 40, hidden);
+
+    const inert = document.createElement("div");
+    inert.inert = true;
+    document.body.append(inert);
+    makeEl(50, 0, 40, 40, inert);
+
+    const visible = makeEl(100, 0);
+    focusFirst();
+
+    expect(document.activeElement).toBe(visible);
+  });
+
+  it("skips an element rejected by checkVisibility", () => {
+    const hidden = makeEl(0, 0);
+    hidden.checkVisibility = vi.fn(() => false);
+    const visible = makeEl(100, 0);
+
+    focusFirst();
+
+    expect(document.activeElement).toBe(visible);
+  });
+
+  it("keeps caret navigation inside an actively focused text input", () => {
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.append(input);
+    mockRect(input, 0, 0, 100, 40);
+    const other = makeEl(200, 0);
+    input.focus();
+
+    navigate("right");
+
+    expect(document.activeElement).toBe(input);
+    expect(document.activeElement).not.toBe(other);
   });
 });

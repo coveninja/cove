@@ -1,11 +1,23 @@
 package webstatic
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
 )
+
+type failingSubFS struct{}
+
+func (failingSubFS) Open(string) (fs.File, error) {
+	return nil, fs.ErrNotExist
+}
+
+func (failingSubFS) Sub(string) (fs.FS, error) {
+	return nil, errors.New("sub failed")
+}
 
 func preserveRegistration(t *testing.T) {
 	t.Helper()
@@ -69,5 +81,45 @@ func TestMountHandlesFilesystemWithoutDist(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestMountHandlesSubFilesystemFailure(t *testing.T) {
+	preserveRegistration(t)
+	Register(failingSubFS{})
+	mux := http.NewServeMux()
+	Mount(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 after sub-filesystem failure", rec.Code)
+	}
+}
+
+func TestMountedFilesSupportHeadAndRejectWrites(t *testing.T) {
+	preserveRegistration(t)
+	Register(fstest.MapFS{
+		"dist/index.html": &fstest.MapFile{Data: []byte("<h1>Cove</h1>")},
+	})
+	mux := http.NewServeMux()
+	Mount(mux)
+
+	head := httptest.NewRecorder()
+	mux.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/", nil))
+	if head.Code != http.StatusOK {
+		t.Fatalf("HEAD status = %d, want 200", head.Code)
+	}
+	if head.Body.Len() != 0 {
+		t.Fatalf("HEAD body length = %d, want 0", head.Body.Len())
+	}
+	if got := head.Header().Get("Content-Length"); got != "13" {
+		t.Fatalf("HEAD Content-Length = %q, want 13", got)
+	}
+
+	post := httptest.NewRecorder()
+	mux.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/", nil))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", post.Code)
 	}
 }

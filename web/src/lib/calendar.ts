@@ -72,6 +72,7 @@ export function summaryLabel(s: CalendarSummary): string {
  * then future items (date-asc as returned by the backend).
  */
 export function nextUp(items: CalendarItem[], limit: number): CalendarItem[] {
+  if (limit <= 0) return [];
   const available = items.filter((i) => i.kind === "available");
   const future = items.filter((i) => i.kind !== "available");
   return [...available, ...future].slice(0, limit);

@@ -16,6 +16,19 @@ import (
 	"time"
 )
 
+var nonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // current network
+	netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),    // documentation
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"), // documentation
+	netip.MustParsePrefix("203.0.113.0/24"),  // documentation
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved
+	netip.MustParsePrefix("100::/64"),        // discard-only
+	netip.MustParsePrefix("2001:db8::/32"),   // documentation
+}
+
 // ValidatePublicURL rejects URLs that aren't plain http(s). Host checks
 // happen at dial time in SafeTransport, not here.
 func ValidatePublicURL(raw string) (*url.URL, error) {
@@ -33,14 +46,25 @@ func ValidatePublicURL(raw string) (*url.URL, error) {
 }
 
 func isPublicAddr(addr netip.Addr) bool {
+	if !addr.IsValid() {
+		return false
+	}
 	addr = addr.Unmap()
-	return !(addr.IsLoopback() ||
+	if addr.IsLoopback() ||
 		addr.IsPrivate() ||
 		addr.IsLinkLocalUnicast() ||
 		addr.IsLinkLocalMulticast() ||
 		addr.IsMulticast() ||
 		addr.IsUnspecified() ||
-		addr.IsInterfaceLocalMulticast())
+		addr.IsInterfaceLocalMulticast() {
+		return false
+	}
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 // SafeTransport returns an http.Transport that only dials public addresses.

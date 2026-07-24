@@ -35,6 +35,8 @@ export class TorrentProgress {
   // playback-failed and cascade to the next fallback stream.
   stalled = $state(false);
 
+  #eventSource: EventSource | null = null;
+
   /**
    * Opens the SSE progress stream for a hash source and returns a cleanup
    * function that closes it. Designed to be returned straight from an $effect:
@@ -48,6 +50,11 @@ export class TorrentProgress {
    * season pack's selected episode file instead of the whole torrent.
    */
   start(src: string, opts?: { season?: number; episode?: number; fileIdx?: number }): () => void {
+    // A caller normally runs the previous effect cleanup before starting the
+    // next source, but close defensively here too. This keeps imperative uses
+    // and rapid source changes from leaving a reconnecting SSE stream behind.
+    this.#eventSource?.close();
+
     // Reset state from any previous stream so stalled and stats don't carry
     // over when the same TorrentProgress instance is reused for a new src.
     this.stalled = false;
@@ -61,6 +68,7 @@ export class TorrentProgress {
     this.totalBytes = 0;
 
     const es = new EventSource(api.progressStreamUrl(src, opts));
+    this.#eventSource = es;
     let consecutiveErrors = 0;
 
     es.onmessage = (e) => {
@@ -91,6 +99,9 @@ export class TorrentProgress {
         es.close();
       }
     };
-    return () => es.close();
+    return () => {
+      es.close();
+      if (this.#eventSource === es) this.#eventSource = null;
+    };
   }
 }

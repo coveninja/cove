@@ -34,8 +34,15 @@ import (
 // apiClient bounds GitHub API metadata calls; downloadClient allows much
 // longer for the release archive itself on slow connections.
 var (
-	apiClient      = &http.Client{Timeout: 30 * time.Second}
-	downloadClient = &http.Client{Timeout: 10 * time.Minute}
+	apiClient       = &http.Client{Timeout: 30 * time.Second}
+	downloadClient  = &http.Client{Timeout: 10 * time.Minute}
+	executablePath  = os.Executable
+	scheduleRestart = func() {
+		go func() {
+			time.Sleep(250 * time.Millisecond)
+			os.Exit(RestartExitCode)
+		}()
+	}
 )
 
 // RestartExitCode is the exit code the Go backend uses to signal the Qt shell
@@ -48,14 +55,18 @@ const RestartExitCode = 42
 // silently returns available=false. Both sides are pinned here as the source
 // of truth — keep in sync with the "Package" jobs in release.yml.
 func assetName() string {
+	return assetNameFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func assetNameFor(goos, goarch string) string {
 	var ext string
-	switch runtime.GOOS {
+	switch goos {
 	case "windows":
 		ext = ".zip"
 	default:
 		ext = ".tar.gz"
 	}
-	return fmt.Sprintf("cove-%s-%s%s", runtime.GOOS, runtime.GOARCH, ext)
+	return fmt.Sprintf("cove-%s-%s%s", goos, goarch, ext)
 }
 
 // pendingURL/pendingChecksumURL are set by check() and consumed by
@@ -151,6 +162,10 @@ func fetchLatest() (*ghRelease, error) {
 }
 
 func check(currentVersion string) (*CheckResult, error) {
+	return checkForPlatform(currentVersion, runtime.GOOS, runtime.GOARCH)
+}
+
+func checkForPlatform(currentVersion, goos, goarch string) (*CheckResult, error) {
 	result := &CheckResult{CurrentVersion: currentVersion}
 
 	// Linux has no portable/self-contained distribution channel — only
@@ -162,7 +177,7 @@ func check(currentVersion string) (*CheckResult, error) {
 	// Android and iOS distribute and update through the Play Store and App
 	// Store respectively; self-patching outside those channels is not
 	// permitted and would not work in a sandboxed environment.
-	if runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "ios" {
+	if goos == "linux" || goos == "android" || goos == "ios" {
 		return result, nil
 	}
 
@@ -188,7 +203,7 @@ func check(currentVersion string) (*CheckResult, error) {
 		return result, nil
 	}
 
-	want := assetName()
+	want := assetNameFor(goos, goarch)
 	var assetURL, checksumURL string
 	for _, a := range rel.Assets {
 		switch a.Name {
@@ -251,7 +266,7 @@ func applyUpdate() error {
 		return fmt.Errorf("no pending update (call /api/update/check first)")
 	}
 
-	execPath, err := os.Executable()
+	execPath, err := executablePath()
 	if err != nil {
 		return fmt.Errorf("cannot determine executable path: %w", err)
 	}
@@ -313,10 +328,7 @@ func applyUpdate() error {
 	// Delay exit slightly so the HTTP response is flushed to the client before
 	// the process disappears. The Qt shell detects RestartExitCode and re-execs
 	// itself; on Windows it also renames cove.exe.new → cove.exe first.
-	go func() {
-		time.Sleep(250 * time.Millisecond)
-		os.Exit(RestartExitCode)
-	}()
+	scheduleRestart()
 	return nil
 }
 
@@ -457,6 +469,10 @@ func extractTarGz(r io.Reader, destDir string) error {
 // SetupHandlers registers /api/update/check and /api/update/apply on mux.
 func SetupHandlers(mux *http.ServeMux, currentVersion string) {
 	mux.HandleFunc("/api/update/check", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		result, err := check(currentVersion)
 		if err != nil {
 			log.Println("[updater] check error:", err)

@@ -48,7 +48,8 @@ const HDR_RE = /\bhdr(?:10)?\+?\b/i;
 
 // ── Language detection ───────────────────────────────────────────────────────
 
-const MULTI_RE = /\bmulti\b|\bdual[ .\-_]?audio\b|\bdual\b|\bvff?[ .\-_]?multi\b/i;
+const MULTI_RE =
+  /\bmulti\b|\bdual[ .\-_]?audio\b|\bdual\b|\bvff?[ .\-_]?multi\b/i;
 
 // Word tokens commonly found in release names → ISO 639-1. Both ISO 639-2
 // forms (bibliographic + terminological) and full English names are covered.
@@ -87,17 +88,42 @@ const LANG_TOKENS: [RegExp, string][] = [
 // Flag emoji (regional-indicator pairs) some addons (Torrentio et al.) put in
 // titles → ISO 639-1 of that country's dominant audio language.
 const FLAG_LANGS: [string, string][] = [
-  ["🇬🇧", "en"], ["🇺🇸", "en"], ["🇦🇺", "en"], ["🏴󠁧󠁢󠁥󠁮󠁧󠁿", "en"],
-  ["🇫🇷", "fr"], ["🇩🇪", "de"], ["🇮🇹", "it"],
-  ["🇪🇸", "es"], ["🇲🇽", "es"], ["🇦🇷", "es"],
-  ["🇵🇹", "pt"], ["🇧🇷", "pt"],
-  ["🇯🇵", "ja"], ["🇰🇷", "ko"],
-  ["🇨🇳", "zh"], ["🇹🇼", "zh"], ["🇭🇰", "zh"],
-  ["🇷🇺", "ru"], ["🇵🇱", "pl"], ["🇳🇱", "nl"],
-  ["🇮🇳", "hi"], ["🇸🇦", "ar"], ["🇦🇪", "ar"], ["🇹🇷", "tr"],
-  ["🇺🇦", "uk"], ["🇸🇪", "sv"], ["🇳🇴", "no"], ["🇩🇰", "da"],
-  ["🇫🇮", "fi"], ["🇬🇷", "el"], ["🇨🇿", "cs"], ["🇭🇺", "hu"],
-  ["🇷🇴", "ro"], ["🇹🇭", "th"], ["🇻🇳", "vi"], ["🇮🇩", "id"],
+  ["🇬🇧", "en"],
+  ["🇺🇸", "en"],
+  ["🇦🇺", "en"],
+  ["🏴󠁧󠁢󠁥󠁮󠁧󠁿", "en"],
+  ["🇫🇷", "fr"],
+  ["🇩🇪", "de"],
+  ["🇮🇹", "it"],
+  ["🇪🇸", "es"],
+  ["🇲🇽", "es"],
+  ["🇦🇷", "es"],
+  ["🇵🇹", "pt"],
+  ["🇧🇷", "pt"],
+  ["🇯🇵", "ja"],
+  ["🇰🇷", "ko"],
+  ["🇨🇳", "zh"],
+  ["🇹🇼", "zh"],
+  ["🇭🇰", "zh"],
+  ["🇷🇺", "ru"],
+  ["🇵🇱", "pl"],
+  ["🇳🇱", "nl"],
+  ["🇮🇳", "hi"],
+  ["🇸🇦", "ar"],
+  ["🇦🇪", "ar"],
+  ["🇹🇷", "tr"],
+  ["🇺🇦", "uk"],
+  ["🇸🇪", "sv"],
+  ["🇳🇴", "no"],
+  ["🇩🇰", "da"],
+  ["🇫🇮", "fi"],
+  ["🇬🇷", "el"],
+  ["🇨🇿", "cs"],
+  ["🇭🇺", "hu"],
+  ["🇷🇴", "ro"],
+  ["🇹🇭", "th"],
+  ["🇻🇳", "vi"],
+  ["🇮🇩", "id"],
 ];
 
 // VOSTFR = original audio + French subs. Counts as a French-friendly release
@@ -127,7 +153,10 @@ function detectLangs(text: string): { langs: string[]; isMulti: boolean } {
 
 // ── Badge labels ─────────────────────────────────────────────────────────────
 
-const CODEC_NAMES: Record<Exclude<ParsedStreamMeta["codec"], "unknown">, string> = {
+const CODEC_NAMES: Record<
+  Exclude<ParsedStreamMeta["codec"], "unknown">,
+  string
+> = {
   h264: "H.264",
   h265: "H.265",
   av1: "AV1",
@@ -158,7 +187,11 @@ export function langLabel(meta: ParsedStreamMeta): string | null {
 const metaCache = new Map<string, ParsedStreamMeta>();
 
 export function parseStreamMeta(stream: Stream): ParsedStreamMeta {
-  const key = stream.url || stream.infoHash || stream.title;
+  // A few addons return catalog-only rows without a URL/info-hash. Using the
+  // title alone made unrelated rows with the same generic title (or no title)
+  // share cached metadata, so include both display fields for that fallback.
+  const key =
+    stream.url || stream.infoHash || `${stream.name}\0${stream.title}`;
   const cached = metaCache.get(key);
   if (cached) return cached;
 

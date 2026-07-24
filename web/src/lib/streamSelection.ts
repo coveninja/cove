@@ -170,7 +170,7 @@ export function getSizeBytes(stream: Stream): number {
   // present — the 💾-regex below is a fallback for addons that only ever put
   // size in free-text titles.
   if (stream.sizeBytes && stream.sizeBytes > 0) return stream.sizeBytes;
-  const match = stream.title.match(/💾\s*([\d.]+)\s*(TB|GB|MB)/i);
+  const match = stream.title.match(/💾\s*(\d+(?:\.\d+)?)\s*(TB|GB|MB)/i);
   if (match) {
     const value = Number(match[1]);
     switch (match[2].toUpperCase()) {
@@ -188,7 +188,9 @@ export function getSizeBytes(stream: Stream): number {
   // titles are excluded to avoid false positives: release names and pack
   // metadata often contain number+unit strings that don't represent file size.
   if (!isTorrentStream(stream)) {
-    const plainMatch = stream.title.match(/\b([\d.]+)\s*(TB|GB|MB)\b/i);
+    const plainMatch = stream.title.match(
+      /(?<![\d.])(\d+(?:\.\d+)?)\s*(TB|GB|MB)\b/i,
+    );
     if (plainMatch) {
       const value = Number(plainMatch[1]);
       switch (plainMatch[2].toUpperCase()) {
@@ -384,8 +386,16 @@ function rankByBoosted(
 
 /** A candidate's stable identity for dedup purposes — mirrors how the rest of
  * the app distinguishes streams (see StreamsList/App.svelte candidate lists). */
+function streamIdentity(stream: Stream): string {
+  return (
+    stream.url ||
+    stream.infoHash ||
+    `${stream.addonName}\0${stream.name}\0${stream.title}`
+  );
+}
+
 function streamKey(c: ScoredStream): string {
-  return c.stream.url || c.stream.infoHash || c.stream.title;
+  return streamIdentity(c.stream);
 }
 
 /**
@@ -507,14 +517,14 @@ export function rankStreams(
 
   // Hard-disabled tail, sorted by boost/seeders — only reachable by the
   // watchdog when fewer than five eligible candidates exist.
-  const rankedKeys = new Set(ranked.map((s) => s.url || s.infoHash || s.title));
+  const rankedKeys = new Set(ranked.map(streamIdentity));
   const tail = rankByBoosted(
     disabled,
     () => 0,
     (a, b) => b.seeders - a.seeders,
   )
     .map((c) => c.stream)
-    .filter((s) => !rankedKeys.has(s.url || s.infoHash || s.title));
+    .filter((s) => !rankedKeys.has(streamIdentity(s)));
   return [...ranked, ...tail];
 }
 
@@ -584,7 +594,10 @@ function rankScored(
       return finalizeRanking(
         fromPool,
         all,
-        (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5),
+        // Unknown is deliberately below the normalized 0..1 range so the
+        // soft provider/source boosts can never turn "we have no size" into
+        // the smallest known file. It still remains in the fallback ranking.
+        (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : -1),
         (a, b) => tiebreakSize(a) - tiebreakSize(b),
       );
     }

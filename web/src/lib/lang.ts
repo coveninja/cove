@@ -57,7 +57,7 @@ export const ISO_639_2_TO_1: Record<string, string> = {
 export function normalizeLang(tag: string | null | undefined): string {
   if (!tag) return "";
   // Strip region/script subtags: "pt-BR" -> "pt", "zh-Hans" -> "zh".
-  const base = tag.toLowerCase().split(/[-_]/)[0];
+  const base = tag.trim().toLowerCase().split(/[-_]/)[0];
   if (base.length === 3) {
     return ISO_639_2_TO_1[base] ?? base;
   }

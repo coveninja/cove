@@ -37,6 +37,19 @@ const (
 	StatusDropped    Status = "dropped"
 )
 
+func validMediaType(mediaType string) bool {
+	return mediaType == "movie" || mediaType == "tv"
+}
+
+func validStatus(status Status) bool {
+	switch status {
+	case StatusWatchLater, StatusWatching, StatusFinished, StatusDropped:
+		return true
+	default:
+		return false
+	}
+}
+
 // LibraryEntry mirrors the `library_entries` Supabase table.
 type LibraryEntry struct {
 	ID          string   `json:"id"` // UUIDv4
@@ -99,6 +112,114 @@ type diskStore struct {
 	Removed   map[string]*Removal       `json:"removed"`   // key: entryKey()
 }
 
+func emptyDiskStore() diskStore {
+	return diskStore{
+		Entries:   make(map[string]*LibraryEntry),
+		Progress:  make(map[string]*WatchProgress),
+		Dismissed: make(map[string]*Dismissal),
+		Removed:   make(map[string]*Removal),
+	}
+}
+
+// ensureMaps normalizes syntactically valid files containing explicit null map
+// fields. Missing fields retain the pre-initialized maps during unmarshal, but
+// explicit null values replace them with nil and would otherwise make the next
+// mutation panic.
+func (d *diskStore) ensureMaps() {
+	if d.Entries == nil {
+		d.Entries = make(map[string]*LibraryEntry)
+	}
+	for key, entry := range d.Entries {
+		if entry == nil {
+			delete(d.Entries, key)
+		}
+	}
+	if d.Progress == nil {
+		d.Progress = make(map[string]*WatchProgress)
+	}
+	for key, progress := range d.Progress {
+		if progress == nil {
+			delete(d.Progress, key)
+		}
+	}
+	if d.Dismissed == nil {
+		d.Dismissed = make(map[string]*Dismissal)
+	}
+	for key, dismissal := range d.Dismissed {
+		if dismissal == nil {
+			delete(d.Dismissed, key)
+		}
+	}
+	if d.Removed == nil {
+		d.Removed = make(map[string]*Removal)
+	}
+	for key, removal := range d.Removed {
+		if removal == nil {
+			delete(d.Removed, key)
+		}
+	}
+}
+
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	return &cp
+}
+
+func cloneEntry(e *LibraryEntry) *LibraryEntry {
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	cp.ProfileID = clonePtr(e.ProfileID)
+	cp.Rating = clonePtr(e.Rating)
+	cp.LastWatchedAt = clonePtr(e.LastWatchedAt)
+	cp.LastWatchedSeason = clonePtr(e.LastWatchedSeason)
+	cp.LastWatchedEpisode = clonePtr(e.LastWatchedEpisode)
+	cp.LastAiredSeason = clonePtr(e.LastAiredSeason)
+	cp.LastAiredEpisode = clonePtr(e.LastAiredEpisode)
+	return &cp
+}
+
+func cloneProgress(p *WatchProgress) *WatchProgress {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.ProfileID = clonePtr(p.ProfileID)
+	cp.Season = clonePtr(p.Season)
+	cp.Episode = clonePtr(p.Episode)
+	return &cp
+}
+
+func cloneDismissal(d *Dismissal) *Dismissal {
+	if d == nil {
+		return nil
+	}
+	cp := *d
+	return &cp
+}
+
+func cloneRemoval(r *Removal) *Removal {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	return &cp
+}
+
+// relinkProgress updates orphaned watch history after a removed title is
+// re-added under a fresh entry UUID. Must be called with l.mu held.
+func (l *Library) relinkProgress(entry *LibraryEntry) {
+	for _, progress := range l.db.Progress {
+		if progress.TmdbID == entry.TmdbID && progress.MediaType == entry.MediaType {
+			progress.LibraryEntryID = entry.ID
+		}
+	}
+}
+
 // TasteSignal is the minimal per-title signal the discover package needs,
 // without exposing the library's internals.
 type TasteSignal struct {
@@ -141,8 +262,7 @@ func (l *Library) AllEntries() []*LibraryEntry {
 	defer l.mu.RUnlock()
 	out := make([]*LibraryEntry, 0, len(l.db.Entries))
 	for _, e := range l.db.Entries {
-		cp := *e
-		out = append(out, &cp)
+		out = append(out, cloneEntry(e))
 	}
 	return out
 }
@@ -153,8 +273,7 @@ func (l *Library) AllProgress() []*WatchProgress {
 	defer l.mu.RUnlock()
 	out := make([]*WatchProgress, 0, len(l.db.Progress))
 	for _, p := range l.db.Progress {
-		cp := *p
-		out = append(out, &cp)
+		out = append(out, cloneProgress(p))
 	}
 	return out
 }
@@ -165,8 +284,7 @@ func (l *Library) AllDismissals() []*Dismissal {
 	defer l.mu.RUnlock()
 	out := make([]*Dismissal, 0, len(l.db.Dismissed))
 	for _, d := range l.db.Dismissed {
-		cp := *d
-		out = append(out, &cp)
+		out = append(out, cloneDismissal(d))
 	}
 	return out
 }
@@ -177,8 +295,7 @@ func (l *Library) AllRemovals() []*Removal {
 	defer l.mu.RUnlock()
 	out := make([]*Removal, 0, len(l.db.Removed))
 	for _, r := range l.db.Removed {
-		cp := *r
-		out = append(out, &cp)
+		out = append(out, cloneRemoval(r))
 	}
 	return out
 }
@@ -198,12 +315,18 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	// Build a map of incoming removals for O(1) lookup in the entries loop.
 	incomingRemovals := make(map[string]*Removal, len(removals))
 	for _, r := range removals {
+		if r == nil {
+			continue
+		}
 		key := entryKey(r.TmdbID, r.MediaType)
 		incomingRemovals[key] = r
 	}
 
 	// Merge remote entries with tombstone-aware last-write-wins.
 	for _, e := range entries {
+		if e == nil {
+			continue
+		}
 		key := entryKey(e.TmdbID, e.MediaType)
 
 		// Determine effective tombstone: the later of local and incoming.
@@ -240,12 +363,12 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 		if local, ok := l.db.Entries[key]; ok {
 			if e.UpdatedAt.After(local.UpdatedAt) {
 				if !reflect.DeepEqual(local, e) {
-					l.db.Entries[key] = e
+					l.db.Entries[key] = cloneEntry(e)
 					changed = true
 				}
 			}
 		} else {
-			l.db.Entries[key] = e
+			l.db.Entries[key] = cloneEntry(e)
 			changed = true
 		}
 	}
@@ -254,6 +377,9 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 	// This loop agrees with the entries loop: an entry survives only if its
 	// UpdatedAt is strictly after the removal timestamp.
 	for _, r := range removals {
+		if r == nil {
+			continue
+		}
 		key := entryKey(r.TmdbID, r.MediaType)
 		if local, ok := l.db.Entries[key]; ok {
 			if !local.UpdatedAt.After(r.RemovedAt) {
@@ -262,7 +388,7 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 				changed = true
 				// Merge tombstone, keeping the later RemovedAt.
 				if existing := l.db.Removed[key]; existing == nil || r.RemovedAt.After(existing.RemovedAt) {
-					l.db.Removed[key] = r
+					l.db.Removed[key] = cloneRemoval(r)
 					changed = true
 				}
 			} else {
@@ -275,7 +401,7 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 		} else {
 			// No local entry. Merge the tombstone, keeping the later RemovedAt.
 			if existing := l.db.Removed[key]; existing == nil || r.RemovedAt.After(existing.RemovedAt) {
-				l.db.Removed[key] = r
+				l.db.Removed[key] = cloneRemoval(r)
 				changed = true
 			}
 		}
@@ -283,6 +409,9 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 
 	// Merge watch progress: most-recent-write wins.
 	for _, p := range progress {
+		if p == nil {
+			continue
+		}
 		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
 		if local, ok := l.db.Progress[key]; ok {
 			// Most-recent-write wins (same rule as entries' UpdatedAt above).
@@ -294,21 +423,24 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 			// then uploaded the reverted record, cementing it.
 			if p.WatchedAt.After(local.WatchedAt) {
 				if !reflect.DeepEqual(local, p) {
-					l.db.Progress[key] = p
+					l.db.Progress[key] = cloneProgress(p)
 					changed = true
 				}
 			}
 		} else {
-			l.db.Progress[key] = p
+			l.db.Progress[key] = cloneProgress(p)
 			changed = true
 		}
 	}
 
 	// Union dismissals.
 	for _, d := range dismissals {
+		if d == nil {
+			continue
+		}
 		key := entryKey(d.TmdbID, d.MediaType)
 		if _, ok := l.db.Dismissed[key]; !ok {
-			l.db.Dismissed[key] = d
+			l.db.Dismissed[key] = cloneDismissal(d)
 			changed = true
 		}
 	}
@@ -471,12 +603,17 @@ func (l *Library) TasteSignals() []TasteSignal {
 		if watchedAt, ok := completed[key]; ok && watchedAt.After(ts) {
 			ts = watchedAt
 		}
+		dismissal := l.db.Dismissed[key]
+		if dismissal != nil && dismissal.DismissedAt.After(ts) {
+			ts = dismissal.DismissedAt
+		}
 		out = append(out, TasteSignal{
 			TmdbID:            e.TmdbID,
 			MediaType:         e.MediaType,
 			Status:            e.Status,
-			UserRating:        e.Rating,
+			UserRating:        clonePtr(e.Rating),
 			Completed:         !completed[key].IsZero(),
+			Dismissed:         dismissal != nil,
 			Title:             e.Title,
 			PosterPath:        rewritePosterURL(e.PosterPath),
 			LastInteractionAt: ts,
@@ -716,12 +853,7 @@ func (l *Library) SetOnProgressSave(fn func(ProgressSaveEvent)) {
 // matching the old Init's best-effort behaviour.
 func New(profileID string) (*Library, error) {
 	l := &Library{
-		db: diskStore{
-			Entries:   make(map[string]*LibraryEntry),
-			Progress:  make(map[string]*WatchProgress),
-			Dismissed: make(map[string]*Dismissal),
-			Removed:   make(map[string]*Removal),
-		},
+		db: emptyDiskStore(),
 	}
 
 	path, err := utils.ConfigPath(fmt.Sprintf("library-%s.json", profileID))
@@ -742,15 +874,14 @@ func New(profileID string) (*Library, error) {
 		return l, err
 	}
 
-	// Maps are pre-initialised above, so a successful unmarshal merges into
-	// them and a failure still leaves a usable empty store.
-	if err := json.Unmarshal(raw, &l.db); err != nil {
+	// Decode into a temporary store so malformed JSON cannot leave the usable
+	// fallback library partially populated before the error is returned.
+	loaded := emptyDiskStore()
+	if err := json.Unmarshal(raw, &loaded); err != nil {
 		return l, err
 	}
-	// Nil guard for on-disk files predating the "removed" field.
-	if l.db.Removed == nil {
-		l.db.Removed = make(map[string]*Removal)
-	}
+	loaded.ensureMaps()
+	l.db = loaded
 	return l, nil
 }
 
@@ -767,12 +898,7 @@ func (l *Library) SetProfile(profileID string) error {
 	if err != nil {
 		return err
 	}
-	newDB := diskStore{
-		Entries:   make(map[string]*LibraryEntry),
-		Progress:  make(map[string]*WatchProgress),
-		Dismissed: make(map[string]*Dismissal),
-		Removed:   make(map[string]*Removal),
-	}
+	newDB := emptyDiskStore()
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -781,10 +907,7 @@ func (l *Library) SetProfile(profileID string) error {
 		if err := json.Unmarshal(raw, &newDB); err != nil {
 			return err
 		}
-		// Nil guard for on-disk files predating the "removed" field.
-		if newDB.Removed == nil {
-			newDB.Removed = make(map[string]*Removal)
-		}
+		newDB.ensureMaps()
 	}
 
 	l.Flush()
@@ -822,6 +945,7 @@ func (l *Library) MarkExternallyWatched(
 	now := time.Now()
 	eKey := entryKey(tmdbID, mediaType)
 	entry, exists := l.db.Entries[eKey]
+	entryCreated := !exists
 	if !exists {
 		entry = &LibraryEntry{
 			ID:         newUUID(),
@@ -835,12 +959,20 @@ func (l *Library) MarkExternallyWatched(
 		}
 		l.db.Entries[eKey] = entry
 		delete(l.db.Removed, eKey)
+		l.relinkProgress(entry)
 	}
 
 	pKey := progressKey(tmdbID, mediaType, season, episode)
 	prog, progExists := l.db.Progress[pKey]
 	if progExists && prog.Completed && !watchedAt.After(prog.WatchedAt) {
 		// Already completed at the same or later time — nothing to do.
+		if entryCreated {
+			// Re-creating a removed entry and relinking its retained progress is
+			// still a real mutation even when the completion row is unchanged.
+			l.gen.Add(1)
+			l.tasteGen.Add(1)
+			l.markDirty()
+		}
 		return
 	}
 	if !progExists {
@@ -849,8 +981,8 @@ func (l *Library) MarkExternallyWatched(
 			LibraryEntryID: entry.ID,
 			TmdbID:         tmdbID,
 			MediaType:      mediaType,
-			Season:         season,
-			Episode:        episode,
+			Season:         clonePtr(season),
+			Episode:        clonePtr(episode),
 		}
 		l.db.Progress[pKey] = prog
 	}
@@ -859,13 +991,14 @@ func (l *Library) MarkExternallyWatched(
 
 	entry.LastWatchedAt = &watchedAt
 	if season != nil {
-		entry.LastWatchedSeason = season
+		entry.LastWatchedSeason = clonePtr(season)
 	}
 	if episode != nil {
-		entry.LastWatchedEpisode = episode
+		entry.LastWatchedEpisode = clonePtr(episode)
 	}
 
 	l.gen.Add(1)
+	l.tasteGen.Add(1)
 	l.markDirty()
 }
 
@@ -900,7 +1033,9 @@ func (l *Library) AddWatchLater(
 	}
 	l.db.Entries[eKey] = entry
 	delete(l.db.Removed, eKey)
+	l.relinkProgress(entry)
 	l.gen.Add(1)
+	l.tasteGen.Add(1)
 	l.markDirty()
 }
 
@@ -981,8 +1116,16 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+			http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
+			return
+		}
 		if body.Status == "" {
 			body.Status = StatusWatchLater
+		}
+		if !validStatus(body.Status) {
+			http.Error(w, "invalid status", http.StatusBadRequest)
+			return
 		}
 
 		l.mu.Lock()
@@ -1047,21 +1190,27 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mediaType := r.URL.Query().Get("media_type")
-		if mediaType == "" {
-			http.Error(w, "missing media_type", http.StatusBadRequest)
+		if !validMediaType(mediaType) {
+			http.Error(w, "media_type must be movie or tv", http.StatusBadRequest)
 			return
 		}
 
 		var season, episode *int
 		if s := r.URL.Query().Get("season"); s != "" {
-			if v, err := strconv.Atoi(s); err == nil {
-				season = &v
+			v, err := strconv.Atoi(s)
+			if err != nil {
+				http.Error(w, "invalid season", http.StatusBadRequest)
+				return
 			}
+			season = &v
 		}
 		if e := r.URL.Query().Get("episode"); e != "" {
-			if v, err := strconv.Atoi(e); err == nil {
-				episode = &v
+			v, err := strconv.Atoi(e)
+			if err != nil {
+				http.Error(w, "invalid episode", http.StatusBadRequest)
+				return
 			}
+			episode = &v
 		}
 
 		pKey := progressKey(tmdbID, mediaType, season, episode)
@@ -1099,6 +1248,14 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+			http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
+			return
+		}
+		if body.PositionSeconds < 0 || body.DurationSeconds < 0 {
+			http.Error(w, "position_seconds and duration_seconds must be non-negative", http.StatusBadRequest)
+			return
+		}
 
 		l.mu.Lock()
 		now := time.Now()
@@ -1106,6 +1263,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		// Auto-create library entry as "watching" if it doesn't exist yet.
 		eKey := entryKey(body.TmdbID, body.MediaType)
 		entry, exists := l.db.Entries[eKey]
+		entryCreated := !exists
 		if !exists {
 			entry = &LibraryEntry{
 				ID:          newUUID(),
@@ -1120,6 +1278,8 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 				UpdatedAt:   now,
 			}
 			l.db.Entries[eKey] = entry
+			delete(l.db.Removed, eKey)
+			l.relinkProgress(entry)
 		}
 
 		// Always update last-watched metadata so resume labels stay current.
@@ -1170,11 +1330,11 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		progressSaveHook := l.onProgressSave
 		l.mu.Unlock()
 
-		// A progress write happens on every ~10s tick during playback — only a
-		// genuine Completed transition is taste-relevant (D2); the position
-		// ticks in between must NOT bump tasteGen, or discover's profile
-		// cache would thrash exactly like it did before this split existed.
-		if completedTransition {
+		// A progress write happens on every ~10s tick during playback. Creating
+		// the entry is taste-relevant, as is a genuine Completed transition;
+		// ordinary position ticks must not bump tasteGen or discover's profile
+		// cache would thrash.
+		if entryCreated || completedTransition {
 			l.tasteGen.Add(1)
 		}
 
@@ -1232,6 +1392,10 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mediaType := parts[1]
+	if !validMediaType(mediaType) {
+		http.Error(w, "media_type must be movie or tv", http.StatusBadRequest)
+		return
+	}
 	sub := ""
 	if len(parts) == 3 {
 		sub = parts[2]
@@ -1297,6 +1461,10 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if !validStatus(body.Status) {
+			http.Error(w, "invalid status", http.StatusBadRequest)
 			return
 		}
 		l.mu.Lock()
@@ -1369,8 +1537,8 @@ func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if body.TmdbID == 0 || body.MediaType == "" {
-			http.Error(w, "tmdb_id and media_type required", http.StatusBadRequest)
+		if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+			http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
 			return
 		}
 

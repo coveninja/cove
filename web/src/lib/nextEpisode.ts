@@ -54,7 +54,13 @@ export async function nextAiredEpisode(
   ) => Promise<TVEpisode[]> = defaultFetchSeason,
 ): Promise<{ season: number; episode: TVEpisode } | null> {
   const same = await fetchSeason(id, season);
-  const inSeason = same.find((e) => e.episode_number === episode + 1);
+  // Prefer the lowest numbered later episode instead of requiring an exact
+  // +1 match. TMDB metadata can occasionally omit an episode from a season;
+  // that gap must not make us jump to the next season while a later episode
+  // in the current season is already available.
+  const inSeason = same
+    .filter((e) => e.episode_number > episode)
+    .toSorted((a, b) => a.episode_number - b.episode_number)[0];
   if (inSeason) return hasAired(inSeason) ? { season, episode: inSeason } : null;
 
   const next = await fetchSeason(id, season + 1);

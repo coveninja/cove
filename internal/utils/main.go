@@ -7,7 +7,7 @@ package utils
 
 import (
 	"net/http"
-	"strings"
+	"regexp"
 )
 
 // localAddr records the address the main HTTP listener was bound to.
@@ -44,9 +44,12 @@ var allowedOrigins = map[string]bool{
 // is a profile's library/settings JSON, well under 1 MiB.
 const maxBodyBytes = 1 << 20
 
+var srtTimestamp = regexp.MustCompile(`(\d{2}:\d{2}:\d{2}),(\d{3})`)
+
 func SrtToVTT(srt string) string {
-	// SRT timestamps use commas; VTT uses dots. That's the only difference.
-	vtt := strings.ReplaceAll(srt, ",", ".")
+	// SRT timestamps use commas; VTT uses dots. Only replace timestamp
+	// separators: dialogue commas are subtitle content and must be preserved.
+	vtt := srtTimestamp.ReplaceAllString(srt, "$1.$2")
 	return "WEBVTT\n\n" + vtt
 }
 

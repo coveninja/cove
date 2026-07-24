@@ -413,6 +413,9 @@ func (s *Store) computeStats(lib LibraryLookup) Stats {
 	titlesThisYear := make(map[string]int64)
 
 	for dateStr, day := range s.db.Days {
+		if day == nil {
+			continue
+		}
 		t, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			continue

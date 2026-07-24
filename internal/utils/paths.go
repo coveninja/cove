@@ -1,8 +1,10 @@
 package utils
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 )
 
@@ -40,6 +42,16 @@ func SetDataDir(dir string) {
 // the app directory on every update (which would wipe data stored alongside the
 // binary).
 func ConfigPath(filename string) (string, error) {
+	clean := filepath.Clean(filename)
+	if filename == "" ||
+		clean == "." ||
+		filepath.IsAbs(clean) ||
+		filepath.VolumeName(clean) != "" ||
+		clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid config filename %q", filename)
+	}
+
 	var appDir string
 	if p := dataDirOverride.Load(); p != nil {
 		appDir = *p
@@ -53,5 +65,5 @@ func ConfigPath(filename string) (string, error) {
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		return "", err
 	}
-	return filepath.Join(appDir, filename), nil
+	return filepath.Join(appDir, clean), nil
 }

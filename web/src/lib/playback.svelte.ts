@@ -8,11 +8,34 @@ import type { Stream } from "$lib/types/addons";
 import type { PlayerSession } from "$lib/types/types";
 import { get } from "svelte/store";
 import { settings } from "$lib/stores/settings";
-import { rankStreamsWithProbe, type StreamSelectionMode } from "$lib/streamSelection";
+import {
+  rankStreamsWithProbe,
+  type StreamSelectionMode,
+} from "$lib/streamSelection";
 import { api } from "$lib/api";
 import { Player } from "$lib/player/player.svelte";
 
-class PlaybackStore {
+function waitForRetry(signal: AbortSignal, ms: number): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+    // Close the small race between the check above and listener registration.
+    if (signal.aborted) finish();
+  });
+}
+
+export class PlaybackStore {
   playerSession = $state<PlayerSession | null>(null);
   playerMode = $state<"full" | null>(null);
 
@@ -72,7 +95,10 @@ class PlaybackStore {
   showPlaybackToast(text: string, ms = 3000): void {
     this.playbackToast = text;
     clearTimeout(this.#playbackToastTimer);
-    this.#playbackToastTimer = setTimeout(() => (this.playbackToast = null), ms);
+    this.#playbackToastTimer = setTimeout(
+      () => (this.playbackToast = null),
+      ms,
+    );
   }
 
   startPlayback(
@@ -85,7 +111,10 @@ class PlaybackStore {
     attempt = 0,
   ): void {
     this.quickPlayPending = null;
-    this.#playStartSound?.();
+    // Audio startup is cosmetic and must never interrupt session creation.
+    // In particular, browsers can reject AudioContext work until a fresh user
+    // gesture; absorb that promise just like the subtitle request below.
+    this.#playStartSound?.().catch(() => {});
 
     const seq = ++this.#sessionSeq;
     this.playerSession = {
@@ -145,7 +174,9 @@ class PlaybackStore {
         console.error("quickPlay: failed to fetch streams", e);
         return [];
       }
-      await new Promise((r) => setTimeout(r, 2000));
+      // There is nothing to wait for after the final attempt, and an abort
+      // should release an in-progress backoff immediately.
+      if (attempt < 7) await waitForRetry(signal, 2000);
     }
     return [];
   }
@@ -198,13 +229,18 @@ class PlaybackStore {
       s?.defaultAudioLang === "original"
         ? (media.original_language ?? "")
         : (s?.defaultAudioLang ?? "");
-    const ranked = await rankStreamsWithProbe(streams, mode, {
-      measuredBandwidthMbps: s?.measuredBandwidthMbps,
-      preferredProvider: s?.defaultProvider,
-      sourcePreference: s?.sourcePreference,
-      probeEnabled: s?.probeStreams ?? true,
-      defaultAudioLang: effectiveAudioLang || undefined,
-    }, ctrl.signal);
+    const ranked = await rankStreamsWithProbe(
+      streams,
+      mode,
+      {
+        measuredBandwidthMbps: s?.measuredBandwidthMbps,
+        preferredProvider: s?.defaultProvider,
+        sourcePreference: s?.sourcePreference,
+        probeEnabled: s?.probeStreams ?? true,
+        defaultAudioLang: effectiveAudioLang || undefined,
+      },
+      ctrl.signal,
+    );
     if (myToken !== this.#quickPlayToken) return;
     const best = ranked[0] ?? null;
     if (!best) {
@@ -302,9 +338,10 @@ class PlaybackStore {
 // so in-progress playback sessions survive hot reloads in development. (Same
 // pattern as player.svelte.ts / MpvPlayer.)
 function makeOrReusePlayback(): PlaybackStore {
-  if (import.meta.hot) {
-    import.meta.hot.data.playback ??= new PlaybackStore();
-    return import.meta.hot.data.playback as PlaybackStore;
+  const hotData = import.meta.hot?.data;
+  if (hotData) {
+    hotData.playback ??= new PlaybackStore();
+    return hotData.playback as PlaybackStore;
   }
   return new PlaybackStore();
 }

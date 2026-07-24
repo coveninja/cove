@@ -27,9 +27,10 @@ type tokenState struct {
 // Store persists tokenState to trakt-{profileID}.json in the app config dir.
 // The file is 0600 (token is sensitive) and written atomically.
 type Store struct {
-	mu    sync.RWMutex
-	state tokenState
-	path  string
+	mu       sync.RWMutex
+	state    tokenState
+	path     string
+	revision uint64 // increments when profile identity or link state is reset
 }
 
 // newStore constructs a Store for the given profile and loads any existing
@@ -39,45 +40,53 @@ func newStore(profileID string) (*Store, error) {
 	return s, s.load(profileID)
 }
 
-func (s *Store) load(profileID string) error {
+func readTokenState(profileID string) (string, tokenState, error) {
 	path, err := utils.ConfigPath(fmt.Sprintf("trakt-%s.json", profileID))
 	if err != nil {
-		return err
+		return "", tokenState{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.path = path
-	s.state = tokenState{}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return nil // not yet linked — not an error
+		return path, tokenState{}, nil // not yet linked — not an error
 	}
 	if err != nil {
-		return err
+		return path, tokenState{}, err
 	}
-	return json.Unmarshal(data, &s.state)
+	var state tokenState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return path, tokenState{}, err
+	}
+	return path, state, nil
+}
+
+func (s *Store) load(profileID string) error {
+	path, state, err := readTokenState(profileID)
+	s.mu.Lock()
+	if path != "" {
+		// Retain the resolved path even when an existing sidecar is corrupt so
+		// a subsequent successful authorization can replace and recover it.
+		s.path = path
+	}
+	if err == nil {
+		s.state = state
+	}
+	s.mu.Unlock()
+	return err
 }
 
 // SetProfile swaps the store to the new profile's sidecar file.
 func (s *Store) SetProfile(profileID string) error {
-	path, err := utils.ConfigPath(fmt.Sprintf("trakt-%s.json", profileID))
+	path, state, err := readTokenState(profileID)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.path = path
-	s.state = tokenState{}
-
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, &s.state)
+	s.state = state
+	s.revision++
+	s.mu.Unlock()
+	return nil
 }
 
 // Get returns a snapshot of the current token state. Safe for concurrent use.
@@ -87,34 +96,63 @@ func (s *Store) Get() tokenState {
 	return s.state
 }
 
+// Snapshot returns the token state together with the current store revision.
+// Long-running operations use the revision with SaveIfRevision so a response
+// started for an old profile cannot write into a newly selected profile.
+func (s *Store) Snapshot() (tokenState, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state, s.revision
+}
+
 // Save persists st to disk and updates the in-memory state. Must be called
 // with an accurate s.path (i.e. after SetProfile or newStore).
 func (s *Store) Save(st tokenState) error {
+	return s.save(st, nil)
+}
+
+// SaveIfRevision is Save with an optimistic profile/link-state guard.
+func (s *Store) SaveIfRevision(st tokenState, revision uint64) error {
+	return s.save(st, &revision)
+}
+
+func (s *Store) save(st tokenState, expectedRevision *uint64) error {
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := utils.AtomicWriteFile(s.path, data, 0o600); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if expectedRevision != nil && s.revision != *expectedRevision {
+		return fmt.Errorf("trakt: token store changed while request was in flight")
+	}
+	path := s.path
+	if path == "" {
+		return fmt.Errorf("trakt: token store path is not set")
+	}
+	if err := utils.AtomicWriteFile(path, data, 0o600); err != nil {
 		return err
 	}
-	s.mu.Lock()
 	s.state = st
-	s.mu.Unlock()
 	return nil
 }
 
 // Clear removes the sidecar file and resets in-memory state. Used by Unlink.
 func (s *Store) Clear() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := s.path
-	s.state = tokenState{}
-	s.mu.Unlock()
+	if path == "" {
+		return fmt.Errorf("trakt: token store path is not set")
+	}
 
 	err := os.Remove(path)
-	if os.IsNotExist(err) {
-		return nil
+	if err != nil && !os.IsNotExist(err) {
+		return err
 	}
-	return err
+	s.state = tokenState{}
+	s.revision++
+	return nil
 }
 
 // IsConnected reports whether an access token is present (does not check expiry).

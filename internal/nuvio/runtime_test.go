@@ -5,9 +5,25 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/dop251/goja"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func useLocalScraperTransport(t *testing.T) {
+	t.Helper()
+	original := scraperTransport
+	scraperTransport = func() *http.Transport { return &http.Transport{} }
+	resetSharedScraperClient()
+	t.Cleanup(func() {
+		scraperTransport = original
+		resetSharedScraperClient()
+	})
+}
 
 // TestRunScraper_InfiniteLoop exercises the timeout/interrupt path against a
 // scraper stuck in a synchronous infinite loop — the case a
@@ -41,6 +57,7 @@ func TestRunScraper_InfiniteLoop(t *testing.T) {
 // rather than a synchronous loop — a different code path through the fetch
 // shim's goroutine and the shared context.
 func TestRunScraper_HangingFetch(t *testing.T) {
+	useLocalScraperTransport(t)
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-block // never respond within the test's lifetime
@@ -71,6 +88,130 @@ func TestRunScraper_HangingFetch(t *testing.T) {
 		t.Fatalf("runScraper took %s to return after a 500ms timeout — hanging fetch was not bounded", elapsed)
 	}
 	t.Logf("returned after %s with error: %v", elapsed, err)
+}
+
+func TestRunScraperContractsAndErrorBoundaries(t *testing.T) {
+	t.Run("scrape metadata contract", func(t *testing.T) {
+		code := `
+			function scrape(metadata) {
+				return [{
+					name: metadata.imdbId,
+					title: metadata.title + "|" + metadata.year + "|" + metadata.type,
+					url: "https://example.com/scrape"
+				}];
+			}
+			module.exports = { getStreams: "not callable", scrape };
+		`
+		streams, err := runScraper(context.Background(), "scrape-contract", code, 5*time.Second, 7, "series", "Example", 2024, "tt0000007", nil, nil)
+		require.NoError(t, err)
+		require.Len(t, streams, 1)
+		assert.Equal(t, "tt0000007", streams[0].Name)
+		assert.Equal(t, "Example|2024|series", streams[0].Title)
+	})
+
+	t.Run("getStreams season and episode contract", func(t *testing.T) {
+		code := `
+			function getStreams(tmdbId, mediaType, season, episode) {
+				return [{
+					name: String(tmdbId),
+					title: mediaType + "|" + season + "|" + episode,
+					url: "https://example.com/get-streams"
+				}];
+			}
+			module.exports = { getStreams };
+		`
+		streams, err := runScraper(context.Background(), "get-streams-contract", code, 5*time.Second, 8, "tv", "Example", 2024, "tt0000008", intPtr(2), intPtr(5))
+		require.NoError(t, err)
+		require.Len(t, streams, 1)
+		assert.Equal(t, "8", streams[0].Name)
+		assert.Equal(t, "tv|2|5", streams[0].Title)
+	})
+
+	t.Run("empty synchronous result", func(t *testing.T) {
+		code := `module.exports = { getStreams: function () { return undefined; } };`
+		streams, err := runScraper(context.Background(), "empty-result", code, 5*time.Second, 1, "movie", "Example", 2024, "", nil, nil)
+		require.NoError(t, err)
+		assert.Empty(t, streams)
+	})
+
+	errorCases := []struct {
+		name    string
+		code    string
+		message string
+	}{
+		{"syntax error", `function {`, "script error"},
+		{"null exports", `module.exports = null;`, "no getStreams or scrape export"},
+		{"missing entry point", `module.exports = {other: function () {}};`, "no getStreams or scrape export"},
+		{"call throws", `module.exports = {getStreams: function () { throw new Error("boom"); }};`, "call error"},
+		{"promise rejects", `module.exports = {getStreams: function () { return Promise.reject("nope"); }};`, "scraper rejected"},
+		{"wrong result shape", `module.exports = {getStreams: function () { return {url: "https://example.com"}; }};`, "not an array"},
+		{"then throws", `module.exports = {getStreams: function () { return {then: function () { throw new Error("then boom"); }}; }};`, "then error"},
+	}
+	for _, testCase := range errorCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := runScraper(context.Background(), testCase.name, testCase.code, 5*time.Second, 1, "movie", "Example", 2024, "", nil, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), testCase.message)
+		})
+	}
+}
+
+func TestExportStreamsNormalizesAndFiltersResults(t *testing.T) {
+	vm := goja.New()
+	raw := []interface{}{
+		"not an object",
+		map[string]interface{}{"name": "missing URL"},
+		map[string]interface{}{
+			"name": "valid", "title": "title", "quality": "1080p", "url": "https://example.com/stream",
+			"headers": map[string]interface{}{"Referer": "https://example.com/", "Ignored": 42},
+			"size":    "1.5 MB",
+		},
+	}
+	streams, err := exportStreams(vm.ToValue(raw))
+	require.NoError(t, err)
+	require.Len(t, streams, 1)
+	assert.Equal(t, "valid", streams[0].Name)
+	assert.Equal(t, int64(1572864), streams[0].Size)
+	assert.Equal(t, map[string]string{"Referer": "https://example.com/"}, streams[0].Headers)
+
+	for name, size := range map[string]interface{}{
+		"float64": float64(1), "float32": float32(2), "int": int(3),
+		"int32": int32(4), "int64": int64(5),
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := []interface{}{map[string]interface{}{"url": "https://example.com", "size": size}}
+			got, exportErr := exportStreams(vm.ToValue(value))
+			require.NoError(t, exportErr)
+			require.Len(t, got, 1)
+			assert.Equal(t, int64Value(size), got[0].Size)
+		})
+	}
+
+	for _, empty := range []goja.Value{nil, goja.Undefined(), goja.Null()} {
+		got, exportErr := exportStreams(empty)
+		require.NoError(t, exportErr)
+		assert.Empty(t, got)
+	}
+	_, err = exportStreams(vm.ToValue("not an array"))
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "not an array"))
+}
+
+func int64Value(value interface{}) int64 {
+	switch value := value.(type) {
+	case float64:
+		return int64(value)
+	case float32:
+		return int64(value)
+	case int:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case int64:
+		return value
+	default:
+		return 0
+	}
 }
 
 // TestRunScraper_NoGoroutineLeak runs several timing-out scrapers back to

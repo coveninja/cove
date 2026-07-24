@@ -3,7 +3,7 @@ import { writable, Subscriber, Unsubscriber } from "svelte/store";
 import type { Settings } from "$lib/types/settings";
 import { api } from "$lib/api";
 
-const DEFAULTS: Settings = {
+export const DEFAULT_SETTINGS: Settings = {
   openOnMute: false,
   defaultVolume: 1.0,
   autoPlay: false,
@@ -40,7 +40,7 @@ const DEFAULTS: Settings = {
   traktSyncEnabled: false,
 };
 
-function createSettingsStore(): {
+export function createSettingsStore(): {
   subscribe: (
     this: void,
     run: Subscriber<Settings>,
@@ -49,14 +49,20 @@ function createSettingsStore(): {
   load: () => Promise<void>;
   save: (patch: Partial<Settings>) => Promise<void>;
 } {
-  const { subscribe, set } = writable<Settings>(DEFAULTS);
+  const { subscribe, set } = writable<Settings>(DEFAULT_SETTINGS);
   // Mirror of the store's current value, kept for load()'s no-change check —
   // svelte stores have no synchronous read without a subscribe round-trip.
-  let current: Settings = DEFAULTS;
+  let current: Settings = DEFAULT_SETTINGS;
+
+  // Guards a load that started before a save from overwriting the newer
+  // optimistic value when its stale response arrives later.
+  let saveSeq = 0;
 
   async function load(): Promise<void> {
+    const seqAtStart = saveSeq;
     try {
       const next = await api.getSettings();
+      if (seqAtStart !== saveSeq) return;
       // Skip the store update when nothing changed. load() runs after every
       // auth sync (periodic while signed in), and an unconditional set()
       // wakes every $settings subscriber even for identical content.
@@ -69,8 +75,6 @@ function createSettingsStore(): {
   }
 
   // Guards the PUT response against overwriting a newer optimistic save.
-  let saveSeq = 0;
-
   function save(patch: Partial<Settings>): Promise<void> {
     const next: Settings = { ...current, ...patch };
     current = next;

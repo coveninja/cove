@@ -1081,6 +1081,7 @@ func (p *Player) GetProgress(infoHash string, season, episode *int, fileIdx *int
 		state.lastUsed = now
 	}
 	t := state.torrent
+	speedByteSec := state.speedByteSec
 	p.activeTorrentsMu.Unlock()
 
 	info := t.Info()
@@ -1131,10 +1132,10 @@ func (p *Player) GetProgress(infoHash string, season, episode *int, fileIdx *int
 		"found":           true,
 		"progress":        pct,
 		"peers":           stats.ActivePeers,
-		"speed":           formatSpeed(state.speedByteSec),
+		"speed":           formatSpeed(speedByteSec),
 		"seeders":         stats.ConnectedSeeders,
 		"totalPeers":      stats.TotalPeers,
-		"speedBps":        state.speedByteSec,
+		"speedBps":        speedByteSec,
 		"downloadedBytes": complete,
 		"totalBytes":      total,
 	}

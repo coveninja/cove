@@ -192,7 +192,7 @@ async function requestOrNull<T>(
 
 /** A torrent src is a bare infohash; anything starting with http is a direct URL. */
 function isHashSrc(src: string): boolean {
-  return !src.startsWith("http");
+  return !/^https?:\/\//i.test(src);
 }
 
 // ── Library: TypeScript-only types ────────────────────────────────────────────
@@ -223,9 +223,12 @@ export const STATUS_COLORS: Record<
 
 /** "1h 23m" / "4m 12s" / "8s" */
 export function formatPosition(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
+  const totalSeconds = Number.isFinite(seconds)
+    ? Math.max(0, Math.floor(seconds))
+    : 0;
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
@@ -462,21 +465,30 @@ export const api = {
       reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      const emitLine = (line: string): void => {
+        if (!line.trim()) return;
+        try {
+          const { id, quality } = JSON.parse(line);
+          if (typeof id !== "string" || typeof quality !== "string") return;
+          onEntry(id, quality);
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // NDJSON producers normally terminate every frame with a newline,
+          // but accepting a final unterminated frame avoids silently dropping
+          // the last quality result when a proxy closes the stream cleanly.
+          buffer += decoder.decode();
+          emitLine(buffer);
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const { id, quality } = JSON.parse(line);
-            onEntry(id, quality);
-          } catch {
-            /* ignore malformed frames */
-          }
-        }
+        for (const line of lines) emitLine(line);
       }
     } catch (e) {
       // Cancel the reader on any error/abort so the locked ReadableStream is
@@ -1062,7 +1074,11 @@ export const api = {
     refreshToken: string;
     email: string;
   }): Promise<void> =>
-    request(`/client-session`, { method: "POST", body: JSON.stringify(data) }),
+    request(`/client-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   clientSessionDelete: (): Promise<void> =>
     request(`/client-session`, { method: "DELETE" }),
 
