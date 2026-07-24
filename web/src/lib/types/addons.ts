@@ -45,6 +45,10 @@ export interface ManifestCatalog {
   name: string;
   extra?: ManifestCatalogExtra[];
 }
+export interface ManifestBehaviorHints {
+  configurable?: boolean;
+  configurationRequired?: boolean;
+}
 export interface Manifest {
   id: string;
   name: string;
@@ -53,6 +57,7 @@ export interface Manifest {
   resources: ManifestResource[];
   types: string[];
   catalogs?: ManifestCatalog[];
+  behaviorHints?: ManifestBehaviorHints;
 }
 export interface AddonEntry {
   id: string;

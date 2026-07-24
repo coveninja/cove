@@ -121,14 +121,20 @@ func (c *ManifestCatalog) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type ManifestBehaviorHints struct {
+	Configurable          bool `json:"configurable,omitempty"`
+	ConfigurationRequired bool `json:"configurationRequired,omitempty"`
+}
+
 type Manifest struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Version     string             `json:"version"`
-	Resources   []ManifestResource `json:"resources"`
-	Types       []string           `json:"types"`
-	Catalogs    []ManifestCatalog  `json:"catalogs,omitempty"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	Version       string                 `json:"version"`
+	Resources     []ManifestResource     `json:"resources"`
+	Types         []string               `json:"types"`
+	Catalogs      []ManifestCatalog      `json:"catalogs,omitempty"`
+	BehaviorHints *ManifestBehaviorHints `json:"behaviorHints,omitempty"`
 }
 
 type AddonEntry struct {
@@ -380,6 +386,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 	// POST /api/addons          — add stremio addon (body: {"url":"..."})
 	// PATCH /api/addons?id=X   — toggle enabled (body: {"enabled":true})
 	// DELETE /api/addons?id=X  — remove stremio addon
+	// POST /api/addons/refresh?id=X — re-fetch manifest, preserve enabled/catalog state
 	mux.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -538,6 +545,33 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	// POST /api/addons/refresh?id=X[&url=Y] — re-fetch manifest, preserve enabled/catalog state
+	mux.HandleFunc("/api/addons/refresh", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id := r.URL.Query().Get("id")
+		addonURL := r.URL.Query().Get("url")
+		if id == "" && addonURL == "" {
+			http.Error(w, "missing ?id= or ?url=", http.StatusBadRequest)
+			return
+		}
+		entry, err := m.RefreshAddon(r.Context(), id, addonURL)
+		if err != nil {
+			if err.Error() == "addon not found" {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(entry); err != nil {
+			log.Println("addons refresh:", err)
+		}
 	}))
 
 	// GET /api/watch-options?id=<tmdbID>&type=movie|tv

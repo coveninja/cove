@@ -702,6 +702,13 @@ export const api = {
     });
   },
 
+  refreshAddon: (id: string, url?: string): Promise<AddonEntry> => {
+    const p = new URLSearchParams();
+    if (id) p.set("id", id);
+    if (url) p.set("url", url);
+    return request(`/addons/refresh?${p}`, { method: "POST" });
+  },
+
   // ── Nuvio plugin repos ───────────────────────────────────────────────────────
   getNuvioRepos: (): Promise<NuvioRepo[]> => request(`/nuvio/repos`),
 

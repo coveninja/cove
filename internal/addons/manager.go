@@ -258,6 +258,78 @@ func (m *Manager) AddStremioAddon(ctx context.Context, url string) (AddonEntry, 
 	return entry, nil
 }
 
+// RefreshAddon re-fetches the manifest for an existing stremio addon and updates
+// its Manifest and Kind while preserving the entry's Enabled state and
+// DisabledCatalogs. Stale DisabledCatalogs keys (catalogs no longer present in
+// the refreshed manifest) are pruned. When addonURL is non-empty, matching is by
+// URL only; otherwise matching falls back to id. Returns an error for official
+// addons or if the addon is not found.
+func (m *Manager) RefreshAddon(ctx context.Context, id, addonURL string) (AddonEntry, error) {
+	for _, a := range officialAddons {
+		if a.ID == id {
+			return AddonEntry{}, fmt.Errorf("cannot refresh built-in addon %q", id)
+		}
+	}
+
+	// Read the existing entry's URL before fetching (no write lock needed yet).
+	m.mu.RLock()
+	var fetchURL string
+	found := false
+	for _, a := range m.stremioAddons {
+		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
+			fetchURL = a.URL
+			found = true
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if !found {
+		return AddonEntry{}, fmt.Errorf("addon not found")
+	}
+	if addonURL != "" {
+		fetchURL = normalizeAddonURL(addonURL)
+	}
+
+	manifest, err := m.FetchManifest(ctx, fetchURL)
+	if err != nil {
+		return AddonEntry{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previous := m.snapshotL()
+
+	// Re-find the entry under write lock — it may have changed while fetching.
+	for i, a := range m.stremioAddons {
+		if (addonURL != "" && a.URL == addonURL) || (addonURL == "" && id != "" && a.ID == id) {
+			m.stremioAddons[i].Manifest = manifest
+			m.stremioAddons[i].Kind = detectKind(manifest)
+
+			// Prune DisabledCatalogs keys for catalogs no longer in the manifest.
+			if len(m.stremioAddons[i].DisabledCatalogs) > 0 {
+				valid := make(map[string]bool, len(manifest.Catalogs))
+				for _, cat := range manifest.Catalogs {
+					valid[cat.CatalogKey()] = true
+				}
+				for key := range m.stremioAddons[i].DisabledCatalogs {
+					if !valid[key] {
+						delete(m.stremioAddons[i].DisabledCatalogs, key)
+					}
+				}
+			}
+
+			entry := m.stremioAddons[i]
+			if err := m.saveL(); err != nil {
+				m.restoreL(previous)
+				return AddonEntry{}, err
+			}
+			return entry, nil
+		}
+	}
+	return AddonEntry{}, fmt.Errorf("addon not found")
+}
+
 // RemoveAddon removes a user-added (stremio) addon by ID or URL. When addonURL
 // is non-empty, matching is by URL only — this is required when duplicate
 // manifest IDs exist (same addon, different config URLs) so the correct entry
