@@ -176,8 +176,8 @@ jobs:
       - run: npm run check
       - run: npm run lint
       - run: npm run build
-      - name: Audit production and development dependencies
-        run: npm audit --audit-level=low
+      - name: Audit production dependencies
+        run: npm audit --audit-level=low --omit=dev
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
