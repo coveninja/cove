@@ -41,7 +41,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "bits-ui": "^2.18.1",
     "clsx": "^2.1.1",
-    "eslint": "^9.39.1",
+    "eslint": "^10.8.0",
     "eslint-plugin-svelte": "^3.22.0",
     "jsdom": "^29.1.1",
     "layerchart": "^2.0.2",
