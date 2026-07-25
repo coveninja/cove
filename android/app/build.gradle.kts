@@ -129,7 +129,7 @@ dependencies {
 
     // OkHttp — health-check polls to /api/ping from WebViewActivity and
     // provides HTTP for CoveApiClient (sync, auth).
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
 
     // kotlinx-serialization JSON — parsing backend responses in CoveApiClient
     // and SyncCoordinator.
@@ -161,7 +161,7 @@ dependencies {
 
     // Stub HTTP server for ApkUpdater / CoveApiClient tests. Pinned to the same
     // 4.12.0 as the okhttp implementation dependency above.
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.4.0")
 
     // runTest for the suspend functions on CoveApiClient. 1.9.0 matches the
     // kotlinx-coroutines-core version already on the runtime classpath.
