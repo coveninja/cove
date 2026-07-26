@@ -8,6 +8,7 @@
   import type { Page } from "$lib/types/types";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { onMount } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
   import { tick } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
 
@@ -92,7 +93,7 @@
       if (movieGenre)
         specs.push({
           key: `mg-${movieGenre.id}`,
-          header: `${movieGenre.name} movies`,
+          header: m.explore_genre_movies({ genre: movieGenre.name }),
           load: () =>
             api.discoverByGenre("movie", movieGenre.id, { limit: ROW_LIMIT }),
         });
@@ -101,7 +102,7 @@
       if (tvGenre)
         specs.push({
           key: `tg-${tvGenre.id}`,
-          header: `${tvGenre.name} shows`,
+          header: m.explore_genre_shows({ genre: tvGenre.name }),
           load: () =>
             api.discoverByGenre("tv", tvGenre.id, { limit: ROW_LIMIT }),
         });
@@ -137,7 +138,7 @@
     // library (the backend falls back to popular titles when signal is thin).
     startRow({
       key: "tastes",
-      header: "Based on your tastes",
+      header: m.home_based_on_tastes(),
       load: () => api.discover("all", { limit: ROW_LIMIT }),
     });
 

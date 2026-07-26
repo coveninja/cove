@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import { epProgress, progressPct, relativeDate } from "$lib/utils";
   import { Check, Play } from "lucide-svelte";
   import type { Media, TVEpisode } from "$lib/types/tmdb";
@@ -136,7 +137,7 @@
       </span>
       {#if ep.overview}
         {#if hideSpoilers}
-          <span class="mt-1 text-sm italic text-muted-foreground/50">Spoiler hidden</span>
+          <span class="mt-1 text-sm italic text-muted-foreground/50">{m.media_spoiler_hidden()}</span>
         {:else}
           <span class="mt-1 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
             {ep.overview}

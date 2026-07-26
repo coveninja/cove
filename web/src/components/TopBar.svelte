@@ -20,6 +20,7 @@
   import { Player } from "$lib/player/player.svelte";
   import AccountPopover from "./AccountPopover.svelte";
   import { setTvMode, tvSwitchVisible } from "$lib/platform";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     query = $bindable(""),
@@ -204,7 +205,7 @@
             </Tooltip.Trigger>
             <Tooltip.Content>
               <div class="flex flex-col">
-                <p>Back</p>
+                <p>{m.common_back()}</p>
               </div>
             </Tooltip.Content>
           </Tooltip.Root>
@@ -226,7 +227,7 @@
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>Home</p>
+              <p>{m.nav_home()}</p>
             </Tooltip.Content>
           </Tooltip.Root>
 
@@ -246,7 +247,7 @@
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>My List</p>
+              <p>{m.nav_my_list()}</p>
             </Tooltip.Content>
           </Tooltip.Root>
 
@@ -266,7 +267,7 @@
               </Button>
             </Tooltip.Trigger>
             <Tooltip.Content>
-              <p>Explore</p>
+              <p>{m.nav_explore()}</p>
             </Tooltip.Content>
           </Tooltip.Root>
         </div>
@@ -301,7 +302,8 @@
 
           <input
             type="search"
-            placeholder="Search..."
+            placeholder={m.search_placeholder()}
+            aria-label={m.nav_search()}
             class="h-full w-full border-0 bg-transparent pr-2 pl-8 text-sm outline-none focus:ring-0"
             class:opacity-0={searchState === "hidden"}
             class:opacity-100={searchState === "active"}
@@ -345,7 +347,7 @@
           </Button>
         </Tooltip.Trigger>
         <Tooltip.Content>
-          <p>{Player.isFullscreen ? "Exit fullscreen" : "Fullscreen"}</p>
+          <p>{Player.isFullscreen ? m.player_exit_fullscreen() : m.player_fullscreen()}</p>
         </Tooltip.Content>
       </Tooltip.Root>
       <Tooltip.Root>
@@ -355,7 +357,7 @@
           </Button>
         </Tooltip.Trigger>
         <Tooltip.Content>
-          <p>Close</p>
+          <p>{m.common_close()}</p>
         </Tooltip.Content>
       </Tooltip.Root>
     {:else}
@@ -367,7 +369,7 @@
             </Button>
           </Tooltip.Trigger>
           <Tooltip.Content>
-            <p>Switch to TV UI</p>
+            <p>{m.settings_tv_switch()}</p>
           </Tooltip.Content>
         </Tooltip.Root>
       {/if}
@@ -384,7 +386,7 @@
           </Button>
         </Tooltip.Trigger>
         <Tooltip.Content>
-          <p>Settings</p>
+          <p>{m.nav_settings()}</p>
         </Tooltip.Content>
       </Tooltip.Root>
       <AccountPopover {onSelectPage} />

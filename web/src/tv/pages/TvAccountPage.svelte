@@ -32,6 +32,7 @@
     Users,
     BarChart3,
   } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     visible = true,
@@ -330,12 +331,12 @@
       <div
         use:focusable
         class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-        aria-label="Account section"
+        aria-label={m.account_section()}
       ></div>
 
       <div class="flex flex-col gap-6">
         <header>
-          <h1 class="text-4xl font-bold tracking-tight">My Account</h1>
+          <h1 class="text-4xl font-bold tracking-tight">{m.account_title()}</h1>
           <p class="mt-1 text-lg text-white/50">
             Manage your account, profiles, and viewing insights.
           </p>
@@ -343,7 +344,7 @@
 
         <!-- Account card -->
         <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-4">
-          <h2 class="text-xl font-semibold">Account</h2>
+          <h2 class="text-xl font-semibold">{m.nav_account()}</h2>
           {#if auth.session}
             <p class="text-base text-white/60 truncate">{auth.session.email}</p>
             <div
@@ -405,11 +406,11 @@
       <div
         use:focusable
         class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-        aria-label="Profiles section"
+        aria-label={m.account_profiles_section()}
       ></div>
 
       <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-4">
-        <h2 class="text-xl font-semibold">Profiles</h2>
+        <h2 class="text-xl font-semibold">{m.account_profiles()}</h2>
         <div
           use:focusGroup={{ id: "tv-account-profiles", policy: { type: "column" } }}
           class="flex flex-col gap-1"
@@ -432,7 +433,7 @@
                   <span class="flex items-center gap-2 text-sm text-white/50">
                     {#if auth.activeProfile?.id === profile.id}
                       <Check class="size-4 text-green-400" />
-                      <span class="text-green-400">Active</span>
+                      <span class="text-green-400">{m.account_active()}</span>
                     {/if}
                     {#if profile.is_primary}
                       <span class="rounded border border-white/20 px-2 py-0.5 text-xs text-white/40">
@@ -492,7 +493,7 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Activity overview section"
+            aria-label={m.account_activity()}
           ></div>
           <div class="flex flex-col gap-6">
             <ActivityHero {activity} />
@@ -509,16 +510,16 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Viewing charts section"
+            aria-label={m.account_insights()}
           ></div>
           <div class="flex flex-col gap-6">
             <!-- By month (full width) -->
             <div class="rounded-2xl bg-white/5 p-6">
               <div class="mb-4 flex items-center gap-2">
                 <BarChart3 class="size-5 text-white/60" />
-                <h3 class="text-lg font-semibold">Hours by Month</h3>
+                <h3 class="text-lg font-semibold">{m.account_hours_month()}</h3>
                 {#if monthSecondary}
-                  <span class="ml-auto text-sm text-white/40">vs last year</span>
+                  <span class="ml-auto text-sm text-white/40">{m.account_vs_last_year()}</span>
                 {/if}
               </div>
               <ActivityBars items={monthItems} secondary={monthSecondary} />
@@ -527,11 +528,11 @@
             <!-- DOW + hour side by side -->
             <div class="grid gap-6 md:grid-cols-2">
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">Hours by Day of Week</h3>
+                <h3 class="mb-4 text-lg font-semibold">{m.account_hours_weekday()}</h3>
                 <ActivityBars items={dowItems} />
               </div>
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">Hours by Hour of Day</h3>
+                <h3 class="mb-4 text-lg font-semibold">{m.account_hours_day()}</h3>
                 <ActivityBars items={hourItems} compact={true} />
               </div>
             </div>
@@ -539,7 +540,7 @@
             <!-- Year over year -->
             {#if showYearChart}
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">Year over Year</h3>
+                <h3 class="mb-4 text-lg font-semibold">{m.account_year_over_year()}</h3>
                 <ActivityBars items={yearItems} />
               </div>
             {/if}
@@ -556,11 +557,11 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Library stats section"
+            aria-label={m.nav_my_list()}
           ></div>
           <div class="flex flex-col gap-6">
             <header>
-              <h2 class="text-3xl font-bold">Your Insights</h2>
+              <h2 class="text-3xl font-bold">{m.account_your_insights()}</h2>
               <p class="mt-1 text-base text-white/50">
                 Your watch history, taste profile, and what makes you unique.
               </p>
@@ -592,7 +593,7 @@
                     <p class="mb-4 text-sm text-white/50">{description}</p>
                   {/if}
                   {#if slices.length === 0}
-                    <p class="text-sm text-white/40">Not enough signal yet.</p>
+                    <p class="text-sm text-white/40">{m.account_not_enough_signal()}</p>
                   {:else}
                     {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
                     <div class="flex items-center gap-6">
@@ -646,13 +647,13 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Titles watched this year section"
+            aria-label={m.account_titles_year()}
           ></div>
           <div class="rounded-2xl bg-white/5 p-6">
             <div class="mb-4 flex items-center gap-2">
               <Film class="size-5 text-white/60" />
-              <h3 class="text-lg font-semibold">Titles watched this year</h3>
-              <span class="ml-1 text-sm text-white/40">Your top picks by watch time</span>
+              <h3 class="text-lg font-semibold">{m.account_titles_year()}</h3>
+              <span class="ml-1 text-sm text-white/40">{m.account_top_watch_time()}</span>
             </div>
             <!-- Horizontal strip — not D-pad-navigable; scroll-stop anchor above handles scroll -->
             <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-none [&::-webkit-scrollbar]:hidden">
@@ -696,7 +697,7 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Studio footprint section"
+            aria-label={m.account_studios_most()}
           ></div>
           <StudioFootprint studios={insights!.top_studios} />
         </section>
@@ -711,14 +712,14 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Genre breakdown section"
+            aria-label={m.media_genres()}
           ></div>
           <div class="grid gap-6 md:grid-cols-2">
             {#snippet genreDonut(title: string, slices: Slice[])}
               <div class="rounded-2xl bg-white/5 p-6">
                 <h3 class="mb-4 text-lg font-semibold">{title}</h3>
                 {#if slices.length === 0}
-                  <p class="text-sm text-white/40">Not enough signal yet.</p>
+                  <p class="text-sm text-white/40">{m.account_not_enough_signal()}</p>
                 {:else}
                   {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
                   <div class="flex items-center gap-6">
@@ -759,7 +760,7 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Taste signals section"
+            aria-label={m.onboarding_taste()}
           ></div>
           <TasteSignalView {insights} />
         </section>
@@ -773,12 +774,12 @@
             <div
               use:focusable
               class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-              aria-label="People section"
+              aria-label={m.search_people()}
             ></div>
             <div class="rounded-2xl bg-white/5 p-6">
               <div class="mb-6 flex items-center gap-2">
                 <Users class="size-5 text-white/60" />
-                <h3 class="text-lg font-semibold">Cast &amp; crew you gravitate to</h3>
+                <h3 class="text-lg font-semibold">{m.account_people_taste()}</h3>
               </div>
               <!--
                 grid policy: cols must match the CSS grid-template-columns count.
@@ -811,12 +812,12 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="How recommendations work section"
+            aria-label={m.account_recommendations_how()}
           ></div>
           <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-5 text-base text-white/60">
             <div class="flex items-center gap-2">
               <Info class="size-5" />
-              <h3 class="text-lg font-semibold text-white">How your recommendations are built</h3>
+              <h3 class="text-lg font-semibold text-white">{m.account_recommendations_how()}</h3>
             </div>
             <p>
               Your profile is built from
@@ -856,11 +857,11 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Empty insights section"
+            aria-label={m.account_nothing_analyze()}
           ></div>
           <div class="flex flex-col items-center gap-4 rounded-2xl bg-white/5 px-10 py-20 text-center">
             <Sparkles class="size-10 text-white/30" />
-            <p class="text-2xl font-semibold">Nothing to analyze yet</p>
+            <p class="text-2xl font-semibold">{m.account_nothing_analyze()}</p>
             <p class="max-w-md text-base text-white/50">
               Watch a few titles and your stats will start appearing here. Finish,
               rate, or drop titles to build your taste profile.
@@ -878,7 +879,7 @@
 <!-- ── Dialogs ──────────────────────────────────────────────────────────────── -->
 {#if deleteTarget}
   <ConfirmDialog
-    title="Delete profile?"
+    title={m.account_delete_confirm()}
     body={`"${deleteTarget.name}" and all of its watch history, library and settings will be permanently deleted. This cannot be undone.`}
     confirmLabel="Delete"
     loading={deleting}

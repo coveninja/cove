@@ -20,6 +20,7 @@
   import { scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import MobileSeekBar from "./MobileSeekBar.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     title,
@@ -110,14 +111,14 @@
     onkeydown={() => {}}
     role="toolbar"
     tabindex={-1}
-    aria-label="Top controls"
+    aria-label={m.player_top_controls()}
   >
     <!-- Close button (44px touch target) -->
     <button
       type="button"
       class="flex size-11 items-center justify-center rounded-full text-white active:bg-white/20"
       onclick={() => onclose?.()}
-      aria-label="Close player"
+      aria-label={m.player_close()}
     >
       <X class="size-6" />
     </button>
@@ -150,7 +151,7 @@
       type="button"
       class="flex size-12 items-center justify-center rounded-full text-white active:bg-white/20"
       onclick={() => { onNudgeBack(); }}
-      aria-label="Seek back 10 seconds"
+      aria-label={m.player_seek_back()}
     >
       <SkipBack class="size-6" />
     </button>
@@ -160,7 +161,7 @@
       type="button"
       class="flex size-16 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm active:bg-white/35"
       onclick={() => { Player.togglePause(); onShowControls(); }}
-      aria-label={Player.paused ? "Play" : "Pause"}
+      aria-label={Player.paused ? m.player_play() : m.player_pause()}
     >
       {#key Player.paused}
         <span
@@ -181,7 +182,7 @@
       type="button"
       class="flex size-12 items-center justify-center rounded-full text-white active:bg-white/20"
       onclick={() => { onNudgeForward(); }}
-      aria-label="Seek forward 10 seconds"
+      aria-label={m.player_seek_forward()}
     >
       <SkipForward class="size-6" />
     </button>
@@ -232,7 +233,7 @@
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
           onclick={() => { audioSheetOpen = true; onShowControls(); }}
-          aria-label="Audio tracks"
+          aria-label={m.player_audio_tracks()}
         >
           <Headphones class="size-4 shrink-0" />
           <span class="max-w-20 truncate text-xs">
@@ -247,7 +248,7 @@
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
           onclick={() => { subsSheetOpen = true; onShowControls(); }}
-          aria-label="Subtitles"
+          aria-label={m.player_subtitles()}
         >
           <Captions class="size-4 shrink-0" />
           <span class="max-w-20 truncate text-xs">
@@ -263,7 +264,7 @@
         type="button"
         class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
         onclick={() => { onCycleAspect(); onShowControls(); }}
-        aria-label="Aspect ratio"
+        aria-label={m.player_aspect_ratio()}
       >
         <Ratio class="size-5 shrink-0" />
         <span class="text-sm">{ASPECT_LABELS[Player.aspectMode]}</span>
@@ -274,7 +275,7 @@
         type="button"
         class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
         onclick={() => { speedSheetOpen = true; onShowControls(); }}
-        aria-label="Playback speed"
+        aria-label={m.player_speed()}
       >
         <Gauge class="size-5 shrink-0" />
         <span class="text-sm"
@@ -287,7 +288,7 @@
         type="button"
         class="flex size-11 items-center justify-center rounded-full text-white active:bg-white/15"
         onclick={onToggleMute}
-        aria-label={Player.volume === 0 ? "Unmute" : "Mute"}
+        aria-label={Player.volume === 0 ? m.player_unmute() : m.player_mute()}
       >
         {#if Player.volume === 0}
           <VolumeX class="size-5" />
@@ -302,7 +303,7 @@
           type="button"
           class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
           onclick={() => { episodesSheetOpen = true; onShowControls(); }}
-          aria-label="Episodes"
+          aria-label={m.player_episodes()}
         >
           <ListVideo class="size-5 shrink-0" />
         </button>

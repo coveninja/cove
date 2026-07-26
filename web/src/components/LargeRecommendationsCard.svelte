@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import {
@@ -323,7 +324,7 @@
             variant="outline"
             size="icon"
             onclick={moveToPrevious}
-            aria-label="Next"
+            aria-label={m.common_next()}
           >
             <ChevronLeft />
           </Button>
@@ -331,7 +332,7 @@
             variant="outline"
             size="icon"
             onclick={moveToNext}
-            aria-label="Next"
+            aria-label={m.common_next()}
           >
             <ChevronRight />
           </Button>
@@ -341,7 +342,7 @@
           variant="outline"
           size="icon"
           onclick={dismissCurrent}
-          aria-label="Not interested"
+          aria-label={m.media_not_interested()}
         >
           <ThumbsDown />
         </Button>

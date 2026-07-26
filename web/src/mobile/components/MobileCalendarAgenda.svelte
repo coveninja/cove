@@ -12,6 +12,7 @@
     ChevronUp,
   } from "lucide-svelte";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+  import * as m from "$lib/paraglide/messages.js";
   import {
     groupByDay,
     calendarSummary,
@@ -129,7 +130,7 @@
     <!-- No expand toggle when empty -->
     <div class="flex items-center gap-2 p-6">
       <CalendarDays class="size-4 text-muted-foreground" />
-      <h2 class="text-base font-semibold">Calendar</h2>
+      <h2 class="text-base font-semibold">{m.calendar_calendar()}</h2>
     </div>
   {:else}
     <button
@@ -138,7 +139,7 @@
       class="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left transition-colors active:bg-secondary/70"
     >
       <CalendarDays class="size-4 shrink-0 text-muted-foreground" />
-      <h2 class="flex-1 text-base font-semibold">Calendar</h2>
+      <h2 class="flex-1 text-base font-semibold">{m.calendar_calendar()}</h2>
       {#if expanded}
         <ChevronUp class="size-4 shrink-0 text-muted-foreground" />
       {:else}
@@ -168,7 +169,7 @@
     <!-- Empty state compact -->
     <div class="mt-1 flex items-center gap-2 py-2 text-muted-foreground">
       <CalendarOff class="size-4 shrink-0 opacity-40" />
-      <p class="text-xs">Nothing scheduled in your library.</p>
+      <p class="text-xs">{m.calendar_empty()}</p>
     </div>
 
   {:else}

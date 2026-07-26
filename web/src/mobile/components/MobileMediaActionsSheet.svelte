@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import { Button } from "$lib/components/ui/button";
   import {
     mediaUtilityItems,
@@ -52,8 +53,8 @@
     size="icon"
     class={className}
     onclick={() => (open = true)}
-    title="More actions"
-    aria-label="More actions"
+    title={m.common_more_actions()}
+    aria-label={m.common_more_actions()}
   >
     <EllipsisVertical />
   </Button>

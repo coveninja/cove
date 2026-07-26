@@ -88,6 +88,9 @@ async function mockBackend(
     savedSession?: boolean;
     profiles?: Profile[];
     syncPushError?: string;
+    onboardingDone?: boolean;
+    uiLanguage?: string;
+    settingsUpdates?: Array<Record<string, unknown>>;
   } = {},
 ): Promise<void> {
   const profiles = (options.profiles ?? [primary]).map((profile) => ({
@@ -121,7 +124,18 @@ async function mockBackend(
       return;
     }
     if (path === "/api/settings") {
-      await route.fulfill({ json: { onboardingDone: true } });
+      if (request.method() === "PUT") {
+        const update = request.postDataJSON() as Record<string, unknown>;
+        options.settingsUpdates?.push(update);
+        await route.fulfill({ json: update });
+      } else {
+        await route.fulfill({
+          json: {
+            onboardingDone: options.onboardingDone ?? true,
+            uiLanguage: options.uiLanguage ?? "en",
+          },
+        });
+      }
       return;
     }
     if (path === "/api/update/check") {
@@ -232,13 +246,13 @@ async function expectCategorizedSearchOrder(page: Page): Promise<void> {
 
 async function fillSearch(page: Page, mode: "desktop" | "mobile" | "tv") {
   if (mode === "desktop") {
-    const input = page.getByPlaceholder("Search...");
+    const input = page.getByRole("searchbox");
     await page.getByRole("search").hover();
     await expect(input).toBeEnabled();
     await input.fill("unified");
   } else {
     await page.getByLabel("Search", { exact: true }).click();
-    await page.getByPlaceholder("Search movies & TV…").fill("unified");
+    await page.getByRole("searchbox").fill("unified");
   }
   await expect(
     page.getByRole("heading", { name: "Top Results", exact: true }),
@@ -257,6 +271,43 @@ test("desktop shell boots with an unavailable optional backend", async ({
   await expect(page).toHaveTitle("Cove");
   await expect(page.getByLabel("Account")).toBeVisible({ timeout: 30_000 });
   expect(errors).toEqual([]);
+});
+
+test("onboarding chooses the UI language immediately after welcome", async ({
+  page,
+}) => {
+  const settingsUpdates: Array<Record<string, unknown>> = [];
+  await mockBackend(page, {
+    onboardingDone: false,
+    uiLanguage: "en",
+    settingsUpdates,
+  });
+
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Welcome to Cove", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Get started", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Choose Your Language", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Türkçe", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Dilinizi Seçin", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "İleri", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Hesabınız", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      settingsUpdates.some((update) => update.uiLanguage === "tr"),
+    )
+    .toBe(true);
 });
 
 test("a guest can sign in and persist the client session", async ({ page }) => {
@@ -416,7 +467,7 @@ test("desktop search leads with six unified results and keeps full categories", 
   ]);
 
   await page.getByLabel("Movies", { exact: true }).click();
-  await page.getByLabel("TV", { exact: true }).click();
+  await page.getByLabel("TV Shows", { exact: true }).click();
   await expect(
     page.locator('[data-search-section="top-results"]:visible'),
   ).toHaveCount(0);
@@ -451,7 +502,7 @@ test("TV search navigates filters, suggestions, top results, and result rows", a
   await fillSearch(page, "tv");
 
   await expectCategorizedSearchOrder(page);
-  const input = page.getByPlaceholder("Search movies & TV…");
+  const input = page.getByRole("searchbox");
   const filters = page.locator('[data-tv-focus-group="search-filters"] button');
   const suggestions = page.locator(
     '[data-tv-focus-group="search-suggestions"] button',

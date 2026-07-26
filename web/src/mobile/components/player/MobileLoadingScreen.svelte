@@ -3,6 +3,7 @@
   import { Spinner } from "$lib/components/ui/spinner";
   import { X } from "lucide-svelte";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -32,7 +33,7 @@
     class="absolute left-4 z-10 flex size-11 items-center justify-center rounded-full text-white active:bg-white/20"
     style="top: max(1rem, var(--safe-top));"
     onclick={() => onclose?.()}
-    aria-label="Close player"
+    aria-label={m.player_close()}
   >
     <X class="size-6" />
   </button>

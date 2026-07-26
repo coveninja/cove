@@ -3,6 +3,7 @@
   import { segmentBgClass, type ChapterBar } from "$lib/player/chapters";
   import type { TorrentProgress } from "$lib/player/torrentProgress.svelte.js";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     chapterBars,
@@ -68,7 +69,7 @@
 <!-- Seek bar: 24px hit box, 24px thumb -->
 <div
   role="slider"
-  aria-label="Seek"
+  aria-label={m.player_seek_seconds()}
   aria-valuemin={0}
   aria-valuemax={Player.duration || 0}
   aria-valuenow={displayPos}

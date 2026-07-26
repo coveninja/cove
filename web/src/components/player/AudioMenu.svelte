@@ -5,6 +5,7 @@
   import { Headphones } from "lucide-svelte";
   import { langName, trackLabel } from "$lib/player/trackLabels";
   import MenuItem from "./MenuItem.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     open = $bindable(false),
@@ -34,13 +35,13 @@
       >
         <Headphones class="size-4" />
         <span class="max-w-28 truncate text-xs">
-          {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
+          {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || m.player_audio()}
         </span>
       </Button>
     {/snippet}
   </Popover.Trigger>
   <Popover.Content side="top" align="end" class="w-56 p-1">
-    <p class="px-2 py-1.5 text-sm font-medium text-muted-foreground">Audio</p>
+    <p class="px-2 py-1.5 text-sm font-medium text-muted-foreground">{m.player_audio()}</p>
     <div class="max-h-72 overflow-y-auto flex flex-col gap-1">
       {#each sortedAudio as track (track.id)}
         <MenuItem

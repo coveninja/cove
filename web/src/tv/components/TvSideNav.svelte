@@ -3,6 +3,7 @@
   import type { ComponentType } from "svelte";
   import type { Page } from "$lib/types/types";
   import { focusable, focusGroup } from "../focus/actions";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     currentPage,
@@ -22,37 +23,37 @@
 
   const tabs: Tab[] = [
     {
-      label: "Home",
+      label: m.nav_home(),
       makePage: () => ({ type: "home" }),
       activeFor: ["home"],
       Icon: House,
     },
     {
-      label: "My List",
+      label: m.nav_my_list(),
       makePage: () => ({ type: "myList" }),
       activeFor: ["myList"],
       Icon: Bookmark,
     },
     {
-      label: "Explore",
+      label: m.nav_explore(),
       makePage: () => ({ type: "explore" }),
       activeFor: ["explore"],
       Icon: Flame,
     },
     {
-      label: "Search",
+      label: m.nav_search(),
       makePage: () => ({ type: "query", query: "" }),
       activeFor: ["query"],
       Icon: Search,
     },
     {
-      label: "Settings",
+      label: m.nav_settings(),
       makePage: () => ({ type: "settings" }),
       activeFor: ["settings"],
       Icon: Settings,
     },
     {
-      label: "Account",
+      label: m.nav_account(),
       makePage: () => ({ type: "account" }),
       activeFor: ["account"],
       Icon: CircleUser,
@@ -66,7 +67,7 @@
 <nav
   class="group flex p-4 flex-col justify-center w-12 h-full transition-[width] duration-220 ease-[ease] focus-within:w-41"
   use:focusGroup={{ id: "side-nav", policy: { type: "column" } }}
-  aria-label="Main navigation"
+  aria-label={m.nav_main()}
 >
   {#each tabs as tab (tab.label)}
     {@const active = isActive(tab)}

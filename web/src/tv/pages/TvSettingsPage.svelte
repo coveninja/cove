@@ -18,6 +18,13 @@
   } from "$lib/types/nuvio";
   import { focusGroup, focusable } from "../focus/actions";
   import { TriangleAlert, RefreshCw, Trash2, Cog, X } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
+  import {
+    LOCALES,
+    languageDisplayName,
+    normalizeAppLocale,
+    type AppLocale,
+  } from "$lib/i18n";
 
   // ── Section navigation ────────────────────────────────────────────────────────
   type SectionId =
@@ -31,17 +38,18 @@
   let activeSection = $state<SectionId>("playback");
 
   const SECTIONS: { id: SectionId; label: string }[] = [
-    { id: "playback", label: "Playback" },
-    { id: "streaming", label: "Streaming" },
-    { id: "subtitles", label: "Subtitles & Audio" },
-    { id: "interface", label: "Interface" },
-    { id: "addons", label: "Addons" },
-    { id: "plugins", label: "Plugins" },
+    { id: "playback", label: m.settings_playback() },
+    { id: "streaming", label: m.settings_streaming() },
+    { id: "subtitles", label: m.settings_subtitles_audio() },
+    { id: "interface", label: m.settings_interface() },
+    { id: "addons", label: m.settings_addons() },
+    { id: "plugins", label: m.settings_plugins() },
   ];
 
   // ── Settings draft ────────────────────────────────────────────────────────────
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
+  let saveError = $state<string | null>(null);
   let saveTimer: ReturnType<typeof setTimeout>;
 
   // Auto-update toggle — native pref, lives outside the Go settings store.
@@ -67,10 +75,22 @@
 
   async function handleSave() {
     if (!draft) return;
+    const previousLanguage = normalizeAppLocale(settings.getCurrent().uiLanguage) ?? "en";
+    const nextLanguage = normalizeAppLocale(draft.uiLanguage) ?? "en";
+    saveError = null;
+    const persisted = await settings.save(draft);
+    if (!persisted) {
+      saved = false;
+      saveError = m.language_save_error();
+      return;
+    }
+    if (nextLanguage !== previousLanguage) {
+      window.location.reload();
+      return;
+    }
     saved = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => (saved = false), 2000);
-    await settings.save(draft);
     const unsub = settings.subscribe((v) => {
       if (draft) {
         draft = {
@@ -118,7 +138,7 @@
       addons = [...addons.filter((a) => a.id !== entry.id), entry];
       addAddonUrl = "";
     } catch (e) {
-      addAddonError = e instanceof Error ? e.message : "Failed to add addon";
+      addAddonError = e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_addons() });
     } finally {
       addAddonLoading = false;
     }
@@ -220,7 +240,7 @@
       addRepoUrl = "";
     } catch (e) {
       addRepoError =
-        e instanceof Error ? e.message : "Failed to add repository";
+        e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_plugins() });
     } finally {
       addRepoLoading = false;
     }
@@ -295,7 +315,7 @@
     } catch (e) {
       algorithmTestResult = {
         ok: false,
-        error: e instanceof Error ? e.message : "Test failed",
+        error: e instanceof Error ? e.message : m.common_error(),
       };
     } finally {
       testingAlgorithm = false;
@@ -413,10 +433,10 @@
   <nav
     class="flex w-52 shrink-0 flex-col gap-0.5 border-r border-border/50 p-4 pt-8"
     use:focusGroup={{ id: "settings-nav", policy: { type: "column" } }}
-    aria-label="Settings sections"
+    aria-label={m.settings_title()}
   >
     <p class="mb-3 px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-      Settings
+      {m.settings_title()}
     </p>
     {#each SECTIONS as section (section.id)}
       <button
@@ -455,7 +475,7 @@
                    transition-colors hover:text-foreground
                    focus:outline-none focus:ring-2 focus:ring-accent"
           >
-            Reset
+            {m.common_reset()}
           </button>
           <button
             type="button"
@@ -465,7 +485,7 @@
                    transition-colors hover:bg-accent/90
                    focus:outline-none focus:ring-2 focus:ring-accent"
           >
-            {saved ? "Saved ✓" : "Save"}
+            {saved ? `${m.common_saved()} ✓` : m.common_save()}
           </button>
         </div>
       {/if}
@@ -476,6 +496,9 @@
       class="flex-1 min-h-0 overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden px-8 pb-16"
       use:focusGroup={{ id: "settings-content", policy: { type: "column" }, rememberFocus: false }}
     >
+      {#if saveError}
+        <p role="alert" class="pt-4 text-sm text-red-400">{saveError}</p>
+      {/if}
       {#if draft}
 
         <!-- ══ Playback ══ -->
@@ -484,14 +507,14 @@
           <!-- Open videos muted -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Open videos muted</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Start every video with audio muted.</p>
+              <p class="text-lg font-medium">{m.settings_open_muted()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_open_muted_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.openOnMute}
-              aria-label="Toggle open videos muted"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_open_muted() })}
               onclick={() => patch("openOnMute", !draft.openOnMute)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -504,14 +527,14 @@
           <!-- Default volume -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Default volume</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Initial volume level (5% steps).</p>
+              <p class="text-lg font-medium">{m.settings_default_volume()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_default_volume_description()}</p>
             </div>
             <div class="flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onclick={() => patch("defaultVolume", Math.max(0, draft!.defaultVolume - 0.05))}
-                aria-label="Decrease volume"
+                aria-label={m.settings_decrease_volume()}
                 class="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-xl font-bold
                        transition-colors hover:bg-secondary/70
                        focus:outline-none focus:ring-2 focus:ring-accent"
@@ -522,7 +545,7 @@
               <button
                 type="button"
                 onclick={() => patch("defaultVolume", Math.min(1, draft!.defaultVolume + 0.05))}
-                aria-label="Increase volume"
+                aria-label={m.settings_increase_volume()}
                 class="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-xl font-bold
                        transition-colors hover:bg-secondary/70
                        focus:outline-none focus:ring-2 focus:ring-accent"
@@ -533,14 +556,14 @@
           <!-- Autoplay next episode -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Autoplay next episode</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Automatically start the next episode when one finishes.</p>
+              <p class="text-lg font-medium">{m.settings_autoplay()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_autoplay_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.autoPlay}
-              aria-label="Toggle autoplay next episode"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_autoplay() })}
               onclick={() => patch("autoPlay", !draft.autoPlay)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -553,14 +576,14 @@
           <!-- Remember position -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Remember position</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Resume from where you left off.</p>
+              <p class="text-lg font-medium">{m.settings_remember_position()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_remember_position_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.rememberPosition}
-              aria-label="Toggle remember position"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_remember_position() })}
               onclick={() => patch("rememberPosition", !draft.rememberPosition)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -572,7 +595,7 @@
 
           <!-- Auto-skip segments header -->
           <div class="border-b border-border/40 pb-1 pt-6">
-            <p class="text-lg font-medium">Auto-skip segments</p>
+            <p class="text-lg font-medium">{m.settings_auto_skip()}</p>
             <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
               Automatically skip segments when timestamps are available via IntroDB.
               A skip button always appears when inside a segment.
@@ -581,12 +604,12 @@
 
           <!-- Skip intro -->
           <div class="flex min-h-[68px] items-center justify-between gap-8 border-b border-border/40 py-4 pl-4">
-            <p class="text-base font-medium text-muted-foreground">Skip intro</p>
+            <p class="text-base font-medium text-muted-foreground">{m.settings_skip_intro()}</p>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.autoSkipIntro}
-              aria-label="Toggle skip intro"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_skip_intro() })}
               onclick={() => patch("autoSkipIntro", !draft.autoSkipIntro)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -598,12 +621,12 @@
 
           <!-- Skip recap -->
           <div class="flex min-h-[68px] items-center justify-between gap-8 border-b border-border/40 py-4 pl-4">
-            <p class="text-base font-medium text-muted-foreground">Skip recap</p>
+            <p class="text-base font-medium text-muted-foreground">{m.settings_skip_recap()}</p>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.autoSkipRecap}
-              aria-label="Toggle skip recap"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_skip_recap() })}
               onclick={() => patch("autoSkipRecap", !draft.autoSkipRecap)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -615,12 +638,12 @@
 
           <!-- Skip credits -->
           <div class="flex min-h-[68px] items-center justify-between gap-8 border-b border-border/40 py-4 pl-4">
-            <p class="text-base font-medium text-muted-foreground">Skip credits</p>
+            <p class="text-base font-medium text-muted-foreground">{m.settings_skip_credits()}</p>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.autoSkipCredits}
-              aria-label="Toggle skip credits"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_skip_credits() })}
               onclick={() => patch("autoSkipCredits", !draft.autoSkipCredits)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -632,12 +655,12 @@
 
           <!-- Skip preview -->
           <div class="flex min-h-[68px] items-center justify-between gap-8 py-4 pl-4">
-            <p class="text-base font-medium text-muted-foreground">Skip preview</p>
+            <p class="text-base font-medium text-muted-foreground">{m.settings_skip_preview()}</p>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.autoSkipPreview}
-              aria-label="Toggle skip preview"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_skip_preview() })}
               onclick={() => patch("autoSkipPreview", !draft.autoSkipPreview)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -655,14 +678,14 @@
           <!-- Auto-select stream -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Automatically pick best stream</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Skip the stream list — start playing immediately when you press Watch.</p>
+              <p class="text-lg font-medium">{m.settings_auto_select()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_auto_select_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.autoSelectStream}
-              aria-label="Toggle auto-select stream"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_auto_select() })}
               onclick={() => patch("autoSelectStream", !draft.autoSelectStream)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -675,14 +698,14 @@
           <!-- Prefetch streams -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Prefetch streams</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Pre-fetch streams for shows you're likely to watch next.</p>
+              <p class="text-lg font-medium">{m.settings_prefetch()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_prefetch_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.prefetchStreams}
-              aria-label="Toggle prefetch streams"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_prefetch() })}
               onclick={() => patch("prefetchStreams", !draft.prefetchStreams)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -695,14 +718,14 @@
           <!-- Pre-download next episode -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Pre-download next episode</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">When an episode finishes downloading, quietly download the next one so it starts instantly.</p>
+              <p class="text-lg font-medium">{m.settings_predownload()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_predownload_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.prefetchNextEpisode}
-              aria-label="Toggle pre-download next episode"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_predownload() })}
               onclick={() => patch("prefetchNextEpisode", !draft.prefetchNextEpisode)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -715,14 +738,14 @@
           <!-- Upload while streaming -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Upload while streaming</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Share downloaded pieces back to peers (max 1 MiB/s). Improves download speed; turn off to never upload.</p>
+              <p class="text-lg font-medium">{m.settings_upload()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_upload_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.allowUploading}
-              aria-label="Toggle upload while streaming"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_upload() })}
               onclick={() => patch("allowUploading", !draft.allowUploading)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -735,14 +758,14 @@
           <!-- Verify streams before auto-selecting -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Verify streams before auto-selecting</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Checks that top candidates are reachable before playback starts. Adds a brief delay but avoids picking dead links.</p>
+              <p class="text-lg font-medium">{m.settings_probe()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_probe_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.probeStreams}
-              aria-label="Toggle verify streams before auto-selecting"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_probe() })}
               onclick={() => patch("probeStreams", !draft.probeStreams)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -755,14 +778,14 @@
           <!-- Allow LAN stream sources -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Allow LAN stream sources</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Lets streams play from private/LAN addresses. Only enable if you run a stream source on your own network.</p>
+              <p class="text-lg font-medium">{m.settings_allow_lan()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_allow_lan_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.allowLanStreamSources}
-              aria-label="Toggle allow LAN stream sources"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_allow_lan() })}
               onclick={() => patch("allowLanStreamSources", !draft.allowLanStreamSources)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -776,14 +799,14 @@
           <div class="border-b border-border/40 py-5">
             <div class="flex min-h-[56px] items-center justify-between gap-8">
               <div class="min-w-0 flex-1">
-                <p class="text-lg font-medium">Remote access</p>
-                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Opens a LAN port (6970) so the mobile app or other devices on your network can connect to this backend.</p>
+                <p class="text-lg font-medium">{m.settings_remote_access()}</p>
+                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_remote_access_description()}</p>
               </div>
                             <button
                 type="button"
                 role="switch"
                 aria-checked={draft.remoteAccessEnabled}
-                aria-label="Toggle remote access"
+                aria-label={m.settings_toggle_setting({ setting: m.settings_remote_access() })}
                 onclick={() => patch("remoteAccessEnabled", !draft.remoteAccessEnabled)}
                 class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                        focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -795,9 +818,9 @@
 
             {#if draft.remoteAccessEnabled}
               <div class="mt-3 rounded-xl bg-secondary/50 p-4">
-                <p class="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">Access token</p>
+                <p class="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">{m.settings_access_token()}</p>
                 {#if draft.remoteAccessToken === ""}
-                  <p class="text-sm text-muted-foreground">No token set — save settings to generate one.</p>
+                  <p class="text-sm text-muted-foreground">{m.settings_no_token()}</p>
                 {:else}
                   <code class="block truncate rounded-lg bg-black/30 px-3 py-2 text-sm font-mono text-foreground/80">
                     {tokenVisible && revealedToken ? revealedToken : "•".repeat(32)}
@@ -811,7 +834,11 @@
                              transition-colors hover:text-foreground disabled:opacity-50
                              focus:outline-none focus:ring-2 focus:ring-accent"
                     >
-                      {revealingToken ? "Loading…" : tokenVisible ? "Hide" : "Show"}
+                      {revealingToken
+                        ? m.common_loading()
+                        : tokenVisible
+                          ? m.settings_hide_token()
+                          : m.settings_show_token()}
                     </button>
                     <button
                       type="button"
@@ -821,7 +848,7 @@
                              transition-colors hover:text-foreground disabled:opacity-50
                              focus:outline-none focus:ring-2 focus:ring-accent"
                     >
-                      {tokenCopied ? "Copied ✓" : "Copy"}
+                      {tokenCopied ? m.common_copied() : m.common_copy()}
                     </button>
                   </div>
                 {/if}
@@ -832,7 +859,7 @@
           <!-- Selection strategy -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Selection strategy</p>
+              <p class="text-lg font-medium">{m.settings_selection_strategy()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
                 {STREAM_SELECTION_MODES.find((m) => m.value === draft.streamSelectionMode)?.description ?? ""}
               </p>
@@ -851,11 +878,11 @@
           <!-- Source preference -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Source preference</p>
+              <p class="text-lg font-medium">{m.settings_source_preference()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
                 {draft.sourcePreference
-                  ? "Gives torrents or direct streams a small ranking boost — doesn't exclude the other kind."
-                  : "No boost — torrents and direct streams rank purely on the selection strategy above."}
+                  ? m.settings_source_boost_description()
+                  : m.settings_source_neutral_description()}
               </p>
             </div>
             <select
@@ -872,12 +899,12 @@
           <!-- Preferred provider -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Preferred provider</p>
+              <p class="text-lg font-medium">{m.settings_preferred_provider()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
                 {#if providerAddons.length === 0 && nuvioProviderOptions.length === 0}
-                  Add a provider addon in the Addons section to set a preference.
+                  {m.settings_provider_missing()}
                 {:else}
-                  Its streams are shown first and favored by auto-select.
+                  {m.settings_provider_description()}
                 {/if}
               </p>
             </div>
@@ -888,7 +915,7 @@
                      disabled:opacity-40
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
-              <option value="" selected={!draft.defaultProvider}>No preference</option>
+              <option value="" selected={!draft.defaultProvider}>{m.common_no_preference()}</option>
               {#each providerAddons as a (a.url || a.id)}
                 <option value={a.manifest.name} selected={a.manifest.name === draft.defaultProvider}>{a.manifest.name}</option>
               {/each}
@@ -901,14 +928,14 @@
           <!-- Connection speed -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Connection speed</p>
+              <p class="text-lg font-medium">{m.settings_connection_speed()}</p>
               {#if draft.measuredBandwidthMbps > 0}
                 <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                  Last measured at {draft.measuredBandwidthMbps} Mbps. Used by "Match My Internet Speed".
+                  {m.settings_speed_measured({ speed: draft.measuredBandwidthMbps })}
                 </p>
               {:else}
                 <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                  Not measured yet — needed for "Match My Internet Speed".
+                  {m.settings_speed_unmeasured()}
                 </p>
               {/if}
               {#if speedTestError}
@@ -923,7 +950,7 @@
                      transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
-              {testingSpeed ? "Testing…" : "Test My Speed"}
+              {testingSpeed ? m.settings_speed_testing() : m.settings_speed_test()}
             </button>
           </div>
 
@@ -935,14 +962,14 @@
           <!-- Enable subtitles by default -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Enable subtitles by default</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Show subtitles automatically when available.</p>
+              <p class="text-lg font-medium">{m.settings_subtitles_default()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_subtitles_default_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.subtitlesEnabled}
-              aria-label="Toggle subtitles enabled"
+              aria-label={m.settings_toggle_setting({ setting: m.settings_subtitles_default() })}
               onclick={() => patch("subtitlesEnabled", !draft.subtitlesEnabled)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -955,8 +982,8 @@
           <!-- Preferred subtitle language -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Preferred subtitle language</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Auto-select this language when subtitles are available.</p>
+              <p class="text-lg font-medium">{m.settings_subtitle_language()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_subtitle_language_description()}</p>
             </div>
             <select
               onchange={(e) => patch("defaultSubtitleLang", (e.currentTarget as HTMLSelectElement).value)}
@@ -964,7 +991,7 @@
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each LANGUAGES as l (l.value)}
-                <option value={l.value} selected={l.value === draft.defaultSubtitleLang}>{l.label}</option>
+                <option value={l.value} selected={l.value === draft.defaultSubtitleLang}>{languageDisplayName(l.value)}</option>
               {/each}
             </select>
           </div>
@@ -972,8 +999,8 @@
           <!-- Preferred audio language -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Preferred audio language</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Auto-select this audio track when multiple are available.</p>
+              <p class="text-lg font-medium">{m.settings_audio_language()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_audio_language_description()}</p>
             </div>
             <select
               onchange={(e) => patch("defaultAudioLang", (e.currentTarget as HTMLSelectElement).value)}
@@ -981,7 +1008,7 @@
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each AUDIO_LANGUAGES as l (l.value)}
-                <option value={l.value} selected={l.value === draft.defaultAudioLang}>{l.label}</option>
+                <option value={l.value} selected={l.value === draft.defaultAudioLang}>{l.value === "original" ? m.common_original() : languageDisplayName(l.value)}</option>
               {/each}
             </select>
           </div>
@@ -990,18 +1017,37 @@
 
         <!-- ══ Interface ══ -->
         <div class:hidden={activeSection !== "interface"} class="pt-4">
+          <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
+            <div class="min-w-0 flex-1">
+              <p class="text-lg font-medium">{m.language_label()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.language_description()}</p>
+            </div>
+            <select
+              aria-label={m.language_label()}
+              onchange={(event) => patch("uiLanguage", (event.currentTarget as HTMLSelectElement).value as AppLocale)}
+              class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
+                     focus:outline-none focus:ring-2 focus:ring-accent"
+            >
+              {#each LOCALES as locale (locale.appLocale)}
+                <option
+                  value={locale.appLocale}
+                  selected={locale.appLocale === (normalizeAppLocale(draft.uiLanguage) ?? "en")}
+                >{locale.nativeName}</option>
+              {/each}
+            </select>
+          </div>
 
           <!-- Show stream details -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Show stream details</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Display codec, resolution, and size badges on the stream list.</p>
+              <p class="text-lg font-medium">{m.settings_stream_details()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_stream_details_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.showStreamDetails}
-              aria-label="Toggle show stream details"
+              aria-label={m.settings_stream_details()}
               onclick={() => patch("showStreamDetails", !draft.showStreamDetails)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -1014,14 +1060,14 @@
           <!-- Hide spoilers -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Hide spoilers</p>
-              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Hide not-seen episode thumbnails, descriptions, and episode names.</p>
+              <p class="text-lg font-medium">{m.settings_hide_spoilers()}</p>
+              <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_hide_spoilers_description()}</p>
             </div>
                         <button
               type="button"
               role="switch"
               aria-checked={draft.hideSpoilers}
-              aria-label="Toggle hide spoilers"
+              aria-label={m.settings_hide_spoilers()}
               onclick={() => patch("hideSpoilers", !draft.hideSpoilers)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -1034,7 +1080,7 @@
           <!-- Discovery algorithm -->
           <div class="flex min-h-[76px] items-center justify-between gap-8 border-b border-border/40 py-5">
             <div class="min-w-0 flex-1">
-              <p class="text-lg font-medium">Discovery algorithm</p>
+              <p class="text-lg font-medium">{m.settings_discovery_algorithm()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
                 {DISCOVERY_ALGORITHMS.find((a) => a.value === draft.discoveryAlgorithm)?.description ?? ""}
               </p>
@@ -1053,7 +1099,7 @@
           <!-- Custom algorithm URL (only when custom is selected) -->
           {#if draft.discoveryAlgorithm === "custom"}
             <div class="border-b border-border/40 py-5">
-              <p class="mb-1 text-lg font-medium">Custom algorithm URL</p>
+              <p class="mb-1 text-lg font-medium">{m.settings_custom_algorithm_url()}</p>
               <p class="mb-3 text-sm leading-snug text-muted-foreground">
                 Cove POSTs your taste profile and a pre-filtered candidate list to this URL
                 and expects relevance scores back. Falls back to Cove Smart if the endpoint
@@ -1076,14 +1122,14 @@
                          transition-colors hover:text-foreground disabled:opacity-50
                          focus:outline-none focus:ring-2 focus:ring-accent"
                 >
-                  {testingAlgorithm ? "Testing…" : "Test connection"}
+                  {testingAlgorithm ? m.common_testing() : m.common_test_connection()}
                 </button>
               </div>
               {#if algorithmTestResult}
                 <p class="mt-2 text-sm {algorithmTestResult.ok ? 'text-green-400' : 'text-red-400'}">
                   {algorithmTestResult.ok
-                    ? "Connected successfully."
-                    : `Failed: ${algorithmTestResult.error}`}
+                    ? m.common_connected_success()
+                    : m.common_failed_message({ error: algorithmTestResult.error })}
                 </p>
               {/if}
             </div>
@@ -1093,13 +1139,13 @@
           {#if isAndroid() || isAndroidTV()}
             <div class="flex min-h-[76px] items-center justify-between gap-8 py-5">
               <div class="min-w-0 flex-1">
-                <p class="text-lg font-medium">Auto-update</p>
-                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Automatically download and install updates on launch.</p>
+                <p class="text-lg font-medium">{m.settings_auto_update()}</p>
+                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_auto_update_description()}</p>
               </div>
               <button
                 type="button"
                 role="switch"
-                aria-label="Toggle auto-update"
+                aria-label={m.settings_auto_update()}
                 aria-checked={autoUpdateEnabled}
                 onclick={() => {
                   const newVal = !autoUpdateEnabled;
@@ -1120,8 +1166,8 @@
           {#if isDesktopTvMode()}
             <div class="flex min-h-[76px] items-center justify-between gap-8 py-5">
               <div class="min-w-0 flex-1">
-                <p class="text-lg font-medium">Desktop interface</p>
-                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">Return to the mouse-and-keyboard desktop interface.</p>
+                <p class="text-lg font-medium">{m.settings_desktop_switch()}</p>
+                <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_desktop_switch_description()}</p>
               </div>
               <button
                 type="button"
@@ -1142,8 +1188,8 @@
 
           <!-- Add new addon -->
           <div class="rounded-2xl bg-secondary/30 p-5">
-            <p class="mb-1 text-lg font-medium">Add Stremio addon</p>
-            <p class="mb-4 text-sm leading-snug text-muted-foreground">Paste a Stremio-compatible addon manifest URL.</p>
+            <p class="mb-1 text-lg font-medium">{m.settings_add_stremio()}</p>
+            <p class="mb-4 text-sm leading-snug text-muted-foreground">{m.settings_add_stremio_description()}</p>
             <div class="flex gap-3">
               <input
                 type="url"
@@ -1162,7 +1208,7 @@
                        transition-colors hover:bg-accent/90 disabled:opacity-50
                        focus:outline-none focus:ring-2 focus:ring-accent"
               >
-                {addAddonLoading ? "Adding…" : "Add"}
+                {addAddonLoading ? m.common_adding() : m.common_add()}
               </button>
             </div>
             {#if addAddonError}
@@ -1179,7 +1225,7 @@
                   <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-base font-semibold">
-                        {addon.manifest.name || addon.url || addon.id || "Unknown addon"}
+                        {addon.manifest.name || addon.url || addon.id || m.common_unknown_addon()}
                       </span>
                       <span
                         class="rounded-full px-2.5 py-0.5 text-xs font-medium
@@ -1190,10 +1236,10 @@
                                    : 'bg-purple-500/20 text-purple-400'}"
                       >
                         {addon.kind === KindProvider
-                          ? "Provider"
+                          ? m.common_provider()
                           : addon.kind === KindTimestamps
-                            ? "Timestamps"
-                            : "Subtitles"}
+                            ? m.common_timestamps()
+                            : m.player_subtitles()}
                       </span>
                       {#if addon.source === SourceOfficial}
                         <span class="rounded-full bg-green-500/20 px-2.5 py-0.5 text-xs font-medium text-green-400">
@@ -1210,7 +1256,7 @@
                   <button
                     type="button"
                     role="switch"
-                    aria-label="Toggle addon enabled"
+                    aria-label={m.settings_toggle_addon()}
                     aria-checked={addon.enabled}
                     onclick={() => handleToggleAddon(addon)}
                     class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
@@ -1226,7 +1272,7 @@
                       <button
                         type="button"
                         onclick={() => (configureAddon = addon)}
-                        title="Configure"
+                        title={m.common_configure()}
                         class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                                transition-colors hover:text-foreground
                                focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1238,7 +1284,7 @@
                       type="button"
                       onclick={() => handleRefreshAddon(addon)}
                       disabled={refreshingAddonId === addon.id}
-                      title="Refresh"
+                      title={m.common_refresh()}
                       class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                              transition-colors hover:text-foreground disabled:opacity-50
                              focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1252,7 +1298,7 @@
                     <button
                       type="button"
                       onclick={() => handleRemoveAddon(addon)}
-                      title="Remove addon"
+                      title={m.settings_remove_addon()}
                       class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                              transition-colors hover:bg-destructive/10 hover:text-destructive
                              focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1276,7 +1322,7 @@
                         <button
                           type="button"
                           role="switch"
-                          aria-label="Toggle catalog enabled"
+                          aria-label={m.settings_toggle_catalog()}
                           aria-checked={catOn}
                           disabled={!addon.enabled}
                           onclick={() => handleToggleCatalog(addon, key, !catOn)}
@@ -1316,7 +1362,7 @@
 
           <!-- Add new repository -->
           <div class="rounded-2xl bg-secondary/30 p-5">
-            <p class="mb-1 text-lg font-medium">Add plugin repository</p>
+            <p class="mb-1 text-lg font-medium">{m.settings_add_repository()}</p>
             <p class="mb-4 text-sm leading-snug text-muted-foreground">
               Paste a GitHub repository URL (e.g. github.com/owner/repo) that publishes a manifest.json.
             </p>
@@ -1338,7 +1384,7 @@
                        transition-colors hover:bg-accent/90 disabled:opacity-50
                        focus:outline-none focus:ring-2 focus:ring-accent"
               >
-                {addRepoLoading ? "Adding…" : "Add"}
+                {addRepoLoading ? m.common_adding() : m.common_add()}
               </button>
             </div>
             {#if addRepoError}
@@ -1369,7 +1415,7 @@
                     type="button"
                     onclick={() => handleRefreshRepo(repo)}
                     disabled={refreshingRepoId === repo.id}
-                    title="Refresh manifest"
+                    title={m.settings_refresh_manifest()}
                     class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                            transition-colors hover:text-foreground disabled:opacity-50
                            focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1381,7 +1427,7 @@
                   <button
                     type="button"
                     role="switch"
-                    aria-label="Toggle repository enabled"
+                    aria-label={m.settings_enable_repository()}
                     aria-checked={repo.enabled}
                     onclick={() => handleToggleRepo(repo)}
                     class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
@@ -1395,7 +1441,7 @@
                   <button
                     type="button"
                     onclick={() => handleRemoveRepo(repo)}
-                    title="Remove repository"
+                    title={m.settings_remove_repository_confirm()}
                     class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                            transition-colors hover:bg-destructive/10 hover:text-destructive
                            focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1449,7 +1495,7 @@
                         <button
                           type="button"
                           role="switch"
-                          aria-label="Toggle scraper enabled"
+                          aria-label={m.settings_toggle_scraper()}
                           aria-checked={scraperOn}
                           onclick={() => requestEnableScraper(repo, scraper)}
                           class="relative inline-flex h-8 w-14 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
@@ -1477,7 +1523,7 @@
         </div><!-- /plugins -->
 
       {:else}
-        <p class="py-16 text-center text-lg text-muted-foreground">Loading settings…</p>
+        <p class="py-16 text-center text-lg text-muted-foreground">{m.settings_loading()}</p>
       {/if}
     </div><!-- /settings-content -->
   </div><!-- /right panel -->
@@ -1510,7 +1556,7 @@
           type="button"
           class="ml-3 shrink-0 rounded-xl p-2 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
           onclick={() => (configureAddon = null)}
-          aria-label="Close"
+          aria-label={m.common_close()}
         >
           <X class="size-5" />
         </button>
@@ -1518,8 +1564,7 @@
 
       <!-- Hint -->
       <p class="shrink-0 px-5 py-2 text-sm text-muted-foreground">
-        After configuring, copy the generated manifest URL and paste it into
-        "Add Stremio addon" above.
+        {m.settings_addon_config_hint()}
       </p>
 
       <!-- iframe -->
@@ -1527,7 +1572,7 @@
         <iframe
           src={`${configureAddon.url}/configure`}
           class="h-full w-full rounded-xl border border-border"
-          title="Addon configuration"
+          title={m.settings_addon_configuration()}
         ></iframe>
       </div>
 
@@ -1537,7 +1582,7 @@
           href={`${configureAddon.url}/configure`}
           target="_blank"
           rel="noopener noreferrer"
-          class="text-primary underline">Open in browser</a
+          class="text-primary underline">{m.common_open_browser()}</a
         >
         — some addons can't be configured in-app.
       </div>

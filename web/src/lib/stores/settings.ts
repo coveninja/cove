@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: Settings = {
   subtitlesEnabled: false,
   defaultSubtitleLang: "en",
   defaultAudioLang: "en",
+  uiLanguage: "",
   showStreamDetails: true,
   autoSelectStream: true,
   streamSelectionMode: null,
@@ -47,7 +48,8 @@ export function createSettingsStore(): {
     invalidate?: () => void,
   ) => Unsubscriber;
   load: () => Promise<void>;
-  save: (patch: Partial<Settings>) => Promise<void>;
+  save: (patch: Partial<Settings>) => Promise<boolean>;
+  getCurrent: () => Settings;
 } {
   const { subscribe, set } = writable<Settings>(DEFAULT_SETTINGS);
   // Mirror of the store's current value, kept for load()'s no-change check —
@@ -75,7 +77,7 @@ export function createSettingsStore(): {
   }
 
   // Guards the PUT response against overwriting a newer optimistic save.
-  function save(patch: Partial<Settings>): Promise<void> {
+  function save(patch: Partial<Settings>): Promise<boolean> {
     const next: Settings = { ...current, ...patch };
     current = next;
     set(next);
@@ -89,14 +91,18 @@ export function createSettingsStore(): {
     return api
       .updateSettings(next)
       .then((server) => {
-        if (seq !== saveSeq) return;
+        if (seq !== saveSeq) return true;
         current = server;
         set(server);
+        return true;
       })
-      .catch((e) => { console.error("Failed to save settings:", e); });
+      .catch((e) => {
+        console.error("Failed to save settings:", e);
+        return false;
+      });
   }
 
-  return { subscribe, load, save };
+  return { subscribe, load, save, getCurrent: () => current };
 }
 
 export const settings = createSettingsStore();

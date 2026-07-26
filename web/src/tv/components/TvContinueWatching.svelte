@@ -32,6 +32,7 @@
   import { focusGroup, focusable } from "../focus/actions";
   // ── Icons for fallback artwork ───────────────────────────────────────────────
   import { Play, Film, Tv } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     onWatch,
@@ -243,7 +244,7 @@
       convention so D-pad Left/Right doesn't land on text.
     -->
     <div class="flex items-center">
-      <h2 class="text-xl font-semibold">Continue Watching</h2>
+      <h2 class="text-xl font-semibold">{m.home_continue_watching()}</h2>
     </div>
 
     <!--

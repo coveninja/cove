@@ -9,6 +9,7 @@ import { inferQuality } from "$lib/utils";
 import { codecCaps } from "$lib/platform";
 import { parseStreamMeta, type ParsedStreamMeta } from "$lib/streamMeta";
 import { api } from "$lib/api";
+import * as msg from "$lib/paraglide/messages.js";
 
 export type StreamSelectionMode =
   | "balanced"
@@ -24,31 +25,28 @@ export const STREAM_SELECTION_MODES: {
 }[] = [
   {
     value: "balanced",
-    label: "Most Seeders & Lowest Size",
-    description:
-      "Favors well-seeded streams without picking an unnecessarily large file.",
+    label: msg.streams_mode_balanced(),
+    description: msg.streams_mode_balanced_description(),
   },
   {
     value: "seeders",
-    label: "Most Seeders",
-    description:
-      "Prioritizes the most reliable, fastest-starting stream available.",
+    label: msg.streams_mode_seeders(),
+    description: msg.streams_mode_seeders_description(),
   },
   {
     value: "quality",
-    label: "Highest Quality",
-    description: "Always picks the best resolution, regardless of file size.",
+    label: msg.streams_mode_quality(),
+    description: msg.streams_mode_quality_description(),
   },
   {
     value: "smallest",
-    label: "Smallest File Size",
-    description: "Minimizes storage and bandwidth use.",
+    label: msg.streams_mode_smallest(),
+    description: msg.streams_mode_smallest_description(),
   },
   {
     value: "bandwidth",
-    label: "Match My Internet Speed",
-    description:
-      "Picks the highest quality your measured connection speed can comfortably handle.",
+    label: msg.streams_mode_bandwidth(),
+    description: msg.streams_mode_bandwidth_description(),
   },
 ];
 
@@ -83,12 +81,12 @@ export type StreamSortMode =
   | "cached";
 
 export const STREAM_SORT_MODES: { value: StreamSortMode; label: string }[] = [
-  { value: "seeders", label: "Seeders" },
-  { value: "largest", label: "Largest" },
-  { value: "smallest", label: "Smallest" },
-  { value: "quality", label: "Quality" },
-  { value: "language", label: "Language" },
-  { value: "cached", label: "Cached" },
+  { value: "seeders", label: msg.streams_sort_seeders() },
+  { value: "largest", label: msg.streams_sort_largest() },
+  { value: "smallest", label: msg.streams_sort_smallest() },
+  { value: "quality", label: msg.streams_sort_quality() },
+  { value: "language", label: msg.streams_sort_language() },
+  { value: "cached", label: msg.streams_sort_cached() },
 ];
 
 /** The row shape the list components derive per stream — structural subset of
@@ -217,11 +215,11 @@ export function formatStreamSummary(stream: Stream): string {
       ? sizeGB >= 1
         ? `${sizeGB.toFixed(2)} GB`
         : `${(sizeBytes / 1024 ** 2).toFixed(0)} MB`
-      : "unknown size";
-  const quality = inferQuality(stream) ?? "unknown quality";
+      : msg.streams_unknown_size();
+  const quality = inferQuality(stream) ?? msg.streams_unknown_quality();
   const seedersStr = isTorrentStream(stream)
-    ? `${getSeeders(stream)} seeders`
-    : "direct stream";
+    ? msg.streams_seeders({ count: getSeeders(stream) })
+    : msg.streams_direct();
   return `${seedersStr}, ${sizeStr}, ${quality}`;
 }
 
@@ -253,9 +251,9 @@ export const SOURCE_PREFERENCES: {
   value: SourcePreference;
   label: string;
 }[] = [
-  { value: "", label: "No preference" },
-  { value: "torrent", label: "Prefer torrents" },
-  { value: "direct", label: "Prefer direct streams" },
+  { value: "", label: msg.common_no_preference() },
+  { value: "torrent", label: msg.streams_prefer_torrents() },
+  { value: "direct", label: msg.streams_prefer_direct() },
 ];
 
 // A preferred-provider stream only wins a close call — this bonus is small

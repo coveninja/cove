@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type LibraryStatus, STATUS_LABELS, STATUS_COLORS } from "$lib/api";
+  import { api, statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import * as Popover from "$lib/components/ui/popover/index.js";
@@ -79,6 +79,7 @@
   }
 
   const inLibrary = $derived(!!libraryEntry);
+  const statuses: LibraryStatus[] = ["watch_later", "watching", "finished", "dropped"];
 </script>
 
 <Popover.Root
@@ -96,7 +97,7 @@
   </Popover.Trigger>
   <Popover.Content class="rounded-3xl p-0">
     <ButtonGroup.Root orientation="vertical" class="w-full">
-      {#each Object.entries(STATUS_LABELS) as [value, label] (value)}
+      {#each statuses as value (value)}
         {@const isActive = libraryEntry?.status === value}
         <Button
           onclick={(e: { stopPropagation: () => void }) => {
@@ -115,7 +116,7 @@
               {/if}
             </span>
             <span class="size-2 shrink-0 rounded-full {STATUS_COLORS[value as LibraryStatus].dot}"></span>
-            {label}
+            {statusLabel(value)}
           </span>
         </Button>
       {/each}

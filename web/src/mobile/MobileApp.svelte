@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import { playback } from "$lib/playback.svelte";
   import { ModeWatcher, setMode } from "mode-watcher";
   import MediaDetailSheet from "./components/MediaDetailSheet.svelte";
@@ -536,7 +537,7 @@
       class="fixed right-4 z-50 flex size-10 items-center justify-center rounded-full bg-background/80 backdrop-blur-sm"
       style="top: calc(0.75rem + var(--safe-top));"
       onclick={() => changePage({ type: "settings" })}
-      aria-label="Settings"
+      aria-label={m.nav_settings()}
     >
       <Cog class="size-5" />
     </button>

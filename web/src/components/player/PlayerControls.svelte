@@ -23,6 +23,7 @@
   import AudioMenu from "./AudioMenu.svelte";
   import SubtitleMenu from "./SubtitleMenu.svelte";
   import MenuItem from "./MenuItem.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     externalSubtitles,
@@ -146,7 +147,7 @@
         {/snippet}
       </Tooltip.Trigger>
       <Tooltip.Content>
-        {Player.paused ? "Play" : "Pause"} · Space
+        {Player.paused ? m.player_play() : m.player_pause()} · Space
       </Tooltip.Content>
     </Tooltip.Root>
 
@@ -173,7 +174,7 @@
           {/snippet}
         </Tooltip.Trigger>
         <Tooltip.Content>
-          {Player.volume === 0 ? "Unmute" : "Mute"} · M
+          {Player.volume === 0 ? m.player_unmute() : m.player_mute()} · M
         </Tooltip.Content>
       </Tooltip.Root>
       <div
@@ -185,7 +186,7 @@
           max={100}
           step={1}
           onValueChange={(v) => Player.setVolume(v)}
-          aria-label="Volume"
+          aria-label={m.player_volume()}
           class="w-24"
         />
       </div>
@@ -218,10 +219,10 @@
             <div>Speed: {torrent.speed}</div>
             <div>Peers: {torrent.peers} active / {torrent.totalPeers} known · {torrent.seeders} seeders</div>
             {#if torrent.totalBytes > 0}
-              <div>Size: {formatBytes(torrent.downloadedBytes)} / {formatBytes(torrent.totalBytes)}</div>
+              <div>{m.player_size()}: {formatBytes(torrent.downloadedBytes)} / {formatBytes(torrent.totalBytes)}</div>
             {/if}
             {#if torrent.speedBps > 0 && torrent.totalBytes > 0}
-              <div>ETA: {formatEta(torrent.totalBytes - torrent.downloadedBytes, torrent.speedBps)}</div>
+              <div>{m.player_eta()}: {formatEta(torrent.totalBytes - torrent.downloadedBytes, torrent.speedBps)}</div>
             {/if}
           </div>
         </Tooltip.Content>
@@ -259,11 +260,11 @@
               onclick={() => (episodesOpen = !episodesOpen)}
             >
               <ListVideo class="size-4" />
-              <span class="text-xs">Episodes</span>
+              <span class="text-xs">{m.player_episodes()}</span>
             </Button>
           {/snippet}
         </Tooltip.Trigger>
-        <Tooltip.Content>Episodes</Tooltip.Content>
+        <Tooltip.Content>{m.player_episodes()}</Tooltip.Content>
       </Tooltip.Root>
     {/if}
 
@@ -286,11 +287,11 @@
       </Popover.Trigger>
       <Popover.Content side="top" align="end" class="w-40 p-1 flex gap-1">
         <p class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-          Playback speed
+          {m.player_speed()}
         </p>
         {#each SPEEDS as speed (speed)}
           <MenuItem
-            label={speed === 1 ? "Normal (1×)" : `${speed}×`}
+            label={speed === 1 ? m.player_normal_speed() : `${speed}×`}
             active={Player.playbackSpeed === speed}
             onSelect={() => chooseSpeed(speed)}
           />
@@ -314,7 +315,7 @@
           </Button>
         {/snippet}
       </Tooltip.Trigger>
-      <Tooltip.Content>Aspect ratio · V</Tooltip.Content>
+      <Tooltip.Content>{m.player_aspect_ratio()} · V</Tooltip.Content>
     </Tooltip.Root>
 
     <!-- Keyboard shortcuts -->
@@ -326,7 +327,7 @@
             variant="ghost"
             size="icon"
             class="text-white hover:bg-white/15 hover:text-white"
-            aria-label="Keyboard shortcuts"
+            aria-label={m.player_keyboard_shortcuts()}
           >
             <Keyboard class="size-4" />
           </Button>
@@ -334,17 +335,17 @@
       </Popover.Trigger>
       <Popover.Content side="top" align="end" class="w-64 p-3">
         <p class="mb-2 text-xs font-medium text-muted-foreground">
-          Keyboard shortcuts
+          {m.player_keyboard_shortcuts()}
         </p>
         <dl class="space-y-1.5 text-sm">
-          {@render shortcut("Play / pause", "Space")}
-          {@render shortcut("Seek ±5s", "← →")}
-          {@render shortcut("Seek ±10s", "J L")}
-          {@render shortcut("Volume", "↑ ↓")}
-          {@render shortcut("Mute", "M")}
-          {@render shortcut("Subtitles", "C")}
-          {@render shortcut("Aspect ratio", "V")}
-          {@render shortcut("Jump to 0–90%", "0–9")}
+          {@render shortcut(m.player_play_pause(), "Space")}
+          {@render shortcut(`${m.player_seek_seconds()} ±5s`, "← →")}
+          {@render shortcut(`${m.player_seek_seconds()} ±10s`, "J L")}
+          {@render shortcut(m.player_volume(), "↑ ↓")}
+          {@render shortcut(m.player_mute(), "M")}
+          {@render shortcut(m.player_subtitles(), "C")}
+          {@render shortcut(m.player_aspect_ratio(), "V")}
+          {@render shortcut(m.player_jump_percent(), "0–9")}
         </dl>
       </Popover.Content>
     </Popover.Root>

@@ -28,6 +28,7 @@
   import {Skeleton} from "$lib/components/ui/skeleton";
   import type {TVEpisode} from "$lib/types/tmdb";
   import EpisodeCard from "./EpisodeCard.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let loadingStreams = $state(false);
   let sortMode = $state<StreamSortMode>("seeders");
@@ -353,7 +354,9 @@
 
   const selectedSeasonLabel = $derived(
     seasons.find((s) => s.season_number === selectedSeason)?.name ??
-      (selectedSeason !== null ? `Season ${selectedSeason}` : "Season"),
+      (selectedSeason !== null
+        ? m.common_season_number({ season: selectedSeason })
+        : m.media_seasons()),
   );
 
   function clearPoll(): void {
@@ -471,7 +474,7 @@
     <div class="flex-none border-b border-border p-4">
       {#if loadingSeasons}
         <span class="animate-pulse text-sm text-muted-foreground"
-          >Loading seasons…</span
+          >{m.streams_loading_seasons()}</span
         >
       {:else}
         <Select.Root
@@ -504,7 +507,7 @@
         {#if loadingEpisodes}
           <div class="flex items-center justify-center py-12">
             <span class="animate-pulse text-sm text-muted-foreground"
-              >Loading episodes…</span
+              >{m.streams_loading_episodes()}</span
             >
           </div>
         {:else}
@@ -600,7 +603,7 @@
       {:else}
         <!-- Movie: "Available Streams" header with progress -->
         <div class="flex items-start justify-between gap-3">
-          <h3 class="text-lg font-semibold">Available Streams</h3>
+          <h3 class="text-lg font-semibold">{m.streams_available()}</h3>
         </div>
         {#if movieProgress}
           {#if movieProgress.completed}
@@ -753,7 +756,7 @@
           {:else if filteredStreams.length === 0}
             <div class="flex items-center justify-center py-12">
               <span class="text-sm text-muted-foreground"
-                >No streams match this filter.</span
+                >{m.streams_no_filter()}</span
               >
             </div>
           {:else}

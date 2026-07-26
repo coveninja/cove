@@ -14,18 +14,36 @@
   import { SvelteSet } from "svelte/reactivity";
   import { focusGroup } from "../focus/actions";
   import { focusAfterKeyRelease, focusFirst } from "../focus/focusStore.svelte";
+  import * as msg from "$lib/paraglide/messages.js";
+  import {
+    activeLocale,
+    activateLocale,
+    languageDisplayName,
+    LOCALES,
+    type AppLocale,
+  } from "$lib/i18n";
 
   let { onclose }: { onclose: () => void } = $props();
 
-  type StepMeta = { id: string; title: string; skippable: boolean };
+  type StepId =
+    | "welcome"
+    | "language"
+    | "account"
+    | "genres"
+    | "seen"
+    | "rate"
+    | "preferences"
+    | "done";
+  type StepMeta = { id: StepId; title: () => string; skippable: boolean };
   const STEPS: StepMeta[] = [
-    { id: "welcome",     title: "Welcome to Cove",         skippable: false },
-    { id: "account",     title: "Your Account",             skippable: false },
-    { id: "genres",      title: "Your Taste",               skippable: false },
-    { id: "seen",        title: "What Have You Seen?",      skippable: true  },
-    { id: "rate",        title: "Rate What You've Seen",    skippable: true  },
-    { id: "preferences", title: "Playback Preferences",     skippable: true  },
-    { id: "done",        title: "You're All Set!",          skippable: false },
+    { id: "welcome",     title: msg.onboarding_welcome,     skippable: false },
+    { id: "language",    title: msg.onboarding_language,    skippable: false },
+    { id: "account",     title: msg.onboarding_account,     skippable: false },
+    { id: "genres",      title: msg.onboarding_taste,       skippable: false },
+    { id: "seen",        title: msg.onboarding_seen,        skippable: true },
+    { id: "rate",        title: msg.onboarding_rate,        skippable: true },
+    { id: "preferences", title: msg.onboarding_preferences, skippable: true },
+    { id: "done",        title: msg.onboarding_ready,       skippable: false },
   ];
 
   const LANGUAGES = [
@@ -51,26 +69,47 @@
   ];
 
   function langLabel(v: string): string {
-    return LANGUAGES.find((l) => l.value === v)?.label ?? v;
+    return languageDisplayName(v);
   }
 
   function audioLangLabel(v: string): string {
-    return AUDIO_LANGUAGES.find((l) => l.value === v)?.label ?? v;
+    return v === "original" ? msg.common_original() : languageDisplayName(v);
   }
 
   let selectedMovieGenreIds = new SvelteSet<number>();
   let selectedTvGenreIds    = new SvelteSet<number>();
+  const initialUiLanguage = activeLocale();
+  let selectedUiLanguage = $state<AppLocale>(initialUiLanguage);
+  let languageSaveError = $state(false);
+
+  function selectUiLanguage(locale: AppLocale): void {
+    selectedUiLanguage = locale;
+    languageSaveError = false;
+    activateLocale(locale);
+  }
 
   // ── Navigation ────────────────────────────────────────────────────────────────
   let stepIndex = $state(0);
   const step = $derived(STEPS[stepIndex]);
+  const stepTitle = $derived.by(() => {
+    selectedUiLanguage;
+    return step.title();
+  });
+  const onboardingAriaLabel = $derived.by(() => {
+    selectedUiLanguage;
+    return msg.aria_onboarding();
+  });
   const isFirst = $derived(stepIndex === 0);
   const isLast = $derived(stepIndex === STEPS.length - 1);
   const canProceed = $derived(
-    stepIndex === 2
+    step.id === "genres"
       ? selectedMovieGenreIds.size > 0 || selectedTvGenreIds.size > 0
       : true,
   );
+
+  function stepIndexFor(id: StepId): number {
+    return STEPS.findIndex((candidate) => candidate.id === id);
+  }
 
   // ── Account step ──────────────────────────────────────────────────────────────
   let authOpen = $state(false);
@@ -79,6 +118,7 @@
   let movieGenres = $state<{ id: number; name: string }[]>([]);
   let tvGenres    = $state<{ id: number; name: string }[]>([]);
   let loadingGenres = $state(false);
+  let genresLanguage: AppLocale | null = null;
 
   function toggleMovieGenre(id: number): void {
     if (selectedMovieGenreIds.has(id)) selectedMovieGenreIds.delete(id);
@@ -87,6 +127,17 @@
   function toggleTvGenre(id: number): void {
     if (selectedTvGenreIds.has(id)) selectedTvGenreIds.delete(id);
     else selectedTvGenreIds.add(id);
+  }
+
+  async function loadGenres(): Promise<void> {
+    if (genresLanguage === selectedUiLanguage) return;
+    loadingGenres = true;
+    [movieGenres, tvGenres] = await Promise.all([
+      api.genreList("movie").catch(() => []),
+      api.genreList("tv").catch(() => []),
+    ]);
+    genresLanguage = selectedUiLanguage;
+    loadingGenres = false;
   }
 
   // ── Seen step ─────────────────────────────────────────────────────────────────
@@ -174,12 +225,21 @@
 
   // ── Navigation handlers ───────────────────────────────────────────────────────
   async function next(): Promise<void> {
-    if (stepIndex === 2) {
+    if (step.id === "language") {
+      languageSaveError = !(await settings.save({ uiLanguage: selectedUiLanguage }));
+      if (languageSaveError) return;
+    }
+    if (step.id === "account") {
+      languageSaveError = !(await settings.save({ uiLanguage: selectedUiLanguage }));
+      if (languageSaveError) return;
+      await loadGenres();
+    }
+    if (step.id === "genres") {
       await loadBrowseMedia();
     }
-    if (stepIndex === 3) {
+    if (step.id === "seen") {
       if (seenMedia.length === 0) {
-        stepIndex = 5;
+        stepIndex = stepIndexFor("preferences");
         return;
       }
       preparingEntries = true;
@@ -199,8 +259,9 @@
       );
       preparingEntries = false;
     }
-    if (stepIndex === 5) {
-      settings.save({
+    if (step.id === "preferences") {
+      await settings.save({
+        uiLanguage: selectedUiLanguage,
         defaultSubtitleLang: subtitleLang,
         defaultAudioLang: audioLang,
         autoPlay,
@@ -212,17 +273,25 @@
       });
     }
     if (isLast) {
-      await settings.save({ onboardingDone: true });
-      onclose();
+      const saved = await settings.save({
+        onboardingDone: true,
+        uiLanguage: selectedUiLanguage,
+      });
+      if (!saved) return;
+      if (selectedUiLanguage !== initialUiLanguage) {
+        window.location.reload();
+      } else {
+        onclose();
+      }
     } else {
       stepIndex += 1;
     }
   }
 
   function back(): void {
-    if (stepIndex === 5 && seenMedia.length === 0) {
+    if (step.id === "preferences" && seenMedia.length === 0) {
       // Skipped rating step on the way in — go back to seen step
-      stepIndex = 3;
+      stepIndex = stepIndexFor("seen");
     } else {
       stepIndex -= 1;
     }
@@ -230,8 +299,8 @@
 
   function skip(): void {
     // Skipping "Seen" with nothing selected also skips "Rate" since it'd be empty
-    if (stepIndex === 3 && seenMedia.length === 0) {
-      stepIndex = 5;
+    if (step.id === "seen" && seenMedia.length === 0) {
+      stepIndex = stepIndexFor("preferences");
     } else {
       stepIndex += 1;
     }
@@ -386,17 +455,6 @@
       cancelFocus = focusAfterKeyRelease(getNextBtn);
     });
 
-    // Load genres; keep onMount synchronous so we can return the cleanup fn.
-    loadingGenres = true;
-    void Promise.all([
-      api.genreList("movie").catch(() => [] as { id: number; name: string }[]),
-      api.genreList("tv").catch(() => [] as { id: number; name: string }[]),
-    ]).then(([movies, tv]) => {
-      movieGenres = movies;
-      tvGenres = tv;
-      loadingGenres = false;
-    });
-
     return () => {
       cancelFocus?.();
       // Also cancel any pending auth-dialog focus attempt.
@@ -423,7 +481,7 @@
   use:focusGroup={{ id: "tv-onboarding", policy: { type: "free" }, trapFocus: true }}
   role="dialog"
   aria-modal="true"
-  aria-label="Onboarding"
+  aria-label={onboardingAriaLabel}
 >
   <!-- Progress pills -->
   <div class="flex shrink-0 items-center justify-center gap-2.5 px-16 pt-10">
@@ -447,15 +505,45 @@
         <div class="flex items-center justify-center rounded-2xl">
           <CoveIcon size={120} />
         </div>
-        <h1 class="text-2xl font-bold tracking-tight">Welcome to Cove</h1>
+        <h1 class="text-2xl font-bold tracking-tight">{msg.onboarding_welcome()}</h1>
         <p class="max-w-lg text-base text-muted-foreground">
-          Your personal media streaming hub. Let's get you set up in a few quick steps.
+          {msg.onboarding_welcome_description()}
         </p>
       </div>
 
     {:else if stepIndex === 1}
+      <!-- Language -->
+      {#key selectedUiLanguage}
+        <h2 class="mb-2 text-2xl font-semibold">{stepTitle}</h2>
+        <p class="mb-8 text-base text-muted-foreground">{msg.onboarding_language_prompt()}</p>
+      {/key}
+      <div class="grid grid-cols-2 gap-5 p-4">
+        {#each LOCALES as locale}
+          <button
+            type="button"
+            onclick={() => selectUiLanguage(locale.appLocale)}
+            aria-pressed={selectedUiLanguage === locale.appLocale}
+            class="flex min-h-28 items-center justify-between rounded-xl border px-8 py-6 text-left transition-colors
+              {selectedUiLanguage === locale.appLocale
+                ? 'border-accent bg-accent/10'
+                : 'border-border hover:border-accent/60 hover:bg-muted/30'}"
+          >
+            <span class="text-2xl font-semibold">{locale.nativeName}</span>
+            {#if selectedUiLanguage === locale.appLocale}
+              <span class="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground">
+                <Check class="size-6" />
+              </span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+      {#if languageSaveError}
+        <p class="mt-5 text-base text-destructive">{msg.language_save_error()}</p>
+      {/if}
+
+    {:else if stepIndex === 2}
       <!-- Account -->
-      <h2 class="mb-6 text-2xl font-semibold">{step.title}</h2>
+      <h2 class="mb-6 text-2xl font-semibold">{stepTitle}</h2>
       {#if auth.isGuest}
         {#if authOpen}
           <!-- Inline auth panel — no fixed overlay, D-pad stays inside the trap -->
@@ -464,15 +552,15 @@
           </div>
         {:else}
           <p class="text-base text-muted-foreground">
-            You're browsing as a guest. You can optionally sign in to sync your library and preferences across devices.
+            {msg.onboarding_guest_description()}
           </p>
           <div bind:this={signInBtnWrap} class="mt-6">
             <Button onclick={() => (authOpen = true)} class="h-12 w-full px-8 text-lg">
-              Sign in / Create account
+              {msg.onboarding_sign_in()}
             </Button>
           </div>
           <p class="mt-4 text-center text-base text-muted-foreground">
-            You can always sign in later from the account menu.
+            {msg.onboarding_sign_in_later()}
           </p>
         {/if}
       {:else}
@@ -483,20 +571,20 @@
             {auth.activeProfile?.name?.charAt(0).toUpperCase() ?? "?"}
           </div>
           <div class="min-w-0 flex-1">
-            <p class="truncate text-lg font-medium">{auth.activeProfile?.name ?? "Profile"}</p>
+            <p class="truncate text-lg font-medium">{auth.activeProfile?.name ?? msg.onboarding_profile()}</p>
             <p class="truncate text-base text-muted-foreground">{auth.session?.email}</p>
           </div>
           <CheckCircle class="size-8 shrink-0 text-green-500" />
         </div>
         <p class="mt-4 text-base text-muted-foreground">
-          Your account is connected. Your library syncs automatically.
+          {msg.onboarding_account_connected()}
         </p>
       {/if}
 
-    {:else if stepIndex === 2}
+    {:else if stepIndex === 3}
       <!-- Genres -->
-      <h2 class="mb-2 text-2xl font-semibold">{step.title}</h2>
-      <p class="mb-6 text-base text-muted-foreground">Pick genres you enjoy watching.</p>
+      <h2 class="mb-2 text-2xl font-semibold">{stepTitle}</h2>
+      <p class="mb-6 text-base text-muted-foreground">{msg.onboarding_genre_prompt()}</p>
       <div class="min-h-0 flex-1 overflow-y-auto">
         {#if loadingGenres}
           <div class="flex items-center justify-center py-12">
@@ -504,7 +592,7 @@
           </div>
         {:else}
           {#if movieGenres.length > 0}
-            <p class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">Movies</p>
+            <p class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">{msg.search_movies()}</p>
             <div class="mb-6 p-4 flex flex-wrap gap-3">
               {#each movieGenres as g (g.id)}
                 <button
@@ -520,7 +608,7 @@
             </div>
           {/if}
           {#if tvGenres.length > 0}
-            <p class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">TV Shows</p>
+            <p class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">{msg.search_tv_shows()}</p>
             <div class="flex flex-wrap gap-3">
               {#each tvGenres as g (g.id)}
                 <button
@@ -538,20 +626,20 @@
         {/if}
       </div>
 
-    {:else if stepIndex === 3}
+    {:else if stepIndex === 4}
       <!-- Seen Before -->
       <div class="mb-2 flex shrink-0 items-center justify-between">
-        <h2 class="text-2xl font-semibold">{step.title}</h2>
+        <h2 class="text-2xl font-semibold">{stepTitle}</h2>
         {#if seenMedia.length > 0}
           <span class="rounded-full bg-accent/20 px-3 py-1 text-base font-medium text-accent">
-            {seenMedia.length} selected
+            {msg.onboarding_selected_count({ count: seenMedia.length })}
           </span>
         {/if}
       </div>
-      <p class="mb-5 shrink-0 text-base text-muted-foreground">Select movies and shows you've already watched.</p>
+      <p class="mb-5 shrink-0 text-base text-muted-foreground">{msg.onboarding_seen_prompt()}</p>
       <input
         type="search"
-        placeholder="Search for a movie or show..."
+        placeholder={msg.onboarding_search_media()}
         value={mediaQuery}
         oninput={(e) => onMediaQueryChange(e.currentTarget.value)}
         class="mb-4 h-12 shrink-0 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
@@ -563,7 +651,7 @@
           </div>
         {:else if displayMedia.length === 0}
           <p class="py-8 text-center text-lg text-muted-foreground">
-            {mediaQuery.trim() ? "No results found." : "No media to show — try selecting some genres first."}
+            {mediaQuery.trim() ? msg.search_no_results() : msg.onboarding_no_media()}
           </p>
         {:else}
           <div class="grid grid-cols-6 gap-3">
@@ -600,11 +688,11 @@
         {/if}
       </div>
 
-    {:else if stepIndex === 4}
+    {:else if stepIndex === 5}
       <!-- Rate Them -->
-      <h2 class="mb-2 shrink-0 text-2xl font-semibold">{step.title}</h2>
+      <h2 class="mb-2 shrink-0 text-2xl font-semibold">{stepTitle}</h2>
       <p class="mb-6 shrink-0 text-base text-muted-foreground">
-        Rate the ones you remember — this helps personalize your recommendations.
+        {msg.onboarding_rate_prompt()}
       </p>
       {#if preparingEntries}
         <div class="flex flex-1 items-center justify-center">
@@ -635,9 +723,9 @@
         </div>
       {/if}
 
-    {:else if stepIndex === 5}
+    {:else if stepIndex === 6}
       <!-- Preferences -->
-      <h2 class="mb-6 shrink-0 text-2xl font-semibold">{step.title}</h2>
+      <h2 class="mb-6 shrink-0 text-2xl font-semibold">{stepTitle}</h2>
       <div class="min-h-0 flex-1 p-4 overflow-y-auto overflow-x-clip">
 
         <!-- Subtitle language cycle button -->
@@ -646,8 +734,8 @@
           class="flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <div>
-            <p class="text-lg font-medium">Subtitle language</p>
-            <p class="text-sm text-muted-foreground">Auto-selected when subtitles are available</p>
+            <p class="text-lg font-medium">{msg.onboarding_subtitles()}</p>
+            <p class="text-sm text-muted-foreground">{msg.onboarding_subtitle_description()}</p>
           </div>
           <span class="ml-6 shrink-0 rounded-lg bg-muted px-4 py-2 text-lg font-semibold">
             {langLabel(subtitleLang)}
@@ -660,8 +748,8 @@
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <div>
-            <p class="text-lg font-medium">Audio language</p>
-            <p class="text-sm text-muted-foreground">Auto-selected when multiple tracks are available</p>
+            <p class="text-lg font-medium">{msg.onboarding_audio()}</p>
+            <p class="text-sm text-muted-foreground">{msg.onboarding_audio_description()}</p>
           </div>
           <span class="ml-6 shrink-0 rounded-lg bg-muted px-4 py-2 text-lg font-semibold">
             {audioLangLabel(audioLang)}
@@ -676,12 +764,12 @@
           class="flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <div>
-            <p class="text-lg font-medium">Auto-play next episode</p>
-            <p class="text-sm text-muted-foreground">Automatically start the next episode</p>
+            <p class="text-lg font-medium">{msg.settings_autoplay()}</p>
+            <p class="text-sm text-muted-foreground">{msg.onboarding_autoplay_description()}</p>
           </div>
           <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
             {autoPlay ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoPlay ? "On" : "Off"}
+            {autoPlay ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
@@ -690,12 +778,12 @@
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <div>
-            <p class="text-lg font-medium">Remember playback position</p>
-            <p class="text-sm text-muted-foreground">Resume from where you left off</p>
+            <p class="text-lg font-medium">{msg.onboarding_remember()}</p>
+            <p class="text-sm text-muted-foreground">{msg.onboarding_remember_description()}</p>
           </div>
           <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
             {rememberPosition ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {rememberPosition ? "On" : "Off"}
+            {rememberPosition ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
@@ -705,10 +793,10 @@
           onclick={() => (autoSkipIntro = !autoSkipIntro)}
           class="flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
-          <p class="text-lg font-medium">Auto-skip intros</p>
+          <p class="text-lg font-medium">{msg.onboarding_skip_intros()}</p>
           <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
             {autoSkipIntro ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipIntro ? "On" : "Off"}
+            {autoSkipIntro ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
@@ -716,10 +804,10 @@
           onclick={() => (autoSkipRecap = !autoSkipRecap)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
-          <p class="text-lg font-medium">Auto-skip recaps</p>
+          <p class="text-lg font-medium">{msg.onboarding_skip_recaps()}</p>
           <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
             {autoSkipRecap ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipRecap ? "On" : "Off"}
+            {autoSkipRecap ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
@@ -727,10 +815,10 @@
           onclick={() => (autoSkipCredits = !autoSkipCredits)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
-          <p class="text-lg font-medium">Auto-skip credits</p>
+          <p class="text-lg font-medium">{msg.onboarding_skip_credits()}</p>
           <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
             {autoSkipCredits ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipCredits ? "On" : "Off"}
+            {autoSkipCredits ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
@@ -738,23 +826,23 @@
           onclick={() => (autoSkipPreview = !autoSkipPreview)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
-          <p class="text-lg font-medium">Auto-skip previews</p>
+          <p class="text-lg font-medium">{msg.onboarding_skip_previews()}</p>
           <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
             {autoSkipPreview ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipPreview ? "On" : "Off"}
+            {autoSkipPreview ? msg.common_on() : msg.common_off()}
           </span>
         </button>
       </div>
 
-    {:else if stepIndex === 6}
+    {:else if stepIndex === 7}
       <!-- Done -->
       <div class="flex flex-1 flex-col items-center justify-center gap-6 text-center">
         <div class="flex size-24 items-center justify-center rounded-full bg-accent/20">
           <CheckCircle class="size-12 text-accent" />
         </div>
-        <h2 class="text-3xl font-semibold">You're all set!</h2>
+        <h2 class="text-3xl font-semibold">{msg.onboarding_ready()}</h2>
         <p class="max-w-lg text-lg text-muted-foreground">
-          Cove is ready to use. Add streaming addons from Settings to start watching.
+          {msg.onboarding_ready_description()}
         </p>
       </div>
     {/if}
@@ -767,33 +855,35 @@
       {#if !isFirst}
         <Button variant="ghost" onclick={back} disabled={nextLoading} class="h-12 px-8 text-lg">
           <ArrowLeft class="size-5" />
-          Back
+          {msg.common_back()}
         </Button>
       {/if}
     </div>
-    <div class="flex items-center gap-3">
-      {#if step.skippable && !nextLoading}
-        <Button variant="ghost" class="h-12 px-8 text-lg text-muted-foreground" onclick={skip}>
-          Skip
-        </Button>
-      {/if}
-      <div bind:this={nextBtnWrap}>
-        <Button
-          onclick={handleNext}
-          disabled={!canProceed}
-          class="h-12 min-w-36 px-8 text-lg"
-        >
-          {#if nextLoading}
-            <Loader2 class="size-5 animate-spin" />
-          {:else}
-            {isFirst ? "Get Started" : isLast ? "Start Exploring" : "Next"}
-            {#if !isLast && !isFirst}
-              <ArrowRight class="size-5" />
+    {#key selectedUiLanguage}
+      <div class="flex items-center gap-3">
+        {#if step.skippable && !nextLoading}
+          <Button variant="ghost" class="h-12 px-8 text-lg text-muted-foreground" onclick={skip}>
+            {msg.onboarding_skip()}
+          </Button>
+        {/if}
+        <div bind:this={nextBtnWrap}>
+          <Button
+            onclick={handleNext}
+            disabled={!canProceed}
+            class="h-12 min-w-36 px-8 text-lg"
+          >
+            {#if nextLoading}
+              <Loader2 class="size-5 animate-spin" />
+            {:else}
+              {isFirst ? msg.onboarding_get_started() : isLast ? msg.onboarding_finish() : msg.onboarding_next()}
+              {#if !isLast && !isFirst}
+                <ArrowRight class="size-5" />
+              {/if}
             {/if}
-          {/if}
-        </Button>
+          </Button>
+        </div>
       </div>
-    </div>
+    {/key}
   </div>
 
 </div>

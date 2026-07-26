@@ -21,6 +21,7 @@
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { SvelteSet, SvelteMap } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
   import TvTrackPanel from "./TvTrackPanel.svelte";
   import TvEpisodePanel from "./TvEpisodePanel.svelte";
   import TvPlayerControls from "./TvPlayerControls.svelte";
@@ -1146,7 +1147,7 @@
 
 {#if audioPanelOpen}
   <TvTrackPanel
-    title="Audio"
+    title={m.player_audio()}
     items={sortedAudio.map((t) => ({ id: t.id, label: trackLabel(t, "Audio") }))}
     selectedId={selectedAudio?.id ?? null}
     onSelect={(id) => chooseAudioTrack(id as number)}
@@ -1156,7 +1157,7 @@
 
 {#if subsPanelOpen}
   <TvTrackPanel
-    title="Subtitles"
+    title={m.player_subtitles()}
     items={subtitleRows}
     selectedId={selectedSubId}
     onSelect={(id) => {
@@ -1177,7 +1178,7 @@
 
 {#if speedPanelOpen}
   <TvTrackPanel
-    title="Playback speed"
+    title={m.player_speed()}
     items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {

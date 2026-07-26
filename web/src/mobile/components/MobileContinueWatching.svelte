@@ -33,6 +33,7 @@
   import { imageFade } from "../lib/imageFade";
   // ── Icons for fallback artwork ───────────────────────────────────────────────
   import { Film, Tv } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -259,7 +260,7 @@
 {#if loading || items.length > 0}
   <div class="w-full space-y-2 px-4">
     <div class="px-1">
-      <h2 class="text-base font-semibold">Continue Watching</h2>
+      <h2 class="text-base font-semibold">{m.home_continue_watching()}</h2>
     </div>
 
     <!-- Touch-native horizontal scroll: native inertia, no chevrons. -->

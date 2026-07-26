@@ -43,9 +43,17 @@
     Repo as NuvioRepo,
     Scraper as NuvioScraper,
   } from "$lib/types/nuvio";
+  import * as m from "$lib/paraglide/messages.js";
+  import {
+    LOCALES,
+    languageDisplayName,
+    normalizeAppLocale,
+    type AppLocale,
+  } from "$lib/i18n";
 
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
+  let saveError = $state<string | null>(null);
   let saveTimer: ReturnType<typeof setTimeout>;
 
   // Auto-update toggle — native pref, lives outside the Go settings store so
@@ -75,10 +83,22 @@
 
   async function handleSave() {
     if (!draft) return;
+    const previousLanguage = normalizeAppLocale(settings.getCurrent().uiLanguage) ?? "en";
+    const nextLanguage = normalizeAppLocale(draft.uiLanguage) ?? "en";
+    saveError = null;
+    const persisted = await settings.save(draft);
+    if (!persisted) {
+      saved = false;
+      saveError = m.language_save_error();
+      return;
+    }
+    if (nextLanguage !== previousLanguage) {
+      window.location.reload();
+      return;
+    }
     saved = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => (saved = false), 2000);
-    await settings.save(draft);
     // Pull server-generated fields back into the draft — enabling remote
     // access makes the backend mint a token that only exists in the PUT
     // response (masked as "***"); without this the draft keeps its stale ""
@@ -132,7 +152,7 @@
       addons = [...addons.filter((a) => a.id !== entry.id), entry];
       addAddonUrl = "";
     } catch (e) {
-      addAddonError = e instanceof Error ? e.message : "Failed to add addon";
+      addAddonError = e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_addons() });
     } finally {
       addAddonLoading = false;
     }
@@ -239,7 +259,7 @@
       addRepoUrl = "";
     } catch (e) {
       addRepoError =
-        e instanceof Error ? e.message : "Failed to add repository";
+        e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_plugins() });
     } finally {
       addRepoLoading = false;
     }
@@ -314,7 +334,7 @@
     } catch (e) {
       algorithmTestResult = {
         ok: false,
-        error: e instanceof Error ? e.message : "Test failed",
+        error: e instanceof Error ? e.message : m.common_error(),
       };
     } finally {
       testingAlgorithm = false;
@@ -345,7 +365,8 @@
   ];
 
   function langLabel(value: string) {
-    return AUDIO_LANGUAGES.find((l) => l.value === value)?.label ?? value;
+    if (value === "original") return m.common_original();
+    return languageDisplayName(value);
   }
 
   let testingSpeed = $state(false);
@@ -603,12 +624,15 @@
 <ScrollArea class="h-full w-full">
   <div class="mx-auto max-w-3xl space-y-6 p-6 pt-18 pb-16">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{m.settings_title()}</h1>
       <div class="flex gap-2">
-        <Button variant="outline" onclick={handleReset}>Reset</Button>
-        <Button onclick={handleSave}>{saved ? "Saved ✓" : "Save"}</Button>
+        <Button variant="outline" onclick={handleReset}>{m.common_reset()}</Button>
+        <Button onclick={handleSave}>{saved ? `${m.common_saved()} ✓` : m.common_save()}</Button>
       </div>
     </div>
+    {#if saveError}
+      <p role="alert" class="text-sm text-red-500">{saveError}</p>
+    {/if}
 
     {#if draft}
       <Tabs.Root value="playback">
@@ -617,14 +641,14 @@
              pill background — w-max keeps the background behind every tab. -->
         <ScrollArea orientation="horizontal" class="w-full">
           <Tabs.List class="mb-2.5 w-max min-w-full">
-            <Tabs.Trigger value="playback">Playback</Tabs.Trigger>
-            <Tabs.Trigger value="streaming">Streaming</Tabs.Trigger>
-            <Tabs.Trigger value="subtitles">Subtitles & Audio</Tabs.Trigger>
-            <Tabs.Trigger value="interface">Interface</Tabs.Trigger>
-            <Tabs.Trigger value="addons">Addons</Tabs.Trigger>
-            <Tabs.Trigger value="plugins">Plugins</Tabs.Trigger>
-            <Tabs.Trigger value="trakt">Trakt</Tabs.Trigger>
-            <Tabs.Trigger value="advanced">Advanced</Tabs.Trigger>
+            <Tabs.Trigger value="playback">{m.settings_playback()}</Tabs.Trigger>
+            <Tabs.Trigger value="streaming">{m.settings_streaming()}</Tabs.Trigger>
+            <Tabs.Trigger value="subtitles">{m.settings_subtitles_audio()}</Tabs.Trigger>
+            <Tabs.Trigger value="interface">{m.settings_interface()}</Tabs.Trigger>
+            <Tabs.Trigger value="addons">{m.settings_addons()}</Tabs.Trigger>
+            <Tabs.Trigger value="plugins">{m.settings_plugins()}</Tabs.Trigger>
+            <Tabs.Trigger value="trakt">{m.settings_trakt()}</Tabs.Trigger>
+            <Tabs.Trigger value="advanced">{m.settings_advanced()}</Tabs.Trigger>
           </Tabs.List>
         </ScrollArea>
 
@@ -633,10 +657,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="open-muted" class="text-sm font-medium"
-                >Open videos muted</Label
+                >{m.settings_open_muted()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Start every video with audio muted.
+                {m.settings_open_muted_description()}
               </p>
             </div>
             <Switch
@@ -649,8 +673,8 @@
 
           <div class="flex items-center justify-between py-3">
             <div>
-              <Label class="text-sm font-medium">Default volume</Label>
-              <p class="text-xs text-muted-foreground">Initial volume level.</p>
+              <Label class="text-sm font-medium">{m.settings_default_volume()}</Label>
+              <p class="text-xs text-muted-foreground">{m.settings_default_volume_description()}</p>
             </div>
             <div class="flex items-center gap-3">
               <Slider
@@ -674,10 +698,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="autoplay" class="text-sm font-medium"
-                >Autoplay next episode</Label
+                >{m.settings_autoplay()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Automatically start the next episode when one finishes.
+                {m.settings_autoplay_description()}
               </p>
             </div>
             <Switch
@@ -691,10 +715,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="remember-pos" class="text-sm font-medium"
-                >Remember position</Label
+                >{m.settings_remember_position()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Resume from where you left off.
+                {m.settings_remember_position_description()}
               </p>
             </div>
             <Switch
@@ -706,15 +730,14 @@
           <Separator />
 
           <div class="py-3">
-            <Label class="text-sm font-medium">Auto-skip segments</Label>
+            <Label class="text-sm font-medium">{m.settings_auto_skip()}</Label>
             <p class="mb-3 text-xs text-muted-foreground">
-              Automatically skip segments when timestamps are available via
-              IntroDB. A skip button always appears when inside a segment.
+              {m.settings_auto_skip_description()}
             </p>
             <div class="space-y-2">
               <div class="flex items-center justify-between">
                 <Label for="skip-intro" class="text-sm text-muted-foreground"
-                  >Skip intro</Label
+                  >{m.settings_skip_intro()}</Label
                 >
                 <Switch
                   id="skip-intro"
@@ -724,7 +747,7 @@
               </div>
               <div class="flex items-center justify-between">
                 <Label for="skip-recap" class="text-sm text-muted-foreground"
-                  >Skip recap</Label
+                  >{m.settings_skip_recap()}</Label
                 >
                 <Switch
                   id="skip-recap"
@@ -734,7 +757,7 @@
               </div>
               <div class="flex items-center justify-between">
                 <Label for="skip-credits" class="text-sm text-muted-foreground"
-                  >Skip credits</Label
+                  >{m.settings_skip_credits()}</Label
                 >
                 <Switch
                   id="skip-credits"
@@ -744,7 +767,7 @@
               </div>
               <div class="flex items-center justify-between">
                 <Label for="skip-preview" class="text-sm text-muted-foreground"
-                  >Skip preview</Label
+                  >{m.settings_skip_preview()}</Label
                 >
                 <Switch
                   id="skip-preview"
@@ -761,11 +784,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="auto-select-stream" class="text-sm font-medium"
-                >Automatically pick best stream</Label
+                >{m.settings_auto_select()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Skip the stream list — start playing immediately when you press
-                Watch.
+                {m.settings_auto_select_description()}
               </p>
             </div>
             <Switch
@@ -779,10 +801,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="prefetch-streams" class="text-sm font-medium"
-                >Prefetch streams</Label
+                >{m.settings_prefetch()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Pre-fetch streams for shows you're likely to watch next.
+                {m.settings_prefetch_description()}
               </p>
             </div>
             <Switch
@@ -796,11 +818,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="prefetch-next-episode" class="text-sm font-medium"
-                >Pre-download next episode</Label
+                >{m.settings_predownload()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                When an episode finishes downloading, quietly download the next
-                one so it starts instantly.
+                {m.settings_predownload_description()}
               </p>
             </div>
             <Switch
@@ -814,11 +835,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="allow-uploading" class="text-sm font-medium"
-                >Upload while streaming</Label
+                >{m.settings_upload()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Share downloaded pieces back to peers (max 1 MiB/s). Improves
-                download speed; turn off to never upload.
+                {m.settings_upload_description()}
               </p>
             </div>
             <Switch
@@ -832,11 +852,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="probe-streams" class="text-sm font-medium"
-                >Verify streams before auto-selecting</Label
+                >{m.settings_probe()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Checks that top candidates are reachable before playback starts.
-                Adds a brief delay but avoids picking dead links.
+                {m.settings_probe_description()}
               </p>
             </div>
             <Switch
@@ -850,12 +869,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="allow-lan-sources" class="text-sm font-medium"
-                >Allow LAN stream sources</Label
+                >{m.settings_allow_lan()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Lets streams play from private/LAN addresses. Only enable if you
-                run a stream source on your own network — this weakens
-                protection against malicious addons probing your network.
+                {m.settings_allow_lan_description()}
               </p>
             </div>
             <Switch
@@ -871,11 +888,10 @@
             <div class="flex items-center justify-between">
               <div>
                 <Label for="remote-access" class="text-sm font-medium"
-                  >Remote access</Label
+                  >{m.settings_remote_access()}</Label
                 >
                 <p class="text-xs text-muted-foreground">
-                  Opens a LAN port (6970) so the mobile app or other devices on
-                  your network can connect to this backend.
+                  {m.settings_remote_access_description()}
                 </p>
               </div>
               <Switch
@@ -888,11 +904,11 @@
             {#if draft.remoteAccessEnabled}
               <div class="rounded-lg border border-border p-3 space-y-2">
                 <Label class="text-xs font-medium text-muted-foreground"
-                  >Access token</Label
+                  >{m.settings_access_token()}</Label
                 >
                 {#if draft.remoteAccessToken === ""}
                   <p class="text-xs text-muted-foreground">
-                    No token set — save settings to generate one.
+                    {m.settings_no_token()}
                   </p>
                 {:else}
                   <div class="flex items-center gap-2">
@@ -909,7 +925,9 @@
                       class="shrink-0"
                       onclick={handleRevealToken}
                       disabled={revealingToken}
-                      title={tokenVisible ? "Hide token" : "Show token"}
+                      title={tokenVisible
+                        ? m.settings_hide_token()
+                        : m.settings_show_token()}
                     >
                       {#if tokenVisible}
                         <EyeOff class="size-4" />
@@ -923,7 +941,7 @@
                       class="shrink-0"
                       onclick={handleCopyToken}
                       disabled={revealingToken}
-                      title="Copy token"
+                      title={m.settings_copy_token()}
                     >
                       {#if tokenCopied}
                         <CheckIcon class="size-4 text-green-500" />
@@ -940,7 +958,7 @@
 
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
-              <Label class="text-sm font-medium">Selection strategy</Label>
+              <Label class="text-sm font-medium">{m.settings_selection_strategy()}</Label>
               <p class="text-xs text-muted-foreground">
                 {STREAM_SELECTION_MODES.find(
                   (m) => m.value === draft.streamSelectionMode,
@@ -951,7 +969,7 @@
               <Select.Trigger class="w-56 shrink-0">
                 {STREAM_SELECTION_MODES.find(
                   (m) => m.value === draft.streamSelectionMode,
-                )?.label ?? "Choose…"}
+                )?.label ?? m.common_choose()}
               </Select.Trigger>
               <Select.Content>
                 {#each STREAM_SELECTION_MODES as m (m.value)}
@@ -964,18 +982,18 @@
 
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
-              <Label class="text-sm font-medium">Source preference</Label>
+              <Label class="text-sm font-medium">{m.settings_source_preference()}</Label>
               <p class="text-xs text-muted-foreground">
                 {draft.sourcePreference
-                  ? "Gives torrents or direct streams a small ranking boost — doesn't exclude the other kind."
-                  : "No boost — torrents and direct streams rank purely on the selection strategy above."}
+                  ? m.settings_source_boost_description()
+                  : m.settings_source_neutral_description()}
               </p>
             </div>
             <Select.Root type="single" bind:value={draft.sourcePreference}>
               <Select.Trigger class="w-56 shrink-0">
                 {SOURCE_PREFERENCES.find(
                   (p) => p.value === draft.sourcePreference,
-                )?.label ?? "No preference"}
+                )?.label ?? m.common_no_preference()}
               </Select.Trigger>
               <Select.Content>
                 {#each SOURCE_PREFERENCES as p (p.value)}
@@ -988,12 +1006,12 @@
 
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
-              <Label class="text-sm font-medium">Preferred provider</Label>
+              <Label class="text-sm font-medium">{m.settings_preferred_provider()}</Label>
               <p class="text-xs text-muted-foreground">
                 {#if providerAddons.length === 0 && nuvioProviderOptions.length === 0}
-                  Add a provider addon in the Addons tab to set a preference.
+                  {m.settings_provider_missing()}
                 {:else}
-                  Its streams are shown first and favored by auto-select.
+                  {m.settings_provider_description()}
                 {/if}
               </p>
             </div>
@@ -1004,10 +1022,10 @@
                 nuvioProviderOptions.length === 0}
             >
               <Select.Trigger class="w-56 shrink-0">
-                {draft.defaultProvider || "No preference"}
+                {draft.defaultProvider || m.common_no_preference()}
               </Select.Trigger>
               <Select.Content>
-                <Select.Item value="">No preference</Select.Item>
+                <Select.Item value="">{m.common_no_preference()}</Select.Item>
                 {#each providerAddons as a (a.url || a.id)}
                   <Select.Item value={a.manifest.name}
                     >{a.manifest.name}</Select.Item
@@ -1023,15 +1041,16 @@
 
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
-              <Label class="text-sm font-medium">Connection speed</Label>
+              <Label class="text-sm font-medium">{m.settings_connection_speed()}</Label>
               {#if draft.measuredBandwidthMbps > 0}
                 <p class="text-xs text-muted-foreground">
-                  Last measured at {draft.measuredBandwidthMbps} Mbps. Used by "Match
-                  My Internet Speed".
+                  {m.settings_speed_measured({
+                    speed: draft.measuredBandwidthMbps,
+                  })}
                 </p>
               {:else}
                 <p class="text-xs text-muted-foreground">
-                  Not measured yet — needed for "Match My Internet Speed".
+                  {m.settings_speed_unmeasured()}
                 </p>
               {/if}
               {#if speedTestError}
@@ -1045,7 +1064,9 @@
               onclick={runSpeedTest}
               disabled={testingSpeed}
             >
-              {testingSpeed ? "Testing…" : "Test My Speed"}
+              {testingSpeed
+                ? m.settings_speed_testing()
+                : m.settings_speed_test()}
             </Button>
           </div>
         </Tabs.Content>
@@ -1055,10 +1076,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="subs-enabled" class="text-sm font-medium"
-                >Enable subtitles by default</Label
+                >{m.settings_subtitles_default()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Show subtitles automatically when available.
+                {m.settings_subtitles_default_description()}
               </p>
             </div>
             <Switch
@@ -1072,10 +1093,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label class="text-sm font-medium"
-                >Preferred subtitle language</Label
+                >{m.settings_subtitle_language()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Auto-select this language when subtitles are available.
+                {m.settings_subtitle_language_description()}
               </p>
             </div>
             <Select.Root type="single" bind:value={draft.defaultSubtitleLang}>
@@ -1084,7 +1105,7 @@
               >
               <Select.Content>
                 {#each LANGUAGES as l}
-                  <Select.Item value={l.value}>{l.label}</Select.Item>
+                  <Select.Item value={l.value}>{languageDisplayName(l.value)}</Select.Item>
                 {/each}
               </Select.Content>
             </Select.Root>
@@ -1093,9 +1114,9 @@
 
           <div class="flex items-center justify-between py-3">
             <div>
-              <Label class="text-sm font-medium">Subtitle size</Label>
+              <Label class="text-sm font-medium">{m.settings_subtitle_size()}</Label>
               <p class="text-xs text-muted-foreground">
-                Text size relative to normal.
+                {m.settings_subtitle_size_description()}
               </p>
             </div>
             <div class="flex items-center gap-3">
@@ -1119,9 +1140,9 @@
 
           <div class="flex items-center justify-between py-3">
             <div>
-              <Label class="text-sm font-medium">Subtitle position</Label>
+              <Label class="text-sm font-medium">{m.settings_subtitle_position()}</Label>
               <p class="text-xs text-muted-foreground">
-                Distance up from the bottom of the screen.
+                {m.settings_subtitle_position_description()}
               </p>
             </div>
             <div class="flex items-center gap-3">
@@ -1146,10 +1167,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="subs-background" class="text-sm font-medium"
-                >Subtitle background</Label
+                >{m.settings_subtitle_background()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Draw a dark box behind the text for readability.
+                {m.settings_subtitle_background_description()}
               </p>
             </div>
             <Switch
@@ -1162,10 +1183,10 @@
 
           <div class="flex items-center justify-between py-3">
             <div>
-              <Label class="text-sm font-medium">Preferred audio language</Label
+              <Label class="text-sm font-medium">{m.settings_audio_language()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Auto-select this audio track when multiple are available.
+                {m.settings_audio_language_description()}
               </p>
             </div>
             <Select.Root type="single" bind:value={draft.defaultAudioLang}>
@@ -1174,7 +1195,7 @@
               >
               <Select.Content>
                 {#each AUDIO_LANGUAGES as l}
-                  <Select.Item value={l.value}>{l.label}</Select.Item>
+                  <Select.Item value={l.value}>{langLabel(l.value)}</Select.Item>
                 {/each}
               </Select.Content>
             </Select.Root>
@@ -1184,12 +1205,34 @@
         <!-- ── Interface ── -->
         <Tabs.Content value="interface" class="mt-4 space-y-1">
           <div class="flex items-center justify-between py-3">
+            <div class="pr-4">
+              <Label class="text-sm font-medium">{m.language_label()}</Label>
+              <p class="text-xs text-muted-foreground">{m.language_description()}</p>
+            </div>
+            <Select.Root
+              type="single"
+              value={normalizeAppLocale(draft.uiLanguage) ?? "en"}
+              onValueChange={(value) => patch("uiLanguage", value as AppLocale)}
+            >
+              <Select.Trigger class="w-44 shrink-0">
+                {LOCALES.find((locale) => locale.appLocale === (normalizeAppLocale(draft.uiLanguage) ?? "en"))?.nativeName}
+              </Select.Trigger>
+              <Select.Content>
+                {#each LOCALES as locale (locale.appLocale)}
+                  <Select.Item value={locale.appLocale}>{locale.nativeName}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+          <Separator />
+
+          <div class="flex items-center justify-between py-3">
             <div>
               <Label for="stream-details" class="text-sm font-medium"
-                >Show stream details</Label
+                >{m.settings_stream_details()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Display codec, resolution, and size badges on the stream list.
+                {m.settings_stream_details_description()}
               </p>
             </div>
             <Switch
@@ -1201,11 +1244,10 @@
           <div class="flex items-center justify-between py-3">
             <div>
               <Label for="thumbnail-previes" class="text-sm font-medium"
-                >Hide Spoilers</Label
+                >{m.settings_hide_spoilers()}</Label
               >
               <p class="text-xs text-muted-foreground">
-                Hide not-seen episode thumbnails, descriptions, and episode
-                names;
+                {m.settings_hide_spoilers_description()}
               </p>
             </div>
             <Switch
@@ -1219,7 +1261,7 @@
 
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
-              <Label class="text-sm font-medium">Discovery algorithm</Label>
+              <Label class="text-sm font-medium">{m.settings_discovery_algorithm()}</Label>
               <p class="text-xs text-muted-foreground">
                 {DISCOVERY_ALGORITHMS.find(
                   (a) => a.value === draft.discoveryAlgorithm,
@@ -1230,7 +1272,7 @@
               <Select.Trigger class="w-56 shrink-0">
                 {DISCOVERY_ALGORITHMS.find(
                   (a) => a.value === draft.discoveryAlgorithm,
-                )?.label ?? "Choose…"}
+                )?.label ?? m.common_choose()}
               </Select.Trigger>
               <Select.Content>
                 {#each DISCOVERY_ALGORITHMS as a (a.value)}
@@ -1243,12 +1285,10 @@
           {#if draft.discoveryAlgorithm === "custom"}
             <div class="rounded-lg border border-border p-4">
               <Label class="mb-2 block text-sm font-medium"
-                >Custom algorithm URL</Label
+                >{m.settings_custom_algorithm_url()}</Label
               >
               <p class="mb-3 text-xs text-muted-foreground">
-                Cove POSTs your taste profile and a pre-filtered candidate list
-                to this URL and expects relevance scores back. Falls back to
-                Cove Smart if the endpoint is unreachable or errors.
+                {m.settings_custom_algorithm_description()}
               </p>
               <div class="flex gap-2">
                 <Input
@@ -1264,7 +1304,7 @@
                     !draft.customAlgorithmUrl.trim()}
                   size="sm"
                 >
-                  {testingAlgorithm ? "Testing…" : "Test connection"}
+                  {testingAlgorithm ? m.common_testing() : m.common_test_connection()}
                 </Button>
               </div>
               {#if algorithmTestResult}
@@ -1274,8 +1314,8 @@
                     : 'text-red-500'}"
                 >
                   {algorithmTestResult.ok
-                    ? "Connected successfully."
-                    : `Failed: ${algorithmTestResult.error}`}
+                    ? m.common_connected_success()
+                    : m.common_failed_message({ error: algorithmTestResult.error })}
                 </p>
               {/if}
             </div>
@@ -1286,10 +1326,10 @@
             <div class="flex items-center justify-between py-3">
               <div>
                 <Label for="auto-update" class="text-sm font-medium"
-                  >Auto-update</Label
+                  >{m.settings_auto_update()}</Label
                 >
                 <p class="text-xs text-muted-foreground">
-                  Automatically download and install updates on launch.
+                  {m.settings_auto_update_description()}
                 </p>
               </div>
               <Switch
@@ -1308,10 +1348,10 @@
             <div class="flex items-center justify-between py-3">
               <div>
                 <Label for="tv-switch-visible" class="text-sm font-medium"
-                  >TV interface switch</Label
+                  >{m.settings_tv_switch()}</Label
                 >
                 <p class="text-xs text-muted-foreground">
-                  Show a button in the top bar to switch to the remote-friendly TV interface.
+                  {m.settings_tv_switch_description()}
                 </p>
               </div>
               <Switch
@@ -1328,10 +1368,10 @@
           <!-- Add new addon -->
           <div class="rounded-lg border border-border p-4">
             <Label class="mb-2 block text-sm font-medium"
-              >Add Stremio addon</Label
+              >{m.settings_add_stremio()}</Label
             >
             <p class="mb-3 text-xs text-muted-foreground">
-              Paste a Stremio-compatible addon manifest URL.
+              {m.settings_add_stremio_description()}
             </p>
             <div class="flex gap-2">
               <Input
@@ -1347,7 +1387,7 @@
                 size="sm"
               >
                 <Plus class="mr-1 size-4" />
-                {addAddonLoading ? "Adding…" : "Add"}
+                {addAddonLoading ? m.common_adding() : m.common_add()}
               </Button>
             </div>
             {#if addAddonError}
@@ -1366,7 +1406,7 @@
                         >{addon.manifest.name ||
                           addon.url ||
                           addon.id ||
-                          "Unknown addon"}</span
+                          m.common_unknown_addon()}</span
                       >
                       <Badge
                         variant="outline"
@@ -1377,16 +1417,16 @@
                             : "border-purple-500/30 bg-purple-500/20 text-purple-400"}
                       >
                         {addon.kind === KindProvider
-                          ? "Provider"
+                          ? m.common_provider()
                           : addon.kind === KindTimestamps
-                            ? "Timestamps"
-                            : "Subtitles"}
+                            ? m.common_timestamps()
+                            : m.player_subtitles()}
                       </Badge>
                       {#if addon.source === SourceOfficial}
                         <Badge
                           variant="outline"
                           class="border-green-500/30 bg-green-500/20 text-green-400"
-                          >Built-in</Badge
+                          >{m.common_builtin()}</Badge
                         >
                       {/if}
                     </div>
@@ -1412,7 +1452,7 @@
                         size="icon"
                         class="shrink-0 text-muted-foreground"
                         onclick={() => (configureAddon = addon)}
-                        title="Configure"
+                        title={m.common_configure()}
                       >
                         <Cog class="size-4" />
                       </Button>
@@ -1423,7 +1463,7 @@
                       class="shrink-0 text-muted-foreground"
                       onclick={() => handleRefreshAddon(addon)}
                       disabled={refreshingAddonId === addon.id}
-                      title="Refresh"
+                      title={m.common_refresh()}
                     >
                       <RefreshCw
                         class={`size-4 ${refreshingAddonId === addon.id ? "animate-spin" : ""}`}
@@ -1434,7 +1474,7 @@
                       size="icon"
                       class="shrink-0 text-muted-foreground hover:text-destructive"
                       onclick={() => handleRemoveAddon(addon)}
-                      title="Remove"
+                      title={m.common_remove()}
                     >
                       <Trash2 class="size-4" />
                     </Button>
@@ -1490,7 +1530,7 @@
           <!-- Add new repository -->
           <div class="rounded-lg border border-border p-4">
             <Label class="mb-2 block text-sm font-medium"
-              >Add plugin repository</Label
+              >{m.settings_add_repository()}</Label
             >
             <p class="mb-3 text-xs text-muted-foreground">
               Paste a GitHub repository URL (e.g. github.com/owner/repo) that
@@ -1510,7 +1550,7 @@
                 size="sm"
               >
                 <Plus class="mr-1 size-4" />
-                {addRepoLoading ? "Adding…" : "Add"}
+                {addRepoLoading ? m.common_adding() : m.common_add()}
               </Button>
             </div>
             {#if addRepoError}
@@ -1550,7 +1590,7 @@
                     class="shrink-0 text-muted-foreground"
                     onclick={() => handleRefreshRepo(repo)}
                     disabled={refreshingRepoId === repo.id}
-                    title="Refresh manifest"
+                    title={m.settings_refresh_manifest()}
                   >
                     <RefreshCw
                       class={`size-4 ${refreshingRepoId === repo.id ? "animate-spin" : ""}`}
@@ -1561,7 +1601,7 @@
                     checked={repo.enabled}
                     onCheckedChange={() => handleToggleRepo(repo)}
                     class="shrink-0"
-                    title="Enable this repository"
+                    title={m.settings_enable_repository()}
                   />
 
                   <Button
@@ -1569,7 +1609,7 @@
                     size="icon"
                     class="shrink-0 text-muted-foreground hover:text-destructive"
                     onclick={() => handleRemoveRepo(repo)}
-                    title="Remove"
+                    title={m.common_remove()}
                   >
                     <Trash2 class="size-4" />
                   </Button>
@@ -1600,13 +1640,13 @@
                             size="sm"
                             variant="outline"
                             onclick={() => (pendingConfirm = null)}
-                            >Cancel</Button
+                            >{m.common_cancel()}</Button
                           >
                           <Button
                             size="sm"
                             onclick={() =>
                               handleSetScraperEnabled(repo, scraper, true)}
-                            >Enable</Button
+                            >{m.common_enable()}</Button
                           >
                         </div>
                       {:else}
@@ -1635,7 +1675,7 @@
         <!-- ── Trakt.tv ── -->
         <Tabs.Content value="trakt" class="mt-4 space-y-4">
           {#if traktStatus === undefined}
-            <p class="text-sm text-muted-foreground">Loading…</p>
+            <p class="text-sm text-muted-foreground">{m.common_loading()}</p>
           {:else if traktStatus === null}
             <p class="text-sm text-muted-foreground">
               Trakt is not configured in this build.
@@ -1656,7 +1696,7 @@
               <div class="flex items-center justify-between">
                 <div>
                   <Label for="trakt-scrobble" class="text-sm font-medium"
-                    >Scrobble</Label
+                    >{m.settings_trakt_scrobble()}</Label
                   >
                   <p class="text-xs text-muted-foreground">
                     Send watch events to Trakt as you watch.
@@ -1672,7 +1712,7 @@
               <div class="flex items-center justify-between">
                 <div>
                   <Label for="trakt-sync" class="text-sm font-medium"
-                    >Two-way sync</Label
+                    >{m.settings_trakt_sync()}</Label
                   >
                   <p class="text-xs text-muted-foreground">
                     Sync watch history and watchlist with Trakt.
@@ -1692,7 +1732,7 @@
                   onclick={handleTraktSync}
                   disabled={traktSyncLoading}
                 >
-                  {traktSyncLoading ? "Syncing…" : "Sync now"}
+                  {traktSyncLoading ? m.common_syncing() : m.account_sync()}
                 </Button>
               {/if}
 
@@ -1704,7 +1744,9 @@
                 onclick={handleTraktDisconnect}
                 disabled={traktUnlinkLoading}
               >
-                {traktUnlinkLoading ? "Disconnecting…" : "Disconnect"}
+                {traktUnlinkLoading
+                  ? m.common_disconnecting()
+                  : m.common_disconnect()}
               </Button>
             </div>
           {:else}
@@ -1712,7 +1754,7 @@
             {#if traktFlowState === "idle"}
               <div class="rounded-lg border border-border p-4 space-y-3">
                 <Label class="text-sm font-medium"
-                  >Connect your Trakt account</Label
+                  >{m.settings_trakt_connect_description()}</Label
                 >
                 <p class="text-xs text-muted-foreground">
                   Trakt tracks your watch history and watchlist across apps and
@@ -1729,7 +1771,7 @@
               <!-- Device flow: show code + URL while polling -->
               <div class="rounded-lg border border-border p-4 space-y-4">
                 <Label class="text-sm font-medium"
-                  >Authorize Cove on Trakt</Label
+                  >{m.settings_trakt_authorize()}</Label
                 >
                 <div class="space-y-2">
                   <p class="text-xs text-muted-foreground">
@@ -1755,7 +1797,7 @@
                       size="icon"
                       class="shrink-0"
                       onclick={handleCopyTraktCode}
-                      title="Copy code"
+                      title={m.settings_copy_code()}
                     >
                       {#if traktCodeCopied}
                         <CheckIcon class="size-4 text-green-500" />
@@ -1775,7 +1817,7 @@
                   The authorization request expired. Start a new one to try
                   again.
                 </p>
-                <Button size="sm" onclick={handleTraktConnect}>Try again</Button
+                <Button size="sm" onclick={handleTraktConnect}>{m.settings_trakt_try_again()}</Button
                 >
               </div>
             {:else if traktFlowState === "denied"}
@@ -1784,7 +1826,7 @@
                   Authorization was denied or is invalid. Start a new request to
                   try again.
                 </p>
-                <Button size="sm" onclick={handleTraktConnect}>Try again</Button
+                <Button size="sm" onclick={handleTraktConnect}>{m.settings_trakt_try_again()}</Button
                 >
               </div>
             {/if}
@@ -1794,21 +1836,17 @@
         <!-- ── Advanced ── -->
         <Tabs.Content value="advanced" class="mt-4 space-y-4">
           <div>
-            <Label class="text-sm font-medium">MPV configuration</Label>
+            <Label class="text-sm font-medium">{m.settings_mpv_configuration()}</Label>
             <p class="mt-1 text-xs text-muted-foreground">
-              Options written here are applied on top of Cove's defaults. Some
-              take effect immediately after saving; others require a playback
-              restart or app restart. On Android, you can override
-              <code class="font-mono">hwdec</code> here (e.g.
-              <code class="font-mono">hwdec=no</code> on devices with broken
-              hardware decoding). See the
+              {m.settings_mpv_description()}
+              <span> </span>
               <a
                 href="https://mpv.io/manual/stable/#configuration-files"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-primary hover:underline"
-                >mpv configuration reference</a
-              > for all available options.
+                >{m.settings_mpv_reference()}</a
+              >
             </p>
           </div>
 
@@ -1829,13 +1867,17 @@
               onclick={handleMpvConfSave}
               disabled={mpvConfSaving || !mpvConfDirty}
             >
-              {mpvConfSaving ? "Saving…" : mpvConfSaveOk ? "Saved ✓" : "Save"}
+              {mpvConfSaving
+                ? m.common_saving()
+                : mpvConfSaveOk
+                  ? m.common_saved()
+                  : m.common_save()}
             </Button>
           </div>
         </Tabs.Content>
       </Tabs.Root>
     {:else}
-      <p class="text-muted-foreground">Loading settings…</p>
+      <p class="text-muted-foreground">{m.settings_loading()}</p>
     {/if}
   </div>
 </ScrollArea>
@@ -1867,7 +1909,7 @@
           type="button"
           class="ml-3 shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
           onclick={() => (configureAddon = null)}
-          aria-label="Close"
+          aria-label={m.common_close()}
         >
           <X class="size-4" />
         </button>
@@ -1875,8 +1917,7 @@
 
       <!-- Hint -->
       <p class="shrink-0 px-4 py-2 text-xs text-muted-foreground">
-        After configuring, copy the generated manifest URL and paste it into
-        "Add Stremio addon" above.
+        {m.settings_addon_config_hint()}
       </p>
 
       <!-- iframe -->
@@ -1884,7 +1925,7 @@
         <iframe
           src={`${configureAddon.url}/configure`}
           class="h-full w-full rounded border border-border"
-          title="Addon configuration"
+          title={m.settings_addon_configuration()}
         ></iframe>
       </div>
 
@@ -1894,7 +1935,7 @@
           href={`${configureAddon.url}/configure`}
           target="_blank"
           rel="noopener noreferrer"
-          class="text-primary underline">Open in browser</a
+          class="text-primary underline">{m.common_open_browser()}</a
         >
         — some addons can't be configured in-app.
       </div>

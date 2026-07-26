@@ -1,5 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
+  import { activeLocale } from "$lib/i18n";
   import type { Media, MediaImages } from "$lib/types/tmdb";
   import { api } from "$lib/api";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -28,7 +30,7 @@
   // Featured row: the top panel shows popular or selected-genre medias.
   let featuredRow = $state<Row>({
     key: "featured",
-    header: "Popular movies",
+    header: m.home_popular_movies(),
     medias: [],
     loading: false,
   });
@@ -61,7 +63,7 @@
     api.getImages(media).then((d: MediaImages) => {
       if (featuredMedia?.id !== id) return;
       featuredBackdrop = getImageOpt(d, "backdrops", { iso: "" });
-      featuredLogo = getImageOpt(d, "logos", { iso: "en" });
+      featuredLogo = getImageOpt(d, "logos", { iso: activeLocale() });
     });
 
     api
@@ -84,11 +86,11 @@
     const genre = genreId !== null ? genreList.find((g) => g.id === genreId) : null;
     const header = genre
       ? type === "movie"
-        ? `${genre.name} movies`
-        : `${genre.name} shows`
+        ? m.explore_genre_movies({ genre: genre.name })
+        : m.explore_genre_shows({ genre: genre.name })
       : type === "movie"
-        ? "Popular movies"
-        : "Popular shows";
+        ? m.home_popular_movies()
+        : m.explore_popular_shows();
 
     untrack(() => {
       featuredRow = { key: "featured", header, medias: [], loading: true };
@@ -123,7 +125,10 @@
 
         genreRows = list.slice(0, 8).map((g) => ({
           key: `genre-${g.id}`,
-          header: type === "movie" ? `${g.name} movies` : `${g.name} shows`,
+          header:
+            type === "movie"
+              ? m.explore_genre_movies({ genre: g.name })
+              : m.explore_genre_shows({ genre: g.name }),
           medias: [] as Media[],
           loading: true,
         }));
@@ -168,7 +173,7 @@
 >
   <!-- Compact header: title + genre dropdown + Movies/TV toggle -->
   <div class="flex shrink-0 items-center justify-between gap-2 px-4 pb-3">
-    <h1 class="text-xl font-semibold tracking-tight">Explore</h1>
+    <h1 class="text-xl font-semibold tracking-tight">{m.explore_title()}</h1>
 
     <div class="flex items-center gap-2">
       <!-- Genre dropdown -->
@@ -179,11 +184,11 @@
       >
         <Select.Trigger class="h-9 w-32 text-xs">
           {selectedGenreId !== null
-            ? (genres.find((g) => g.id === selectedGenreId)?.name ?? "Genre")
-            : "All genres"}
+            ? (genres.find((g) => g.id === selectedGenreId)?.name ?? m.explore_genre())
+            : m.explore_all_genres()}
         </Select.Trigger>
         <Select.Content>
-          <Select.Item value="">All genres</Select.Item>
+          <Select.Item value="">{m.explore_all_genres()}</Select.Item>
           {#each genres as genre (genre.id)}
             <Select.Item value={String(genre.id)}>{genre.name}</Select.Item>
           {/each}
@@ -198,14 +203,14 @@
             ? 'bg-secondary text-foreground'
             : 'text-muted-foreground'}"
           onclick={() => (mediaType = "movie")}
-        >Movies</button>
+        >{m.explore_movies()}</button>
         <button
           type="button"
           class="px-3 py-2 text-xs font-medium transition-colors {mediaType === 'tv'
             ? 'bg-secondary text-foreground'
             : 'text-muted-foreground'}"
           onclick={() => (mediaType = "tv")}
-        >TV</button>
+        >{m.explore_tv()}</button>
       </div>
     </div>
   </div>
@@ -273,7 +278,7 @@
                   }}
                 >
                   <Play class="size-4 fill-current" />
-                  Watch
+                  {m.common_watch()}
                 </button>
                 <button
                   type="button"
@@ -284,7 +289,7 @@
                   }}
                 >
                   <Info class="size-4" />
-                  Details
+                  {m.media_details()}
                 </button>
               </div>
             {/if}

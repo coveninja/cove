@@ -12,6 +12,7 @@
   import { Button } from "$lib/components/ui/button";
   import { animate, splitText, stagger } from "animejs";
   import { onMount, tick } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
   import { getTopSearchResults } from "$lib/searchTopResults";
 
   let {
@@ -40,24 +41,24 @@
 
   // ── Controls ──────────────────────────────────────────────────────────────────
   const sortOptions = [
-    { value: "relevance", label: "Relevance" },
-    { value: "rating", label: "Rating" },
-    { value: "popularity", label: "Popularity" },
-    { value: "recommended", label: "Recommended for you" },
-    { value: "personal", label: "My rating" },
+    { value: "relevance", label: m.search_sort_relevance() },
+    { value: "rating", label: m.search_sort_rating() },
+    { value: "popularity", label: m.search_sort_popularity() },
+    { value: "recommended", label: m.search_sort_recommended() },
+    { value: "personal", label: m.search_sort_personal() },
   ] as const;
 
   // string (not a strict union) so it can bind cleanly to shadcn Select.
   let sortKey = $state<string>("relevance");
   const sortLabel = $derived(
-    sortOptions.find((o) => o.value === sortKey)?.label ?? "Relevance",
+    sortOptions.find((o) => o.value === sortKey)?.label ?? m.search_sort_relevance(),
   );
 
   const typeOptions = [
-    { key: "movie", label: "Movies" },
-    { key: "tv", label: "TV" },
-    { key: "person", label: "People" },
-    { key: "provider", label: "Providers" },
+    { key: "movie", label: m.search_movies() },
+    { key: "tv", label: m.search_tv_shows() },
+    { key: "person", label: m.search_people() },
+    { key: "provider", label: m.search_providers() },
   ] as const;
 
   // ToggleGroup (multiple) binds to a string[] of the active type keys.
@@ -271,7 +272,7 @@
   {#if query.length > 0}
     <div class="mb-4 shrink-0 space-y-3">
       <div class="flex text-2xl font-semibold" class:invisible={!hasAnimated}>
-        Results for
+        {m.search_results_for()}
         <span class="size-1.5"></span>
         {#key displayQuery}
           <span class="text-accent" bind:this={resultsTextEl}
@@ -296,7 +297,7 @@
         </ToggleGroup.Root>
 
         <div class="ml-auto flex items-center gap-2">
-          <span class="text-xs text-muted-foreground">Sort titles by</span>
+          <span class="text-xs text-muted-foreground">{m.search_sort_by()}</span>
           <Select.Root type="single" bind:value={sortKey}>
             <Select.Trigger size="sm" class="w-45 text-xs">
               {sortLabel}
@@ -315,7 +316,7 @@
       {#if !loading && keywords.length > 1}
         <div class="flex flex-col gap-2">
           <span class="text-xs font-medium text-muted-foreground">
-            More to Explore:
+            {m.search_more_to_explore()}:
           </span>
           <ScrollArea orientation="horizontal" class="overflow-clip rounded-sm">
             <div class="flex gap-2 pb-2">
@@ -340,7 +341,7 @@
     <ScrollArea class="flex min-h-0 flex-1 gap-4 p-4">
       {#if topResults.length > 0}
         <section class="mb-8 space-y-3" data-search-section="top-results">
-          <h2 class="text-lg font-semibold">Top Results</h2>
+          <h2 class="text-lg font-semibold">{m.search_top_results()}</h2>
           <div
             class="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6"
             data-search-grid="top-results"
@@ -359,7 +360,7 @@
 
       {#if showPerson && people.length > 0}
         <section class="mb-8 space-y-3" data-search-section="people">
-          <h2 class="text-lg font-semibold">People</h2>
+          <h2 class="text-lg font-semibold">{m.search_people()}</h2>
           <div
             class="grid gap-4"
             style="grid-template-columns: repeat(auto-fill, minmax(120px, 1fr))"
@@ -373,7 +374,7 @@
 
       {#if showProvider && providers.length > 0}
         <section class="space-y-3 p-4" data-search-section="providers">
-          <h2 class="text-lg font-semibold">Providers</h2>
+          <h2 class="text-lg font-semibold">{m.search_providers()}</h2>
           <div
             class="grid gap-4"
             style="grid-template-columns: repeat(auto-fill, minmax(110px, 1fr))"
@@ -388,7 +389,7 @@
       <div class="space-y-8 pr-4 pb-8">
         {#if showMovie && movies.length > 0}
           <section class="space-y-3" data-search-section="movies">
-            <h2 class="text-lg font-semibold">Movies</h2>
+            <h2 class="text-lg font-semibold">{m.search_movies()}</h2>
             <div
               class="grid gap-4"
               style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
@@ -407,7 +408,7 @@
 
         {#if showTV && tv.length > 0}
           <section class="space-y-3" data-search-section="tv">
-            <h2 class="text-lg font-semibold">TV Shows</h2>
+            <h2 class="text-lg font-semibold">{m.search_tv_shows()}</h2>
             <div
               class="grid gap-4"
               style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
@@ -426,7 +427,7 @@
 
         {#if query.trim() && !anyVisible}
           <p class="pt-8 text-center text-sm text-muted-foreground">
-            No results to show.
+            {m.search_no_results()}
           </p>
         {/if}
       </div>

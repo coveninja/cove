@@ -3,6 +3,7 @@
   import { Spinner } from "$lib/components/ui/spinner";
   import { tick } from "svelte";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media = undefined,
@@ -56,7 +57,7 @@
   {/if}
   <Spinner class="relative z-10 mt-8 size-14 text-white" />
   <p class="relative z-10 mt-4 text-base text-white/50">{loadingMessage}</p>
-  <p class="relative z-10 mt-2 text-sm text-white/40">Press Back to cancel</p>
+  <p class="relative z-10 mt-2 text-sm text-white/40">{m.player_press_back_cancel()}</p>
   {#if takingAWhile}
     <p
       class="relative z-10 mt-2 text-sm text-white/40"

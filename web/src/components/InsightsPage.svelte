@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import {
     api,
     type LibraryStats,
@@ -288,7 +289,7 @@
 
 {#snippet donut(slices: Slice[])}
   {#if slices.length === 0}
-    <p class="text-xs text-muted-foreground">Not enough signal yet.</p>
+    <p class="text-xs text-muted-foreground">{m.account_not_enough_signal()}</p>
   {:else}
     {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
     <div class="flex items-center gap-5">
@@ -342,7 +343,7 @@
 
 <div class="mx-auto flex w-full max-w-4xl flex-col gap-6 p-6">
   <header class="flex flex-col gap-1">
-    <h1 class="text-2xl font-semibold">Your Insights</h1>
+    <h1 class="text-2xl font-semibold">{m.account_your_insights()}</h1>
     <p class="text-sm text-muted-foreground">
       Your watch history, taste profile, and what makes you unique.
     </p>
@@ -378,7 +379,7 @@
               Hours by Month
               {#if monthSecondary}
                 <span class="ml-auto text-xs font-normal text-muted-foreground"
-                  >vs last year</span
+                  >{m.account_vs_last_year()}</span
                 >
               {/if}
             </Card.Title>
@@ -392,7 +393,7 @@
         <div class="grid gap-4 md:grid-cols-2">
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">Hours by Day of Week</Card.Title>
+              <Card.Title class="text-sm">{m.account_hours_weekday()}</Card.Title>
             </Card.Header>
             <Card.Content>
               <ActivityBars items={dowItems} />
@@ -401,7 +402,7 @@
 
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">Hours by Hour of Day</Card.Title>
+              <Card.Title class="text-sm">{m.account_hours_day()}</Card.Title>
             </Card.Header>
             <Card.Content>
               <ActivityBars items={hourItems} compact={true} />
@@ -413,7 +414,7 @@
         {#if showYearChart}
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">Year over year</Card.Title>
+              <Card.Title class="text-sm">{m.account_year_over_year()}</Card.Title>
             </Card.Header>
             <Card.Content>
               <ActivityBars items={yearItems} />
@@ -459,7 +460,7 @@
             <Film class="size-4" />
             Titles watched this year
           </Card.Title>
-          <Card.Description>Your top picks by watch time</Card.Description>
+          <Card.Description>{m.account_top_watch_time()}</Card.Description>
         </Card.Header>
         <Card.Content>
           <div class="flex gap-3 overflow-x-auto pb-2">
@@ -591,7 +592,7 @@
       <Card.Root>
         <Card.Content class="flex flex-col items-center gap-2 p-10 text-center">
           <Sparkles class="size-6 text-muted-foreground" />
-          <p class="font-medium">Nothing to analyze yet</p>
+          <p class="font-medium">{m.account_nothing_analyze()}</p>
           <p class="max-w-sm text-sm text-muted-foreground">
             Watch a few titles and your stats will start appearing here. Finish,
             rate, or drop titles to build your taste profile.

@@ -3,6 +3,7 @@ import { hasAired } from "$lib/nextEpisode";
 import { libraryChanged } from "$lib/stores/library";
 import type { LibraryEntry } from "$lib/types/library";
 import type { Media, TVEpisode, TVSeason } from "$lib/types/tmdb";
+import * as m from "$lib/paraglide/messages.js";
 
 export type MediaUtilityAction =
   | "mark-watched"
@@ -43,37 +44,39 @@ export function mediaUtilityItems(
       id: "mark-watched",
       label:
         media.media_type === "tv"
-          ? "Mark aired episodes watched"
-          : "Mark as watched",
+          ? m.media_mark_episodes_watched()
+          : m.media_mark_movie_watched(),
       sublabel:
         media.media_type === "tv"
-          ? "Completes every released regular episode"
-          : "Completes the movie and moves it to Finished",
+          ? m.media_mark_episodes_watched_description()
+          : m.media_mark_movie_watched_description(),
     });
   }
   if (state.hasProgress || state.entry?.status === "finished") {
     items.push({
       id: "mark-unwatched",
-      label: "Reset watch progress",
+      label: m.media_reset_progress(),
       sublabel:
         media.media_type === "tv"
-          ? "Marks every saved episode unwatched"
-          : "Marks the movie unwatched",
+          ? m.media_reset_episodes_description()
+          : m.media_reset_movie_description(),
       destructive: true,
     });
   }
   items.push({
     id: "toggle-not-interested",
-    label: state.dismissed ? "Undo not interested" : "Not interested",
+    label: state.dismissed
+      ? m.media_undo_not_interested()
+      : m.media_not_interested(),
     sublabel: state.dismissed
-      ? "Allow this title in recommendations again"
-      : "Reduce similar recommendations",
+      ? m.media_undo_not_interested_description()
+      : m.media_not_interested_description(),
   });
   if (state.entry) {
     items.push({
       id: "remove-from-library",
-      label: "Remove from My List",
-      sublabel: "Watch history is preserved",
+      label: m.media_remove_library(),
+      sublabel: m.media_history_preserved(),
       destructive: true,
     });
   }

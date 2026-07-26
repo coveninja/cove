@@ -1,5 +1,6 @@
 <script lang="ts">
   import {untrack} from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
   import type {Media} from "$lib/types/tmdb";
   import {api} from "$lib/api";
   import {ScrollArea} from "$lib/components/ui/scroll-area/index.js";
@@ -28,7 +29,7 @@
   // the fetch begins so skeletons only appear once a request is actually in flight.
   let featuredRow = $state<Row>({
     key: "featured",
-    header: "Popular movies",
+    header: m.home_popular_movies(),
     medias: [],
     loading: false,
   });
@@ -45,11 +46,11 @@
     const genre = genreId !== null ? genreList.find((g) => g.id === genreId) : null;
     const header = genre
       ? type === "movie"
-        ? `${genre.name} movies`
-        : `${genre.name} shows`
+        ? m.explore_genre_movies({ genre: genre.name })
+        : m.explore_genre_shows({ genre: genre.name })
       : type === "movie"
-        ? "Popular movies"
-        : "Popular shows";
+        ? m.home_popular_movies()
+        : m.explore_popular_shows();
 
     untrack(() => {
       featuredRow = { key: "featured", header, medias: [], loading: true };
@@ -84,7 +85,10 @@
 
         genreRows = list.slice(0, 8).map((g) => ({
           key: `genre-${g.id}`,
-          header: type === "movie" ? `${g.name} movies` : `${g.name} shows`,
+          header:
+            type === "movie"
+              ? m.explore_genre_movies({ genre: g.name })
+              : m.explore_genre_shows({ genre: g.name }),
           medias: [] as Media[],
           loading: true,
         }));
@@ -116,7 +120,7 @@
   <!-- Header + type tabs + genre chips (outside ScrollArea for horizontal scroll) -->
   <div class="flex shrink-0 flex-col gap-3 px-6 pb-4">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold tracking-tight">Explore</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">{m.explore_title()}</h1>
       <div class="flex gap-4">
         <Select.Root
                 type="single"
@@ -125,11 +129,11 @@
         >
           <Select.Trigger class="w-48">
             {selectedGenreId !== null
-                    ? (genres.find((g) => g.id === selectedGenreId)?.name ?? "Genre")
-                    : "All genres"}
+                    ? (genres.find((g) => g.id === selectedGenreId)?.name ?? m.explore_genre())
+                    : m.explore_all_genres()}
           </Select.Trigger>
           <Select.Content>
-            <Select.Item value="">All genres</Select.Item>
+            <Select.Item value="">{m.explore_all_genres()}</Select.Item>
             {#each genres as genre (genre.id)}
               <Select.Item value={String(genre.id)}>{genre.name}</Select.Item>
             {/each}
@@ -141,14 +145,14 @@
                   size="default"
                   onclick={() => (mediaType = "movie")}
           >
-            Movies
+            {m.explore_movies()}
           </Button>
           <Button
                   variant={mediaType === "tv" ? "secondary" : "ghost"}
                   size="default"
                   onclick={() => (mediaType = "tv")}
           >
-            TV Shows
+            {m.explore_tv()}
           </Button>
         </ButtonGroup.Root>
 

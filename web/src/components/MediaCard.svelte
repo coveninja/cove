@@ -17,6 +17,7 @@
   import { CircleCheckBig, HeartOff } from "lucide-svelte";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
+  import { activeLocale } from "$lib/i18n";
 
   let {
     media,
@@ -79,6 +80,8 @@
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
+  const posterLocale = activeLocale();
+  const posterLocaleFallbacks = posterLocale === "en" ? [null] : ["en", null];
 
   // ── Data fetching (hover card only) ─────────────────────────────────────────
   function fetchData(): void {
@@ -297,8 +300,8 @@
         {#if logoLoaded && images.posters.length > 0}
           <img
             src={getImageOpt(images, "posters", {
-              iso: "en",
-              voteAverage: 5,
+              iso: posterLocale,
+              isoFallbacks: posterLocaleFallbacks,
               randomize: true,
             })}
             alt={title}

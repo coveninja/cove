@@ -16,6 +16,7 @@
   import { animate } from "animejs";
   import { pressable } from "../lib/pressable";
   import MobileMediaActionsSheet from "./MobileMediaActionsSheet.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -262,7 +263,7 @@
   let showStreams = $state(false);
   let streamMaxQuality = $state<string | null>(null);
   const streamsToggleLabel = $derived(
-    media.media_type === "tv" ? "Episodes" : "Choose a source",
+    media.media_type === "tv" ? m.media_episodes() : m.streams_choose_source(),
   );
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -410,7 +411,7 @@
     class="absolute right-3 z-10 flex size-11 items-center justify-center rounded-full bg-black/50 text-white"
     style="top: calc(0.5rem + var(--safe-top));"
     onclick={closeSheet}
-    aria-label="Close"
+    aria-label={m.common_close()}
     type="button"
   >
     <X class="size-5" />
@@ -649,7 +650,7 @@
       <!-- Cast row (names only — cast credits do not include profile photos) -->
       {#if castNames.length}
         <div class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-foreground">Cast</h3>
+          <h3 class="text-sm font-semibold text-foreground">{m.media_cast()}</h3>
           <div
             class="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]"
             style="-webkit-overflow-scrolling: touch;"
@@ -668,7 +669,7 @@
       <!-- More like this (horizontal poster scroll) -->
       {#if similar.length}
         <div class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-foreground">More like this</h3>
+          <h3 class="text-sm font-semibold text-foreground">{m.media_more_like_this()}</h3>
           <div
             class="flex gap-3 overflow-x-auto pb-2 [scrollbar-width:none]"
             style="-webkit-overflow-scrolling: touch;"

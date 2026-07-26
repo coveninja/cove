@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type LibraryStatus, STATUS_LABELS, STATUS_COLORS } from "$lib/api";
+  import { api, statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import {
@@ -18,6 +18,7 @@
     performMediaUtilityAction,
     type MediaUtilityAction,
   } from "$lib/mediaActions";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     libraryEntry,
@@ -42,6 +43,7 @@
   const utilityItems = $derived(
     mediaUtilityItems(media, { entry: libraryEntry, dismissed, hasProgress }),
   );
+  const statuses: LibraryStatus[] = ["watch_later", "watching", "finished", "dropped"];
 
   function animateBookmarkIn(el: HTMLElement): void {
     animate(el, {
@@ -129,14 +131,14 @@
   <ContextMenu.SubTrigger>
     <span class="flex items-center justify-start gap-4 align-middle">
       <List />
-      Add to List
+      {m.media_add_list()}
     </span>
   </ContextMenu.SubTrigger>
   <ContextMenu.SubContent class="w-48">
     <p class="px-2 py-1.5 text-center text-xs text-muted-foreground">
-      Click to add or remove
+      {m.my_list_toggle_description()}
     </p>
-    {#each Object.entries(STATUS_LABELS) as [value, label] (value)}
+    {#each statuses as value (value)}
       {@const isActive = libraryEntry?.status === value}
       <ContextMenu.Item
         onclick={(e) => {
@@ -153,7 +155,7 @@
             {/if}
           </span>
           <span class="size-2 shrink-0 rounded-full {STATUS_COLORS[value as LibraryStatus].dot}"></span>
-          {label}
+          {statusLabel(value)}
         </span>
       </ContextMenu.Item>
     {/each}

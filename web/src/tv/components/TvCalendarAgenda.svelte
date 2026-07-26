@@ -11,6 +11,7 @@
     ChevronUp,
   } from "lucide-svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import * as m from "$lib/paraglide/messages.js";
   import {
     groupByDay,
     calendarSummary,
@@ -210,7 +211,7 @@
         class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-[transform,filter] duration-150 focus:scale-[1.02] focus:brightness-[1.15] focus:outline-none"
       >
         <CalendarDays class="size-5 shrink-0 text-muted-foreground" />
-        <span class="flex-1 text-base font-semibold">Calendar</span>
+        <span class="flex-1 text-base font-semibold">{m.calendar_calendar()}</span>
         {#if expanded}
           <ChevronUp class="size-5 shrink-0 text-muted-foreground" />
         {:else}
@@ -447,7 +448,7 @@
                         </span>
                       {:else if item.kind === "movie"}
                         <span class="shrink-0 text-sm text-muted-foreground"
-                          >release</span
+                          >{m.common_release()}</span
                         >
                       {/if}
                     </button>

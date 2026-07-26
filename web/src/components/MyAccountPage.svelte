@@ -18,6 +18,7 @@
   import InsightsPage from "./InsightsPage.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import AuthDialog from "./AuthDialog.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     visible = true,
@@ -143,7 +144,7 @@
   <div class="mx-auto mt-24 flex w-full max-w-4xl flex-col gap-6 p-6">
     <!-- Page header -->
     <header class="flex flex-col gap-1">
-      <h1 class="text-2xl font-bold">My Account</h1>
+      <h1 class="text-2xl font-bold">{m.account_title()}</h1>
       <p class="text-muted-foreground text-sm">
         Manage your account, profiles, and viewing insights.
       </p>
@@ -152,7 +153,7 @@
     <!-- Account card -->
     <Card.Root>
       <Card.Header>
-        <Card.Title>Account</Card.Title>
+        <Card.Title>{m.nav_account()}</Card.Title>
       </Card.Header>
       <Card.Content class="flex flex-col gap-3">
         {#if auth.session}
@@ -201,12 +202,12 @@
     <!-- Profiles card -->
     <Card.Root>
       <Card.Header>
-        <Card.Title>Profiles</Card.Title>
+        <Card.Title>{m.account_profiles()}</Card.Title>
       </Card.Header>
       <Card.Content
         class="flex flex-col gap-1"
         role="list"
-        aria-label="Profiles"
+        aria-label={m.account_profiles()}
       >
         {#each auth.profiles as profile (profile.id)}
           <div
@@ -248,12 +249,12 @@
                   >
                     {#if auth.activeProfile?.id === profile.id}
                       <Check class="text-accent size-3" />
-                      <span class="text-accent">Active</span>
+                      <span class="text-accent">{m.account_active()}</span>
                     {/if}
                     {#if profile.is_primary}
                       <span
                         class="border-border text-muted-foreground rounded border px-1 py-0.5 text-[10px]"
-                        >Primary</span
+                        >{m.account_primary()}</span
                       >
                     {/if}
                   </span>
@@ -337,7 +338,7 @@
 
 {#if deleteTarget}
   <ConfirmDialog
-    title="Delete profile?"
+    title={m.account_delete_confirm()}
     body={`"${deleteTarget.name}" and all of its watch history, library and settings will be permanently deleted. This cannot be undone.`}
     confirmLabel="Delete"
     loading={deleting}

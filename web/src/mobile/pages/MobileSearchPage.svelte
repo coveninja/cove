@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { Search } from "lucide-svelte";
   import { Spinner } from "$lib/components/ui/spinner";
@@ -225,7 +226,7 @@
     <input
       bind:this={inputEl}
       type="search"
-      placeholder="Search movies & TV…"
+      placeholder={m.search_placeholder()}
       class="h-9 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
       bind:value={query}
     />
@@ -236,7 +237,7 @@
     <div
       class="flex gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
     >
-      {#each [["movie", "Movies"], ["tv", "TV"], ["person", "People"], ["provider", "Providers"]] as [key, label] (key)}
+      {#each [["movie", m.search_movies()], ["tv", m.search_tv_shows()], ["person", m.search_people()], ["provider", m.search_providers()]] as [key, label] (key)}
         <button
           type="button"
           onclick={() => toggleType(key)}
@@ -253,7 +254,7 @@
     {#if !loading && keywords.length > 1}
       <div class="px-4 pb-3">
         <p class="mb-1.5 text-xs font-medium text-muted-foreground">
-          More to Explore:
+          {m.search_more_to_explore()}:
         </p>
         <div
           class="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -289,7 +290,7 @@
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              Top Results
+            {m.search_top_results()}
             </h2>
             <div class="grid grid-cols-3 gap-2" data-search-grid="top-results">
               {#each topResults as media (`${media.media_type}:${media.id}`)}
@@ -310,7 +311,7 @@
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              People
+              {m.search_people()}
             </h2>
             <div
               class="flex gap-4 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -330,7 +331,7 @@
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              Providers
+              {m.search_providers()}
             </h2>
             <div
               class="flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -353,7 +354,7 @@
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              Movies
+              {m.search_movies()}
             </h2>
             <div class="grid grid-cols-3 gap-2">
               {#each movies as media (media.id)}
@@ -374,7 +375,7 @@
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              TV Shows
+              {m.search_tv_shows()}
             </h2>
             <div class="grid grid-cols-3 gap-2">
               {#each tv as media (media.id)}
@@ -391,7 +392,7 @@
 
         {#if !anyVisible}
           <p class="pt-8 text-center text-sm text-muted-foreground">
-            No results found.
+            {m.search_no_results()}
           </p>
         {/if}
       </div>
@@ -402,7 +403,7 @@
       class="flex h-48 flex-col items-center justify-center gap-2 text-muted-foreground"
     >
       <Search class="size-8 opacity-30" />
-      <p class="text-sm">Type to search…</p>
+      <p class="text-sm">{m.search_start_typing()}</p>
     </div>
   {/if}
 </div>

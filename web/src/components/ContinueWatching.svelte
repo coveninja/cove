@@ -13,6 +13,7 @@
   import { SvelteMap } from "svelte/reactivity";
   import { animate } from "animejs";
   import { nextUnwatchedAiredEpisode as nextUnwatchedAiredEpisodeShared } from "$lib/nextEpisode";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -244,7 +245,7 @@
 {#if loading || items.length > 0}
   <div class="w-full space-y-3 px-4">
     <div class="ml-12 flex items-center justify-between px-1">
-      <h2 class="text-lg font-semibold">Continue Watching</h2>
+      <h2 class="text-lg font-semibold">{m.home_continue_watching()}</h2>
     </div>
 
     <div class="flex items-center justify-between gap-2 overflow-hidden">
@@ -253,7 +254,7 @@
                 onclick={() => scrollByCards(-1)}
                 variant="outline"
                 size="icon"
-                aria-label="Scroll left"
+                aria-label={m.common_scroll_left()}
         >
           <ChevronLeft class="size-4" />
         </Button>
@@ -279,7 +280,7 @@
         onclick={() => scrollByCards(1)}
         variant="outline"
         size="icon"
-        aria-label="Scroll right"
+        aria-label={m.common_scroll_right()}
       >
         <ChevronRight class="size-4" />
       </Button>

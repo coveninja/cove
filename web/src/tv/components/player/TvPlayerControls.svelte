@@ -18,6 +18,7 @@
   import { focusable, focusGroup } from "../../focus/actions";
   import TvSeekBar from "./TvSeekBar.svelte";
   import type { ChapterBar } from "./TvSeekBar.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@
     class="flex shrink-0 items-start justify-between bg-gradient-to-b from-black/75 to-transparent px-8 pb-10 pt-6"
     role="toolbar"
     tabindex={-1}
-    aria-label="Top controls"
+    aria-label={m.player_top_controls()}
   >
     <!-- Title + episode label -->
     <div class="flex min-w-0 flex-1 flex-col">
@@ -195,7 +196,7 @@
         type="button"
         class="flex size-12 items-center justify-center rounded-full text-white hover:bg-white/20 focus:bg-white/20"
         onclick={onSeekBack}
-        aria-label="Seek back 10 seconds"
+        aria-label={m.player_seek_back()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <SkipBack class="size-6" />
@@ -207,7 +208,7 @@
         type="button"
         class="flex size-14 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm hover:bg-white/35 focus:bg-white/35"
         onclick={onPlayPause}
-        aria-label={Player.paused ? "Play" : "Pause"}
+        aria-label={Player.paused ? m.player_play() : m.player_pause()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         {#if Player.paused}
@@ -222,7 +223,7 @@
         type="button"
         class="flex size-12 items-center justify-center rounded-full text-white hover:bg-white/20 focus:bg-white/20"
         onclick={onSeekForward}
-        aria-label="Seek forward 10 seconds"
+        aria-label={m.player_seek_forward()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <SkipForward class="size-6" />
@@ -241,12 +242,12 @@
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
           onclick={() => { audioPanelOpen = true; }}
-          aria-label="Audio tracks"
+          aria-label={m.player_audio_tracks()}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
           <Headphones class="size-5 shrink-0" />
           <span class="max-w-24 truncate text-sm">
-            {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
+            {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || m.player_audio()}
           </span>
         </button>
       {/if}
@@ -257,14 +258,14 @@
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
           onclick={() => { subsPanelOpen = true; }}
-          aria-label="Subtitles"
+          aria-label={m.player_subtitles()}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
           <Captions class="size-5 shrink-0" />
           <span class="max-w-24 truncate text-sm">
             {subSelection.kind === "off"
-              ? "Subs"
-              : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? "Subs")}
+              ? m.player_subtitles()
+              : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? m.player_subtitles())}
           </span>
         </button>
       {/if}
@@ -274,7 +275,7 @@
         type="button"
         class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
         onclick={() => { speedPanelOpen = true; }}
-        aria-label="Playback speed"
+        aria-label={m.player_speed()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <Gauge class="size-5 shrink-0" />
@@ -286,7 +287,7 @@
         type="button"
         class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
         onclick={onCycleAspect}
-        aria-label="Aspect ratio"
+        aria-label={m.player_aspect_ratio()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <Ratio class="size-5 shrink-0" />
@@ -299,11 +300,11 @@
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
           onclick={() => { episodesPanelOpen = true; }}
-          aria-label="Episodes"
+          aria-label={m.player_episodes()}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
           <ListVideo class="size-5 shrink-0" />
-          <span class="text-sm">Episodes</span>
+          <span class="text-sm">{m.player_episodes()}</span>
         </button>
       {/if}
 
@@ -312,7 +313,7 @@
         type="button"
         class="flex size-11 items-center justify-center rounded-full text-white hover:bg-white/20 focus:bg-white/20"
         onclick={() => onclose?.()}
-        aria-label="Close player"
+        aria-label={m.player_close()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <X class="size-6" />

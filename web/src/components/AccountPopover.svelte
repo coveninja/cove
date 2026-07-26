@@ -17,6 +17,7 @@
   import AuthDialog from "./AuthDialog.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import type { Page } from "$lib/types/types";
+  import * as m from "$lib/paraglide/messages.js";
 
   let { onSelectPage = () => {} }: { onSelectPage?: (p: Page) => void } =
     $props();
@@ -86,7 +87,7 @@
 <Popover.Root bind:open>
   <Popover.Trigger>
     {#snippet child({ props })}
-      <Button variant="outline" size="icon" aria-label="Account" {...props}>
+      <Button variant="outline" size="icon" aria-label={m.nav_account()} {...props}>
         {#if auth.session}
           <span
             class="flex size-full items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground"
@@ -104,7 +105,7 @@
     <div class="flex flex-col">
       <!-- Profile list -->
       <div class="px-3 py-2">
-        <p class="pb-1 text-xs font-medium text-muted-foreground">Profiles</p>
+        <p class="pb-1 text-xs font-medium text-muted-foreground">{m.account_profiles()}</p>
         {#each auth.profiles as profile (profile.id)}
           <button
             type="button"
@@ -131,7 +132,7 @@
             <!-- svelte-ignore a11y_autofocus -->
             <input
               type="text"
-              placeholder="Profile name"
+              placeholder={m.account_profile_name()}
               class="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               bind:value={newProfileName}
               onkeydown={(e) => {
@@ -183,7 +184,7 @@
 
       <!-- Account section -->
       <div class="px-3 py-2">
-        <p class="pb-1 text-xs font-medium text-muted-foreground">Account</p>
+        <p class="pb-1 text-xs font-medium text-muted-foreground">{m.nav_account()}</p>
         {#if auth.session}
           <p class="mb-2 truncate text-xs text-muted-foreground">
             {auth.session.email}

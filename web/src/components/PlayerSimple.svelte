@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import "vidstack/bundle";
   import "vidstack/svelte";
   import "vidstack/player/styles/base.css";
@@ -223,7 +224,7 @@
       <media-provider class="h-full w-full"></media-provider>
       <button
         type="button"
-        aria-label="Toggle playback"
+        aria-label={m.player_play_pause()}
         class="absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none border-none bg-transparent p-0"
         onclick={(e) => {
           e.stopPropagation();

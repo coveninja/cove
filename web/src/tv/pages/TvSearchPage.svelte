@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
+  import * as m from "$lib/paraglide/messages.js";
   import { Search } from "lucide-svelte";
   import { Spinner } from "$lib/components/ui/spinner";
   import TvMediaCard from "../components/TvMediaCard.svelte";
@@ -191,7 +192,7 @@
       <input
         bind:this={inputEl}
         type="search"
-        placeholder="Search movies & TV…"
+        placeholder={m.search_placeholder()}
         class="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
         bind:value={query}
       />
@@ -207,7 +208,7 @@
         class="flex items-center gap-3"
         data-tv-focus-group="search-filters"
       >
-        {#each [["movie", "Movies"], ["tv", "TV"], ["person", "People"], ["provider", "Providers"]] as [key, label] (key)}
+        {#each [["movie", m.search_movies()], ["tv", m.search_tv_shows()], ["person", m.search_people()], ["provider", m.search_providers()]] as [key, label] (key)}
           <button
             type="button"
             use:focusable={{ groupId: "search-filters" }}
@@ -228,7 +229,7 @@
     {#if !loading && keywords.length > 1}
       <div class="shrink-0">
         <p class="ml-4 mb-2 text-sm font-medium text-muted-foreground">
-          More to Explore:
+          {m.search_more_to_explore()}:
         </p>
         <div
           use:focusGroup={{
@@ -263,7 +264,7 @@
               <h2
                 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
               >
-                Top Results
+                {m.search_top_results()}
               </h2>
               <div
                 use:focusGroup={{
@@ -288,7 +289,7 @@
               <h2
                 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
               >
-                People
+                {m.search_people()}
               </h2>
               <div
                 use:focusGroup={{
@@ -314,7 +315,7 @@
               <h2
                 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
               >
-                Providers
+                {m.search_providers()}
               </h2>
               <div
                 use:focusGroup={{
@@ -340,7 +341,7 @@
               <h2
                 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
               >
-                Movies
+                {m.search_movies()}
               </h2>
               <div
                 use:focusGroup={{
@@ -363,7 +364,7 @@
               <h2
                 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
               >
-                TV Shows
+                {m.search_tv_shows()}
               </h2>
               <div
                 use:focusGroup={{
@@ -382,7 +383,7 @@
 
           {#if !anyVisible}
             <p class="pt-8 text-center text-base text-muted-foreground">
-              No results found.
+              {m.search_no_results()}
             </p>
           {/if}
         </div>
@@ -394,7 +395,7 @@
       class="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground"
     >
       <Search class="size-12 opacity-30" />
-      <p class="text-base">Type to search…</p>
+      <p class="text-base">{m.search_start_typing()}</p>
     </div>
   {/if}
 </div>

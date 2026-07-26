@@ -109,6 +109,27 @@ func TestMergeFrom_AcceptsNewer(t *testing.T) {
 	assert.True(t, st.Get().OnboardingDone, "a genuinely newer incoming merge must be accepted")
 }
 
+func TestUILanguagePersistsAndRoamsWithProfile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	local := st.Get()
+	local.UILanguage = "tr"
+	require.NoError(t, st.Set(local))
+	assert.Equal(t, "tr", st.Get().UILanguage)
+
+	reloaded, err := New("test")
+	require.NoError(t, err)
+	assert.Equal(t, "tr", reloaded.Get().UILanguage)
+
+	remote := reloaded.Get()
+	remote.UILanguage = "en"
+	remote.UpdatedAt = remote.UpdatedAt.Add(time.Hour)
+	reloaded.MergeFrom(remote)
+	assert.Equal(t, "en", reloaded.Get().UILanguage)
+}
+
 // TestMergeFrom_PreservesDeviceLocalNetworkFields verifies that a Supabase
 // pull never overwrites settings controlling this device's LAN exposure.
 func TestMergeFrom_PreservesDeviceLocalNetworkFields(t *testing.T) {

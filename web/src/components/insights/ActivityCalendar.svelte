@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { ActivityStats } from "$lib/api";
   import { fmtHours } from "./utils";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -155,7 +156,7 @@
       <CalendarDays class="size-4" />
       Activity calendar
     </Card.Title>
-    <Card.Description>Trailing 12 months</Card.Description>
+    <Card.Description>{m.account_trailing_months()}</Card.Description>
   </Card.Header>
 
   <Card.Content>

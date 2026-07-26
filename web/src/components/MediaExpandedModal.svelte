@@ -24,6 +24,7 @@
   import MediaActionsPanel from "./MediaActionsPanel.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import { resolveTvWatchAction, type TvWatchAction } from "$lib/watchAction";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -155,7 +156,7 @@
   let streamMaxQuality = $state<string | null>(null);
 
   const streamsToggleLabel = $derived(
-    media.media_type === "tv" ? "Episodes" : "Choose a source",
+    media.media_type === "tv" ? m.media_episodes() : m.streams_choose_source(),
   );
 
   // ── Library state ──────────────────────────────────────────────────────────
@@ -295,7 +296,7 @@
         <button
           class="absolute top-3 right-3 z-20 flex size-9 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
           onclick={close}
-          aria-label="Close"
+          aria-label={m.common_close()}
         >
           <X class="size-5" />
         </button>
@@ -478,7 +479,7 @@
             <div class="flex w-full flex-col gap-3 md:w-56">
               {#if cast.length}
                 <div class="text-sm">
-                  <span class="text-muted-foreground">Cast: </span>
+                  <span class="text-muted-foreground">{m.media_cast()}: </span>
                   {cast.slice(0, 5).join(", ")}
                 </div>
               {/if}
@@ -540,7 +541,7 @@
           {#if similar.length}
             <div class="space-y-3">
               <Separator />
-              <h3 class="text-base font-semibold">More like this</h3>
+              <h3 class="text-base font-semibold">{m.media_more_like_this()}</h3>
               <div class="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
                 {#each similar as item (item.id)}
                   <div

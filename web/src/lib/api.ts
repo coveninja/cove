@@ -19,6 +19,7 @@ import type { Profile } from "$lib/types/profiles"; // tygo-generated
 import type { Stats as ActivityStats, TitleSeconds } from "$lib/types/activity"; // tygo-generated
 import type { CheckResult as UpdateCheckResult } from "$lib/types/updater"; // tygo-generated
 import type { CalendarItem } from "$lib/types/calendar"; // tygo-generated
+import * as m from "$lib/paraglide/messages.js";
 export type { ActivityStats, TitleSeconds, UpdateCheckResult };
 
 // Single source of truth for the backend origin. Override per-environment with
@@ -209,6 +210,19 @@ export const STATUS_LABELS: Record<LibraryStatus, string> = {
   finished: "Finished",
   dropped: "Dropped",
 };
+
+export function statusLabel(status: LibraryStatus): string {
+  switch (status) {
+    case "watch_later":
+      return m.my_list_watch_later();
+    case "watching":
+      return m.my_list_watching();
+    case "finished":
+      return m.my_list_finished();
+    case "dropped":
+      return m.my_list_dropped();
+  }
+}
 
 /** Accent color per library status, for at-a-glance color coding across the UI. */
 export const STATUS_COLORS: Record<

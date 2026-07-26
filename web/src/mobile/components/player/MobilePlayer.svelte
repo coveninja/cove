@@ -22,6 +22,7 @@
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { SvelteSet, SvelteMap } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
   import TrackSheet from "./TrackSheet.svelte";
   import EpisodeSheet from "./EpisodeSheet.svelte";
   import MobilePlayerControls from "./MobilePlayerControls.svelte";
@@ -1020,7 +1021,7 @@
 
 {#if audioSheetOpen}
   <TrackSheet
-    title="Audio"
+    title={m.player_audio()}
     items={sortedAudio.map((t) => ({ id: t.id, label: trackLabel(t, "Audio") }))}
     selectedId={selectedAudio?.id ?? null}
     onSelect={(id) => chooseAudioTrack(id as number)}
@@ -1036,7 +1037,7 @@
     <div class="space-y-4">
       <div class="space-y-2">
         <div class="flex items-center justify-between text-sm">
-          <span>Size</span>
+          <span>{m.player_size()}</span>
           <span class="tabular-nums text-white/50">
             {Math.round($settings?.subtitleSize ?? 100)}%
           </span>
@@ -1048,12 +1049,12 @@
           max={200}
           step={10}
           onValueChange={(v) => updateSubStyle({ subtitleSize: v })}
-          aria-label="Subtitle size"
+          aria-label={m.settings_subtitle_size()}
         />
       </div>
       <div class="space-y-2">
         <div class="flex items-center justify-between text-sm">
-          <span>Position</span>
+          <span>{m.player_position()}</span>
           <span class="tabular-nums text-white/50">
             {Math.round($settings?.subtitlePosition ?? 8)}%
           </span>
@@ -1065,7 +1066,7 @@
           max={90}
           step={1}
           onValueChange={(v) => updateSubStyle({ subtitlePosition: v })}
-          aria-label="Subtitle position"
+          aria-label={m.settings_subtitle_position()}
         />
       </div>
       <button
@@ -1076,7 +1077,7 @@
             subtitleBackground: !($settings?.subtitleBackground ?? false),
           })}
       >
-        <span>Background box</span>
+        <span>{m.player_background_box()}</span>
         <span
           class="relative inline-flex h-6 w-10 items-center rounded-full transition-colors {($settings?.subtitleBackground ??
           false)
@@ -1097,7 +1098,7 @@
 
 {#if subsSheetOpen}
   <TrackSheet
-    title="Subtitles"
+    title={m.player_subtitles()}
     items={subtitleRows}
     selectedId={selectedSubId}
     onSelect={(id) => {
@@ -1119,7 +1120,7 @@
 
 {#if speedSheetOpen}
   <TrackSheet
-    title="Playback speed"
+    title={m.player_speed()}
     items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {

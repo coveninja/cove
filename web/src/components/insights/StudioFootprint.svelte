@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { StudioEntry } from "$lib/api";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Building2 } from "lucide-svelte";
@@ -14,7 +15,7 @@
       <Building2 class="size-4" />
       Studio footprint
     </Card.Title>
-    <Card.Description>Studios you watch most</Card.Description>
+    <Card.Description>{m.account_studios_most()}</Card.Description>
   </Card.Header>
   <Card.Content class="flex flex-col gap-2">
     {#each studios as studio (studio.id)}

@@ -4,6 +4,7 @@
   import { Button } from "$lib/components/ui/button";
   import { X } from "lucide-svelte";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -32,7 +33,7 @@
       type="button"
       class="absolute right-4 top-4 z-10 flex size-9 items-center justify-center rounded-full text-white/70 hover:bg-white/10 hover:text-white"
       onclick={() => onClose?.()}
-      aria-label="Close player"
+      aria-label={m.player_close()}
     >
       <X class="size-5" />
     </button>

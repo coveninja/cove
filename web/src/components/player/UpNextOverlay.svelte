@@ -3,6 +3,7 @@
   import { Button } from "$lib/components/ui/button";
   import { X, SkipForward } from "lucide-svelte";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     nextEp,
@@ -35,7 +36,7 @@
         e.stopPropagation();
         onDismiss();
       }}
-      aria-label="Dismiss"
+      aria-label={m.player_dismiss()}
     >
       <X class="size-4" />
     </Button>

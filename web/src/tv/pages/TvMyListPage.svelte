@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { api, STATUS_LABELS, STATUS_COLORS, type LibraryStatus } from "$lib/api";
+  import { api, statusLabel, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import TvMediaCard from "../components/TvMediaCard.svelte";
   import TvCalendarAgenda from "../components/TvCalendarAgenda.svelte";
   import { BookMarked, Star } from "lucide-svelte";
   import { onMount } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
   import { libraryChanged } from "$lib/stores/library";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { focusGroup, focusable } from "../focus/actions";
@@ -33,14 +34,14 @@
     | "title_asc";
 
   const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-    { value: "default", label: "Recommended" },
-    { value: "watched_desc", label: "Recently watched" },
-    { value: "added_desc", label: "Recently added" },
-    { value: "added_asc", label: "Oldest added" },
-    { value: "release_desc", label: "Release date" },
-    { value: "tmdb_desc", label: "TMDB rating" },
-    { value: "personal_desc", label: "Your rating" },
-    { value: "title_asc", label: "Title A–Z" },
+    { value: "default", label: m.my_list_sort_recommended() },
+    { value: "watched_desc", label: m.my_list_sort_recently_watched() },
+    { value: "added_desc", label: m.my_list_sort_recently_added() },
+    { value: "added_asc", label: m.my_list_sort_oldest_added() },
+    { value: "release_desc", label: m.my_list_sort_release_date() },
+    { value: "tmdb_desc", label: m.my_list_sort_tmdb_rating() },
+    { value: "personal_desc", label: m.my_list_sort_your_rating() },
+    { value: "title_asc", label: m.my_list_sort_title() },
   ];
 
   let sortKey = $state<SortKey>("default");
@@ -83,7 +84,7 @@
     SECTION_ORDER
       .map((status) => ({
         status,
-        label: STATUS_LABELS[status],
+        label: statusLabel(status),
         entries: entries
           .filter(
             (e) =>
@@ -213,24 +214,24 @@
 
   const EMPTY_MESSAGES: Record<string, { heading: string; sub: string }> = {
     all: {
-      heading: "Your list is empty",
-      sub: "Open any title and use the status buttons to start tracking.",
+      heading: m.my_list_empty(),
+      sub: m.my_list_empty_tracking(),
     },
     watching: {
-      heading: "Nothing in progress",
-      sub: "Mark something as Watching to see it here.",
+      heading: m.my_list_empty_watching(),
+      sub: m.my_list_empty_watching(),
     },
     watch_later: {
-      heading: "Nothing saved for later",
-      sub: "Found something you want to watch? Hit Watch Later.",
+      heading: m.my_list_empty_later(),
+      sub: m.my_list_empty_later(),
     },
     finished: {
-      heading: "Nothing finished yet",
-      sub: "Mark a title as Finished once you're done.",
+      heading: m.my_list_empty_finished(),
+      sub: m.my_list_empty_finished(),
     },
     dropped: {
-      heading: "Nothing dropped",
-      sub: "Titles you give up on will appear here.",
+      heading: m.my_list_empty_dropped(),
+      sub: m.my_list_empty_dropped(),
     },
   };
 </script>
@@ -239,10 +240,12 @@
   <!-- Sticky header with D-pad-navigable filter controls -->
   <div class="shrink-0 space-y-3 p-4 bg-card rounded-2xl">
     <div class="flex items-baseline gap-3">
-      <h1 class="text-2xl font-bold">My List</h1>
+      <h1 class="text-2xl font-bold">{m.my_list_title()}</h1>
       {#if !loading && entries.length > 0}
         <span class="text-base text-muted-foreground">
-          {entries.length} title{entries.length !== 1 ? "s" : ""}
+          {entries.length === 1
+            ? m.my_list_title_count_one()
+            : m.my_list_titles_count({ count: entries.length })}
         </span>
       {/if}
     </div>
@@ -257,7 +260,7 @@
         use:focusGroup={{ id: "mylist-filters", policy: { type: "row" } }}
         class="flex items-center gap-2"
       >
-        {#each [["all", "All"], ["movie", "Movies"], ["tv", "TV"]] as [val, label] (val)}
+        {#each [["all", m.my_list_all()], ["movie", m.my_list_movies()], ["tv", m.my_list_shows()]] as [val, label] (val)}
           <button
             type="button"
             use:focusable={{ groupId: "mylist-filters" }}
@@ -306,8 +309,8 @@
 
         {#if sections.length === 0}
           <div class="flex h-[40vh] flex-col items-center justify-center gap-3 text-center">
-            <p class="text-xl font-medium">No titles for current filter</p>
-            <p class="text-base text-muted-foreground">Try changing the type filter above.</p>
+            <p class="text-xl font-medium">{m.my_list_no_filter()}</p>
+            <p class="text-base text-muted-foreground">{m.my_list_change_filter()}</p>
           </div>
         {:else}
           {#each sections as section (section.status)}
@@ -375,4 +378,3 @@
     </div>
   {/if}
 </div>
-

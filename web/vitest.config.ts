@@ -21,6 +21,7 @@ export default mergeConfig(
         include: ["src/**/*.{ts,svelte}"],
         exclude: [
           "src/lib/types/**", // tygo-generated from Go structs
+          "src/lib/paraglide/**", // Paraglide-generated locale runtime
           "src/lib/components/ui/**", // vendored shadcn-svelte
           "**/*.test.ts",
         ],

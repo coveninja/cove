@@ -11,6 +11,7 @@
   import { imageFade } from "../lib/imageFade";
   import { longpress } from "../lib/longpress";
   import MobileMediaActionsSheet from "./MobileMediaActionsSheet.svelte";
+  import { activeLocale } from "$lib/i18n";
 
   let {
     media,
@@ -45,6 +46,8 @@
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
+  const posterLocale = activeLocale();
+  const posterLocaleFallbacks = posterLocale === "en" ? [null] : ["en", null];
 
   // ── Library state ─────────────────────────────────────────────────────────
   $effect(() => {
@@ -120,8 +123,8 @@
       <img
         use:imageFade
         src={getImageOpt(images, "posters", {
-          iso: "en",
-          voteAverage: 5,
+          iso: posterLocale,
+          isoFallbacks: posterLocaleFallbacks,
           randomize: true,
         })}
         alt={title}

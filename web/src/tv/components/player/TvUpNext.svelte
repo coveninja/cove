@@ -3,6 +3,7 @@
   import { X, SkipForward } from "lucide-svelte";
   import { fade } from "svelte/transition";
   import { focusable } from "../../focus/actions";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     nextEp,
@@ -37,7 +38,7 @@
         type="button"
         class="flex size-6 shrink-0 items-center justify-center rounded-full text-white/60 hover:bg-white/20 focus:bg-white/20"
         onclick={onDismiss}
-        aria-label="Dismiss"
+        aria-label={m.player_dismiss()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <X class="size-4" />

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { focusable } from "../../focus/actions";
+  import * as m from "$lib/paraglide/messages.js";
 
   export type ChapterBar = {
     startFrac: number;
@@ -42,7 +43,7 @@
 
 <div
   role="slider"
-  aria-label="Seek"
+  aria-label={m.player_seek_seconds()}
   aria-valuemin={0}
   aria-valuemax={duration || 0}
   aria-valuenow={displayPos}

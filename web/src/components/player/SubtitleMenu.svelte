@@ -9,6 +9,7 @@
   import { langName, trackLabel } from "$lib/player/trackLabels";
   import type { SubSel } from "$lib/player/subtitles";
   import MenuItem from "./MenuItem.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     open = $bindable(false),
@@ -39,7 +40,7 @@
   type SubLangGroup = { label: string; items: SubMenuItem[] };
   type SubSourceSection = { source: string; groups: SubLangGroup[] };
 
-  const OTHER = "Other";
+  const OTHER = m.player_other();
 
   // Bucket items by language name and sort (Other last).
   function groupByLang(
@@ -77,14 +78,14 @@
           kind: "external" as const,
           key: `x${s.id}`,
           id: s.id,
-          label: s.lang ? langName(s.lang) : "Subtitle",
+        label: s.lang ? langName(s.lang) : m.player_subtitles(),
         },
       })),
     );
 
     const sections: SubSourceSection[] = [];
-    if (embedded.length) sections.push({ source: "Embedded", groups: embedded });
-    if (external.length) sections.push({ source: "Add-ons", groups: external });
+    if (embedded.length) sections.push({ source: m.player_embedded(), groups: embedded });
+    if (external.length) sections.push({ source: m.player_addons(), groups: external });
     return sections;
   });
 
@@ -92,13 +93,13 @@
     // Capture into a const so the discriminated-union narrowing survives into
     // the .find() callbacks below.
     const sel = subSelection;
-    if (sel.kind === "off") return "Subtitles";
+    if (sel.kind === "off") return m.player_subtitles();
     if (sel.kind === "embedded") {
       const t = Player.subtitleTracks.find((x) => x.id === sel.id);
-      return t ? trackLabel(t, "Subtitle") : "Subtitles";
+      return t ? trackLabel(t, "Subtitle") : m.player_subtitles();
     }
     const e = externalSubtitles.find((x) => x.id === sel.id);
-    return e ? langName(e.lang) : "Subtitles";
+    return e ? langName(e.lang) : m.player_subtitles();
   });
 </script>
 
@@ -117,10 +118,10 @@
     {/snippet}
   </Popover.Trigger>
   <Popover.Content side="top" align="end" class="w-60 p-1">
-    <p class="px-2 py-1.5 text-sm font-semibold text-muted-foreground">Subtitles</p>
+    <p class="px-2 py-1.5 text-sm font-semibold text-muted-foreground">{m.player_subtitles()}</p>
     <div class="max-h-72 overflow-y-auto flex flex-col gap-1">
       <MenuItem
-        label="Off"
+        label={m.player_subtitles_off()}
         active={subSelection.kind === "off"}
         onSelect={() => onSelect({ kind: "off" })}
       />
@@ -160,12 +161,12 @@
     <!-- Style controls (size / position / background box) -->
     <div class="mt-1 border-t border-border px-2 pt-2 pb-1 flex flex-col gap-2">
       <p class="pb-1 text-sm font-semibold tracking-wide text-muted-foreground/70">
-        Style
+        {m.player_style()}
       </p>
       <div class="space-y-3 py-1">
         <div class="space-y-1.5">
           <div class="flex items-center justify-between text-xs">
-            <span>Size</span>
+            <span>{m.player_size()}</span>
             <span class="tabular-nums text-muted-foreground">
               {Math.round($settings?.subtitleSize ?? 100)}%
             </span>
@@ -177,12 +178,12 @@
             max={200}
             step={10}
             onValueChange={(v) => onUpdateStyle({ subtitleSize: v })}
-            aria-label="Subtitle size"
+            aria-label={m.settings_subtitle_size()}
           />
         </div>
         <div class="space-y-1.5">
           <div class="flex items-center justify-between text-xs">
-            <span>Position</span>
+            <span>{m.player_position()}</span>
             <span class="tabular-nums text-muted-foreground">
               {Math.round($settings?.subtitlePosition ?? 8)}%
             </span>
@@ -194,12 +195,12 @@
             max={90}
             step={1}
             onValueChange={(v) => onUpdateStyle({ subtitlePosition: v })}
-            aria-label="Subtitle position"
+            aria-label={m.settings_subtitle_position()}
           />
         </div>
       </div>
       <MenuItem
-        label="Background"
+        label={m.player_background()}
         active={$settings?.subtitleBackground ?? false}
         onSelect={() =>
           onUpdateStyle({

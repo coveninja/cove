@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { Details, Media, MediaImages } from "$lib/types/tmdb";
   import { api } from "$lib/api";
   import {
@@ -245,7 +246,7 @@
   class="relative w-full overflow-hidden"
   style="height: clamp(420px, 56vw, 480px); touch-action: pan-y;"
   role="region"
-  aria-label="Featured"
+  aria-label={m.common_featured()}
   ontouchstart={onTouchStart}
   ontouchend={onTouchEnd}
 >
@@ -344,7 +345,7 @@
         type="button"
         class="flex size-11 shrink-0 items-center justify-center rounded-lg bg-white/15 text-white backdrop-blur-sm active:scale-95 active:brightness-90 transition-[transform,filter] duration-75"
         onclick={dismissCurrent}
-        aria-label="Not interested"
+        aria-label={m.media_not_interested()}
       >
         <ThumbsDown class="size-4" />
       </button>

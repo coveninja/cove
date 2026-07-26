@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { DiscoverInsights, ContributingTitle } from "$lib/api";
   import { mediaFromEntry } from "$lib/mediaFromEntry";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -145,7 +146,7 @@
       <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
         <!-- Liked radar -->
         <div class="flex flex-col items-center">
-          <p class="mb-2 font-medium text-accent/80">Liked</p>
+          <p class="mb-2 font-medium text-accent/80">{m.account_liked()}</p>
           {#if likedRadarData.length > 0}
             <Chart.Container
                     config={likedChartConfig}
@@ -197,13 +198,13 @@
               </LineChart>
             </Chart.Container>
           {:else}
-            <p class="text-sm text-muted-foreground">No liked signals yet</p>
+            <p class="text-sm text-muted-foreground">{m.account_no_liked()}</p>
           {/if}
         </div>
 
         <!-- Disliked radar -->
         <div class="flex flex-col items-center">
-          <p class="mb-2 font-medium text-red-400/80">Disliked</p>
+          <p class="mb-2 font-medium text-red-400/80">{m.account_disliked()}</p>
           {#if dislikedRadarData.length > 0}
             <Chart.Container
                     config={dislikedChartConfig}
@@ -255,7 +256,7 @@
               </LineChart>
             </Chart.Container>
           {:else}
-            <p class="text-sm text-muted-foreground">No disliked signals yet</p>
+            <p class="text-sm text-muted-foreground">{m.account_no_disliked()}</p>
           {/if}
         </div>
       </div>
@@ -267,7 +268,7 @@
 {#if (insights.top_contributors?.length ?? 0) > 0 || (insights.negative_contributors?.length ?? 0) > 0}
   <Card.Root>
     <Card.Header>
-      <Card.Title>Titles that shaped your profile</Card.Title>
+      <Card.Title>{m.account_profile_titles()}</Card.Title>
       <Card.Description>
         Positive and negative contributors to your taste
       </Card.Description>

@@ -8,6 +8,7 @@
   import { api } from "$lib/api";
   import { epKey, epProgress, progressPct } from "$lib/utils";
   import { imageFade } from "../../lib/imageFade";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -205,7 +206,7 @@
   onkeydown={() => {}}
   role="dialog"
   tabindex={-1}
-  aria-label="Episodes"
+  aria-label={m.player_episodes()}
 >
   <!-- Drag handle pill -->
   <div class="flex shrink-0 justify-center pb-1 pt-3">
@@ -213,7 +214,7 @@
   </div>
 
   <!-- Sheet title -->
-  <p class="shrink-0 px-5 pb-1 pt-3 text-base font-semibold">Episodes</p>
+  <p class="shrink-0 px-5 pb-1 pt-3 text-base font-semibold">{m.player_episodes()}</p>
 
   <!-- Season chip strip (only when more than one season) -->
   {#if seasons.length > 1}
@@ -305,7 +306,7 @@
             </span>
             <span class="block text-xs leading-snug text-white/50">
               {#if isCurrent}
-                <span class="font-medium text-accent/80">Now playing</span>{#if ep.air_date || ep.runtime} · {/if}
+                <span class="font-medium text-accent/80">{m.player_now_playing()}</span>{#if ep.air_date || ep.runtime} · {/if}
               {/if}{#if ep.air_date}{formatAirDate(ep.air_date)}{/if}{#if ep.air_date && ep.runtime} · {/if}{#if ep.runtime}{ep.runtime}m{/if}
             </span>
           </span>

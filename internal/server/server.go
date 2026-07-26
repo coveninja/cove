@@ -298,7 +298,14 @@ func Start(cfg Config) (*Handle, error) {
 	}
 	activeID := profileStore.ActiveProfileID()
 
-	tmdbClient := tmdb.New(cfg.TMDBAPIKey)
+	st, err := settings.New(activeID)
+	if err != nil {
+		log.Println("could not load settings:", err)
+	}
+
+	tmdbClient := tmdb.New(cfg.TMDBAPIKey, tmdb.WithLocaleSource(func() string {
+		return st.Get().UILanguage
+	}))
 
 	addonMgr := addons.New(activeID, func(tmdbID int) string {
 		id, err := tmdbClient.GetTVIMDBId(tmdbID)
@@ -309,10 +316,6 @@ func Start(cfg Config) (*Handle, error) {
 	})
 	nuvioMgr := nuvio.New(activeID)
 
-	st, err := settings.New(activeID)
-	if err != nil {
-		log.Println("could not load settings:", err)
-	}
 	lib, err := library.New(activeID)
 	if err != nil {
 		log.Println("could not load library:", err)

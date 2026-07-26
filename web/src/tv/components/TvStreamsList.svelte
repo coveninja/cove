@@ -18,6 +18,7 @@
   import { api, formatPosition } from "$lib/api";
   import type { WatchProgress } from "$lib/types/library";
   import { settings } from "$lib/stores/settings";
+  import * as m from "$lib/paraglide/messages.js";
   import {
     compareStreamsBy,
     formatAutoPickReason,
@@ -421,7 +422,7 @@
     <div class="flex-none border-b border-border">
       {#if loadingSeasons}
         <div class="p-4">
-          <span class="animate-pulse text-base text-muted-foreground">Loading seasons…</span>
+          <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading_seasons()}</span>
         </div>
       {:else}
         <!--
@@ -458,7 +459,7 @@
     >
       {#if loadingEpisodes}
         <div class="flex items-center justify-center py-16">
-          <span class="animate-pulse text-base text-muted-foreground">Loading episodes…</span>
+          <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading_episodes()}</span>
         </div>
       {:else}
         <div class="flex flex-col divide-y divide-border px-2 py-2">
@@ -542,7 +543,7 @@
 
       {:else}
         <!-- Movie: "Available Streams" header with progress -->
-        <h3 class="text-xl font-semibold">Available Streams</h3>
+        <h3 class="text-xl font-semibold">{m.streams_available()}</h3>
         {#if movieProgress}
           {#if movieProgress.completed}
             <p class="flex items-center gap-1.5 text-sm text-green-500">
@@ -658,7 +659,7 @@
             <!-- Auto-picking state -->
             <div class="flex flex-col items-center justify-center gap-4 py-16">
               <Spinner class="size-10" />
-              <span class="text-base text-muted-foreground">Auto-selecting the best stream…</span>
+              <span class="text-base text-muted-foreground">{m.streams_auto_selecting()}</span>
               <!-- Focusable cancel button — reached geometrically -->
               <button
                 type="button"
@@ -675,7 +676,7 @@
           {:else if loadingStreams}
             <div class="flex flex-col items-center justify-center gap-3 py-16">
               <Spinner class="size-10" />
-              <span class="animate-pulse text-base text-muted-foreground">Finding streams…</span>
+              <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading()}</span>
             </div>
 
           {:else if streams.length === 0}
@@ -688,7 +689,7 @@
 
           {:else if filteredStreams.length === 0}
             <div class="flex items-center justify-center py-16">
-              <span class="text-base text-muted-foreground">No streams match this filter.</span>
+              <span class="text-base text-muted-foreground">{m.streams_no_filter()}</span>
             </div>
 
           {:else}

@@ -18,6 +18,7 @@
   import { scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import TvMediaActionsPanel from "./TvMediaActionsPanel.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -288,7 +289,7 @@
     <button
       class="absolute right-6 top-6 z-20 flex size-12 items-center justify-center rounded-full bg-black/50 text-white"
       onclick={onclose}
-      aria-label="Close"
+      aria-label={m.common_close()}
       type="button"
     >
       <X class="size-6" />
@@ -389,13 +390,13 @@
         {overviewText}
       </p>
     {:else if detailsLoading}
-      <p class="animate-pulse text-base text-muted-foreground">Loading details…</p>
+      <p class="animate-pulse text-base text-muted-foreground">{m.media_loading_details()}</p>
     {/if}
 
     <!-- Cast row (names only) -->
     {#if castNames.length}
       <div class="flex flex-col gap-2">
-        <h3 class="text-base font-semibold text-foreground">Cast</h3>
+        <h3 class="text-base font-semibold text-foreground">{m.media_cast()}</h3>
         <div class="flex flex-wrap gap-2">
           {#each castNames as name (name)}
             <span
@@ -411,7 +412,9 @@
     <!-- Streams / episodes section — always expanded on TV (no toggle) -->
     <div class="flex flex-col gap-3">
       <h3 class="text-base font-semibold text-foreground">
-        {media.media_type === "tv" ? "Episodes & Sources" : "Sources"}
+        {media.media_type === "tv"
+          ? m.streams_episodes_sources()
+          : m.streams_sources()}
       </h3>
       <TvStreamsList
         {media}
@@ -432,7 +435,7 @@
     <!-- More like this — TvMediaCard grid, D-pad navigable via detail-similar group -->
     {#if similar.length}
       <div class="flex flex-col gap-4 pb-8">
-        <h3 class="text-base font-semibold text-foreground">More like this</h3>
+        <h3 class="text-base font-semibold text-foreground">{m.media_more_like_this()}</h3>
         <div class="grid grid-cols-6 gap-4 xl:grid-cols-8">
           {#each similar.slice(0, 16) as item (item.id)}
             <TvMediaCard
