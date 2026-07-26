@@ -37,6 +37,13 @@ type CalendarItem struct {
 	WaitingCount  int    `json:"waiting_count"` // aired-but-unwatched count for kind="available" TV
 }
 
+type episodePosition struct {
+	season  int
+	episode int
+}
+
+type completedEpisodeSet map[episodePosition]struct{}
+
 // Server owns the /api/library/calendar handler.
 type Server struct {
 	lib  *library.Library
@@ -74,12 +81,30 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 
 	entries := s.lib.AllEntries()
 
-	// Pre-index completed movies so processMovie can skip them.
+	// Pre-index completed progress so the calendar uses the same source of
+	// truth as the detail views. LibraryEntry.LastWatchedSeason/Episode only
+	// describe the most recently touched episode and can be stale or
+	// non-contiguous after manual watch actions and sync.
 	completedMovies := make(map[int]bool)
+	completedTVEpisodes := make(map[int]completedEpisodeSet)
 	for _, p := range s.lib.AllProgress() {
-		if p.MediaType == "movie" && p.Completed {
-			completedMovies[p.TmdbID] = true
+		if !p.Completed {
+			continue
 		}
+		if p.MediaType == "movie" {
+			completedMovies[p.TmdbID] = true
+			continue
+		}
+		if p.MediaType != "tv" || p.Season == nil || p.Episode == nil ||
+			*p.Season <= 0 || *p.Episode <= 0 {
+			continue
+		}
+		completed := completedTVEpisodes[p.TmdbID]
+		if completed == nil {
+			completed = make(completedEpisodeSet)
+			completedTVEpisodes[p.TmdbID] = completed
+		}
+		completed[episodePosition{season: *p.Season, episode: *p.Episode}] = struct{}{}
 	}
 
 	// Filter entries: watching or watch_later only.
@@ -106,7 +131,7 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 			if e.MediaType == "movie" {
 				items, err = s.processMovie(e, today, cutoffFuture, completedMovies)
 			} else {
-				items, err = s.processTV(e, today, cutoffFuture)
+				items, err = s.processTV(e, today, cutoffFuture, completedTVEpisodes[e.TmdbID])
 			}
 			if err != nil {
 				log.Printf("calendar: entry %d %s: %v", e.TmdbID, e.MediaType, err)
@@ -208,6 +233,7 @@ func (s *Server) processMovie(
 func (s *Server) processTV(
 	e *library.LibraryEntry,
 	today, cutoffFuture time.Time,
+	completed completedEpisodeSet,
 ) ([]CalendarItem, error) {
 	det, err := s.tmdb.GetDetails(e.TmdbID, "tv")
 	if err != nil {
@@ -221,6 +247,9 @@ func (s *Server) processTV(
 			realSeasons = append(realSeasons, s)
 		}
 	}
+	sort.Slice(realSeasons, func(i, j int) bool {
+		return realSeasons[i].SeasonNumber < realSeasons[j].SeasonNumber
+	})
 
 	poster := rewritePosterURL(e.PosterPath)
 	var items []CalendarItem
@@ -230,50 +259,36 @@ func (s *Server) processTV(
 		airedS := det.LastEpisodeToAir.SeasonNumber
 		airedE := det.LastEpisodeToAir.EpisodeNumber
 
-		watchedS := 0
-		watchedE := 0
-		if e.LastWatchedSeason != nil {
-			watchedS = *e.LastWatchedSeason
-		}
-		if e.LastWatchedEpisode != nil {
-			watchedE = *e.LastWatchedEpisode
-		}
+		nextS, nextE, waiting := airedEpisodeBacklog(realSeasons, airedS, airedE, completed)
+		if nextS > 0 && nextE > 0 {
+			item := CalendarItem{
+				Kind:          "available",
+				TmdbID:        e.TmdbID,
+				MediaType:     "tv",
+				Title:         e.Title,
+				PosterPath:    poster,
+				SeasonNumber:  intPtr(nextS),
+				EpisodeNumber: intPtr(nextE),
+				WaitingCount:  waiting,
+				Date:          e.LastAirDate, // fallback; enriched below
+			}
 
-		// aired position > watched position?
-		if airedAhead(airedS, airedE, watchedS, watchedE) {
-			nextS, nextE := nextEpisode(realSeasons, watchedS, watchedE)
-			if nextS > 0 && nextE > 0 {
-				waiting := computeWaiting(realSeasons, watchedS, watchedE, airedS, airedE)
-
-				item := CalendarItem{
-					Kind:          "available",
-					TmdbID:        e.TmdbID,
-					MediaType:     "tv",
-					Title:         e.Title,
-					PosterPath:    poster,
-					SeasonNumber:  intPtr(nextS),
-					EpisodeNumber: intPtr(nextE),
-					WaitingCount:  waiting,
-					Date:          e.LastAirDate, // fallback; enriched below
-				}
-
-				// Enrich with episode metadata from the season.
-				eps, err := s.tmdb.GetEpisodesCached(e.TmdbID, nextS)
-				if err == nil {
-					for _, ep := range eps {
-						if ep.EpisodeNumber == nextE {
-							item.EpisodeName = ep.Name
-							item.StillPath = ep.StillPath
-							if ep.AirDate != "" {
-								item.Date = ep.AirDate
-							}
-							break
+			// Enrich with episode metadata from the season.
+			eps, err := s.tmdb.GetEpisodesCached(e.TmdbID, nextS)
+			if err == nil {
+				for _, ep := range eps {
+					if ep.EpisodeNumber == nextE {
+						item.EpisodeName = ep.Name
+						item.StillPath = ep.StillPath
+						if ep.AirDate != "" {
+							item.Date = ep.AirDate
 						}
+						break
 					}
 				}
-
-				items = append(items, item)
 			}
+
+			items = append(items, item)
 		}
 	}
 
@@ -348,84 +363,40 @@ func (s *Server) collectFutureEps(
 	return items, nil
 }
 
-// airedAhead reports whether the aired position (aS, aE) is strictly ahead of
-// the watched position (wS, wE).
-func airedAhead(aS, aE, wS, wE int) bool {
-	if aS != wS {
-		return aS > wS
-	}
-	return aE > wE
-}
-
-// nextEpisode returns the (season, episode) immediately after (watchedS, watchedE)
-// using realSeasons episode counts. Returns (0,0) if unknown.
-func nextEpisode(realSeasons []tmdb.TVSeason, watchedS, watchedE int) (int, int) {
-	if len(realSeasons) == 0 {
-		return 0, 0
-	}
-	if watchedS == 0 {
-		// Never started: first real season, episode 1.
-		return realSeasons[0].SeasonNumber, 1
-	}
-	for i, s := range realSeasons {
-		if s.SeasonNumber == watchedS {
-			if watchedE < s.EpisodeCount {
-				return watchedS, watchedE + 1
-			}
-			// Last episode of this season — move to next real season.
-			if i+1 < len(realSeasons) {
-				return realSeasons[i+1].SeasonNumber, 1
-			}
-			return 0, 0 // no next season known
-		}
-	}
-	return 0, 0
-}
-
-// computeWaiting counts episodes strictly after (watchedS, watchedE) up through
-// and including (airedS, airedE) using season episode counts. Minimum 1.
-func computeWaiting(realSeasons []tmdb.TVSeason, watchedS, watchedE, airedS, airedE int) int {
-	count := 0
-	// Walk real seasons in order, counting episodes after the watch position up
-	// through the aired position.
-	inRange := false
+// airedEpisodeBacklog finds the earliest aired episode without a completed
+// progress record and counts all such episodes through the latest aired
+// position. Completion records are authoritative because watch history need
+// not be contiguous and the most recently touched episode may be incomplete.
+func airedEpisodeBacklog(
+	realSeasons []tmdb.TVSeason,
+	airedS, airedE int,
+	completed completedEpisodeSet,
+) (nextS, nextE, waiting int) {
 	for _, s := range realSeasons {
-		sn := s.SeasonNumber
-		total := s.EpisodeCount
-
-		if sn < watchedS {
+		if s.SeasonNumber > airedS {
+			break
+		}
+		lastEpisode := s.EpisodeCount
+		if s.SeasonNumber == airedS && airedE < lastEpisode {
+			lastEpisode = airedE
+		}
+		if lastEpisode <= 0 {
 			continue
 		}
-		if sn == watchedS {
-			inRange = true
-			startEp := watchedE + 1
-			if sn == airedS {
-				// Watched and aired are in the same season.
-				if airedE >= startEp {
-					count += airedE - startEp + 1
-				}
-				break
+
+		for episode := 1; episode <= lastEpisode; episode++ {
+			position := episodePosition{season: s.SeasonNumber, episode: episode}
+			if _, ok := completed[position]; ok {
+				continue
 			}
-			count += total - watchedE
-			continue
+			if waiting == 0 {
+				nextS = s.SeasonNumber
+				nextE = episode
+			}
+			waiting++
 		}
-		if !inRange {
-			inRange = true
-		}
-		if sn == airedS {
-			count += airedE
-			break
-		}
-		if sn > airedS {
-			break
-		}
-		count += total
 	}
-
-	if count < 1 {
-		count = 1
-	}
-	return count
+	return nextS, nextE, waiting
 }
 
 func intPtr(v int) *int { return &v }

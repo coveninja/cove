@@ -48,82 +48,81 @@ func testDay(t *testing.T) (time.Time, time.Time) {
 	return today, today.AddDate(0, 0, 90)
 }
 
-func TestAiredAhead(t *testing.T) {
-	tests := []struct {
-		name                   string
-		airedS, airedE, wS, wE int
-		want                   bool
-	}{
-		{"later episode", 1, 4, 1, 3, true},
-		{"same episode", 1, 3, 1, 3, false},
-		{"earlier episode", 1, 2, 1, 3, false},
-		{"later season", 2, 1, 1, 99, true},
-		{"earlier season", 1, 99, 2, 1, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := airedAhead(tt.airedS, tt.airedE, tt.wS, tt.wE); got != tt.want {
-				t.Fatalf("airedAhead() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNextEpisode(t *testing.T) {
-	seasons := []tmdb.TVSeason{
-		{SeasonNumber: 1, EpisodeCount: 2},
-		{SeasonNumber: 2, EpisodeCount: 3},
-	}
-	tests := []struct {
-		name               string
-		watchedS, watchedE int
-		wantSeason, wantEp int
-	}{
-		{"never started", 0, 0, 1, 1},
-		{"within season", 1, 1, 1, 2},
-		{"crosses season", 1, 2, 2, 1},
-		{"end of known show", 2, 3, 0, 0},
-		{"unknown season", 4, 1, 0, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s, e := nextEpisode(seasons, tt.watchedS, tt.watchedE)
-			if s != tt.wantSeason || e != tt.wantEp {
-				t.Fatalf("nextEpisode() = S%dE%d, want S%dE%d", s, e, tt.wantSeason, tt.wantEp)
-			}
-		})
-	}
-
-	if s, e := nextEpisode(nil, 0, 0); s != 0 || e != 0 {
-		t.Fatalf("nextEpisode(nil) = S%dE%d, want unknown", s, e)
-	}
-}
-
-func TestComputeWaitingAcrossSeasons(t *testing.T) {
+func TestAiredEpisodeBacklogUsesCompletedRecords(t *testing.T) {
 	seasons := []tmdb.TVSeason{
 		{SeasonNumber: 1, EpisodeCount: 4},
 		{SeasonNumber: 2, EpisodeCount: 3},
 		{SeasonNumber: 3, EpisodeCount: 2},
 	}
+
 	tests := []struct {
-		name                               string
-		watchedS, watchedE, airedS, airedE int
-		want                               int
+		name                         string
+		airedS, airedE               int
+		completed                    completedEpisodeSet
+		wantSeason, wantEp, wantWait int
 	}{
-		{"same season", 1, 1, 1, 4, 3},
-		{"adjacent seasons", 1, 3, 2, 2, 3},
-		{"multiple seasons", 1, 2, 3, 1, 6},
-		{"never started", 0, 0, 1, 3, 3},
-		{"defensive minimum", 3, 2, 3, 2, 1},
+		{
+			name:      "fully watched",
+			airedS:    1,
+			airedE:    4,
+			completed: completedSet(episodePosition{1, 1}, episodePosition{1, 2}, episodePosition{1, 3}, episodePosition{1, 4}),
+		},
+		{
+			name:       "non-contiguous gap",
+			airedS:     2,
+			airedE:     2,
+			completed:  completedSet(episodePosition{1, 1}, episodePosition{1, 3}, episodePosition{1, 4}, episodePosition{2, 2}),
+			wantSeason: 1,
+			wantEp:     2,
+			wantWait:   2,
+		},
+		{
+			name:       "never watched",
+			airedS:     1,
+			airedE:     3,
+			wantSeason: 1,
+			wantEp:     1,
+			wantWait:   3,
+		},
+		{
+			name:       "future episodes in current season excluded",
+			airedS:     3,
+			airedE:     1,
+			completed:  completedSet(episodePosition{1, 1}, episodePosition{1, 2}, episodePosition{1, 3}, episodePosition{1, 4}, episodePosition{2, 1}, episodePosition{2, 2}, episodePosition{2, 3}),
+			wantSeason: 3,
+			wantEp:     1,
+			wantWait:   1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := computeWaiting(seasons, tt.watchedS, tt.watchedE, tt.airedS, tt.airedE)
-			if got != tt.want {
-				t.Fatalf("computeWaiting() = %d, want %d", got, tt.want)
+			gotSeason, gotEp, gotWait := airedEpisodeBacklog(
+				seasons,
+				tt.airedS,
+				tt.airedE,
+				tt.completed,
+			)
+			if gotSeason != tt.wantSeason || gotEp != tt.wantEp || gotWait != tt.wantWait {
+				t.Fatalf(
+					"airedEpisodeBacklog() = S%dE%d waiting=%d, want S%dE%d waiting=%d",
+					gotSeason,
+					gotEp,
+					gotWait,
+					tt.wantSeason,
+					tt.wantEp,
+					tt.wantWait,
+				)
 			}
 		})
 	}
+}
+
+func completedSet(positions ...episodePosition) completedEpisodeSet {
+	completed := make(completedEpisodeSet, len(positions))
+	for _, position := range positions {
+		completed[position] = struct{}{}
+	}
+	return completed
 }
 
 func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
@@ -230,7 +229,12 @@ func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 		Status: library.StatusWatching, LastWatchedSeason: intValue(1), LastWatchedEpisode: intValue(2),
 	}
 
-	items, err := s.processTV(entry, today, cutoff)
+	items, err := s.processTV(
+		entry,
+		today,
+		cutoff,
+		completedSet(episodePosition{season: 1, episode: 1}, episodePosition{season: 1, episode: 2}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +259,69 @@ func TestCalendarHandlerRejectsOtherMethods(t *testing.T) {
 	s.handleCalendar(rec, httptest.NewRequest(http.MethodPost, "/api/library/calendar", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestCalendarHandlerSuppressesFullyWatchedTVBacklog(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	lib, err := library.New("calendar-fully-watched-tv")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	entry := &library.LibraryEntry{
+		ID:                 "weak-hero",
+		TmdbID:             210942,
+		MediaType:          "tv",
+		Title:              "Weak Hero",
+		Status:             library.StatusWatching,
+		LastWatchedSeason:  intValue(1),
+		LastWatchedEpisode: intValue(1), // deliberately stale
+		UpdatedAt:          now,
+	}
+	progress := make([]*library.WatchProgress, 0, 8)
+	for episode := 1; episode <= 8; episode++ {
+		progress = append(progress, &library.WatchProgress{
+			ID:             "weak-hero-" + strconv.Itoa(episode),
+			LibraryEntryID: entry.ID,
+			TmdbID:         entry.TmdbID,
+			MediaType:      "tv",
+			Season:         intValue(1),
+			Episode:        intValue(episode),
+			Completed:      true,
+			WatchedAt:      now,
+		})
+	}
+	if err := lib.MergeFrom([]*library.LibraryEntry{entry}, progress, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	details := &tmdb.Details{
+		Seasons: []tmdb.TVSeason{{SeasonNumber: 1, EpisodeCount: 8}},
+	}
+	details.LastEpisodeToAir = &struct {
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+	}{SeasonNumber: 1, EpisodeNumber: 8, AirDate: "2025-05-02"}
+
+	server := New(lib, nil)
+	server.tmdb = &fakeTMDB{
+		details: map[string]*tmdb.Details{"tv:210942": details},
+	}
+	rec := httptest.NewRecorder()
+	server.handleCalendar(rec, httptest.NewRequest(http.MethodGet, "/api/library/calendar", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var items []CalendarItem
+	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("fully watched show produced calendar backlog: %#v", items)
 	}
 }
 
