@@ -218,6 +218,9 @@ func (s *Server) processMovie(
 
 	if !rel.After(today) {
 		// Already released.
+		if e.Status == library.StatusWatchLater {
+			return nil, nil // the Watch Later shelf owns released titles
+		}
 		if completedMovies[e.TmdbID] {
 			return nil, nil // already watched
 		}
@@ -292,7 +295,36 @@ func (s *Server) processTV(
 		}
 	}
 
-	// ── Upcoming episodes within 90 days ────────────────────────────────────
+	// Watch Later is a lightweight release reminder, not a second episode
+	// schedule. Emit only TMDB's single next episode and never an aired backlog.
+	if e.Status == library.StatusWatchLater {
+		next := det.NextEpisodeToAir
+		if next == nil ||
+			next.AirDate == "" ||
+			next.SeasonNumber <= 0 ||
+			next.EpisodeNumber <= 0 {
+			return items, nil
+		}
+		airDate, err := time.ParseInLocation("2006-01-02", next.AirDate, today.Location())
+		if err != nil || !airDate.After(today) || airDate.After(cutoffFuture) {
+			return items, nil
+		}
+		items = append(items, CalendarItem{
+			Date:          next.AirDate,
+			Kind:          "episode",
+			TmdbID:        e.TmdbID,
+			MediaType:     "tv",
+			Title:         e.Title,
+			PosterPath:    poster,
+			SeasonNumber:  intPtr(next.SeasonNumber),
+			EpisodeNumber: intPtr(next.EpisodeNumber),
+			EpisodeName:   next.Name,
+			StillPath:     next.StillPath,
+		})
+		return items, nil
+	}
+
+	// ── Upcoming episodes within 90 days (watching status only) ─────────────
 	if det.NextEpisodeToAir != nil &&
 		det.NextEpisodeToAir.AirDate != "" &&
 		det.NextEpisodeToAir.SeasonNumber > 0 {

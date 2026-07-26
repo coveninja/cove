@@ -138,23 +138,53 @@ func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
 	}
 	s := &Server{tmdb: fake}
 
-	items, err := s.processMovie(&library.LibraryEntry{TmdbID: 1, Title: "Today"}, today, cutoff, nil)
+	items, err := s.processMovie(
+		&library.LibraryEntry{TmdbID: 1, Title: "Today", Status: library.StatusWatching},
+		today,
+		cutoff,
+		nil,
+	)
 	if err != nil || len(items) != 1 || items[0].Kind != "available" {
 		t.Fatalf("today's local release = %#v, %v; want one available item", items, err)
 	}
 
-	items, err = s.processMovie(&library.LibraryEntry{TmdbID: 2, Title: "Tomorrow"}, today, cutoff, nil)
+	items, err = s.processMovie(
+		&library.LibraryEntry{TmdbID: 2, Title: "Tomorrow", Status: library.StatusWatchLater},
+		today,
+		cutoff,
+		nil,
+	)
 	if err != nil || len(items) != 1 || items[0].Kind != "movie" {
-		t.Fatalf("tomorrow's release = %#v, %v; want one future movie", items, err)
+		t.Fatalf("Watch Later release tomorrow = %#v, %v; want one future movie", items, err)
 	}
 
-	items, err = s.processMovie(&library.LibraryEntry{TmdbID: 1}, today, cutoff, map[int]bool{1: true})
+	items, err = s.processMovie(
+		&library.LibraryEntry{TmdbID: 1, Title: "Today", Status: library.StatusWatchLater},
+		today,
+		cutoff,
+		nil,
+	)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("released Watch Later movie = %#v, %v; want skipped", items, err)
+	}
+
+	items, err = s.processMovie(
+		&library.LibraryEntry{TmdbID: 1, Status: library.StatusWatching},
+		today,
+		cutoff,
+		map[int]bool{1: true},
+	)
 	if err != nil || len(items) != 0 {
 		t.Fatalf("completed release = %#v, %v; want skipped", items, err)
 	}
 
 	for _, id := range []int{3, 4} {
-		items, err = s.processMovie(&library.LibraryEntry{TmdbID: id}, today, cutoff, nil)
+		items, err = s.processMovie(
+			&library.LibraryEntry{TmdbID: id, Status: library.StatusWatching},
+			today,
+			cutoff,
+			nil,
+		)
 		if err != nil || len(items) != 0 {
 			t.Fatalf("movie %d = %#v, %v; want skipped", id, items, err)
 		}
@@ -253,6 +283,61 @@ func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 	}
 }
 
+func TestProcessTVWatchLaterEmitsOnlyNextFutureEpisode(t *testing.T) {
+	today, cutoff := testDay(t)
+	details := &tmdb.Details{
+		Seasons: []tmdb.TVSeason{{SeasonNumber: 2, EpisodeCount: 8}},
+	}
+	details.LastEpisodeToAir = &struct {
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+	}{SeasonNumber: 2, EpisodeNumber: 2, AirDate: "2026-07-16"}
+	details.NextEpisodeToAir = &struct {
+		Name          string `json:"name"`
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+		StillPath     string `json:"still_path"`
+	}{
+		Name: "Premiere", SeasonNumber: 2, EpisodeNumber: 3,
+		AirDate: "2026-07-23", StillPath: "/premiere.jpg",
+	}
+	fake := &fakeTMDB{
+		details: map[string]*tmdb.Details{"tv:20": details},
+		episodesErr: map[[2]int]error{
+			{20, 2}: errors.New("Watch Later must not fetch the full season"),
+		},
+	}
+	s := &Server{tmdb: fake}
+	entry := &library.LibraryEntry{
+		TmdbID: 20, MediaType: "tv", Title: "Saved Series",
+		Status: library.StatusWatchLater,
+	}
+
+	items, err := s.processTV(entry, today, cutoff, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items (%#v), want only the next scheduled episode", len(items), items)
+	}
+	next := items[0]
+	if next.Kind != "episode" ||
+		*next.SeasonNumber != 2 ||
+		*next.EpisodeNumber != 3 ||
+		next.EpisodeName != "Premiere" ||
+		next.StillPath != "/premiere.jpg" {
+		t.Fatalf("unexpected Watch Later reminder: %#v", next)
+	}
+
+	details.NextEpisodeToAir.AirDate = today.Format("2006-01-02")
+	items, err = s.processTV(entry, today, cutoff, nil)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("aired Watch Later episode = %#v, %v; want skipped", items, err)
+	}
+}
+
 func TestCalendarHandlerRejectsOtherMethods(t *testing.T) {
 	s := &Server{}
 	rec := httptest.NewRecorder()
@@ -325,7 +410,7 @@ func TestCalendarHandlerSuppressesFullyWatchedTVBacklog(t *testing.T) {
 	}
 }
 
-func TestCalendarHandlerFiltersSortsAndSuppressesCompletedMovies(t *testing.T) {
+func TestCalendarHandlerFiltersSortsAndSuppressesCompletedAndReleasedWatchLaterMovies(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	lib, err := library.New("calendar-handler")
 	if err != nil {
@@ -374,11 +459,11 @@ func TestCalendarHandlerFiltersSortsAndSuppressesCompletedMovies(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 4 {
-		t.Fatalf("got %d items (%#v), want four visible incomplete movies", len(items), items)
+	if len(items) != 3 {
+		t.Fatalf("got %d items (%#v), want active backlog and two future releases", len(items), items)
 	}
-	wantIDs := []int{101, 102, 103, 104}
-	wantKinds := []string{"available", "available", "movie", "movie"}
+	wantIDs := []int{101, 103, 104}
+	wantKinds := []string{"available", "movie", "movie"}
 	for i := range wantIDs {
 		if items[i].TmdbID != wantIDs[i] || items[i].Kind != wantKinds[i] {
 			t.Fatalf("item %d = %#v, want tmdb=%d kind=%s", i, items[i], wantIDs[i], wantKinds[i])
