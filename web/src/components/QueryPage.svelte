@@ -12,6 +12,7 @@
   import { Button } from "$lib/components/ui/button";
   import { animate, splitText, stagger } from "animejs";
   import { onMount, tick } from "svelte";
+  import { getTopSearchResults } from "$lib/searchTopResults";
 
   let {
     query = $bindable(""),
@@ -29,12 +30,13 @@
     tv: [],
     people: [],
     providers: [],
+    title_order: [],
   });
 
   let data = $state<SearchResults>(empty());
   let keywords: { id: number; name: string }[] = $state([]);
   // svelte-ignore non_reactive_update
-    let qualityMap = new SvelteMap<number, string>();
+  let qualityMap = new SvelteMap<number, string>();
 
   // ── Controls ──────────────────────────────────────────────────────────────────
   const sortOptions = [
@@ -116,35 +118,40 @@
     return out;
   }
 
+  function compareMedia(a: Media, b: Media): number {
+    switch (sortKey) {
+      case "rating":
+        return (b.vote_average ?? 0) - (a.vote_average ?? 0);
+      case "popularity":
+        return (b.popularity ?? 0) - (a.popularity ?? 0);
+      case "recommended":
+        return recScore(b) - recScore(a);
+      case "personal":
+        return ratingOf(b) - ratingOf(a);
+      default:
+        return 0;
+    }
+  }
+
   // Sort a copy, keeping the original (relevance) index as the tiebreak so the
   // order is deterministic.
   function sortMedia(list: Media[]): Media[] {
-    const arr = list.map((m, i) => ({ m, i }));
-    arr.sort((a, b) => {
-      let primary = 0;
-      switch (sortKey) {
-        case "rating":
-          primary = (b.m.vote_average ?? 0) - (a.m.vote_average ?? 0);
-          break;
-        case "popularity":
-          primary = (b.m.popularity ?? 0) - (a.m.popularity ?? 0);
-          break;
-        case "recommended":
-          primary = recScore(b.m) - recScore(a.m);
-          break;
-        case "personal":
-          primary = ratingOf(b.m) - ratingOf(a.m);
-          break;
-        default:
-          primary = 0; // relevance == original order
-      }
-      return primary !== 0 ? primary : a.i - b.i;
-    });
-    return arr.map((x) => x.m);
+    if (sortKey === "relevance") return [...list];
+    return list
+      .map((m, i) => ({ m, i }))
+      .sort((a, b) => compareMedia(a.m, b.m) || a.i - b.i)
+      .map(({ m }) => m);
   }
 
   let movies = $derived(sortMedia(withKnownFor(data.movies, "movie")));
   let tv = $derived(sortMedia(withKnownFor(data.tv, "tv")));
+  let topResults = $derived(
+    getTopSearchResults(data.movies, data.tv, data.title_order ?? [], {
+      includeMovies: showMovie,
+      includeTV: showTV,
+      compare: sortKey === "relevance" ? undefined : compareMedia,
+    }),
+  );
   let people = $derived(
     [...data.people].sort((a, b) => b.popularity - a.popularity),
   );
@@ -243,6 +250,7 @@
         tv: res.tv ?? [],
         people: res.people ?? [],
         providers: res.providers ?? [],
+        title_order: res.title_order ?? [],
       };
       keywords = kw ?? [];
       loading = false;
@@ -330,8 +338,27 @@
 
   {#if !loading}
     <ScrollArea class="flex min-h-0 flex-1 gap-4 p-4">
+      {#if topResults.length > 0}
+        <section class="mb-8 space-y-3" data-search-section="top-results">
+          <h2 class="text-lg font-semibold">Top Results</h2>
+          <div
+            class="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6"
+            data-search-grid="top-results"
+          >
+            {#each topResults as media (`${media.media_type}:${media.id}`)}
+              <MediaCard
+                {media}
+                onclick={() => onSelectMedia(media)}
+                quality={qualityMap.get(media.id) ?? null}
+                onwatch={onWatch}
+              />
+            {/each}
+          </div>
+        </section>
+      {/if}
+
       {#if showPerson && people.length > 0}
-        <section class="mb-8 space-y-3">
+        <section class="mb-8 space-y-3" data-search-section="people">
           <h2 class="text-lg font-semibold">People</h2>
           <div
             class="grid gap-4"
@@ -345,7 +372,7 @@
       {/if}
 
       {#if showProvider && providers.length > 0}
-        <section class="space-y-3 p-4">
+        <section class="space-y-3 p-4" data-search-section="providers">
           <h2 class="text-lg font-semibold">Providers</h2>
           <div
             class="grid gap-4"
@@ -360,7 +387,7 @@
 
       <div class="space-y-8 pr-4 pb-8">
         {#if showMovie && movies.length > 0}
-          <section class="space-y-3">
+          <section class="space-y-3" data-search-section="movies">
             <h2 class="text-lg font-semibold">Movies</h2>
             <div
               class="grid gap-4"
@@ -379,7 +406,7 @@
         {/if}
 
         {#if showTV && tv.length > 0}
-          <section class="space-y-3">
+          <section class="space-y-3" data-search-section="tv">
             <h2 class="text-lg font-semibold">TV Shows</h2>
             <div
               class="grid gap-4"

@@ -6,11 +6,17 @@
   import MobileMediaCard from "../components/MobileMediaCard.svelte";
   import PersonCard from "../../components/cards/PersonCard.svelte";
   import ProviderCard from "../../components/cards/ProviderCard.svelte";
-  import { api, type SearchResults, type Person, type Provider } from "$lib/api";
+  import {
+    api,
+    type SearchResults,
+    type Person,
+    type Provider,
+  } from "$lib/api";
   import type { Media } from "$lib/types/tmdb";
   import { getContext } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { animate, stagger } from "animejs";
+  import { getTopSearchResults } from "$lib/searchTopResults";
 
   let {
     onSelectPerson,
@@ -40,6 +46,7 @@
     tv: [],
     people: [],
     providers: [],
+    title_order: [],
   });
 
   let data = $state<SearchResults>(empty());
@@ -84,6 +91,12 @@
 
   let movies = $derived(withKnownFor(data.movies, "movie"));
   let tv = $derived(withKnownFor(data.tv, "tv"));
+  let topResults = $derived(
+    getTopSearchResults(data.movies, data.tv, data.title_order ?? [], {
+      includeMovies: showMovie,
+      includeTV: showTV,
+    }),
+  );
   let people = $derived(
     [...data.people].sort((a, b) => b.popularity - a.popularity),
   );
@@ -147,6 +160,7 @@
         tv: res.tv ?? [],
         people: res.people ?? [],
         providers: res.providers ?? [],
+        title_order: res.title_order ?? [],
       };
       keywords = kw ?? [];
       loading = false;
@@ -230,8 +244,8 @@
             key,
           )
             ? 'bg-foreground text-background'
-            : 'bg-secondary text-muted-foreground'}"
-        >{label}</button>
+            : 'bg-secondary text-muted-foreground'}">{label}</button
+        >
       {/each}
     </div>
 
@@ -269,9 +283,30 @@
 
     {#if !loading}
       <div bind:this={container} class="space-y-6 px-4 pb-8">
+        <!-- Unified title ranking: always six cards at most (3 columns × 2 rows). -->
+        {#if topResults.length > 0}
+          <section class="space-y-2" data-search-section="top-results">
+            <h2
+              class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Top Results
+            </h2>
+            <div class="grid grid-cols-3 gap-2" data-search-grid="top-results">
+              {#each topResults as media (`${media.media_type}:${media.id}`)}
+                <div data-search-card>
+                  <MobileMediaCard
+                    {media}
+                    onclick={() => openMediaDetail?.(media)}
+                  />
+                </div>
+              {/each}
+            </div>
+          </section>
+        {/if}
+
         <!-- People: horizontal scroll row -->
         {#if showPerson && people.length > 0}
-          <section class="space-y-2">
+          <section class="space-y-2" data-search-section="people">
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
@@ -291,7 +326,7 @@
 
         <!-- Providers: horizontal scroll row -->
         {#if showProvider && providers.length > 0}
-          <section class="space-y-2">
+          <section class="space-y-2" data-search-section="providers">
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
@@ -314,7 +349,7 @@
 
         <!-- Movies: 3-col grid -->
         {#if showMovie && movies.length > 0}
-          <section class="space-y-2">
+          <section class="space-y-2" data-search-section="movies">
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
@@ -335,7 +370,7 @@
 
         <!-- TV: 3-col grid -->
         {#if showTV && tv.length > 0}
-          <section class="space-y-2">
+          <section class="space-y-2" data-search-section="tv">
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >

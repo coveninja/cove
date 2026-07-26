@@ -413,10 +413,11 @@ type Provider struct {
 
 // SearchResults is the sectioned payload for /api/search/multi.
 type SearchResults struct {
-	Movies    []Media    `json:"movies"`
-	TV        []Media    `json:"tv"`
-	People    []Person   `json:"people"`
-	Providers []Provider `json:"providers"`
+	Movies     []Media    `json:"movies"`
+	TV         []Media    `json:"tv"`
+	People     []Person   `json:"people"`
+	Providers  []Provider `json:"providers"`
+	TitleOrder []string   `json:"title_order"`
 }
 
 // PersonDetails is the full /person/{id} payload used by the person overlay:
@@ -756,9 +757,39 @@ func (c *Client) SearchProviders(query string) ([]Provider, error) {
 	return out, nil
 }
 
+// splitSearchTitles sections a ranked title list without discarding its
+// cross-type order. Keyword matches are appended after regular search results;
+// duplicate typed IDs keep their first (highest-ranked) position.
+func splitSearchTitles(titleLists ...[]Media) (movies, tv []Media, titleOrder []string) {
+	movies = []Media{}
+	tv = []Media{}
+	titleOrder = []string{}
+
+	seen := make(map[string]bool)
+	for _, titles := range titleLists {
+		for _, m := range titles {
+			if m.MediaType != "movie" && m.MediaType != "tv" {
+				continue
+			}
+			key := fmt.Sprintf("%s:%d", m.MediaType, m.ID)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			titleOrder = append(titleOrder, key)
+			if m.MediaType == "tv" {
+				tv = append(tv, m)
+			} else {
+				movies = append(movies, m)
+			}
+		}
+	}
+	return movies, tv, titleOrder
+}
+
 // MultiSearch fans out across titles, people, and providers and returns them in
-// separate sections. Titles reuse the scored Search + keyword merge, split by
-// media type so relevance order is preserved within each section.
+// separate sections. Titles reuse the scored Search + keyword merge, with
+// TitleOrder retaining the combined movie/TV relevance ranking.
 func (c *Client) MultiSearch(query string) (SearchResults, error) {
 	regular, err := c.Search(query)
 	if err != nil {
@@ -766,26 +797,7 @@ func (c *Client) MultiSearch(query string) (SearchResults, error) {
 	}
 	byKeyword, _ := c.SearchByKeywords(query)
 
-	seen := make(map[string]bool)
-	movies, tv := []Media{}, []Media{}
-	add := func(m Media) {
-		key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		if m.MediaType == "tv" {
-			tv = append(tv, m)
-		} else {
-			movies = append(movies, m)
-		}
-	}
-	for _, m := range regular {
-		add(m)
-	}
-	for _, m := range byKeyword {
-		add(m)
-	}
+	movies, tv, titleOrder := splitSearchTitles(regular, byKeyword)
 
 	// People and providers are best-effort: a failure in either shouldn't sink
 	// the whole search. Coerce nils so each section marshals as [] not null.
@@ -798,7 +810,13 @@ func (c *Client) MultiSearch(query string) (SearchResults, error) {
 		providers = []Provider{}
 	}
 
-	return SearchResults{Movies: movies, TV: tv, People: people, Providers: providers}, nil
+	return SearchResults{
+		Movies:     movies,
+		TV:         tv,
+		People:     people,
+		Providers:  providers,
+		TitleOrder: titleOrder,
+	}, nil
 }
 
 // GetPerson returns a person's bio and their filmography (combined credits),

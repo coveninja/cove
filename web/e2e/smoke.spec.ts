@@ -21,6 +21,67 @@ const secondary: Profile = {
   name_updated_at: "2026-01-01T00:00:00Z",
 };
 
+function searchTitle(id: number, type: "movie" | "tv", popularity: number) {
+  return {
+    id,
+    title: type === "movie" ? `Movie ${id}` : "",
+    name: type === "tv" ? `TV ${id}` : "",
+    overview: "",
+    release_date: "",
+    first_air_date: "",
+    poster_path: `https://images.test/${type}-${id}.jpg`,
+    vote_average: popularity / 10,
+    media_type: type,
+    trailer_url: "",
+    clip_urls: "",
+    images: [],
+    popularity,
+  };
+}
+
+const unifiedSearchResults = {
+  movies: [
+    searchTitle(101, "movie", 10),
+    searchTitle(102, "movie", 80),
+    searchTitle(103, "movie", 30),
+    searchTitle(104, "movie", 60),
+  ],
+  tv: [
+    searchTitle(201, "tv", 20),
+    searchTitle(202, "tv", 70),
+    searchTitle(203, "tv", 40),
+    searchTitle(204, "tv", 50),
+  ],
+  people: [
+    {
+      id: 301,
+      name: "Search Person",
+      profile_path: "",
+      known_for_department: "Acting",
+      popularity: 10,
+      known_for: [],
+    },
+  ],
+  providers: [
+    {
+      provider_id: 401,
+      provider_name: "Search Provider",
+      logo_path: "",
+      display_priority: 1,
+    },
+  ],
+  title_order: [
+    "tv:201",
+    "movie:101",
+    "tv:202",
+    "movie:102",
+    "tv:203",
+    "movie:103",
+    "tv:204",
+    "movie:104",
+  ],
+};
+
 async function mockBackend(
   page: Page,
   options: {
@@ -127,9 +188,56 @@ async function mockBackend(
       await route.fulfill({ json: { movie_share: 0, tv_share: 0 } });
       return;
     }
+    if (path === "/api/search/multi") {
+      await route.fulfill({ json: unifiedSearchResults });
+      return;
+    }
+    if (path === "/api/keywords") {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    if (path === "/api/images") {
+      await route.fulfill({
+        json: { backdrops: [], logos: [], posters: [] },
+      });
+      return;
+    }
+    if (path === "/api/quality/batch") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body: "",
+      });
+      return;
+    }
 
     await route.fulfill({ status: 404, body: "" });
   });
+}
+
+async function expectCategorizedSearchOrder(page: Page): Promise<void> {
+  const sections = page.locator("[data-search-section]:visible");
+  await expect(sections).toHaveCount(5);
+  expect(
+    await sections.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-search-section")),
+    ),
+  ).toEqual(["top-results", "people", "providers", "movies", "tv"]);
+}
+
+async function fillSearch(page: Page, mode: "desktop" | "mobile" | "tv") {
+  if (mode === "desktop") {
+    const input = page.getByPlaceholder("Search...");
+    await page.getByRole("search").hover();
+    await expect(input).toBeEnabled();
+    await input.fill("unified");
+  } else {
+    await page.getByLabel("Search", { exact: true }).click();
+    await page.getByPlaceholder("Search movies & TV…").fill("unified");
+  }
+  await expect(
+    page.getByRole("heading", { name: "Top Results", exact: true }),
+  ).toBeVisible();
 }
 
 test("desktop shell boots with an unavailable optional backend", async ({
@@ -259,4 +367,93 @@ test("a restored session surfaces a deduplicated sync push error", async ({
   await expect(
     page.getByText("Sync issue: some data failed to upload"),
   ).toBeVisible({ timeout: 30_000 });
+});
+
+test("desktop search leads with six unified results and keeps full categories", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await page.goto("/");
+  await fillSearch(page, "desktop");
+
+  await expectCategorizedSearchOrder(page);
+  const grid = page.locator(
+    '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
+  );
+  await expect(grid).toHaveClass(/xl:grid-cols-6/);
+  await expect(grid.locator(":scope > *")).toHaveCount(6);
+  const posters = grid.locator("img");
+  await expect(posters).toHaveCount(6);
+  expect(
+    await posters.evaluateAll((images) => images.map((image) => image.alt)),
+  ).toEqual([
+    "TV 201",
+    "Movie 101",
+    "TV 202",
+    "Movie 102",
+    "TV 203",
+    "Movie 103",
+  ]);
+
+  await page.getByRole("button", { name: "Relevance", exact: true }).click();
+  await page.getByRole("option", { name: "Popularity" }).click();
+  await expect(posters.first()).toHaveAttribute("alt", "Movie 102");
+  await expect(posters).toHaveCount(6);
+  expect(
+    await posters.evaluateAll((images) => images.map((image) => image.alt)),
+  ).toEqual([
+    "Movie 102",
+    "TV 202",
+    "Movie 104",
+    "TV 204",
+    "TV 203",
+    "Movie 103",
+  ]);
+
+  await page.getByLabel("Movies", { exact: true }).click();
+  await page.getByLabel("TV", { exact: true }).click();
+  await expect(
+    page.locator('[data-search-section="top-results"]:visible'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-search-section="people"]:visible'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-search-section="providers"]:visible'),
+  ).toHaveCount(1);
+});
+
+test("Android search renders the unified six as a three-column grid", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await page.goto("/?mobile=1");
+  await fillSearch(page, "mobile");
+
+  await expectCategorizedSearchOrder(page);
+  const grid = page.locator(
+    '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
+  );
+  await expect(grid).toHaveClass(/grid-cols-3/);
+  await expect(grid.locator(":scope > *")).toHaveCount(6);
+});
+
+test("TV search exposes the unified six as one navigable D-pad group", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await page.goto("/?tv=1");
+  await fillSearch(page, "tv");
+
+  await expectCategorizedSearchOrder(page);
+  const grid = page.locator(
+    '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
+  );
+  const cards = grid.locator("[data-tv-focusable]");
+  await expect(grid).toHaveClass(/grid-cols-6/);
+  await expect(cards).toHaveCount(6);
+
+  await cards.first().focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(cards.nth(1)).toBeFocused();
 });

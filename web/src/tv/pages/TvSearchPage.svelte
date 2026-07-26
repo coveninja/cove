@@ -8,6 +8,7 @@
   import { api, type SearchResults } from "$lib/api";
   import type { Media } from "$lib/types/tmdb";
   import { focusGroup, focusable } from "../focus/actions";
+  import { getTopSearchResults } from "$lib/searchTopResults";
 
   // PersonCard / ProviderCard are reused as-is; their native focusable elements
   // are D-pad-reachable via the geometric fallback without annotation.
@@ -28,6 +29,7 @@
     tv: [],
     people: [],
     providers: [],
+    title_order: [],
   });
 
   let data = $state<SearchResults>(empty());
@@ -70,7 +72,15 @@
 
   let movies = $derived(withKnownFor(data.movies, "movie"));
   let tv = $derived(withKnownFor(data.tv, "tv"));
-  let people = $derived([...data.people].sort((a, b) => b.popularity - a.popularity));
+  let topResults = $derived(
+    getTopSearchResults(data.movies, data.tv, data.title_order ?? [], {
+      includeMovies: showMovie,
+      includeTV: showTV,
+    }),
+  );
+  let people = $derived(
+    [...data.people].sort((a, b) => b.popularity - a.popularity),
+  );
   let providers = $derived(data.providers);
 
   let anyVisible = $derived(
@@ -131,6 +141,7 @@
         tv: res.tv ?? [],
         people: res.people ?? [],
         providers: res.providers ?? [],
+        title_order: res.title_order ?? [],
       };
       keywords = kw ?? [];
       loading = false;
@@ -169,7 +180,9 @@
     use:focusGroup={{ id: "search-bar", policy: { type: "row" } }}
     class="shrink-0 flex items-center gap-3 py-4"
   >
-    <div class="flex flex-1 items-center gap-3 rounded-xl bg-secondary px-4 py-3">
+    <div
+      class="flex flex-1 items-center gap-3 rounded-xl bg-secondary px-4 py-3"
+    >
       {#if loading}
         <Spinner class="size-5 shrink-0" />
       {:else}
@@ -194,8 +207,8 @@
             key,
           )
             ? 'bg-foreground text-background'
-            : 'bg-secondary text-muted-foreground'}"
-        >{label}</button>
+            : 'bg-secondary text-muted-foreground'}">{label}</button
+        >
       {/each}
     {/if}
   </div>
@@ -204,28 +217,58 @@
     <!-- Keyword suggestions — native buttons, geometric fallback navigates them -->
     {#if !loading && keywords.length > 1}
       <div class="shrink-0">
-        <p class="ml-4 mb-2 text-sm font-medium text-muted-foreground">More to Explore:</p>
+        <p class="ml-4 mb-2 text-sm font-medium text-muted-foreground">
+          More to Explore:
+        </p>
         <div class="flex gap-2 overflow-x-hidden p-4">
           {#each keywords as kw (kw.id)}
             <button
               type="button"
               class="shrink-0 rounded-lg bg-secondary px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
-              onclick={() => (query = kw.name)}
-            >{kw.name}</button>
+              onclick={() => (query = kw.name)}>{kw.name}</button
+            >
           {/each}
         </div>
       </div>
     {/if}
 
     <!-- Results -->
-    <div class="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden px-4">
+    <div
+      class="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden px-4"
+    >
       {#if !loading}
         <div class="space-y-8 pb-12">
+          <!-- One six-card D-pad group preserving the unified title ranking. -->
+          {#if topResults.length > 0}
+            <section class="space-y-3" data-search-section="top-results">
+              <h2
+                class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+              >
+                Top Results
+              </h2>
+              <div
+                use:focusGroup={{
+                  id: "search-top-results-grid",
+                  policy: { type: "grid", cols: COLS },
+                  rememberFocus: true,
+                }}
+                class="grid grid-cols-6 gap-4"
+                data-search-grid="top-results"
+              >
+                {#each topResults as media (`${media.media_type}:${media.id}`)}
+                  <TvMediaCard {media} groupId="search-top-results-grid" />
+                {/each}
+              </div>
+            </section>
+          {/if}
+
           <!-- People: horizontal strip — PersonCard is reused as-is; geometric
                fallback reaches its native interactive elements. -->
           {#if showPerson && people.length > 0}
-            <section class="space-y-3">
-              <h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <section class="space-y-3" data-search-section="people">
+              <h2
+                class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+              >
                 People
               </h2>
               <div class="flex gap-5 overflow-x-hidden pb-1">
@@ -240,8 +283,10 @@
 
           <!-- Providers: horizontal strip — same reuse pattern as PersonCard. -->
           {#if showProvider && providers.length > 0}
-            <section class="space-y-3">
-              <h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <section class="space-y-3" data-search-section="providers">
+              <h2
+                class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+              >
                 Providers
               </h2>
               <div class="flex gap-4 overflow-x-hidden pb-1">
@@ -256,8 +301,10 @@
 
           <!-- Movies: D-pad-navigable grid -->
           {#if showMovie && movies.length > 0}
-            <section class="space-y-3">
-              <h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <section class="space-y-3" data-search-section="movies">
+              <h2
+                class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+              >
                 Movies
               </h2>
               <div
@@ -277,8 +324,10 @@
 
           <!-- TV Shows: D-pad-navigable grid -->
           {#if showTV && tv.length > 0}
-            <section class="space-y-3">
-              <h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <section class="space-y-3" data-search-section="tv">
+              <h2
+                class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+              >
                 TV Shows
               </h2>
               <div
@@ -306,10 +355,11 @@
     </div>
   {:else}
     <!-- Idle state -->
-    <div class="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+    <div
+      class="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground"
+    >
       <Search class="size-12 opacity-30" />
       <p class="text-base">Type to search…</p>
     </div>
   {/if}
 </div>
-

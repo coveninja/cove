@@ -202,6 +202,7 @@ export interface SearchResults {
   tv: Media[];
   people: Person[];
   providers: Provider[];
+  title_order: string[];
 }
 /**
  * PersonDetails is the full /person/{id} payload used by the person overlay:

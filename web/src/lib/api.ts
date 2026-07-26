@@ -323,6 +323,7 @@ export interface SearchResults {
   tv: Media[];
   people: Person[];
   providers: Provider[];
+  title_order: string[];
 }
 
 // Full person payload for the person overlay (bio + filmography).

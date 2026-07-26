@@ -2,6 +2,7 @@ package tmdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -203,6 +204,45 @@ func TestSearchProviders_NonOKResponseSwallowedSilently(t *testing.T) {
 
 // ── MultiSearch ───────────────────────────────────────────────────────────────
 
+func TestSplitSearchTitles_PreservesInterleavedOrderAndDeduplicates(t *testing.T) {
+	movie1 := Media{ID: 1, MediaType: "movie"}
+	tv2 := Media{ID: 2, MediaType: "tv"}
+	movie3 := Media{ID: 3, MediaType: "movie"}
+
+	movies, tv, titleOrder := splitSearchTitles(
+		[]Media{tv2, movie1, tv2},
+		[]Media{movie3, movie1, {ID: 4, MediaType: "person"}},
+	)
+
+	assert.Equal(t, []Media{movie1, movie3}, movies)
+	assert.Equal(t, []Media{tv2}, tv)
+	assert.Equal(t, []string{"tv:2", "movie:1", "movie:3"}, titleOrder)
+}
+
+func TestSplitSearchTitles_EmptySlicesSerializeAsArrays(t *testing.T) {
+	movies, tv, titleOrder := splitSearchTitles(nil, nil)
+
+	assert.NotNil(t, movies)
+	assert.NotNil(t, tv)
+	assert.NotNil(t, titleOrder)
+
+	payload, err := json.Marshal(SearchResults{
+		Movies:     movies,
+		TV:         tv,
+		People:     []Person{},
+		Providers:  []Provider{},
+		TitleOrder: titleOrder,
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"movies": [],
+		"tv": [],
+		"people": [],
+		"providers": [],
+		"title_order": []
+	}`, string(payload))
+}
+
 func TestMultiSearch_SectionsResultsByType(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -210,7 +250,7 @@ func TestMultiSearch_SectionsResultsByType(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/search/movie"):
 			fmt.Fprint(w, `{"results":[{"id":1,"title":"Film","poster_path":"/f.jpg","popularity":5.0}]}`)
 		case strings.Contains(r.URL.Path, "/search/tv"):
-			fmt.Fprint(w, `{"results":[{"id":2,"name":"Show","poster_path":"/s.jpg","popularity":5.0}]}`)
+			fmt.Fprint(w, `{"results":[{"id":2,"name":"Show","poster_path":"/s.jpg","popularity":10.0}]}`)
 		default:
 			fmt.Fprint(w, `{"results":[]}`)
 		}
@@ -225,6 +265,7 @@ func TestMultiSearch_SectionsResultsByType(t *testing.T) {
 	assert.NotNil(t, results.TV)
 	assert.NotNil(t, results.People)
 	assert.NotNil(t, results.Providers)
+	assert.Equal(t, []string{"tv:2", "movie:1"}, results.TitleOrder)
 }
 
 func TestMultiSearch_SearchErrorPropagates(t *testing.T) {
