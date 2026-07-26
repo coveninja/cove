@@ -26,7 +26,10 @@
 >
   <div class="flex items-start justify-between gap-2">
     <p class="text-xs font-medium uppercase tracking-wide text-white/60">
-      Up next · S{nextEp.season}E{nextEp.episode.episode_number}
+      {m.player_up_next({
+        season: nextEp.season,
+        episode: nextEp.episode.episode_number,
+      })}
     </p>
     <Button
       variant="outline"
@@ -55,11 +58,13 @@
     }}
   >
     <SkipForward class="size-4" />
-    Watch now
+    {m.player_watch_now()}
   </Button>
   {#if countdownSecs !== null}
     <div class="px-4 py-2">
-      <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>
+      <p class="mb-1.5 text-xs text-white/60">
+        {m.player_playing_in({ seconds: countdownSecs })}
+      </p>
       <div class="h-1 w-full overflow-hidden rounded-full bg-white/20">
         <div
           class="h-full bg-white transition-[width] duration-1000 ease-linear"

@@ -53,7 +53,7 @@
             onclick={onSeeAll}
             class="text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            See all →
+            {m.common_see_all()}
           </button>
         {/if}
       </div>

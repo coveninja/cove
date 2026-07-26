@@ -109,7 +109,7 @@
         class="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px] font-semibold text-accent-foreground shadow"
       >
         <Play class="size-3 fill-current" />
-        Now Playing
+        {m.player_now_playing()}
       </span>
     {/if}
   </span>
@@ -121,18 +121,22 @@
         {ep.name}
       </span>
       <span class="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-        <span class="font-medium">E{ep.episode_number}</span>
+        <span class="font-medium"
+          >{m.common_episode_short({ episode: ep.episode_number })}</span
+        >
         {#if ep.air_date}
           <span>·</span>
           <span>{unreleased ? relativeDate(ep.air_date) : ep.air_date}</span>
         {/if}
         {#if ep.runtime > 0}
           <span>·</span>
-          <span>{ep.runtime}m</span>
+          <span>{m.common_minutes_short({ minutes: ep.runtime })}</span>
         {/if}
         {#if inProgress && prog}
           <span>·</span>
-          <span class="text-accent">{Math.round(pct)}% watched</span>
+          <span class="text-accent"
+            >{m.media_percent_watched({ percent: Math.round(pct) })}</span
+          >
         {/if}
       </span>
       {#if ep.overview}

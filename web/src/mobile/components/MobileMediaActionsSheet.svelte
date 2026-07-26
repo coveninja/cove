@@ -62,7 +62,7 @@
 
 {#if open}
   <TrackSheet
-    title={`${title} actions`}
+    title={m.common_title_actions({ title })}
     {items}
     onSelect={(id) => handleAction(id as MediaUtilityAction)}
     onClose={() => (open = false)}

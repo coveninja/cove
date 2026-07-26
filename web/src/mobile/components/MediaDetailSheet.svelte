@@ -482,7 +482,9 @@
           class="absolute bottom-3 right-3 z-20 flex size-9 items-center justify-center rounded-full bg-black/60 text-white"
           onclick={() => (trailerMuted = !trailerMuted)}
           type="button"
-          aria-label={trailerMuted ? "Unmute trailer" : "Mute trailer"}
+          aria-label={trailerMuted
+            ? m.player_unmute_trailer()
+            : m.player_mute_trailer()}
         >
           {#if trailerMuted}
             <VolumeOff class="size-4" />
@@ -515,7 +517,9 @@
           {/if}
           {#if media.media_type === "tv" && numberOfEpisodes !== null}
             <span
-              >{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span
+              >{numberOfEpisodes === 1
+                ? m.common_episode_count_one()
+                : m.common_episodes_count({ count: numberOfEpisodes })}</span
             >
           {/if}
           {#if genres.length}
@@ -635,7 +639,7 @@
               onclick={toggleOverview}
               type="button"
             >
-              {overviewExpanded ? "Show less" : "Show more"}
+              {overviewExpanded ? m.common_less() : m.calendar_show_more()}
             </button>
           {/if}
         </div>

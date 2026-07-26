@@ -66,7 +66,7 @@
       class="relative z-10 mt-2 text-xs text-white/40"
       transition:fade={{ duration: 150 }}
     >
-      This is taking a while…
+      {m.player_taking_while()}
     </p>
   {/if}
   {#if cancelVisible || takingAWhile}
@@ -75,7 +75,7 @@
       class="relative z-10 mt-4 rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"
       onclick={() => onCancel()}
     >
-      Cancel
+      {m.common_cancel()}
     </button>
   {/if}
 </div>

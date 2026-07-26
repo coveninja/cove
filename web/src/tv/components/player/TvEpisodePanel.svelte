@@ -210,7 +210,8 @@
                 ? 'bg-white text-black'
                 : 'bg-white/10 text-white/70 hover:text-white'}"
           >
-            {s.name || `Season ${s.season_number}`}
+            {s.name ||
+              m.common_season_number({ season: s.season_number })}
           </button>
         {/each}
       </div>

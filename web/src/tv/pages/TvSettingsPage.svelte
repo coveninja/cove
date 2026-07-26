@@ -323,21 +323,21 @@
   }
 
   const LANGUAGES = [
-    { value: "en", label: "English" },
-    { value: "es", label: "Spanish" },
-    { value: "fr", label: "French" },
-    { value: "de", label: "German" },
-    { value: "pt", label: "Portuguese" },
-    { value: "it", label: "Italian" },
-    { value: "ja", label: "Japanese" },
-    { value: "ko", label: "Korean" },
-    { value: "zh", label: "Chinese" },
-    { value: "ar", label: "Arabic" },
-    { value: "ru", label: "Russian" },
+    { value: "en" },
+    { value: "es" },
+    { value: "fr" },
+    { value: "de" },
+    { value: "pt" },
+    { value: "it" },
+    { value: "ja" },
+    { value: "ko" },
+    { value: "zh" },
+    { value: "ar" },
+    { value: "ru" },
   ];
 
   const AUDIO_LANGUAGES = [
-    { value: "original", label: "Original" },
+    { value: "original" },
     ...LANGUAGES,
   ];
 
@@ -597,8 +597,7 @@
           <div class="border-b border-border/40 pb-1 pt-6">
             <p class="text-lg font-medium">{m.settings_auto_skip()}</p>
             <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-              Automatically skip segments when timestamps are available via IntroDB.
-              A skip button always appears when inside a segment.
+              {m.settings_auto_skip_description()}
             </p>
           </div>
 
@@ -1101,9 +1100,7 @@
             <div class="border-b border-border/40 py-5">
               <p class="mb-1 text-lg font-medium">{m.settings_custom_algorithm_url()}</p>
               <p class="mb-3 text-sm leading-snug text-muted-foreground">
-                Cove POSTs your taste profile and a pre-filtered candidate list to this URL
-                and expects relevance scores back. Falls back to Cove Smart if the endpoint
-                is unreachable or errors.
+                {m.settings_custom_algorithm_description()}
               </p>
               <div class="flex gap-3">
                 <input
@@ -1176,7 +1173,7 @@
                        transition-colors hover:text-foreground
                        focus:outline-none focus:ring-2 focus:ring-accent"
               >
-                Switch to desktop interface
+                {m.settings_switch_desktop()}
               </button>
             </div>
           {/if}
@@ -1243,7 +1240,7 @@
                       </span>
                       {#if addon.source === SourceOfficial}
                         <span class="rounded-full bg-green-500/20 px-2.5 py-0.5 text-xs font-medium text-green-400">
-                          Built-in
+                          {m.common_builtin()}
                         </span>
                       {/if}
                     </div>
@@ -1340,7 +1337,7 @@
               </div>
             {:else}
               <p class="py-6 text-center text-base text-muted-foreground">
-                No addons yet. Add a Stremio-compatible addon above.
+                {m.settings_no_addons()}
               </p>
             {/each}
           </div>
@@ -1353,18 +1350,14 @@
           <!-- Third-party code warning -->
           <div class="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-400">
             <TriangleAlert class="mt-0.5 size-5 shrink-0" />
-            <p class="leading-snug">
-              Plugins are community-maintained JavaScript stream scrapers. Cove runs this code
-              on your device to find streams — it has not been reviewed by Cove and its safety
-              and quality vary by repository. Nothing runs until you explicitly enable a scraper below.
-            </p>
+            <p class="leading-snug">{m.settings_plugin_warning()}</p>
           </div>
 
           <!-- Add new repository -->
           <div class="rounded-2xl bg-secondary/30 p-5">
             <p class="mb-1 text-lg font-medium">{m.settings_add_repository()}</p>
             <p class="mb-4 text-sm leading-snug text-muted-foreground">
-              Paste a GitHub repository URL (e.g. github.com/owner/repo) that publishes a manifest.json.
+              {m.settings_repository_url_description()}
             </p>
             <div class="flex gap-3">
               <input
@@ -1402,11 +1395,17 @@
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="text-base font-semibold">{repo.owner}/{repo.repo}</span>
                       <span class="rounded-full bg-purple-500/20 px-2.5 py-0.5 text-xs font-medium text-purple-400">
-                        {repo.scrapers.length} scraper{repo.scrapers.length === 1 ? "" : "s"}
+                        {repo.scrapers.length === 1
+                          ? m.settings_scraper_count_one()
+                          : m.settings_scrapers_count({
+                              count: repo.scrapers.length,
+                            })}
                       </span>
                     </div>
                     {#if repo.fetchErr}
-                      <p class="mt-0.5 text-xs text-red-400">Last refresh failed: {repo.fetchErr}</p>
+                      <p class="mt-0.5 text-xs text-red-400">
+                        {m.settings_refresh_failed({ error: repo.fetchErr })}
+                      </p>
                     {/if}
                   </div>
 
@@ -1468,7 +1467,9 @@
                         <!-- Third-party JS confirmation -->
                         <div class="flex shrink-0 items-center gap-2">
                           <span class="text-xs text-amber-400">
-                            Run third-party JS from {repo.owner}/{repo.repo}?
+                            {m.settings_run_third_party({
+                              repository: `${repo.owner}/${repo.repo}`,
+                            })}
                           </span>
                           <button
                             type="button"
@@ -1477,7 +1478,7 @@
                                    transition-colors hover:text-foreground
                                    focus:outline-none focus:ring-2 focus:ring-accent"
                           >
-                            Cancel
+                            {m.common_cancel()}
                           </button>
                           <button
                             type="button"
@@ -1486,7 +1487,7 @@
                                    transition-colors hover:bg-accent/90
                                    focus:outline-none focus:ring-2 focus:ring-accent"
                           >
-                            Enable
+                            {m.common_enable()}
                           </button>
                         </div>
                       {:else}
@@ -1508,14 +1509,14 @@
                     </div>
                   {:else}
                     <p class="py-3 text-center text-sm text-muted-foreground">
-                      No scrapers found in this repository's manifest.
+                      {m.settings_no_scrapers()}
                     </p>
                   {/each}
                 </div>
               </div>
             {:else}
               <p class="py-6 text-center text-base text-muted-foreground">
-                No plugin repositories yet. Add one above.
+                {m.settings_no_repositories()}
               </p>
             {/each}
           </div>
@@ -1584,7 +1585,7 @@
           rel="noopener noreferrer"
           class="text-primary underline">{m.common_open_browser()}</a
         >
-        — some addons can't be configured in-app.
+        {m.settings_addon_fallback()}
       </div>
     </div>
   </div>

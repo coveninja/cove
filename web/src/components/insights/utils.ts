@@ -127,3 +127,30 @@ export function activityWeekdayLabels(
       : "",
   );
 }
+
+export function activityMonthLabels(
+  locale: string = intlLocale(),
+): string[] {
+  const formatter = new Intl.DateTimeFormat(locale, { month: "short" });
+  return Array.from({ length: 12 }, (_, month) =>
+    formatter.format(new Date(2024, month, 1, 12)),
+  );
+}
+
+export function activityDayLabels(
+  locale: string = intlLocale(),
+): string[] {
+  const formatter = new Intl.DateTimeFormat(locale, { weekday: "short" });
+  return Array.from({ length: 7 }, (_, day) =>
+    formatter.format(new Date(2024, 0, 7 + day, 12)),
+  );
+}
+
+export function activityHourLabels(
+  locale: string = intlLocale(),
+): string[] {
+  const formatter = new Intl.DateTimeFormat(locale, { hour: "numeric" });
+  return Array.from({ length: 24 }, (_, hour) =>
+    formatter.format(new Date(2024, 0, 1, hour)),
+  );
+}

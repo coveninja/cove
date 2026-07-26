@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activityDayLabels,
+  activityHourLabels,
+  activityMonthLabels,
   activityWeekdayLabels,
   buildActivityCalendar,
   fmtHours,
@@ -45,5 +48,23 @@ describe("activity calendar geometry", () => {
       "C",
       "",
     ]);
+  });
+
+  it("localizes activity chart axes", () => {
+    expect(activityMonthLabels("tr-TR").slice(0, 3)).toEqual([
+      "Oca",
+      "Şub",
+      "Mar",
+    ]);
+    expect(activityDayLabels("tr-TR")).toEqual([
+      "Paz",
+      "Pzt",
+      "Sal",
+      "Çar",
+      "Per",
+      "Cum",
+      "Cmt",
+    ]);
+    expect(activityHourLabels("tr-TR").slice(0, 2)).toEqual(["00", "01"]);
   });
 });

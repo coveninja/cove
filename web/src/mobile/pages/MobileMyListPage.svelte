@@ -476,7 +476,7 @@
             {#if activeGenre !== "all"}
               <p class="text-base font-medium">{m.my_list_no_genre()}</p>
               <p class="text-sm text-muted-foreground">
-                Try a different genre or clear the filter.
+              {m.my_list_change_filter()}
               </p>
             {:else}
               <p class="text-base font-medium">

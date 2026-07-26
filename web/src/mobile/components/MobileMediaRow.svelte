@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Media } from "$lib/types/tmdb";
   import MobileMediaCard from "./MobileMediaCard.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Same data contract as SmallRecommendations so MobileHomePage can drive both
   // interchangeably. Parent owns fetching; this component is purely presentational.
@@ -32,7 +33,7 @@
             onclick={onSeeAll}
             class="text-sm text-muted-foreground transition-colors hover:text-foreground active:scale-95 active:text-foreground transition-transform duration-100"
           >
-            See all →
+            {m.common_see_all()}
           </button>
         {/if}
       </div>

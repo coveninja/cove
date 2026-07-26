@@ -193,7 +193,7 @@
               onclick={() => onSelect(featuredMedia!)}
             >
               <Info class="size-4" />
-              Details
+              {m.media_details()}
             </Button>
             <LibraryStatusPanel
               libraryEntry={featuredLibraryEntry}

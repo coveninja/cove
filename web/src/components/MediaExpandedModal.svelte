@@ -398,12 +398,16 @@
             {/if}
             {#if media.media_type === "tv" && numberOfSeasons !== null}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs">
-                {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
+                {numberOfSeasons === 1
+                  ? m.common_season_count_one()
+                  : m.common_seasons_count({ count: numberOfSeasons })}
               </span>
             {/if}
             {#if media.media_type === "tv" && numberOfEpisodes !== null}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs">
-                {numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}
+                {numberOfEpisodes === 1
+                  ? m.common_episode_count_one()
+                  : m.common_episodes_count({ count: numberOfEpisodes })}
               </span>
             {/if}
             {#if streamMaxQuality}
@@ -452,7 +456,7 @@
               class="flex items-center gap-2 rounded-md bg-secondary/40 px-3 py-2"
             >
               <span class="text-xs text-muted-foreground">
-                {episodesWatched} episode{episodesWatched !== 1 ? "s" : ""} watched
+                {m.media_episodes_watched({ count: episodesWatched })}
                 {#if numberOfEpisodes}· {Math.round(
                   (episodesWatched / numberOfEpisodes) * 100,
                 )}%{/if}
@@ -465,7 +469,7 @@
             <div class="flex flex-col gap-3">
               {#if detailsLoading && overviewParagraphs.length === 0}
                 <p class="animate-pulse text-sm text-muted-foreground">
-                  Loading details…
+                  {m.media_loading_details()}
                 </p>
               {:else}
                 {#each overviewParagraphs as paragraph, i (i)}
@@ -486,7 +490,9 @@
               {#if keywords.length}
                 <div class="text-sm">
                   <span class="text-muted-foreground"
-                  >This {media.media_type === "tv" ? "show" : "film"} is:
+                  >{media.media_type === "tv"
+                    ? m.media_show_is()
+                    : m.media_film_is()}
                   </span>
                   {keywords.join(", ")}
                 </div>

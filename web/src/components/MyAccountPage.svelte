@@ -95,7 +95,7 @@
     if (!renamingProfileID || renaming) return;
     const name = renameName.trim();
     if (!name) {
-      renameError = "Profile name is required.";
+      renameError = m.account_profile_required();
       return;
     }
 
@@ -146,7 +146,7 @@
     <header class="flex flex-col gap-1">
       <h1 class="text-2xl font-bold">{m.account_title()}</h1>
       <p class="text-muted-foreground text-sm">
-        Manage your account, profiles, and viewing insights.
+        {m.account_page_description()}
       </p>
     </header>
 
@@ -171,7 +171,7 @@
               {#if syncing}<Spinner class="size-3" />{:else}<RefreshCw
                   class="size-3"
                 />{/if}
-              Sync now
+              {m.account_sync()}
             </Button>
             <Button
               variant="ghost"
@@ -179,13 +179,12 @@
               class="text-muted-foreground gap-1 text-xs"
               onclick={logout}
             >
-              <LogOut class="size-3" /> Sign out
+              <LogOut class="size-3" /> {m.common_sign_out()}
             </Button>
           </div>
         {:else}
           <p class="text-muted-foreground text-sm">
-            You're browsing as a guest. Sign in to sync your library across
-            devices.
+            {m.account_guest_sync()}
           </p>
           <Button
             variant="default"
@@ -193,7 +192,7 @@
             class="w-fit gap-1 text-xs"
             onclick={() => (authOpen = true)}
           >
-            <LogIn class="size-3" /> Sign in / Create account
+            <LogIn class="size-3" /> {m.onboarding_sign_in()}
           </Button>
         {/if}
       </Card.Content>
@@ -212,7 +211,7 @@
         {#each auth.profiles as profile (profile.id)}
           <div
             role="listitem"
-            aria-label={`Profile ${profile.name}`}
+            aria-label={m.account_profile_aria({ name: profile.name })}
             class="flex items-center justify-between gap-3 rounded-md px-2 py-2"
           >
             <div class="flex min-w-0 flex-1 items-center gap-3">
@@ -226,7 +225,9 @@
                   <Input
                     type="text"
                     class="h-8"
-                    aria-label={`Profile name for ${profile.name}`}
+                    aria-label={m.account_profile_name_for({
+                      name: profile.name,
+                    })}
                     bind:value={renameName}
                     disabled={renaming}
                     onkeydown={(event) => {
@@ -269,7 +270,7 @@
                   disabled={renaming || !renameName.trim()}
                 >
                   {#if renaming}<Spinner class="size-3" />{/if}
-                  Save
+                  {m.common_save()}
                 </Button>
                 <Button
                   variant="ghost"
@@ -277,29 +278,29 @@
                   onclick={cancelRename}
                   disabled={renaming}
                 >
-                  Cancel
+                  {m.common_cancel()}
                 </Button>
               {:else}
                 {#if auth.activeProfile?.id !== profile.id}
                   <Button
                     variant="outline"
                     size="xs"
-                    aria-label={`Switch to ${profile.name}`}
+                    aria-label={m.account_switch_to({ name: profile.name })}
                     onclick={() => switchProfile(profile.id)}
                     disabled={switchingProfileID !== null}
                   >
                     {#if switchingProfileID === profile.id}
                       <Spinner class="size-3" />
                     {/if}
-                    Switch
+                    {m.account_switch_profile()}
                   </Button>
                 {/if}
                 <Button
                   variant="ghost"
                   size="icon-xs"
                   class="text-muted-foreground"
-                  aria-label={`Rename ${profile.name}`}
-                  title={`Rename ${profile.name}`}
+                  aria-label={m.account_rename_named({ name: profile.name })}
+                  title={m.account_rename_named({ name: profile.name })}
                   onclick={() => startRename(profile.id, profile.name)}
                 >
                   <Pencil class="size-3.5" />
@@ -309,8 +310,8 @@
                     variant="ghost"
                     size="icon-xs"
                     class="text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete ${profile.name}`}
-                    title={`Delete ${profile.name}`}
+                    aria-label={m.account_delete_named({ name: profile.name })}
+                    title={m.account_delete_named({ name: profile.name })}
                     onclick={() => {
                       deleteTarget = { id: profile.id, name: profile.name };
                       deleteError = null;
@@ -339,8 +340,8 @@
 {#if deleteTarget}
   <ConfirmDialog
     title={m.account_delete_confirm()}
-    body={`"${deleteTarget.name}" and all of its watch history, library and settings will be permanently deleted. This cannot be undone.`}
-    confirmLabel="Delete"
+    body={m.account_delete_body({ name: deleteTarget.name })}
+    confirmLabel={m.common_delete()}
     loading={deleting}
     onconfirm={confirmDelete}
     oncancel={() => {

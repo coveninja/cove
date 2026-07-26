@@ -277,7 +277,9 @@
             use:pressable
             onclick={() => resume(item)}
             class="relative w-56 shrink-0 overflow-hidden rounded-md text-left"
-            aria-label={item.upNext ? `Play ${item.title}` : `Resume ${item.title}`}
+            aria-label={item.upNext
+              ? m.common_play_title({ title: item.title })
+              : m.common_resume_title({ title: item.title })}
           >
             <!-- Artwork: episode still (TV) or poster (movie / fallback) -->
             {#if item.image}

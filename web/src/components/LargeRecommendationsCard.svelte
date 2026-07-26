@@ -271,7 +271,7 @@
             class:opacity-0={i !== mediaIndex}
             class:opacity-100={i === mediaIndex}
             src={url}
-            alt="logo"
+            alt=""
           />
         {/if}
       {/each}

@@ -160,7 +160,7 @@
             class="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             onclick={() => (showNewProfileInput = true)}
           >
-            <Plus class="size-3.5" /> New profile
+            <Plus class="size-3.5" /> {m.account_new_profile()}
           </button>
         {/if}
       </div>
@@ -176,7 +176,7 @@
             open = false;
           }}
         >
-          <Settings class="size-3.5" /> Manage account &amp; insights
+          <Settings class="size-3.5" /> {m.account_manage_insights()}
         </button>
       </div>
 
@@ -200,7 +200,7 @@
               {#if syncing}<Spinner class="size-3" />{:else}<RefreshCw
                   class="size-3"
                 />{/if}
-              Sync now
+              {m.account_sync()}
             </Button>
             <Button
               variant="ghost"
@@ -208,12 +208,12 @@
               class="gap-1 text-xs text-muted-foreground"
               onclick={logout}
             >
-              <LogOut class="size-3" /> Sign out
+              <LogOut class="size-3" /> {m.common_sign_out()}
             </Button>
           </div>
         {:else}
           <p class="mb-2 text-xs text-muted-foreground">
-            Guest — data is local only
+            {m.account_guest_local()}
           </p>
           <Button
             variant="default"
@@ -224,7 +224,7 @@
               authOpen = true;
             }}
           >
-            <LogIn class="size-3" /> Sign in / Create account
+            <LogIn class="size-3" /> {m.onboarding_sign_in()}
           </Button>
         {/if}
       </div>

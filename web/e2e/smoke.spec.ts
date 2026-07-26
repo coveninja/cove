@@ -410,6 +410,52 @@ test("My Account uses explicit profile actions and supports renaming", async ({
   expect(activationRequests).toBe(1);
 });
 
+test("account, popover, and insights follow the selected UI language", async ({
+  page,
+}) => {
+  await mockBackend(page, {
+    savedSession: true,
+    uiLanguage: "tr",
+  });
+  await page.goto("/");
+
+  await page.getByLabel("Hesap", { exact: true }).click();
+  await expect(
+    page.getByRole("button", {
+      name: "Hesabı ve içgörüleri yönet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Şimdi eşitle", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Oturumu kapat", exact: true }),
+  ).toBeVisible();
+
+  await page
+    .getByRole("button", {
+      name: "Hesabı ve içgörüleri yönet",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Hesabım", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Hesabınızı, profillerinizi ve izleme içgörülerinizi yönetin.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "İzleme geçmişiniz, zevk profiliniz ve sizi benzersiz kılan özellikler.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+});
+
 test("a restored session surfaces a deduplicated sync push error", async ({
   page,
 }) => {

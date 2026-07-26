@@ -138,7 +138,7 @@
         <!-- Body -->
         <div class="flex flex-col gap-4 p-5 sm:p-7">
           <h3 class="text-base font-semibold">
-            Popular on {provider.provider_name}
+            {m.media_popular_on({ provider: provider.provider_name })}
           </h3>
 
           {#if loading}
@@ -169,7 +169,7 @@
             </div>
           {:else}
             <p class="text-sm text-muted-foreground">
-              No titles found for this provider in your region (US).
+              {m.media_provider_empty({ region: "US" })}
             </p>
           {/if}
         </div>

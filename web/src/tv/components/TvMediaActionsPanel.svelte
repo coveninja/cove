@@ -57,7 +57,7 @@
 
 {#if panelOpen}
   <TvTrackPanel
-    title={`${title} actions`}
+    title={m.common_title_actions({ title })}
     {items}
     onSelect={(id) => handleAction(id as MediaUtilityAction)}
     onClose={() => (panelOpen = false)}

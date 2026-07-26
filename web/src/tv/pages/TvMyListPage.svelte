@@ -281,7 +281,8 @@
           onclick={cycleSortKey}
           class="flex items-center gap-1.5 rounded-xl bg-secondary px-5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
-          Sort: {SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? ""}
+          {m.my_list_sort()}: {SORT_OPTIONS.find((o) => o.value === sortKey)
+            ?.label ?? ""}
         </button>
       </div>
     {/if}

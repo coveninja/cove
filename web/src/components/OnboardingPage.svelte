@@ -47,24 +47,24 @@
   ];
 
   const LANGUAGES = [
-    { value: "en", label: "English" },
-    { value: "es", label: "Spanish" },
-    { value: "fr", label: "French" },
-    { value: "de", label: "German" },
-    { value: "pt", label: "Portuguese" },
-    { value: "it", label: "Italian" },
-    { value: "ja", label: "Japanese" },
-    { value: "ko", label: "Korean" },
-    { value: "zh", label: "Chinese" },
-    { value: "ar", label: "Arabic" },
-    { value: "ru", label: "Russian" },
+    { value: "en" },
+    { value: "es" },
+    { value: "fr" },
+    { value: "de" },
+    { value: "pt" },
+    { value: "it" },
+    { value: "ja" },
+    { value: "ko" },
+    { value: "zh" },
+    { value: "ar" },
+    { value: "ru" },
   ];
 
   // Audio-only: "original" plays whatever track matches the title's TMDB
   // original_language — see SettingsPage.svelte / Player.svelte for the same
   // concept.
   const AUDIO_LANGUAGES = [
-    { value: "original", label: "Original language" },
+    { value: "original" },
     ...LANGUAGES,
   ];
 

@@ -101,11 +101,11 @@
   );
 
   const likedChartConfig = {
-    value: { label: "Liked", color: "var(--accent)" },
+    value: { label: m.account_liked(), color: "var(--accent)" },
   } satisfies Chart.ChartConfig;
 
   const dislikedChartConfig = {
-    value: { label: "Disliked", color: "#ef4444" },
+    value: { label: m.account_disliked(), color: "#ef4444" },
   } satisfies Chart.ChartConfig;
 
   // ── Contributor poster row ─────────────────────────────────────────────────
@@ -136,10 +136,10 @@
     <Card.Header>
       <Card.Title class="flex items-center gap-2">
         <Tag class="size-4" />
-        Your taste signals
+        {m.account_taste_signals()}
       </Card.Title>
       <Card.Description>
-        Genres &amp; themes that shape your recommendations
+        {m.account_taste_signals_description()}
       </Card.Description>
     </Card.Header>
     <Card.Content>
@@ -157,7 +157,7 @@
                       series={[
                   {
                     key: "value",
-                    label: "Liked",
+                    label: m.account_liked(),
                     color: likedChartConfig.value.color,
                   },
                 ]}
@@ -215,7 +215,7 @@
                       series={[
                   {
                     key: "value",
-                    label: "Disliked",
+                    label: m.account_disliked(),
                     color: dislikedChartConfig.value.color,
                   },
                 ]}
@@ -270,14 +270,14 @@
     <Card.Header>
       <Card.Title>{m.account_profile_titles()}</Card.Title>
       <Card.Description>
-        Positive and negative contributors to your taste
+        {m.account_contributors_description()}
       </Card.Description>
     </Card.Header>
     <Card.Content class="flex flex-col gap-4">
       {#if insights.top_contributors?.length > 0}
         <div>
           <p class="mb-2 font-medium text-accent/80">
-            Strongest positive influence
+            {m.account_positive_influence()}
           </p>
           <div class="flex gap-3 overflow-x-auto pb-2">
             {#each insights.top_contributors as c (c.tmdb_id + c.media_type)}
@@ -321,7 +321,7 @@
       {#if insights.negative_contributors?.length > 0}
         <div>
           <p class="mb-2 font-medium text-red-500/80">
-            Strongest negative influence
+            {m.account_negative_influence()}
           </p>
           <div class="flex gap-3 overflow-x-auto pb-2">
             {#each insights.negative_contributors as c (c.tmdb_id + c.media_type)}

@@ -258,7 +258,7 @@
         class:opacity-0={i !== mediaIndex}
         class:opacity-100={i === mediaIndex}
         src={url}
-        alt="backdrop"
+        alt=""
         style="will-change: transform;"
         bind:this={backdropEls[i]}
       />
@@ -287,7 +287,7 @@
             class:opacity-0={i !== mediaIndex}
             class:opacity-100={i === mediaIndex}
             src={url}
-            alt="logo"
+            alt=""
             bind:this={logoEls[i]}
           />
         {/if}
@@ -339,7 +339,7 @@
         onclick={openCurrentDetail}
       >
         <Info class="size-4" />
-        Details
+          {m.media_details()}
       </button>
       <button
         type="button"

@@ -10,6 +10,7 @@
   import { Play, Info } from "lucide-svelte";
   import { Player } from "$lib/player/player.svelte";
   import { focusGroup, focusable } from "../focus/actions";
+  import * as m from "$lib/paraglide/messages.js";
 
   // visible prop mirrors MobileHero so TvHomePage can use the same binding.
   let { visible = true } = $props<{ visible?: boolean }>();
@@ -196,7 +197,7 @@
         class:opacity-0={i !== mediaIndex}
         class:opacity-100={i === mediaIndex}
         src={url}
-        alt="backdrop"
+        alt=""
       />
     {/if}
   {/each}
@@ -220,7 +221,7 @@
             class:opacity-0={i !== mediaIndex}
             class:opacity-100={i === mediaIndex}
             src={url}
-            alt="logo"
+            alt=""
           />
         {/if}
       {/each}
@@ -276,7 +277,7 @@
         onclick={openCurrentDetail}
       >
         <Info class="size-5" />
-        Details
+          {m.media_details()}
       </button>
     </div>
 

@@ -342,17 +342,17 @@
   }
 
   const LANGUAGES = [
-    { value: "en", label: "English" },
-    { value: "es", label: "Spanish" },
-    { value: "fr", label: "French" },
-    { value: "de", label: "German" },
-    { value: "pt", label: "Portuguese" },
-    { value: "it", label: "Italian" },
-    { value: "ja", label: "Japanese" },
-    { value: "ko", label: "Korean" },
-    { value: "zh", label: "Chinese" },
-    { value: "ar", label: "Arabic" },
-    { value: "ru", label: "Russian" },
+    { value: "en" },
+    { value: "es" },
+    { value: "fr" },
+    { value: "de" },
+    { value: "pt" },
+    { value: "it" },
+    { value: "ja" },
+    { value: "ko" },
+    { value: "zh" },
+    { value: "ar" },
+    { value: "ru" },
   ];
 
   // Audio-only: "original" plays whatever track matches the title's TMDB
@@ -360,7 +360,7 @@
   // audio auto-select effect. Subtitles have no equivalent concept (TMDB
   // doesn't publish an "original subtitle language").
   const AUDIO_LANGUAGES = [
-    { value: "original", label: "Original" },
+    { value: "original" },
     ...LANGUAGES,
   ];
 
@@ -1507,7 +1507,7 @@
               </div>
             {:else}
               <p class="py-4 text-center text-sm text-muted-foreground">
-                No addons yet. Add a Stremio-compatible addon above.
+                {m.settings_no_addons()}
               </p>
             {/each}
           </div>
@@ -1519,12 +1519,7 @@
             class="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-400"
           >
             <TriangleAlert class="mt-0.5 size-4 shrink-0" />
-            <p>
-              Plugins are community-maintained JavaScript stream scrapers. Cove
-              runs this code on your device to find streams — it has not been
-              reviewed by Cove and its safety and quality vary by repository.
-              Nothing runs until you explicitly enable a scraper below.
-            </p>
+            <p>{m.settings_plugin_warning()}</p>
           </div>
 
           <!-- Add new repository -->
@@ -1533,8 +1528,7 @@
               >{m.settings_add_repository()}</Label
             >
             <p class="mb-3 text-xs text-muted-foreground">
-              Paste a GitHub repository URL (e.g. github.com/owner/repo) that
-              publishes a manifest.json.
+              {m.settings_repository_url_description()}
             </p>
             <div class="flex gap-2">
               <Input
@@ -1571,15 +1565,16 @@
                       <Badge
                         variant="outline"
                         class="border-purple-500/30 bg-purple-500/20 text-purple-400"
-                        >{repo.scrapers.length} scraper{repo.scrapers.length ===
-                        1
-                          ? ""
-                          : "s"}</Badge
+                        >{repo.scrapers.length === 1
+                          ? m.settings_scraper_count_one()
+                          : m.settings_scrapers_count({
+                              count: repo.scrapers.length,
+                            })}</Badge
                       >
                     </div>
                     {#if repo.fetchErr}
                       <p class="mt-0.5 text-xs text-red-500">
-                        Last refresh failed: {repo.fetchErr}
+                        {m.settings_refresh_failed({ error: repo.fetchErr })}
                       </p>
                     {/if}
                   </div>
@@ -1634,7 +1629,9 @@
                       {#if pendingConfirm?.repoId === repo.id && pendingConfirm?.scraperId === scraper.id}
                         <div class="flex shrink-0 items-center gap-2">
                           <span class="text-xs text-amber-400"
-                            >Run third-party JS from {repo.owner}/{repo.repo}?</span
+                            >{m.settings_run_third_party({
+                              repository: `${repo.owner}/${repo.repo}`,
+                            })}</span
                           >
                           <Button
                             size="sm"
@@ -1660,14 +1657,14 @@
                     </div>
                   {:else}
                     <p class="py-2 text-center text-xs text-muted-foreground">
-                      No scrapers found in this repository's manifest.
+                      {m.settings_no_scrapers()}
                     </p>
                   {/each}
                 </div>
               </div>
             {:else}
               <p class="py-4 text-center text-sm text-muted-foreground">
-                No plugin repositories yet. Add one above.
+                {m.settings_no_repositories()}
               </p>
             {/each}
           </div>
@@ -1678,7 +1675,7 @@
             <p class="text-sm text-muted-foreground">{m.common_loading()}</p>
           {:else if traktStatus === null}
             <p class="text-sm text-muted-foreground">
-              Trakt is not configured in this build.
+              {m.settings_trakt_unconfigured()}
             </p>
           {:else if traktStatus.connected}
             <!-- Connected state -->
@@ -1686,9 +1683,9 @@
               class="rounded-lg border border-border bg-secondary/30 p-4 space-y-4"
             >
               <p class="text-sm font-medium">
-                Connected as <span class="text-primary"
-                  >{traktStatus.username}</span
-                >
+                {m.settings_trakt_connected_as({
+                  username: traktStatus.username,
+                })}
               </p>
 
               <Separator />
@@ -1699,7 +1696,7 @@
                     >{m.settings_trakt_scrobble()}</Label
                   >
                   <p class="text-xs text-muted-foreground">
-                    Send watch events to Trakt as you watch.
+                    {m.settings_trakt_scrobble_description()}
                   </p>
                 </div>
                 <Switch
@@ -1715,7 +1712,7 @@
                     >{m.settings_trakt_sync()}</Label
                   >
                   <p class="text-xs text-muted-foreground">
-                    Sync watch history and watchlist with Trakt.
+                    {m.settings_trakt_sync_description()}
                   </p>
                 </div>
                 <Switch
@@ -1757,14 +1754,13 @@
                   >{m.settings_trakt_connect_description()}</Label
                 >
                 <p class="text-xs text-muted-foreground">
-                  Trakt tracks your watch history and watchlist across apps and
-                  devices. Scrobbling sends watch events as you play.
+                  {m.settings_trakt_about()}
                 </p>
                 {#if traktConnectError}
                   <p class="text-xs text-red-500">{traktConnectError}</p>
                 {/if}
                 <Button size="sm" onclick={handleTraktConnect}>
-                  Connect Trakt account
+                  {m.settings_trakt_connect()}
                 </Button>
               </div>
             {:else if traktFlowState === "polling"}
@@ -1775,7 +1771,7 @@
                 >
                 <div class="space-y-2">
                   <p class="text-xs text-muted-foreground">
-                    1. Open this URL in a browser:
+                    {m.settings_trakt_open_url()}
                   </p>
                   <a
                     href={traktFlow?.verification_url}
@@ -1785,7 +1781,7 @@
                     >{traktFlow?.verification_url}</a
                   >
                   <p class="text-xs text-muted-foreground">
-                    2. Enter this code:
+                    {m.settings_trakt_enter_code()}
                   </p>
                   <div class="flex items-center gap-2">
                     <code
@@ -1808,14 +1804,13 @@
                   </div>
                 </div>
                 <p class="text-xs text-muted-foreground">
-                  Waiting for authorization…
+                  {m.settings_trakt_waiting()}
                 </p>
               </div>
             {:else if traktFlowState === "expired"}
               <div class="rounded-lg border border-border p-4 space-y-3">
                 <p class="text-sm text-muted-foreground">
-                  The authorization request expired. Start a new one to try
-                  again.
+                  {m.settings_trakt_expired()}
                 </p>
                 <Button size="sm" onclick={handleTraktConnect}>{m.settings_trakt_try_again()}</Button
                 >
@@ -1823,8 +1818,7 @@
             {:else if traktFlowState === "denied"}
               <div class="rounded-lg border border-border p-4 space-y-3">
                 <p class="text-sm text-muted-foreground">
-                  Authorization was denied or is invalid. Start a new request to
-                  try again.
+                  {m.settings_trakt_denied()}
                 </p>
                 <Button size="sm" onclick={handleTraktConnect}>{m.settings_trakt_try_again()}</Button
                 >
@@ -1937,7 +1931,7 @@
           rel="noopener noreferrer"
           class="text-primary underline">{m.common_open_browser()}</a
         >
-        — some addons can't be configured in-app.
+        {m.settings_addon_fallback()}
       </div>
     </div>
   </div>

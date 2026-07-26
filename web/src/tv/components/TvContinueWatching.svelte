@@ -282,7 +282,9 @@
             role="button"
             tabindex="-1"
             class="relative w-70 shrink-0 cursor-pointer overflow-hidden rounded-md transition-[transform,filter,scale] duration-150 ease-[ease] focus:scale-[1.08] focus:brightness-[1.15]"
-            aria-label={item.upNext ? `Play ${item.title}` : `Resume ${item.title}`}
+            aria-label={item.upNext
+              ? m.common_play_title({ title: item.title })
+              : m.common_resume_title({ title: item.title })}
           >
             <!-- Artwork: episode still (TV) or poster (movie / fallback) -->
             {#if item.image}

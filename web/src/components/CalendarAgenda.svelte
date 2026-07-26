@@ -363,7 +363,10 @@
                           <span
                             class="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-medium leading-none text-white"
                           >
-                            S{item.season_number}E{item.episode_number}
+                            {m.common_season_episode({
+                              season: item.season_number,
+                              episode: item.episode_number,
+                            })}
                           </span>
                         {/if}
                       </span>
@@ -375,10 +378,14 @@
                           {#if item.media_type === "tv" && item.episode_name}
                             {item.episode_name}{#if item.kind === "available" && item.waiting_count > 1}&nbsp;<span
                                 class="font-medium text-accent"
-                                >+{item.waiting_count - 1} more</span
+                                >{m.common_more_count({
+                                  count: item.waiting_count - 1,
+                                })}</span
                               >{/if}
                           {:else if item.media_type === "tv" && item.season_number != null}
-                            Season {item.season_number}
+                            {m.common_season_number({
+                              season: item.season_number,
+                            })}
                           {:else}
                             &nbsp;
                           {/if}
@@ -400,7 +407,7 @@
             class="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             <ChevronDown class="size-4" />
-            Show {hiddenDayCount} more day{hiddenDayCount !== 1 ? "s" : ""}
+            {m.common_show_more_days({ count: hiddenDayCount })}
           </button>
         {/if}
       </div>

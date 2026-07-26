@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fmtHours } from "./utils";
+  import * as m from "$lib/paraglide/messages.js";
 
   /**
    * Reusable vertical bar chart.
@@ -100,11 +101,11 @@
   <div class="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground">
     <span class="flex items-center gap-1">
       <span class="inline-block size-2.5 rounded-[2px] bg-indigo-500/75"></span>
-      This year
+      {m.account_this_year()}
     </span>
     <span class="flex items-center gap-1">
       <span class="inline-block size-2.5 rounded-[2px] bg-muted/60"></span>
-      Last year
+      {m.account_last_year()}
     </span>
   </div>
 {/if}

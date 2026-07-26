@@ -13,7 +13,7 @@
   <Card.Header>
     <Card.Title class="flex items-center gap-2 text-sm">
       <Building2 class="size-4" />
-      Studio footprint
+      {m.account_studio_footprint()}
     </Card.Title>
     <Card.Description>{m.account_studios_most()}</Card.Description>
   </Card.Header>

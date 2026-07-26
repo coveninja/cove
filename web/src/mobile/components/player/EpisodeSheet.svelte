@@ -229,7 +229,8 @@
               : 'bg-white/10 text-white/70'}"
             onclick={() => (selectedSeason = s.season_number)}
           >
-            {s.name || `Season ${s.season_number}`}
+            {s.name ||
+              m.common_season_number({ season: s.season_number })}
           </button>
         {/each}
       </div>
@@ -273,7 +274,7 @@
             {#if ep.still_path}
               <img
                 src={ep.still_path}
-                alt="Episode {ep.episode_number}"
+                alt={m.common_episode_number({ episode: ep.episode_number })}
                 class="aspect-video w-full rounded-md object-cover bg-muted"
                 use:imageFade
               />
@@ -298,7 +299,7 @@
                   ? 'text-accent'
                   : ''}"
               >
-                E{ep.episode_number} · {ep.name}
+                {m.common_episode_short({ episode: ep.episode_number })} · {ep.name}
               </span>
               {#if completed}
                 <CircleCheckBig class="size-4 shrink-0 text-accent" />
@@ -307,7 +308,7 @@
             <span class="block text-xs leading-snug text-white/50">
               {#if isCurrent}
                 <span class="font-medium text-accent/80">{m.player_now_playing()}</span>{#if ep.air_date || ep.runtime} · {/if}
-              {/if}{#if ep.air_date}{formatAirDate(ep.air_date)}{/if}{#if ep.air_date && ep.runtime} · {/if}{#if ep.runtime}{ep.runtime}m{/if}
+              {/if}{#if ep.air_date}{formatAirDate(ep.air_date)}{/if}{#if ep.air_date && ep.runtime} · {/if}{#if ep.runtime}{m.common_minutes_short({ minutes: ep.runtime })}{/if}
             </span>
           </span>
         </button>

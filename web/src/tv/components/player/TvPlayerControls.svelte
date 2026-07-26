@@ -174,7 +174,7 @@
           onclick={onSkipSegment}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
-          Skip {activeSegment.label}
+          {m.player_skip_segment({ segment: activeSegment.label })}
         </button>
       </div>
     {/if}

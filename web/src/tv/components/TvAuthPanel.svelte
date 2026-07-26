@@ -378,7 +378,7 @@
         class="h-auto p-0 text-base text-muted-foreground"
         onclick={() => { setView("register"); email = pendingEmail; profileName = pendingProfileName; }}
       >
-        ← Back to registration
+        {m.auth_back_registration()}
       </Button>
     </div>
   {/if}

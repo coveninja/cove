@@ -29,6 +29,7 @@
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { SvelteSet } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
 
   // ─── Props (unchanged from the old Player) ──────────────────────────────────
 
@@ -1088,7 +1089,7 @@
   {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
       <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">
-        Native player unavailable — run inside the Cove desktop app.
+        {m.player_native_desktop_only()}
       </p>
     </div>
   {/if}

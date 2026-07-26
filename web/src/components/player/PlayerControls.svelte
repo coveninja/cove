@@ -216,8 +216,14 @@
               </div>
               <span class="tabular-nums">{torrent.progress.toFixed(1)}%</span>
             </div>
-            <div>Speed: {torrent.speed}</div>
-            <div>Peers: {torrent.peers} active / {torrent.totalPeers} known · {torrent.seeders} seeders</div>
+            <div>{m.player_torrent_speed({ speed: torrent.speed })}</div>
+            <div>
+              {m.player_torrent_peers({
+                active: torrent.peers,
+                known: torrent.totalPeers,
+                seeders: torrent.seeders,
+              })}
+            </div>
             {#if torrent.totalBytes > 0}
               <div>{m.player_size()}: {formatBytes(torrent.downloadedBytes)} / {formatBytes(torrent.totalBytes)}</div>
             {/if}

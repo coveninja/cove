@@ -14,6 +14,7 @@
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -240,7 +241,9 @@
           variant={dismissed ? "destructive" : "outline"}
           size="icon"
           onclick={toggleDismissed}
-          title={dismissed ? "Undo not interested" : "Not interested"}
+          title={dismissed
+            ? m.media_undo_not_interested()
+            : m.media_not_interested()}
         >
           <ThumbsDown class="size-4" />
         </Button>

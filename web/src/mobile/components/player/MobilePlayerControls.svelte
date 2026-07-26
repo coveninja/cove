@@ -204,7 +204,7 @@
           class="rounded-full border border-white/60 bg-black/60 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm active:bg-white/20"
           onclick={() => onSkipSegment()}
         >
-          Skip {activeSegment.label}
+          {m.player_skip_segment({ segment: activeSegment.label })}
         </button>
       </div>
     {/if}

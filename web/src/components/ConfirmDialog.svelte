@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     title,
     body,
-    confirmLabel = "Delete",
+    confirmLabel = m.common_delete(),
     loading = false,
     onconfirm,
     oncancel,
@@ -40,7 +41,7 @@
     {/if}
     <div class="flex justify-end gap-2">
       <Button variant="outline" onclick={oncancel} disabled={loading}>
-        Cancel
+        {m.common_cancel()}
       </Button>
       <Button variant="destructive" onclick={onconfirm} disabled={loading}>
         {#if loading}<Spinner class="mr-2 size-4" />{/if}

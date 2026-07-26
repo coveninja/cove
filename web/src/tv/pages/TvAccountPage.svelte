@@ -19,6 +19,11 @@
   import ActivityBars from "../../components/insights/ActivityBars.svelte";
   import StudioFootprint from "../../components/insights/StudioFootprint.svelte";
   import TasteSignalView from "../../components/insights/TasteSignalView.svelte";
+  import {
+    activityDayLabels,
+    activityHourLabels,
+    activityMonthLabels,
+  } from "../../components/insights/utils";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import {
     RefreshCw,
@@ -213,7 +218,7 @@
     const rest = list.slice(5);
     if (rest.length > 0) {
       top.push({
-        label: "Other",
+        label: m.account_other(),
         value: rest.reduce((a, g) => a + Math.abs(g.score), 0),
         color: palette[5],
       });
@@ -224,13 +229,13 @@
   function mvSlices(s: LibraryStats): Slice[] {
     return [
       {
-        label: "Movies",
+        label: m.my_list_movies(),
         value: s.movie_share,
         color: palette[0],
         count: s.by_type.movie ?? 0,
       },
       {
-        label: "TV",
+        label: m.my_list_shows(),
         value: s.tv_share,
         color: palette[1],
         count: s.by_type.tv ?? 0,
@@ -239,10 +244,10 @@
   }
 
   const statusMeta = [
-    { key: "watching", label: "Watching" },
-    { key: "finished", label: "Finished" },
-    { key: "watch_later", label: "Watch later" },
-    { key: "dropped", label: "Dropped" },
+    { key: "watching", label: m.my_list_watching() },
+    { key: "finished", label: m.my_list_finished() },
+    { key: "watch_later", label: m.my_list_watch_later() },
+    { key: "dropped", label: m.my_list_dropped() },
   ];
 
   function statusSlices(s: LibraryStats): Slice[] {
@@ -257,21 +262,19 @@
   }
 
   const weights = [
-    { label: "Finished a title", value: "+1.5" },
-    { label: "Watched to the end", value: "+1.0" },
-    { label: "Currently watching", value: "+0.5" },
-    { label: "Saved to watch later", value: "+0.5" },
-    { label: "Each ★ above / below 3", value: "±1.5" },
-    { label: "Dropped", value: "−2.0" },
-    { label: "Not interested", value: "−2.0" },
+    { label: m.account_weight_finished(), value: "+1.5" },
+    { label: m.account_weight_watched_end(), value: "+1.0" },
+    { label: m.account_weight_watching(), value: "+0.5" },
+    { label: m.account_weight_watch_later(), value: "+0.5" },
+    { label: m.account_weight_rating(), value: "±1.5" },
+    { label: m.account_weight_dropped(), value: "−2.0" },
+    { label: m.account_weight_not_interested(), value: "−2.0" },
   ];
 
   // ── Activity chart data ───────────────────────────────────────────────────────
-  const MONTH_SHORT = [
-    "Jan","Feb","Mar","Apr","May","Jun",
-    "Jul","Aug","Sep","Oct","Nov","Dec",
-  ];
-  const DOW_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const MONTH_SHORT = activityMonthLabels();
+  const DOW_SHORT = activityDayLabels();
+  const HOUR_LABELS = activityHourLabels();
 
   const monthItems = $derived(
     activity
@@ -289,8 +292,7 @@
   const hourItems = $derived(
     activity
       ? activity.by_hour_of_day.map((v, i) => ({
-          label:
-            i === 0 ? "12a" : i < 12 ? `${i}a` : i === 12 ? "12p" : `${i - 12}p`,
+          label: HOUR_LABELS[i],
           value: v,
         }))
       : [],
@@ -338,7 +340,7 @@
         <header>
           <h1 class="text-4xl font-bold tracking-tight">{m.account_title()}</h1>
           <p class="mt-1 text-lg text-white/50">
-            Manage your account, profiles, and viewing insights.
+            {m.account_page_description()}
           </p>
         </header>
 
@@ -363,7 +365,7 @@
                 {:else}
                   <RefreshCw class="size-5" />
                 {/if}
-                Sync now
+                {m.account_sync()}
               </button>
               <button
                 type="button"
@@ -372,12 +374,12 @@
                 class="flex items-center gap-2 rounded-xl bg-white/5 px-6 py-3 text-base font-medium text-white/60 transition-colors focus:bg-white/20 focus:text-white focus:outline-none"
               >
                 <LogOut class="size-5" />
-                Sign out
+                {m.common_sign_out()}
               </button>
             </div>
           {:else}
             <p class="text-base text-white/60">
-              You're browsing as a guest. Sign in to sync your library across devices.
+              {m.account_guest_sync()}
             </p>
             <button
               type="button"
@@ -386,7 +388,7 @@
               class="flex w-fit items-center gap-2 rounded-xl bg-white px-6 py-3 text-base font-semibold text-black transition-colors focus:bg-white/80 focus:outline-none"
             >
               <LogIn class="size-5" />
-              Sign in / Create account
+              {m.onboarding_sign_in()}
             </button>
           {/if}
         </div>
@@ -437,7 +439,7 @@
                     {/if}
                     {#if profile.is_primary}
                       <span class="rounded border border-white/20 px-2 py-0.5 text-xs text-white/40">
-                        Primary
+                        {m.account_primary()}
                       </span>
                     {/if}
                   </span>
@@ -452,7 +454,7 @@
                     deleteError = null;
                   }}
                   class="ml-2 flex size-10 shrink-0 items-center justify-center rounded-xl text-white/40 transition-colors focus:bg-red-500/20 focus:text-red-400 focus:outline-none"
-                  aria-label={`Delete profile ${profile.name}`}
+                  aria-label={m.account_delete_named({ name: profile.name })}
                 >
                   <Trash2 class="size-5" />
                 </button>
@@ -477,7 +479,9 @@
 
     {:else if loadError}
       <section class="rounded-2xl border border-red-500/30 bg-red-500/10 p-6">
-        <p class="text-base text-red-300">Couldn't load your profile: {loadError}</p>
+        <p class="text-base text-red-300">
+          {m.account_load_error({ error: loadError })}
+        </p>
       </section>
 
     {:else}
@@ -563,7 +567,7 @@
             <header>
               <h2 class="text-3xl font-bold">{m.account_your_insights()}</h2>
               <p class="mt-1 text-base text-white/50">
-                Your watch history, taste profile, and what makes you unique.
+                {m.account_insights_description()}
               </p>
             </header>
 
@@ -575,13 +579,19 @@
                   <div class="mt-1 text-sm text-white/50">{label}</div>
                 </div>
               {/snippet}
-              {@render statTile(String(stats.total), "in library")}
-              {@render statTile(String(stats.by_status.finished ?? 0), "finished")}
+              {@render statTile(String(stats.total), m.account_in_library())}
+              {@render statTile(
+                String(stats.by_status.finished ?? 0),
+                m.account_finished(),
+              )}
               {@render statTile(
                 stats.rated ? stats.avg_rating.toFixed(1) : "—",
-                `avg rating (${stats.rated} rated)`,
+                m.account_avg_rating({ count: stats.rated }),
               )}
-              {@render statTile(String(stats.dismissed), "not interested")}
+              {@render statTile(
+                String(stats.dismissed),
+                m.account_not_interested(),
+              )}
             </div>
 
             <!-- Movie vs TV + Watch activity donuts -->
@@ -624,14 +634,14 @@
                 </div>
               {/snippet}
               {@render donutCard(
-                "What You Enjoy Most",
+                m.account_enjoy_most(),
                 mvSlices(stats),
-                "Share of what you've finished or are watching.",
+                m.account_enjoy_description(),
               )}
               {@render donutCard(
-                "Watch Activity",
+                m.account_watch_activity(),
                 statusSlices(stats),
-                "Where your titles sit",
+                m.account_watch_activity_description(),
               )}
             </div>
           </div>
@@ -747,8 +757,14 @@
                 {/if}
               </div>
             {/snippet}
-            {@render genreDonut("Top Movie Genres", genreSlices(insights.top_movie_genres))}
-            {@render genreDonut("Top TV Genres", genreSlices(insights.top_tv_genres))}
+            {@render genreDonut(
+              m.account_top_movie_genres(),
+              genreSlices(insights.top_movie_genres),
+            )}
+            {@render genreDonut(
+              m.account_top_tv_genres(),
+              genreSlices(insights.top_tv_genres),
+            )}
           </div>
         </section>
 
@@ -820,10 +836,9 @@
               <h3 class="text-lg font-semibold text-white">{m.account_recommendations_how()}</h3>
             </div>
             <p>
-              Your profile is built from
-              <span class="font-semibold text-white">{insights.signals_used}</span>
-              titles you've actively engaged with. Each becomes a like/dislike weight,
-              which is spread across that title's genres and keywords:
+              {m.account_recommendations_intro({
+                count: insights.signals_used,
+              })}
             </p>
             <div class="grid grid-cols-2 gap-x-8 gap-y-2">
               {#each weights as wgt (wgt.label)}
@@ -833,17 +848,8 @@
                 </div>
               {/each}
             </div>
-            <p>
-              Older signals fade over time — a favorite from a year ago still counts at
-              roughly half strength, leveling off at a floor so a multi-year-old favorite
-              is never fully forgotten.
-            </p>
-            <p>
-              A single dropped or "not interested" title needs to be a much stronger signal
-              before it steers you away from an entire genre; once two or more titles agree,
-              a milder signal is enough. Rating a title below ★3 always counts as a
-              dislike, even if you finished it.
-            </p>
+            <p>{m.account_recommendations_decay()}</p>
+            <p>{m.account_recommendations_negative()}</p>
           </div>
         </section>
       {/if}
@@ -863,8 +869,7 @@
             <Sparkles class="size-10 text-white/30" />
             <p class="text-2xl font-semibold">{m.account_nothing_analyze()}</p>
             <p class="max-w-md text-base text-white/50">
-              Watch a few titles and your stats will start appearing here. Finish,
-              rate, or drop titles to build your taste profile.
+              {m.account_empty_description()}
             </p>
           </div>
         </section>
@@ -880,8 +885,8 @@
 {#if deleteTarget}
   <ConfirmDialog
     title={m.account_delete_confirm()}
-    body={`"${deleteTarget.name}" and all of its watch history, library and settings will be permanently deleted. This cannot be undone.`}
-    confirmLabel="Delete"
+    body={m.account_delete_body({ name: deleteTarget.name })}
+    confirmLabel={m.common_delete()}
     loading={deleting}
     onconfirm={confirmDelete}
     oncancel={() => {

@@ -312,7 +312,11 @@
         <span>{runtime}</span>
       {/if}
       {#if media.media_type === "tv" && numberOfEpisodes !== null}
-        <span>{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span>
+        <span
+          >{numberOfEpisodes === 1
+            ? m.common_episode_count_one()
+            : m.common_episodes_count({ count: numberOfEpisodes })}</span
+        >
       {/if}
       {#if genres.length}
         <span class="text-muted-foreground/60">·</span>

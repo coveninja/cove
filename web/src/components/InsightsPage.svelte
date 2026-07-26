@@ -16,6 +16,11 @@
   import ActivityBars from "./insights/ActivityBars.svelte";
   import StudioFootprint from "./insights/StudioFootprint.svelte";
   import TasteSignalView from "./insights/TasteSignalView.svelte";
+  import {
+    activityDayLabels,
+    activityHourLabels,
+    activityMonthLabels,
+  } from "./insights/utils";
   import { libraryChanged } from "$lib/stores/library";
   import {
     Film,
@@ -154,7 +159,7 @@
     const rest = list.slice(5);
     if (rest.length > 0) {
       top.push({
-        label: "Other",
+        label: m.account_other(),
         value: rest.reduce((a, g) => a + Math.abs(g.score), 0),
         color: palette[5],
       });
@@ -165,13 +170,13 @@
   function mvSlices(s: LibraryStats): Slice[] {
     return [
       {
-        label: "Movies",
+        label: m.my_list_movies(),
         value: s.movie_share,
         color: palette[0],
         count: s.by_type.movie ?? 0,
       },
       {
-        label: "TV",
+        label: m.my_list_shows(),
         value: s.tv_share,
         color: palette[1],
         count: s.by_type.tv ?? 0,
@@ -180,10 +185,10 @@
   }
 
   const statusMeta = [
-    { key: "watching", label: "Watching" },
-    { key: "finished", label: "Finished" },
-    { key: "watch_later", label: "Watch later" },
-    { key: "dropped", label: "Dropped" },
+    { key: "watching", label: m.my_list_watching() },
+    { key: "finished", label: m.my_list_finished() },
+    { key: "watch_later", label: m.my_list_watch_later() },
+    { key: "dropped", label: m.my_list_dropped() },
   ];
 
   function statusSlices(s: LibraryStats): Slice[] {
@@ -198,31 +203,19 @@
   }
 
   const weights = [
-    { label: "Finished a title", value: "+1.5" },
-    { label: "Watched to the end", value: "+1.0" },
-    { label: "Currently watching", value: "+0.5" },
-    { label: "Saved to watch later", value: "+0.5" },
-    { label: "Each ★ above / below 3", value: "±1.5" },
-    { label: "Dropped", value: "−2.0" },
-    { label: "Not interested", value: "−2.0" },
+    { label: m.account_weight_finished(), value: "+1.5" },
+    { label: m.account_weight_watched_end(), value: "+1.0" },
+    { label: m.account_weight_watching(), value: "+0.5" },
+    { label: m.account_weight_watch_later(), value: "+0.5" },
+    { label: m.account_weight_rating(), value: "±1.5" },
+    { label: m.account_weight_dropped(), value: "−2.0" },
+    { label: m.account_weight_not_interested(), value: "−2.0" },
   ];
 
   // ── Activity chart helpers ────────────────────────────────────────────────
-  const MONTH_SHORT = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  const DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MONTH_SHORT = activityMonthLabels();
+  const DOW_SHORT = activityDayLabels();
+  const HOUR_LABELS = activityHourLabels();
 
   const monthItems = $derived(
     activity
@@ -251,14 +244,7 @@
   const hourItems = $derived(
     activity
       ? activity.by_hour_of_day.map((v, i) => ({
-          label:
-            i === 0
-              ? "12a"
-              : i < 12
-                ? `${i}a`
-                : i === 12
-                  ? "12p"
-                  : `${i - 12}p`,
+          label: HOUR_LABELS[i],
           value: v,
         }))
       : [],
@@ -345,7 +331,7 @@
   <header class="flex flex-col gap-1">
     <h1 class="text-2xl font-semibold">{m.account_your_insights()}</h1>
     <p class="text-sm text-muted-foreground">
-      Your watch history, taste profile, and what makes you unique.
+      {m.account_insights_description()}
     </p>
   </header>
 
@@ -359,7 +345,7 @@
   {:else if loadError}
     <Card.Root class="border-destructive/40 bg-destructive/10">
       <Card.Content class="p-4 text-sm">
-        Couldn't load your profile: {loadError}
+        {m.account_load_error({ error: loadError })}
       </Card.Content>
     </Card.Root>
   {:else}
@@ -376,7 +362,7 @@
           <Card.Header>
             <Card.Title class="flex items-center gap-2 text-sm">
               <BarChart3 class="size-4" />
-              Hours by Month
+              {m.account_hours_month()}
               {#if monthSecondary}
                 <span class="ml-auto text-xs font-normal text-muted-foreground"
                   >{m.account_vs_last_year()}</span
@@ -427,27 +413,30 @@
     <!-- ─── Library at a glance + composition donuts (taste gate) ─────── -->
     {#if hasProfile && stats && insights}
       <section class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {@render stat(String(stats.total), "in library")}
-        {@render stat(String(stats.by_status.finished ?? 0), "finished")}
+        {@render stat(String(stats.total), m.account_in_library())}
+        {@render stat(
+          String(stats.by_status.finished ?? 0),
+          m.account_finished(),
+        )}
         {@render stat(
           stats.rated ? stats.avg_rating.toFixed(1) : "—",
-          `avg rating (${stats.rated} rated)`,
+          m.account_avg_rating({ count: stats.rated }),
         )}
-        {@render stat(String(stats.dismissed), "not interested")}
+        {@render stat(String(stats.dismissed), m.account_not_interested())}
       </section>
 
       <section class="grid gap-4 md:grid-cols-2">
         {@render chartCard(
-          "What You Enjoy Most",
+          m.account_enjoy_most(),
           Film,
           mvSlices(stats),
-          "Share of what you've finished or are watching.",
+          m.account_enjoy_description(),
         )}
         {@render chartCard(
-          "Watch activity",
+          m.account_watch_activity(),
           Activity,
           statusSlices(stats),
-          "Where your titles sit",
+          m.account_watch_activity_description(),
         )}
       </section>
     {/if}
@@ -458,7 +447,7 @@
         <Card.Header>
           <Card.Title class="flex items-center gap-2 text-sm">
             <Film class="size-4" />
-            Titles watched this year
+            {m.account_titles_year()}
           </Card.Title>
           <Card.Description>{m.account_top_watch_time()}</Card.Description>
         </Card.Header>
@@ -506,12 +495,12 @@
     {#if hasProfile && insights}
       <section class="grid gap-4 md:grid-cols-2">
         {@render chartCard(
-          "Top Movie Genres",
+          m.account_top_movie_genres(),
           Film,
           genreSlices(insights.top_movie_genres),
         )}
         {@render chartCard(
-          "Top TV Genres",
+          m.account_top_tv_genres(),
           Tv,
           genreSlices(insights.top_tv_genres),
         )}
@@ -526,7 +515,7 @@
           <Card.Header>
             <Card.Title class="flex items-center gap-2 text-sm">
               <Users class="size-4" />
-              Cast &amp; crew you gravitate to
+              {m.account_people_taste()}
             </Card.Title>
           </Card.Header>
           <Card.Content>
@@ -547,18 +536,11 @@
         <Card.Header>
           <Card.Title class="flex items-center gap-2 text-sm">
             <Info class="size-4" />
-            How your recommendations are built
+            {m.account_recommendations_how()}
           </Card.Title>
         </Card.Header>
         <Card.Content class="flex flex-col gap-4 text-sm text-muted-foreground">
-          <p>
-            Your profile is built from
-            <span class="font-medium text-foreground"
-              >{insights.signals_used}</span
-            >
-            titles you've actively engaged with. Each becomes a like/dislike weight,
-            which is spread across that title's genres and keywords:
-          </p>
+          <p>{m.account_recommendations_intro({ count: insights.signals_used })}</p>
 
           <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
             {#each weights as wgt (wgt.label)}
@@ -571,18 +553,9 @@
             {/each}
           </div>
 
-          <p>
-            Older signals fade over time — a favorite from a year ago still
-            counts at roughly half strength, leveling off at a floor so a
-            multi-year-old favorite is never fully forgotten.
-          </p>
+          <p>{m.account_recommendations_decay()}</p>
 
-          <p>
-            A single dropped or "not interested" title needs to be a much
-            stronger signal before it steers you away from an entire genre; once
-            two or more titles agree, a milder signal is enough. Rating a title
-            below ★3 always counts as a dislike, even if you finished it.
-          </p>
+          <p>{m.account_recommendations_negative()}</p>
         </Card.Content>
       </Card.Root>
     {/if}
@@ -594,8 +567,7 @@
           <Sparkles class="size-6 text-muted-foreground" />
           <p class="font-medium">{m.account_nothing_analyze()}</p>
           <p class="max-w-sm text-sm text-muted-foreground">
-            Watch a few titles and your stats will start appearing here. Finish,
-            rate, or drop titles to build your taste profile.
+            {m.account_empty_description()}
           </p>
         </Card.Content>
       </Card.Root>

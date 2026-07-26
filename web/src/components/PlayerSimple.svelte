@@ -207,7 +207,7 @@
 {#if mpvBusy}
   <!-- mpv is active: keep the YouTube iframe fully destroyed while it plays. -->
   {#if bg}
-    <img class="h-full w-full object-cover {Class}" alt="bg" src={bg} />
+    <img class="h-full w-full object-cover {Class}" alt="" src={bg} />
   {:else}
     <div class="h-full w-full bg-black {Class}"></div>
   {/if}
@@ -237,7 +237,7 @@
       {#if bg}
         <img
           class="absolute inset-0 z-20 h-full w-full object-cover transition-opacity duration-300 group-data-started/player:pointer-events-none group-data-[started]/player:opacity-0"
-          alt="bg"
+          alt=""
           src={bg}
         />
       {/if}
