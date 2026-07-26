@@ -400,6 +400,7 @@
   "account_sync": "Sync now",
   "account_insights": "Insights",
   "account_activity": "Activity",
+  "account_no_activity": "No activity",
   "account_history": "Watch history",
   "account_delete_confirm": "Delete this profile?",
   "account_delete_description": "This permanently removes the profile and its local data.",

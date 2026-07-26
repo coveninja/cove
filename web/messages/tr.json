@@ -400,6 +400,7 @@
   "account_sync": "Şimdi eşitle",
   "account_insights": "İçgörüler",
   "account_activity": "Etkinlik",
+  "account_no_activity": "Etkinlik yok",
   "account_history": "İzleme geçmişi",
   "account_delete_confirm": "Bu profil silinsin mi?",
   "account_delete_description": "Bu işlem profili ve yerel verilerini kalıcı olarak siler.",
