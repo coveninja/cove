@@ -8,6 +8,7 @@
   } from "$lib/mediaActions";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
+  import { Portal } from "bits-ui";
   import { EllipsisVertical } from "lucide-svelte";
   import TrackSheet from "./player/TrackSheet.svelte";
 
@@ -61,10 +62,12 @@
 {/if}
 
 {#if open}
-  <TrackSheet
-    title={m.common_title_actions({ title })}
-    {items}
-    onSelect={(id) => handleAction(id as MediaUtilityAction)}
-    onClose={() => (open = false)}
-  />
+  <Portal>
+    <TrackSheet
+      title={m.common_title_actions({ title })}
+      {items}
+      onSelect={(id) => handleAction(id as MediaUtilityAction)}
+      onClose={() => (open = false)}
+    />
+  </Portal>
 {/if}
