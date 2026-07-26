@@ -27,7 +27,7 @@
   import { libraryChanged } from "$lib/stores/library";
   import { mediaFromEntry } from "$lib/mediaFromEntry";
   import { SvelteMap } from "svelte/reactivity";
-  import { nextAiredEpisode as nextAiredEpisodeShared } from "$lib/nextEpisode";
+  import { nextUnwatchedAiredEpisode as nextUnwatchedAiredEpisodeShared } from "$lib/nextEpisode";
   // ── TV focus engine ──────────────────────────────────────────────────────────
   import { focusGroup, focusable } from "../focus/actions";
   // ── Icons for fallback artwork ───────────────────────────────────────────────
@@ -71,12 +71,19 @@
     return eps.find((e) => e.episode_number === episode)?.still_path ?? "";
   }
 
-  function nextAiredEpisode(
+  function nextUnwatchedAiredEpisode(
     id: number,
     season: number,
     episode: number,
+    progress: WatchProgress[],
   ): Promise<{ season: number; episode: TVEpisode } | null> {
-    return nextAiredEpisodeShared(id, season, episode, fetchSeason);
+    return nextUnwatchedAiredEpisodeShared(
+      id,
+      season,
+      episode,
+      progress,
+      fetchSeason,
+    );
   }
 
   function latestProgress(progress: WatchProgress[]): WatchProgress | null {
@@ -159,7 +166,7 @@
       };
     }
 
-    const next = await nextAiredEpisode(entry.tmdb_id, s, e);
+    const next = await nextUnwatchedAiredEpisode(entry.tmdb_id, s, e, progress);
     if (!next) return null;
     return {
       key,
