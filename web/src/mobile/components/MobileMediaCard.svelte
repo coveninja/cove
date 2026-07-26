@@ -9,6 +9,9 @@
   import type { LibraryEntry } from "$lib/types/library";
   import { pressable } from "../lib/pressable";
   import { imageFade } from "../lib/imageFade";
+  import { longpress } from "../lib/longpress";
+  import MobileMediaActionsSheet from "./MobileMediaActionsSheet.svelte";
+  import { activeLocale } from "$lib/i18n";
 
   let {
     media,
@@ -36,10 +39,15 @@
   let images = $state<MediaImages | undefined>();
   let logoLoaded = $state(false);
   let libraryEntry = $state<LibraryEntry | null>(null);
+  let dismissed = $state(false);
+  let hasProgress = $state(false);
+  let actionsOpen = $state(false);
 
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
+  const posterLocale = activeLocale();
+  const posterLocaleFallbacks = posterLocale === "en" ? [null] : ["en", null];
 
   // ── Library state ─────────────────────────────────────────────────────────
   $effect(() => {
@@ -49,6 +57,8 @@
       .libraryGet(media.id, media.media_type)
       .then((result) => {
         libraryEntry = result?.entry ?? null;
+        dismissed = result?.dismissed ?? false;
+        hasProgress = (result?.progress.length ?? 0) > 0;
       })
       .catch((err) => {
         console.error("MobileMediaCard: failed to load library entry", err);
@@ -96,7 +106,13 @@
 <div
   bind:this={buttonEl}
   use:pressable
+  use:longpress={{
+    onLongPress: () => {
+      actionsOpen = true;
+    },
+  }}
   onclick={openOverlay}
+  oncontextmenu={(event) => event.preventDefault()}
   class="relative cursor-pointer"
   role="button"
   tabindex="0"
@@ -107,8 +123,8 @@
       <img
         use:imageFade
         src={getImageOpt(images, "posters", {
-          iso: "en",
-          voteAverage: 5,
+          iso: posterLocale,
+          isoFallbacks: posterLocaleFallbacks,
           randomize: true,
         })}
         alt={title}
@@ -154,3 +170,12 @@
     {/if}
   </div>
 </div>
+
+<MobileMediaActionsSheet
+  {media}
+  {libraryEntry}
+  {dismissed}
+  {hasProgress}
+  bind:open={actionsOpen}
+  showTrigger={false}
+/>

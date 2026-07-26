@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { ActivityStats } from "$lib/api";
   import { fmtHours } from "./utils";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -14,7 +15,7 @@
       <div class="text-3xl font-bold tabular-nums">
         {activity.current_streak}
       </div>
-      <div class="text-xs text-muted-foreground">day streak</div>
+      <div class="text-xs text-muted-foreground">{m.account_day_streak()}</div>
     </Card.Content>
   </Card.Root>
 
@@ -24,7 +25,7 @@
       <div class="text-3xl font-bold tabular-nums">
         {activity.longest_streak}
       </div>
-      <div class="text-xs text-muted-foreground">longest streak</div>
+      <div class="text-xs text-muted-foreground">{m.account_longest_streak()}</div>
     </Card.Content>
   </Card.Root>
 
@@ -34,7 +35,7 @@
       <div class="text-3xl font-bold tabular-nums">
         {fmtHours(activity.avg_seconds_per_active_day)}
       </div>
-      <div class="text-xs text-muted-foreground">avg per active day</div>
+      <div class="text-xs text-muted-foreground">{m.account_average_active_day()}</div>
     </Card.Content>
   </Card.Root>
 </section>

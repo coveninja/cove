@@ -13,6 +13,7 @@
   import { libraryChanged } from "$lib/stores/library";
   import { settings } from "$lib/stores/settings";
   import { focusFirst } from "../focus/focusStore.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let { ondone }: { ondone: () => void } = $props();
 
@@ -53,7 +54,7 @@
   // ── Auth operations (identical logic to AuthDialog, ondone() replaces onclose()) ──
 
   async function login(): Promise<void> {
-    if (!email || !password) { error = "Email and password are required."; return; }
+    if (!email || !password) { error = m.auth_required_credentials(); return; }
     loading = true; error = "";
     try {
       const res = await api.authLogin(email, password);
@@ -69,7 +70,7 @@
   }
 
   async function sendOTP(): Promise<void> {
-    if (!email) { error = "Email is required."; return; }
+    if (!email) { error = m.auth_required_email(); return; }
     loading = true; error = "";
     try {
       await api.authSendOTP(email);
@@ -100,7 +101,7 @@
   }
 
   async function register(): Promise<void> {
-    if (!email || !password) { error = "Email and password are required."; return; }
+    if (!email || !password) { error = m.auth_required_credentials(); return; }
     loading = true; error = "";
     try {
       api.authRegister(email, password, profileName || undefined).then((e) => {
@@ -193,41 +194,41 @@
 <div bind:this={panelRoot} class="w-full max-w-xl">
 
   {#if view === "choose"}
-    <h3 class="mb-2 text-2xl font-semibold">Sign in to Cove</h3>
-    <p class="mb-6 text-base text-muted-foreground">Sync your library across devices</p>
+    <h3 class="mb-2 text-2xl font-semibold">{m.auth_sign_in_title()}</h3>
+    <p class="mb-6 text-base text-muted-foreground">{m.auth_sync_description()}</p>
     <div class="flex flex-col gap-3">
       <Button variant="default" class="h-12 w-full text-lg" onclick={() => setView("login")}>
-        Sign in with password
+        {m.auth_sign_in_password()}
       </Button>
       <Button variant="outline" class="h-12 w-full text-lg" onclick={() => setView("otp-email")}>
-        Sign in with email code
+        {m.auth_email_code_title()}
       </Button>
       <div class="relative my-1 flex items-center">
         <div class="flex-1 border-t border-border"></div>
-        <span class="mx-3 text-sm text-muted-foreground">or</span>
+        <span class="mx-3 text-sm text-muted-foreground">{m.auth_or()}</span>
         <div class="flex-1 border-t border-border"></div>
       </div>
       <Button variant="ghost" class="h-12 w-full text-lg" onclick={() => setView("register")}>
-        Create account
+        {m.auth_create_account()}
       </Button>
     </div>
 
   {:else if view === "login"}
     <Button variant="link" class="mb-4 h-auto p-0 text-base text-muted-foreground" onclick={() => setView("choose")}>
-      ← Back
+      ← {m.common_back()}
     </Button>
-    <h3 class="mb-6 text-2xl font-semibold">Sign in</h3>
+    <h3 class="mb-6 text-2xl font-semibold">{m.common_sign_in()}</h3>
     <div class="flex flex-col gap-4">
       <input
         type="email"
-        placeholder="Email"
+        placeholder={m.common_email()}
         bind:value={email}
         onkeydown={(e) => e.key === "Enter" && login()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <input
         type="password"
-        placeholder="Password"
+        placeholder={m.auth_password()}
         bind:value={password}
         onkeydown={(e) => e.key === "Enter" && login()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
@@ -235,23 +236,23 @@
       {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
       <Button class="h-12 w-full text-lg" onclick={login} disabled={loading}>
         {#if loading}<Spinner class="mr-2 size-5" />{/if}
-        Sign in
+        {m.common_sign_in()}
       </Button>
       <Button variant="link" class="h-auto p-0 text-base text-muted-foreground" onclick={() => setView("otp-email")}>
-        Sign in with email code instead
+        {m.auth_sign_in_email_instead()}
       </Button>
     </div>
 
   {:else if view === "otp-email"}
     <Button variant="link" class="mb-4 h-auto p-0 text-base text-muted-foreground" onclick={() => setView("choose")}>
-      ← Back
+      ← {m.common_back()}
     </Button>
-    <h3 class="mb-2 text-2xl font-semibold">Sign in with email code</h3>
-    <p class="mb-6 text-base text-muted-foreground">We'll send a one-time code to your inbox.</p>
+    <h3 class="mb-2 text-2xl font-semibold">{m.auth_email_code_title()}</h3>
+    <p class="mb-6 text-base text-muted-foreground">{m.auth_email_code_intro()}</p>
     <div class="flex flex-col gap-4">
       <input
         type="email"
-        placeholder="Email"
+        placeholder={m.common_email()}
         bind:value={email}
         onkeydown={(e) => e.key === "Enter" && sendOTP()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
@@ -259,14 +260,14 @@
       {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
       <Button class="h-12 w-full text-lg" onclick={sendOTP} disabled={loading}>
         {#if loading}<Spinner class="mr-2 size-5" />{/if}
-        Send code
+        {m.auth_send_code()}
       </Button>
     </div>
 
   {:else if view === "otp-code"}
-    <h3 class="mb-2 text-2xl font-semibold">Enter your code</h3>
+    <h3 class="mb-2 text-2xl font-semibold">{m.auth_enter_code()}</h3>
     <p class="mb-6 text-base text-muted-foreground">
-      Check your inbox at <strong>{otpEmail}</strong>
+      {m.auth_check_inbox({ email: otpEmail })}
     </p>
     <div class="flex flex-col items-center gap-5">
       <InputOTP maxlength={8} bind:value={otpCode} onComplete={verifyOTP}>
@@ -289,11 +290,11 @@
       {#if error}<p class="text-sm text-destructive text-center">{error}</p>{/if}
       {#if loading}
         <div class="flex items-center gap-2 text-base text-muted-foreground">
-          <Spinner class="size-5" /> Verifying…
+          <Spinner class="size-5" /> {m.auth_verifying()}
         </div>
       {:else}
         <Button class="h-12 w-full text-lg" onclick={verifyOTP} disabled={otpCode.length < 8}>
-          Verify
+          {m.auth_verify()}
         </Button>
       {/if}
       <Button
@@ -301,31 +302,31 @@
         class="h-auto p-0 text-base text-muted-foreground"
         onclick={() => { const prevEmail = otpEmail; setView("otp-email"); email = prevEmail; }}
       >
-        Resend code
+        {m.auth_resend_code()}
       </Button>
     </div>
 
   {:else if view === "register"}
     <Button variant="link" class="mb-4 h-auto p-0 text-base text-muted-foreground" onclick={() => setView("choose")}>
-      ← Back
+      ← {m.common_back()}
     </Button>
-    <h3 class="mb-6 text-2xl font-semibold">Create account</h3>
+    <h3 class="mb-6 text-2xl font-semibold">{m.auth_create_account()}</h3>
     <div class="flex flex-col gap-4">
       <input
         type="text"
-        placeholder="Display name (optional)"
+        placeholder={m.auth_display_name()}
         bind:value={profileName}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <input
         type="email"
-        placeholder="Email"
+        placeholder={m.common_email()}
         bind:value={email}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <input
         type="password"
-        placeholder="Password"
+        placeholder={m.auth_password()}
         bind:value={password}
         onkeydown={(e) => e.key === "Enter" && register()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
@@ -333,16 +334,16 @@
       {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
       <Button class="h-12 w-full text-lg" onclick={register} disabled={loading}>
         {#if loading}<Spinner class="mr-2 size-5" />{/if}
-        Create account
+        {m.auth_create_account()}
       </Button>
       <p class="text-sm text-muted-foreground">
-        Your existing library will be synced to the new account.
+        {m.auth_existing_library_sync()}
       </p>
     </div>
 
   {:else if view === "register-otp"}
-    <h3 class="mb-2 text-2xl font-semibold">Check your email</h3>
-    <p class="mb-1 text-base text-muted-foreground">We sent a confirmation code to</p>
+    <h3 class="mb-2 text-2xl font-semibold">{m.auth_check_email()}</h3>
+    <p class="mb-1 text-base text-muted-foreground">{m.auth_confirmation_sent()}</p>
     <p class="mb-6 text-base font-medium">{pendingEmail}</p>
     <div class="flex flex-col items-center gap-5">
       <InputOTP maxlength={8} bind:value={otpCode} onComplete={confirmRegistration}>
@@ -365,11 +366,11 @@
       {#if error}<p class="text-sm text-destructive text-center">{error}</p>{/if}
       {#if loading}
         <div class="flex items-center gap-2 text-base text-muted-foreground">
-          <Spinner class="size-5" /> Verifying…
+          <Spinner class="size-5" /> {m.auth_verifying()}
         </div>
       {:else}
         <Button class="h-12 w-full text-lg" onclick={confirmRegistration} disabled={otpCode.length < 8}>
-          Confirm account
+          {m.auth_confirm_account()}
         </Button>
       {/if}
       <Button
@@ -377,7 +378,7 @@
         class="h-auto p-0 text-base text-muted-foreground"
         onclick={() => { setView("register"); email = pendingEmail; profileName = pendingProfileName; }}
       >
-        ← Back to registration
+        {m.auth_back_registration()}
       </Button>
     </div>
   {/if}

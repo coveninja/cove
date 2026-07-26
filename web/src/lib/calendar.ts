@@ -1,4 +1,6 @@
 import type { CalendarItem } from "$lib/types/calendar";
+import { intlLocale } from "$lib/i18n";
+import * as m from "$lib/paraglide/messages.js";
 
 export interface CalendarDay {
   key: string; // "available" or YYYY-MM-DD
@@ -56,14 +58,14 @@ export function calendarSummary(items: CalendarItem[]): CalendarSummary {
 export function summaryLabel(s: CalendarSummary): string {
   const parts: string[] = [];
   if (s.available > 0)
-    parts.push(`${s.available} ready to watch`);
+    parts.push(m.common_ready_to_watch({ count: s.available }));
   if (s.today > 0)
-    parts.push(`${s.today} today`);
+    parts.push(m.common_today_count({ count: s.today }));
   if (s.thisWeek > 0)
-    parts.push(`${s.thisWeek} this week`);
+    parts.push(m.common_this_week_count({ count: s.thisWeek }));
   if (parts.length > 0) return parts.join(" · ");
-  if (s.upcoming > 0) return `${s.upcoming} upcoming`;
-  return "Nothing scheduled";
+  if (s.upcoming > 0) return m.common_upcoming_count({ count: s.upcoming });
+  return m.common_nothing_scheduled();
 }
 
 /**
@@ -94,12 +96,12 @@ export function shortDateLabel(dateStr: string): string {
     (target.getTime() - today.getTime()) / 86_400_000,
   );
 
-  if (delta === 0) return "Today";
-  if (delta === 1) return "Tomorrow";
+  if (delta === 0) return m.common_today();
+  if (delta === 1) return m.common_tomorrow();
   if (delta >= 2 && delta <= 6) {
-    return target.toLocaleDateString(undefined, { weekday: "short" });
+    return target.toLocaleDateString(intlLocale(), { weekday: "short" });
   }
-  return target.toLocaleDateString(undefined, {
+  return target.toLocaleDateString(intlLocale(), {
     month: "short",
     day: "numeric",
   });
@@ -118,7 +120,7 @@ export function groupByDay(items: CalendarItem[]): CalendarDay[] {
     if (item.kind === "available") {
       let avail = days[0];
       if (!avail || avail.key !== "available") {
-        avail = { key: "available", label: "Available Now", items: [] };
+        avail = { key: "available", label: m.common_available_now(), items: [] };
         days.unshift(avail);
       }
       avail.items.push(item);
@@ -152,14 +154,14 @@ export function dayLabel(dateStr: string): string {
     (target.getTime() - today.getTime()) / 86_400_000,
   );
 
-  const monthDay = target.toLocaleDateString(undefined, {
+  const monthDay = target.toLocaleDateString(intlLocale(), {
     month: "short",
     day: "numeric",
   });
 
-  if (delta === 0) return `Today · ${monthDay}`;
-  if (delta === 1) return "Tomorrow";
+  if (delta === 0) return `${m.common_today()} · ${monthDay}`;
+  if (delta === 1) return m.common_tomorrow();
 
-  const weekday = target.toLocaleDateString(undefined, { weekday: "short" });
+  const weekday = target.toLocaleDateString(intlLocale(), { weekday: "short" });
   return `${weekday} · ${monthDay}`;
 }

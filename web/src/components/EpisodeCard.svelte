@@ -9,6 +9,7 @@
   import { settings } from "$lib/stores/settings";
   import ScrambledText from "./ScrambledText.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -167,7 +168,7 @@
             class="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-foreground shadow"
           >
             <Play class="size-3 fill-current" />
-            Now Playing
+            {m.player_now_playing()}
           </span>
         {/if}
       </span>
@@ -183,7 +184,7 @@
           <span
             class="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"
           >
-            E{ep.episode_number}
+            {m.common_episode_short({ episode: ep.episode_number })}
             {#if ep.air_date}
               · <span class="font-normal"
                 >{unreleased ? relativeDate(ep.air_date) : ep.air_date}</span
@@ -191,7 +192,9 @@
             {/if}
             {#if inProgress}
               · <span class="font-normal text-accent"
-                >{formatPosition(prog!.position_seconds)} watched</span
+                >{m.media_progress_watched({
+                  progress: formatPosition(prog!.position_seconds),
+                })}</span
               >
             {/if}
           </span>
@@ -226,14 +229,14 @@
           onclick={() => markWatched(ep)}
           class="flex items-center gap-2"
         >
-          <Check class="size-4" /> Mark as Watched
+          <Check class="size-4" /> {m.media_mark_watched()}
         </ContextMenu.Item>
       {:else}
         <ContextMenu.Item
           onclick={() => markUnwatched(ep)}
           class="flex items-center gap-2"
         >
-          <RotateCcw class="size-4" /> Mark as Unwatched
+          <RotateCcw class="size-4" /> {m.media_mark_unwatched()}
         </ContextMenu.Item>
       {/if}
       <ContextMenu.Separator />
@@ -243,7 +246,7 @@
         }}
         class="flex items-center gap-2"
       >
-        <Play class="size-4" /> View Streams
+        <Play class="size-4" /> {m.media_view_streams()}
       </ContextMenu.Item>
     </ContextMenu.Content>
   {/if}

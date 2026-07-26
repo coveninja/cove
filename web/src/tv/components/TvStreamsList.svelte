@@ -18,6 +18,7 @@
   import { api, formatPosition } from "$lib/api";
   import type { WatchProgress } from "$lib/types/library";
   import { settings } from "$lib/stores/settings";
+  import * as m from "$lib/paraglide/messages.js";
   import {
     compareStreamsBy,
     formatAutoPickReason,
@@ -75,6 +76,14 @@
 
   let streams = $state<Stream[]>([]);
   let watchOptions = $state<WatchOption[]>([]);
+
+  function watchTypeLabel(type: string): string {
+    if (type === "rent") return m.streams_watch_rent();
+    if (type === "buy") return m.streams_watch_buy();
+    if (type === "free") return m.streams_watch_free();
+    if (type === "ads") return m.streams_watch_ads();
+    return type;
+  }
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let pollAttempts = 0;
@@ -421,7 +430,7 @@
     <div class="flex-none border-b border-border">
       {#if loadingSeasons}
         <div class="p-4">
-          <span class="animate-pulse text-base text-muted-foreground">Loading seasons…</span>
+          <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading_seasons()}</span>
         </div>
       {:else}
         <!--
@@ -458,7 +467,7 @@
     >
       {#if loadingEpisodes}
         <div class="flex items-center justify-center py-16">
-          <span class="animate-pulse text-base text-muted-foreground">Loading episodes…</span>
+          <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading_episodes()}</span>
         </div>
       {:else}
         <div class="flex flex-col divide-y divide-border px-2 py-2">
@@ -493,7 +502,7 @@
           class="flex items-center gap-2 rounded-xl border border-border bg-secondary/60 px-4 py-2.5 text-base font-medium transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <ChevronLeft class="size-5" />
-          Back to episodes
+          {m.streams_back_episodes()}
         </button>
 
         <!-- Selected episode summary (display only — not focusable) -->
@@ -509,7 +518,9 @@
           {/if}
           <div class="min-w-0 flex-1">
             <p class="text-sm text-muted-foreground">
-              S{selectedSeason} · E{selectedEpisode.episode_number}
+              {m.common_season_short({ season: selectedSeason })} · {m.common_episode_short(
+                { episode: selectedEpisode.episode_number },
+              )}
             </p>
             <p class="text-base font-semibold leading-snug">{selectedEpisode.name}</p>
             {#if selectedSeason != null}
@@ -518,7 +529,7 @@
                 {@const pct = progressPct(prog)}
                 {#if prog.completed}
                   <p class="mt-1.5 flex items-center gap-1 text-sm text-green-500">
-                    <Check class="size-4" /> Watched
+                    <Check class="size-4" /> {m.media_watched()}
                   </p>
                 {:else if pct > 1}
                   <div class="mt-2 space-y-1">
@@ -542,11 +553,11 @@
 
       {:else}
         <!-- Movie: "Available Streams" header with progress -->
-        <h3 class="text-xl font-semibold">Available Streams</h3>
+        <h3 class="text-xl font-semibold">{m.streams_available()}</h3>
         {#if movieProgress}
           {#if movieProgress.completed}
             <p class="flex items-center gap-1.5 text-sm text-green-500">
-              <Check class="size-4" /> Watched
+              <Check class="size-4" /> {m.media_watched()}
             </p>
           {:else if progressPct(movieProgress) > 1}
             <div class="space-y-1">
@@ -584,7 +595,7 @@
             onclick={cycleQuality}
             class="flex-1 rounded-xl bg-secondary px-4 py-3 text-base font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
-            Quality: {qualityFilter.toUpperCase()}
+            {m.streams_sort_quality()}: {qualityFilter.toUpperCase()}
           </button>
           <button
             type="button"
@@ -592,7 +603,9 @@
             onclick={cycleSort}
             class="flex-1 rounded-xl bg-secondary px-4 py-3 text-base font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
-            Sort: {STREAM_SORT_MODES.find((m) => m.value === sortMode)?.label}
+            {m.my_list_sort()}: {STREAM_SORT_MODES.find(
+              (m) => m.value === sortMode,
+            )?.label}
           </button>
         </div>
       {/if}
@@ -607,13 +620,13 @@
         {#if watchOptions.length > 0}
           <div class="mb-5">
             <p class="mb-2 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-              Where to Watch
+              {m.streams_where_watch()}
             </p>
             <div class="flex flex-wrap gap-2">
               {#each watchOptions as opt (opt.providerId + opt.type)}
                 <span
                   class="flex items-center gap-1.5 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-sm"
-                  title="{opt.providerName} ({opt.type})"
+                  title="{opt.providerName} ({watchTypeLabel(opt.type)})"
                 >
                   {#if opt.logoPath}
                     <img
@@ -624,7 +637,9 @@
                   {/if}
                   <span class="font-medium">{opt.providerName}</span>
                   {#if opt.type !== "flatrate"}
-                    <span class="capitalize text-muted-foreground">· {opt.type}</span>
+                    <span class="capitalize text-muted-foreground"
+                      >· {watchTypeLabel(opt.type)}</span
+                    >
                   {/if}
                 </span>
               {/each}
@@ -640,7 +655,7 @@
           >
             <span class="flex items-center gap-2">
               <Play class="size-5 fill-current" />
-              Playing this stream
+              {m.streams_playing_current()}
             </span>
             <!-- Native button — reached geometrically within tv-detail free group -->
             <button
@@ -648,7 +663,9 @@
               onclick={() => (showAlternatives = !showAlternatives)}
               class="rounded-lg bg-accent/20 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              {showAlternatives ? "Hide alternatives" : "See alternatives"}
+              {showAlternatives
+                ? m.streams_hide_alternatives()
+                : m.streams_see_alternatives()}
             </button>
           </div>
         {/if}
@@ -658,7 +675,7 @@
             <!-- Auto-picking state -->
             <div class="flex flex-col items-center justify-center gap-4 py-16">
               <Spinner class="size-10" />
-              <span class="text-base text-muted-foreground">Auto-selecting the best stream…</span>
+              <span class="text-base text-muted-foreground">{m.streams_auto_selecting()}</span>
               <!-- Focusable cancel button — reached geometrically -->
               <button
                 type="button"
@@ -668,27 +685,27 @@
                 }}
                 class="rounded-xl border border-border bg-secondary px-5 py-2.5 text-base font-medium transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
-                Choose manually instead
+                {m.streams_choose_manually()}
               </button>
             </div>
 
           {:else if loadingStreams}
             <div class="flex flex-col items-center justify-center gap-3 py-16">
               <Spinner class="size-10" />
-              <span class="animate-pulse text-base text-muted-foreground">Finding streams…</span>
+              <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading()}</span>
             </div>
 
           {:else if streams.length === 0}
             <div class="flex flex-col items-center justify-center gap-3 py-16">
               <Spinner class="size-10" />
               <span class="animate-pulse text-base text-muted-foreground">
-                No streams found — retrying…
+                {m.streams_none_retrying()}
               </span>
             </div>
 
           {:else if filteredStreams.length === 0}
             <div class="flex items-center justify-center py-16">
-              <span class="text-base text-muted-foreground">No streams match this filter.</span>
+              <span class="text-base text-muted-foreground">{m.streams_no_filter()}</span>
             </div>
 
           {:else}
@@ -718,7 +735,7 @@
                       <span
                         class="shrink-0 rounded-lg bg-destructive/20 px-2 py-1 text-sm font-medium text-destructive"
                       >
-                        Unsupported
+                        {m.streams_unsupported()}
                       </span>
                     </span>
 
@@ -764,7 +781,7 @@
                           );
                         }}
                       >
-                        Play anyway
+                        {m.streams_play_anyway()}
                       </button>
                     </span>
                   </div>
@@ -833,7 +850,7 @@
                       {/if}
                       {#if stream.cached}
                         <span class="rounded-lg bg-background/70 px-2 py-1">
-                          ⚡ {stream.debrid || "Cached"}
+                          ⚡ {stream.debrid || m.streams_sort_cached()}
                         </span>
                       {:else if stream.debrid}
                         <span class="rounded-lg bg-background/70 px-2 py-1">

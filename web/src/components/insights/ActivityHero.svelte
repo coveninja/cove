@@ -3,6 +3,8 @@
   import { fmtHours } from "./utils";
   import * as Card from "$lib/components/ui/card/index.js";
   import { TrendingUp, TrendingDown } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
+  import { intlLocale } from "$lib/i18n";
 
   let { activity }: { activity: ActivityStats } = $props();
 
@@ -27,22 +29,22 @@
     <p
       class="font-medium uppercase tracking-widest text-muted-foreground"
     >
-      You have spent
+      {m.account_time_spent()}
     </p>
 
     <div class="flex items-baseline gap-2">
       <span
         class="font-mono text-7xl font-black leading-none text-accent [font-variant-numeric:tabular-nums]"
       >
-        {hours.toLocaleString()}
+        {hours.toLocaleString(intlLocale())}
       </span>
-      <span class="text-2xl font-light text-muted-foreground">h</span>
+      <span class="text-2xl font-light text-muted-foreground">{m.common_hours_unit()}</span>
     </div>
 
     <p class="text-muted-foreground">
-      across <span class="font-semibold text-foreground"
-        >{activity.total_titles.toLocaleString()}</span
-      > titles
+      {m.account_across_titles({
+        count: activity.total_titles.toLocaleString(intlLocale()),
+      })}
     </p>
 
     <div class="flex flex-wrap items-center justify-center gap-2 pt-1">
@@ -55,10 +57,10 @@
         >
           {#if positive}
             <TrendingUp class="size-3" />
-            +{yoyPct}% vs {lastYear}
+            {m.account_year_comparison({ percent: `+${yoyPct}`, year: lastYear })}
           {:else}
             <TrendingDown class="size-3" />
-            {yoyPct}% vs {lastYear}
+            {m.account_year_comparison({ percent: yoyPct, year: lastYear })}
           {/if}
         </span>
       {/if}
@@ -67,9 +69,11 @@
         <span
           class="rounded-full bg-muted/60 px-3 py-1 text-muted-foreground"
         >
-          {activity.titles_this_year} titles · {fmtHours(
-            activity.this_year_seconds,
-          )} in {currentYear}
+          {m.account_titles_in_year({
+            count: activity.titles_this_year,
+            hours: fmtHours(activity.this_year_seconds),
+            year: currentYear,
+          })}
         </span>
       {/if}
     </div>

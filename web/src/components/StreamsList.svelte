@@ -28,6 +28,7 @@
   import {Skeleton} from "$lib/components/ui/skeleton";
   import type {TVEpisode} from "$lib/types/tmdb";
   import EpisodeCard from "./EpisodeCard.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let loadingStreams = $state(false);
   let sortMode = $state<StreamSortMode>("seeders");
@@ -84,6 +85,14 @@
   // Stream state
   let streams = $state<Stream[]>([]);
   let watchOptions = $state<WatchOption[]>([]);
+
+  function watchTypeLabel(type: string): string {
+    if (type === "rent") return m.streams_watch_rent();
+    if (type === "buy") return m.streams_watch_buy();
+    if (type === "free") return m.streams_watch_free();
+    if (type === "ads") return m.streams_watch_ads();
+    return type;
+  }
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let pollAttempts = 0;
@@ -353,7 +362,9 @@
 
   const selectedSeasonLabel = $derived(
     seasons.find((s) => s.season_number === selectedSeason)?.name ??
-      (selectedSeason !== null ? `Season ${selectedSeason}` : "Season"),
+      (selectedSeason !== null
+        ? m.common_season_number({ season: selectedSeason })
+        : m.media_seasons()),
   );
 
   function clearPoll(): void {
@@ -471,7 +482,7 @@
     <div class="flex-none border-b border-border p-4">
       {#if loadingSeasons}
         <span class="animate-pulse text-sm text-muted-foreground"
-          >Loading seasons…</span
+          >{m.streams_loading_seasons()}</span
         >
       {:else}
         <Select.Root
@@ -489,7 +500,10 @@
               {#each seasons as s (s.season_number)}
                 <Select.Item
                   value={s.season_number.toString()}
-                  label="{s.name} ({s.episode_count} eps)"
+                  label={m.common_season_with_episodes({
+                    season: s.name,
+                    count: s.episode_count,
+                  })}
                 />
               {/each}
             </Select.Group>
@@ -504,7 +518,7 @@
         {#if loadingEpisodes}
           <div class="flex items-center justify-center py-12">
             <span class="animate-pulse text-sm text-muted-foreground"
-              >Loading episodes…</span
+              >{m.streams_loading_episodes()}</span
             >
           </div>
         {:else}
@@ -536,7 +550,7 @@
           }}
         >
           <ChevronLeft class="size-4" />
-          Back to episodes
+          {m.streams_back_episodes()}
         </Button>
 
         <!-- Selected episode summary -->
@@ -556,7 +570,9 @@
           {/if}
           <div class="min-w-0 flex-1">
             <p class="text-[11px] text-muted-foreground">
-              S{selectedSeason} · E{selectedEpisode.episode_number}
+              {m.common_season_short({ season: selectedSeason })} · {m.common_episode_short(
+                { episode: selectedEpisode.episode_number },
+              )}
             </p>
             <p class="text-sm leading-snug font-semibold">
               {selectedEpisode.name}
@@ -574,7 +590,7 @@
                   <p
                     class="mt-1.5 flex items-center gap-1 text-[11px] text-green-500"
                   >
-                    <Check class="size-3" /> Watched
+                    <Check class="size-3" /> {m.media_watched()}
                   </p>
                 {:else if pct > 1}
                   <div class="mt-2 space-y-1">
@@ -600,12 +616,12 @@
       {:else}
         <!-- Movie: "Available Streams" header with progress -->
         <div class="flex items-start justify-between gap-3">
-          <h3 class="text-lg font-semibold">Available Streams</h3>
+          <h3 class="text-lg font-semibold">{m.streams_available()}</h3>
         </div>
         {#if movieProgress}
           {#if movieProgress.completed}
             <p class="flex items-center gap-1.5 text-xs text-green-500">
-              <Check class="size-3.5" /> Watched
+              <Check class="size-3.5" /> {m.media_watched()}
             </p>
           {:else if progressPct(movieProgress) > 1}
             <div class="space-y-1">
@@ -672,14 +688,14 @@
             <p
               class="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide"
             >
-              Where to Watch
+              {m.streams_where_watch()}
             </p>
             <div class="flex flex-wrap gap-2">
               {#each watchOptions as opt (opt.providerId + opt.type)}
                 <button
                   onclick={() => window.open(opt.link, "_blank")}
                   class="flex items-center gap-1.5 rounded-md border border-border bg-secondary/40 px-2.5 py-1.5 text-xs transition-colors hover:bg-secondary"
-                  title="{opt.providerName} ({opt.type})"
+                  title="{opt.providerName} ({watchTypeLabel(opt.type)})"
                 >
                   {#if opt.logoPath}
                     <img
@@ -691,7 +707,7 @@
                   <span class="font-medium">{opt.providerName}</span>
                   {#if opt.type !== "flatrate"}
                     <span class="text-muted-foreground capitalize">
-                      · {opt.type}
+                      · {watchTypeLabel(opt.type)}
                     </span>
                   {/if}
                 </button>
@@ -707,14 +723,16 @@
           >
             <span class="flex items-center gap-2">
               <Play class="size-4 fill-current" />
-              Playing this stream
+              {m.streams_playing_current()}
             </span>
             <Button
               variant="ghost"
               size="sm"
               onclick={() => (showAlternatives = !showAlternatives)}
             >
-              {showAlternatives ? "Hide alternatives" : "See alternatives"}
+              {showAlternatives
+                ? m.streams_hide_alternatives()
+                : m.streams_see_alternatives()}
             </Button>
           </div>
         {/if}
@@ -723,7 +741,7 @@
             <div class="flex flex-col items-center justify-center gap-3 py-12">
               <Spinner class="size-8" />
               <span class="text-sm text-muted-foreground">
-                Auto-selecting the best stream…
+                {m.streams_auto_selecting()}
               </span>
               <Button
                 variant="outline"
@@ -733,27 +751,27 @@
                   autoPicking = false;
                 }}
               >
-                Choose manually instead
+                {m.streams_choose_manually()}
               </Button>
             </div>
           {:else if loadingStreams}
             <div class="flex flex-col items-center justify-center gap-2 py-12">
               <Spinner class="size-8" />
               <span class="animate-pulse text-sm text-muted-foreground">
-                Finding streams…
+                {m.streams_loading()}
               </span>
             </div>
           {:else if streams.length === 0}
             <div class="flex flex-col items-center justify-center gap-2 py-12">
               <Spinner class="size-8" />
               <span class="animate-pulse text-sm text-muted-foreground">
-                No streams found — retrying…
+                {m.streams_none_retrying()}
               </span>
             </div>
           {:else if filteredStreams.length === 0}
             <div class="flex items-center justify-center py-12">
               <span class="text-sm text-muted-foreground"
-                >No streams match this filter.</span
+                >{m.streams_no_filter()}</span
               >
             </div>
           {:else}
@@ -775,7 +793,7 @@
                       <span
                         class="shrink-0 rounded bg-destructive/20 px-1.5 py-0.5 text-[10px] font-medium text-destructive"
                       >
-                        Unsupported
+                        {m.streams_unsupported()}
                       </span>
                     </span>
 
@@ -824,7 +842,7 @@
                           );
                         }}
                       >
-                        Play anyway
+                        {m.streams_play_anyway()}
                       </button>
                     </span>
                   </div>
@@ -897,7 +915,7 @@
                       {/if}
                       {#if stream.cached}
                         <span class="rounded bg-background/70 px-1.5 py-0.5">
-                          ⚡ {stream.debrid || "Cached"}
+                          ⚡ {stream.debrid || m.streams_sort_cached()}
                         </span>
                       {:else if stream.debrid}
                         <span class="rounded bg-background/70 px-1.5 py-0.5">

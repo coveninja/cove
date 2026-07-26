@@ -5,6 +5,7 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import MediaCard from "./MediaCard.svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     addonId,
@@ -93,7 +94,7 @@
 
 <div class="relative h-full p-6 pt-18">
   <div class="mb-6 flex items-baseline gap-3">
-    <h1 class="text-2xl font-semibold">{name || "Catalog"}</h1>
+    <h1 class="text-2xl font-semibold">{name || m.common_catalog()}</h1>
   </div>
 
   <ScrollArea class="h-full">
@@ -131,7 +132,7 @@
               onclick={() => loadPage(nextSkip)}
               disabled={loading}
             >
-              {loading ? "Loading…" : "Load more"}
+              {loading ? m.common_loading() : m.common_load_more()}
             </Button>
           </div>
         {/if}

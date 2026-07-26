@@ -2,7 +2,7 @@
   import type { Media, MediaImages } from "$lib/types/tmdb";
   import type { Stream } from "$lib/types/addons";
   import { onMount, tick } from "svelte";
-  import { X, Play, ThumbsDown } from "lucide-svelte";
+  import { X, Play } from "lucide-svelte";
   import { api, formatPosition } from "$lib/api";
   import { getImageOpt, formatRuntime, formatRating } from "$lib/utils";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
@@ -17,6 +17,8 @@
   import TvMediaCard from "./TvMediaCard.svelte";
   import { scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
+  import TvMediaActionsPanel from "./TvMediaActionsPanel.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -103,9 +105,11 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let dismissed = $state(false);
+  let hasProgress = $state(false);
   let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
+    $libraryChanged;
     let stale = false;
     api
       .libraryGet(media.id, media.media_type)
@@ -115,11 +119,13 @@
           libraryEntry = null;
           movieProgress = null;
           dismissed = false;
+          hasProgress = false;
           tvWatchAction = null;
           return;
         }
         libraryEntry = result.entry;
         dismissed = result.dismissed;
+        hasProgress = result.progress.length > 0;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         } else {
@@ -135,18 +141,6 @@
       stale = true;
     };
   });
-
-  async function toggleDismissed(): Promise<void> {
-    const next = !dismissed;
-    dismissed = next;
-    try {
-      if (next) await api.notInterested(media);
-      else await api.undoNotInterested(media);
-      libraryChanged.update((n) => n + 1);
-    } catch {
-      dismissed = !next;
-    }
-  }
 
   // ── Derived image URLs ─────────────────────────────────────────────────────
   const logoUrl = $derived(
@@ -295,7 +289,7 @@
     <button
       class="absolute right-6 top-6 z-20 flex size-12 items-center justify-center rounded-full bg-black/50 text-white"
       onclick={onclose}
-      aria-label="Close"
+      aria-label={m.common_close()}
       type="button"
     >
       <X class="size-6" />
@@ -318,7 +312,11 @@
         <span>{runtime}</span>
       {/if}
       {#if media.media_type === "tv" && numberOfEpisodes !== null}
-        <span>{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span>
+        <span
+          >{numberOfEpisodes === 1
+            ? m.common_episode_count_one()
+            : m.common_episodes_count({ count: numberOfEpisodes })}</span
+        >
       {/if}
       {#if genres.length}
         <span class="text-muted-foreground/60">·</span>
@@ -369,16 +367,13 @@
                 class="size-14 shrink-0 rounded-xl"
         />
 
-        <!-- Not interested -->
-        <Button
-                variant={dismissed ? "destructive" : "outline"}
-                size="icon"
-                class="size-14 shrink-0 rounded-xl"
-                onclick={toggleDismissed}
-                title={dismissed ? "Undo not interested" : "Not interested"}
-        >
-          <ThumbsDown class="size-5" />
-        </Button>
+        <TvMediaActionsPanel
+          {media}
+          {libraryEntry}
+          {dismissed}
+          {hasProgress}
+          class="size-14 shrink-0 rounded-xl"
+        />
 
         <!-- Star rating -->
         <StarRating
@@ -399,13 +394,13 @@
         {overviewText}
       </p>
     {:else if detailsLoading}
-      <p class="animate-pulse text-base text-muted-foreground">Loading details…</p>
+      <p class="animate-pulse text-base text-muted-foreground">{m.media_loading_details()}</p>
     {/if}
 
     <!-- Cast row (names only) -->
     {#if castNames.length}
       <div class="flex flex-col gap-2">
-        <h3 class="text-base font-semibold text-foreground">Cast</h3>
+        <h3 class="text-base font-semibold text-foreground">{m.media_cast()}</h3>
         <div class="flex flex-wrap gap-2">
           {#each castNames as name (name)}
             <span
@@ -421,7 +416,9 @@
     <!-- Streams / episodes section — always expanded on TV (no toggle) -->
     <div class="flex flex-col gap-3">
       <h3 class="text-base font-semibold text-foreground">
-        {media.media_type === "tv" ? "Episodes & Sources" : "Sources"}
+        {media.media_type === "tv"
+          ? m.streams_episodes_sources()
+          : m.streams_sources()}
       </h3>
       <TvStreamsList
         {media}
@@ -442,7 +439,7 @@
     <!-- More like this — TvMediaCard grid, D-pad navigable via detail-similar group -->
     {#if similar.length}
       <div class="flex flex-col gap-4 pb-8">
-        <h3 class="text-base font-semibold text-foreground">More like this</h3>
+        <h3 class="text-base font-semibold text-foreground">{m.media_more_like_this()}</h3>
         <div class="grid grid-cols-6 gap-4 xl:grid-cols-8">
           {#each similar.slice(0, 16) as item (item.id)}
             <TvMediaCard

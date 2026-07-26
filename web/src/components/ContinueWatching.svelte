@@ -12,7 +12,8 @@
   } from "./cards/ContinueWatchingCard.svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { animate } from "animejs";
-  import { nextAiredEpisode as nextAiredEpisodeShared } from "$lib/nextEpisode";
+  import { nextUnwatchedAiredEpisode as nextUnwatchedAiredEpisodeShared } from "$lib/nextEpisode";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -63,15 +64,21 @@
     return eps.find((e) => e.episode_number === episode)?.still_path ?? "";
   }
 
-  // Wraps the shared nextAiredEpisode (see $lib/nextEpisode) with this row's
-  // own per-load season cache, so a show's resume-point lookup and its
-  // roll-forward check share fetches instead of hitting the same season twice.
-  function nextAiredEpisode(
+  // Wraps the shared completed-aware selector with this row's per-load season
+  // cache, so resume artwork and roll-forward checks share season fetches.
+  function nextUnwatchedAiredEpisode(
     id: number,
     season: number,
     episode: number,
+    progress: WatchProgress[],
   ): Promise<{ season: number; episode: TVEpisode } | null> {
-    return nextAiredEpisodeShared(id, season, episode, fetchSeason);
+    return nextUnwatchedAiredEpisodeShared(
+      id,
+      season,
+      episode,
+      progress,
+      fetchSeason,
+    );
   }
 
   function latestProgress(progress: WatchProgress[]): WatchProgress | null {
@@ -158,7 +165,7 @@
     }
 
     // Finished that episode → roll forward to the next aired one ("Up Next").
-    const next = await nextAiredEpisode(entry.tmdb_id, s, e);
+    const next = await nextUnwatchedAiredEpisode(entry.tmdb_id, s, e, progress);
     if (!next) return null; // caught up
     return {
       key,
@@ -238,7 +245,7 @@
 {#if loading || items.length > 0}
   <div class="w-full space-y-3 px-4">
     <div class="ml-12 flex items-center justify-between px-1">
-      <h2 class="text-lg font-semibold">Continue Watching</h2>
+      <h2 class="text-lg font-semibold">{m.home_continue_watching()}</h2>
     </div>
 
     <div class="flex items-center justify-between gap-2 overflow-hidden">
@@ -247,7 +254,7 @@
                 onclick={() => scrollByCards(-1)}
                 variant="outline"
                 size="icon"
-                aria-label="Scroll left"
+                aria-label={m.common_scroll_left()}
         >
           <ChevronLeft class="size-4" />
         </Button>
@@ -273,7 +280,7 @@
         onclick={() => scrollByCards(1)}
         variant="outline"
         size="icon"
-        aria-label="Scroll right"
+        aria-label={m.common_scroll_right()}
       >
         <ChevronRight class="size-4" />
       </Button>

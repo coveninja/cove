@@ -12,7 +12,7 @@
     onClose,
   }: {
     title: string;
-    items: { id: string | number; label: string; sublabel?: string; dot?: string; header?: boolean; indent?: boolean }[];
+    items: { id: string | number; label: string; sublabel?: string; dot?: string; destructive?: boolean; header?: boolean; indent?: boolean }[];
     selectedId?: string | number | null;
     onSelect: (id: string | number) => void;
     onClose: () => void;
@@ -94,7 +94,7 @@
       {:else}
         <button
           type="button"
-          class="flex min-h-[56px] w-full items-center gap-3 px-6 py-3 text-left transition-colors hover:bg-white/8 focus:bg-white/10"
+          class="flex min-h-[56px] w-full items-center gap-3 px-6 py-3 text-left transition-colors hover:bg-white/8 focus:bg-white/10 {item.destructive ? 'text-red-400' : ''}"
           data-track-selected={selectedId === item.id ? "true" : "false"}
           onclick={() => {
             onSelect(item.id);

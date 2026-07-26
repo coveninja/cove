@@ -172,6 +172,11 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Generate localization coverage
+        run: npm run i18n:coverage
+      - name: Verify generated localization coverage
+        working-directory: .
+        run: git diff --exit-code -- README.md
       - run: npm test
       - run: npm run check
       - run: npm run lint

@@ -15,6 +15,7 @@
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+  import * as m from "$lib/paraglide/messages.js";
   import {
     groupByDay,
     calendarSummary,
@@ -148,7 +149,7 @@
     <!-- No expand toggle when empty -->
     <div class="flex items-center gap-2 px-1 py-0.5">
       <CalendarDays class="size-4 shrink-0 text-muted-foreground" />
-      <h2 class="text-lg font-semibold">Calendar</h2>
+      <h2 class="text-lg font-semibold">{m.calendar_calendar()}</h2>
     </div>
   {:else}
     <button
@@ -157,7 +158,7 @@
       class="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-secondary/50"
     >
       <CalendarDays class="size-4 shrink-0 text-muted-foreground" />
-      <span class="flex-1 text-lg font-semibold">Calendar</span>
+      <span class="flex-1 text-lg font-semibold">{m.calendar_calendar()}</span>
       {#if expanded}
         <ChevronUp class="size-4 shrink-0 text-muted-foreground" />
       {:else}
@@ -187,7 +188,7 @@
     <!-- Empty state compact -->
     <div class="mt-2 flex items-center gap-3 py-3 text-muted-foreground">
       <CalendarOff class="size-5 shrink-0 opacity-40" />
-      <p class="text-sm">Nothing scheduled in your library.</p>
+      <p class="text-sm">{m.calendar_empty()}</p>
     </div>
 
   {:else}
@@ -201,7 +202,7 @@
           onclick={() => scrollByCards(-1)}
           variant="outline"
           size="icon"
-          aria-label="Scroll left"
+          aria-label={m.common_scroll_left()}
         >
           <ChevronLeft class="size-4" />
         </Button>
@@ -267,7 +268,7 @@
           onclick={() => scrollByCards(1)}
           variant="outline"
           size="icon"
-          aria-label="Scroll right"
+          aria-label={m.common_scroll_right()}
         >
           <ChevronRight class="size-4" />
         </Button>
@@ -362,7 +363,10 @@
                           <span
                             class="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-medium leading-none text-white"
                           >
-                            S{item.season_number}E{item.episode_number}
+                            {m.common_season_episode({
+                              season: item.season_number,
+                              episode: item.episode_number,
+                            })}
                           </span>
                         {/if}
                       </span>
@@ -374,10 +378,14 @@
                           {#if item.media_type === "tv" && item.episode_name}
                             {item.episode_name}{#if item.kind === "available" && item.waiting_count > 1}&nbsp;<span
                                 class="font-medium text-accent"
-                                >+{item.waiting_count - 1} more</span
+                                >{m.common_more_count({
+                                  count: item.waiting_count - 1,
+                                })}</span
                               >{/if}
                           {:else if item.media_type === "tv" && item.season_number != null}
-                            Season {item.season_number}
+                            {m.common_season_number({
+                              season: item.season_number,
+                            })}
                           {:else}
                             &nbsp;
                           {/if}
@@ -399,7 +407,7 @@
             class="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             <ChevronDown class="size-4" />
-            Show {hiddenDayCount} more day{hiddenDayCount !== 1 ? "s" : ""}
+            {m.common_show_more_days({ count: hiddenDayCount })}
           </button>
         {/if}
       </div>

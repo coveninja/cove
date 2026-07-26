@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { Media } from "$lib/types/tmdb";
   import type { Provider } from "$lib/api";
   import { api } from "$lib/api";
@@ -85,7 +86,7 @@
         <button
           class="absolute top-3 right-3 z-20 flex size-9 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
           onclick={close}
-          aria-label="Close"
+          aria-label={m.common_close()}
         >
           <X class="size-5" />
         </button>
@@ -119,7 +120,7 @@
             </div>
 
             <div class="min-w-0">
-              <p class="text-xs text-white/60">Streaming service</p>
+              <p class="text-xs text-white/60">{m.media_streaming_service()}</p>
               <h2
                 class="text-2xl font-bold text-white drop-shadow-lg sm:text-3xl"
               >
@@ -137,7 +138,7 @@
         <!-- Body -->
         <div class="flex flex-col gap-4 p-5 sm:p-7">
           <h3 class="text-base font-semibold">
-            Popular on {provider.provider_name}
+            {m.media_popular_on({ provider: provider.provider_name })}
           </h3>
 
           {#if loading}
@@ -168,7 +169,7 @@
             </div>
           {:else}
             <p class="text-sm text-muted-foreground">
-              No titles found for this provider in your region (US).
+              {m.media_provider_empty({ region: "US" })}
             </p>
           {/if}
         </div>

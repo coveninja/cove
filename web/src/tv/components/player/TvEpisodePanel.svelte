@@ -8,6 +8,7 @@
   import type { WatchProgress } from "$lib/types/library";
   import { focusable, focusGroup } from "../../focus/actions";
   import TvEpisodeCard from "../TvEpisodeCard.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -183,14 +184,14 @@
   class="fixed right-0 top-0 z-[61] flex h-full w-[560px] flex-col bg-neutral-900 text-white shadow-2xl"
   role="dialog"
   tabindex={-1}
-  aria-label="Episodes"
+  aria-label={m.player_episodes()}
   onkeydown={handleKeydown}
   use:focusGroup={{ id: "tv-episode-panel", policy: { type: "free" }, trapFocus: true }}
   transition:fly={{ x: 560, duration: 220, opacity: 1 }}
 >
   <!-- Header ──────────────────────────────────────────────────────────────────── -->
   <div class="flex shrink-0 items-center border-b border-white/10 px-6 py-5">
-    <p class="text-lg font-semibold">Episodes</p>
+    <p class="text-lg font-semibold">{m.player_episodes()}</p>
   </div>
 
   <!-- Season chip strip (only when more than one season) ──────────────────────── -->
@@ -209,7 +210,8 @@
                 ? 'bg-white text-black'
                 : 'bg-white/10 text-white/70 hover:text-white'}"
           >
-            {s.name || `Season ${s.season_number}`}
+            {s.name ||
+              m.common_season_number({ season: s.season_number })}
           </button>
         {/each}
       </div>

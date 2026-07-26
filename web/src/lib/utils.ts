@@ -9,6 +9,8 @@ import {
 } from "$lib/types/tmdb";
 import { SvelteMap } from "svelte/reactivity";
 import type { WatchProgress } from "$lib/types/library";
+import { intlLocale, regionDisplayName } from "$lib/i18n";
+import * as m from "$lib/paraglide/messages.js";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -26,11 +28,7 @@ export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & {
 };
 
 export function countryName(code: string): string {
-  try {
-    return new Intl.DisplayNames(["en"], { type: "region" }).of(code) ?? code;
-  } catch {
-    return code;
-  }
+  return regionDisplayName(code);
 }
 
 const qualityOrder = [
@@ -99,14 +97,23 @@ export function qualityClass(quality: string): string {
 }
 
 export function formatRuntime(d: Details): string {
-  if (d.runtime > 0) return `${Math.floor(d.runtime / 60)}h ${d.runtime % 60}m`;
-  if (d.episode_run_time?.[0]) return `${d.episode_run_time[0]}m / ep`;
+  if (d.runtime > 0)
+    return m.common_hours_minutes({
+      hours: Math.floor(d.runtime / 60),
+      minutes: d.runtime % 60,
+    });
+  if (d.episode_run_time?.[0])
+    return m.common_minutes_episode({ minutes: d.episode_run_time[0] });
   // TMDB often leaves episode_run_time empty for TV — fall back to the
   // season/episode count.
   if (d.number_of_seasons > 0)
-    return `${d.number_of_seasons} Season${d.number_of_seasons === 1 ? "" : "s"}`;
+    return d.number_of_seasons === 1
+      ? m.common_season_count_one()
+      : m.common_seasons_count({ count: d.number_of_seasons });
   if (d.number_of_episodes > 0)
-    return `${d.number_of_episodes} Episode${d.number_of_episodes === 1 ? "" : "s"}`;
+    return d.number_of_episodes === 1
+      ? m.common_episode_count_one()
+      : m.common_episodes_count({ count: d.number_of_episodes });
   return "";
 }
 
@@ -128,6 +135,7 @@ interface ImageOptions {
   aspect_ratio?: number;
   height?: number;
   iso?: string;
+  isoFallbacks?: readonly (string | null)[];
   voteAverage?: number;
   voteCount?: number;
   minWidth?: number;
@@ -143,9 +151,7 @@ export function getImageOpt(
 
   const list = images[type];
 
-  const matches = list.filter((img) => {
-    if (opts.iso && img.iso_639_1 !== null && img.iso_639_1 !== opts.iso)
-      return false;
+  const eligible = list.filter((img) => {
     if (opts.height !== undefined && img.height !== opts.height) return false;
     if (
       opts.aspect_ratio !== undefined &&
@@ -158,6 +164,21 @@ export function getImageOpt(
       return false;
     return !(opts.minWidth !== undefined && img.width < opts.minWidth);
   });
+
+  let matches = eligible;
+  if (opts.iso) {
+    const priorities = [opts.iso, ...(opts.isoFallbacks ?? [null])];
+    matches = [];
+    for (const language of priorities) {
+      const tier = eligible.filter(
+        (img) => (img.iso_639_1 || null) === language,
+      );
+      if (tier.length > 0) {
+        matches = tier;
+        break;
+      }
+    }
+  }
 
   if (matches.length > 0) {
     if (opts.randomize) {
@@ -230,10 +251,15 @@ export function relativeDate(dateStr: string): string {
   const days = Math.ceil(
     (new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24),
   );
-  if (days <= 1) return "Coming Tomorrow";
-  if (days <= 7) return `Coming in ${days} Days`;
-  if (days <= 14) return "Coming Next Week";
-  return `Coming ${new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  if (days <= 1) return m.common_coming_tomorrow();
+  if (days <= 7) return m.common_coming_days({ days });
+  if (days <= 14) return m.common_coming_next_week();
+  return m.common_coming_date({
+    date: new Date(dateStr).toLocaleDateString(intlLocale(), {
+      month: "short",
+      day: "numeric",
+    }),
+  });
 }
 
 export function epKey(season: number, episode: number): string {

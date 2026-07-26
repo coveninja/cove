@@ -7,6 +7,7 @@
   import type { CatalogRef } from "$lib/types/addons";
   import type { Page } from "$lib/types/types";
   import { getContext, onMount } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
   import { SvelteMap } from "svelte/reactivity";
 
   // Contexts set by TvApp: watchMedia resumes playback directly (the primary
@@ -82,14 +83,14 @@
       if (movieGenre)
         specs.push({
           key: `mg-${movieGenre.id}`,
-          header: `${movieGenre.name} movies`,
+          header: m.explore_genre_movies({ genre: movieGenre.name }),
           load: () => api.discoverByGenre("movie", movieGenre.id, { limit: ROW_LIMIT }),
         });
       const tvGenre = tg[i];
       if (tvGenre)
         specs.push({
           key: `tg-${tvGenre.id}`,
-          header: `${tvGenre.name} shows`,
+          header: m.explore_genre_shows({ genre: tvGenre.name }),
           load: () => api.discoverByGenre("tv", tvGenre.id, { limit: ROW_LIMIT }),
         });
       const keyword = kw[i];
@@ -107,7 +108,7 @@
   onMount(() => {
     startRow({
       key: "tastes",
-      header: "Based on your tastes",
+      header: m.home_based_on_tastes(),
       load: () => api.discover("all", { limit: ROW_LIMIT }),
     });
 

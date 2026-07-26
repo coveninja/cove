@@ -5,7 +5,7 @@
   import { animate } from "animejs";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button";
-  import { ChevronDown, ListVideo, Play, Star, ThumbsDown, X } from "lucide-svelte";
+  import { ChevronDown, ListVideo, Play, Star, X } from "lucide-svelte";
   import {
     countryName,
     formatRating,
@@ -21,8 +21,10 @@
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import StarRating from "./StarRating.svelte";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
+  import MediaActionsPanel from "./MediaActionsPanel.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import { resolveTvWatchAction, type TvWatchAction } from "$lib/watchAction";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -154,7 +156,7 @@
   let streamMaxQuality = $state<string | null>(null);
 
   const streamsToggleLabel = $derived(
-    media.media_type === "tv" ? "Episodes" : "Choose a source",
+    media.media_type === "tv" ? m.media_episodes() : m.streams_choose_source(),
   );
 
   // ── Library state ──────────────────────────────────────────────────────────
@@ -165,6 +167,7 @@
   let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
+    $libraryChanged;
     let stale = false;
     api
       .libraryGet(media.id, media.media_type)
@@ -193,18 +196,6 @@
     return () => { stale = true; };
   });
 
-  async function toggleDismissed(): Promise<void> {
-    const next = !dismissed;
-    dismissed = next;
-    try {
-      if (next) await api.notInterested(media);
-      else await api.undoNotInterested(media);
-      libraryChanged.update((n) => n + 1);
-    } catch {
-      dismissed = !next;
-    }
-  }
-
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
@@ -216,6 +207,11 @@
   );
   const episodesWatched = $derived(
     tvProgressList.filter((p) => p.completed).length,
+  );
+  const hasProgress = $derived(
+    media.media_type === "movie"
+      ? movieProgress !== null
+      : tvProgressList.length > 0,
   );
   const hasIncompleteMovieProgress = $derived(
     media.media_type === "movie" &&
@@ -300,7 +296,7 @@
         <button
           class="absolute top-3 right-3 z-20 flex size-9 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
           onclick={close}
-          aria-label="Close"
+          aria-label={m.common_close()}
         >
           <X class="size-5" />
         </button>
@@ -369,20 +365,18 @@
                 {lastAiredSeason}
                 {lastAiredEpisode}
               />
-              <Button
-                variant={dismissed ? "destructive" : "outline"}
-                size="icon"
-                onclick={toggleDismissed}
-                title={dismissed ? "Undo not interested" : "Not interested"}
-              >
-                <ThumbsDown class="size-4" />
-              </Button>
               <LibraryStatusPanel
                 {libraryEntry}
                 {media}
                 {lastAiredSeason}
                 {lastAiredEpisode}
                 size="icon"
+              />
+              <MediaActionsPanel
+                {media}
+                {libraryEntry}
+                {dismissed}
+                {hasProgress}
               />
             </div>
           </div>
@@ -404,12 +398,16 @@
             {/if}
             {#if media.media_type === "tv" && numberOfSeasons !== null}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs">
-                {numberOfSeasons} season{numberOfSeasons !== 1 ? "s" : ""}
+                {numberOfSeasons === 1
+                  ? m.common_season_count_one()
+                  : m.common_seasons_count({ count: numberOfSeasons })}
               </span>
             {/if}
             {#if media.media_type === "tv" && numberOfEpisodes !== null}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs">
-                {numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}
+                {numberOfEpisodes === 1
+                  ? m.common_episode_count_one()
+                  : m.common_episodes_count({ count: numberOfEpisodes })}
               </span>
             {/if}
             {#if streamMaxQuality}
@@ -458,7 +456,7 @@
               class="flex items-center gap-2 rounded-md bg-secondary/40 px-3 py-2"
             >
               <span class="text-xs text-muted-foreground">
-                {episodesWatched} episode{episodesWatched !== 1 ? "s" : ""} watched
+                {m.media_episodes_watched({ count: episodesWatched })}
                 {#if numberOfEpisodes}· {Math.round(
                   (episodesWatched / numberOfEpisodes) * 100,
                 )}%{/if}
@@ -471,7 +469,7 @@
             <div class="flex flex-col gap-3">
               {#if detailsLoading && overviewParagraphs.length === 0}
                 <p class="animate-pulse text-sm text-muted-foreground">
-                  Loading details…
+                  {m.media_loading_details()}
                 </p>
               {:else}
                 {#each overviewParagraphs as paragraph, i (i)}
@@ -485,14 +483,16 @@
             <div class="flex w-full flex-col gap-3 md:w-56">
               {#if cast.length}
                 <div class="text-sm">
-                  <span class="text-muted-foreground">Cast: </span>
+                  <span class="text-muted-foreground">{m.media_cast()}: </span>
                   {cast.slice(0, 5).join(", ")}
                 </div>
               {/if}
               {#if keywords.length}
                 <div class="text-sm">
                   <span class="text-muted-foreground"
-                  >This {media.media_type === "tv" ? "show" : "film"} is:
+                  >{media.media_type === "tv"
+                    ? m.media_show_is()
+                    : m.media_film_is()}
                   </span>
                   {keywords.join(", ")}
                 </div>
@@ -547,7 +547,7 @@
           {#if similar.length}
             <div class="space-y-3">
               <Separator />
-              <h3 class="text-base font-semibold">More like this</h3>
+              <h3 class="text-base font-semibold">{m.media_more_like_this()}</h3>
               <div class="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
                 {#each similar as item (item.id)}
                   <div

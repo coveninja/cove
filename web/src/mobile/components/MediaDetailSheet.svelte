@@ -2,7 +2,7 @@
   import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
   import type { Stream } from "$lib/types/addons";
   import { onMount } from "svelte";
-  import { X, Play, ListVideo, ChevronDown, ThumbsDown, Volume2, VolumeOff } from "lucide-svelte";
+  import { X, Play, ListVideo, ChevronDown, Volume2, VolumeOff } from "lucide-svelte";
   import { api, formatPosition } from "$lib/api";
   import { getImageOpt, getVideoOpt, formatRuntime, formatRating } from "$lib/utils";
   import PlayerSimple from "../../components/PlayerSimple.svelte";
@@ -15,6 +15,8 @@
   import { Button } from "$lib/components/ui/button";
   import { animate } from "animejs";
   import { pressable } from "../lib/pressable";
+  import MobileMediaActionsSheet from "./MobileMediaActionsSheet.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -106,9 +108,11 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let dismissed = $state(false);
+  let hasProgress = $state(false);
   let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
+    $libraryChanged;
     let stale = false;
     api
       .libraryGet(media.id, media.media_type)
@@ -118,11 +122,13 @@
           libraryEntry = null;
           movieProgress = null;
           dismissed = false;
+          hasProgress = false;
           tvWatchAction = null;
           return;
         }
         libraryEntry = result.entry;
         dismissed = result.dismissed;
+        hasProgress = result.progress.length > 0;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         } else {
@@ -138,18 +144,6 @@
       stale = true;
     };
   });
-
-  async function toggleDismissed(): Promise<void> {
-    const next = !dismissed;
-    dismissed = next;
-    try {
-      if (next) await api.notInterested(media);
-      else await api.undoNotInterested(media);
-      libraryChanged.update((n) => n + 1);
-    } catch {
-      dismissed = !next;
-    }
-  }
 
   // ── Library panel bounce ───────────────────────────────────────────────────
   let libraryPanelEl = $state<HTMLElement | null>(null);
@@ -269,7 +263,7 @@
   let showStreams = $state(false);
   let streamMaxQuality = $state<string | null>(null);
   const streamsToggleLabel = $derived(
-    media.media_type === "tv" ? "Episodes" : "Choose a source",
+    media.media_type === "tv" ? m.media_episodes() : m.streams_choose_source(),
   );
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -417,7 +411,7 @@
     class="absolute right-3 z-10 flex size-11 items-center justify-center rounded-full bg-black/50 text-white"
     style="top: calc(0.5rem + var(--safe-top));"
     onclick={closeSheet}
-    aria-label="Close"
+    aria-label={m.common_close()}
     type="button"
   >
     <X class="size-5" />
@@ -488,7 +482,9 @@
           class="absolute bottom-3 right-3 z-20 flex size-9 items-center justify-center rounded-full bg-black/60 text-white"
           onclick={() => (trailerMuted = !trailerMuted)}
           type="button"
-          aria-label={trailerMuted ? "Unmute trailer" : "Mute trailer"}
+          aria-label={trailerMuted
+            ? m.player_unmute_trailer()
+            : m.player_mute_trailer()}
         >
           {#if trailerMuted}
             <VolumeOff class="size-4" />
@@ -521,7 +517,9 @@
           {/if}
           {#if media.media_type === "tv" && numberOfEpisodes !== null}
             <span
-              >{numberOfEpisodes} ep{numberOfEpisodes !== 1 ? "s" : ""}</span
+              >{numberOfEpisodes === 1
+                ? m.common_episode_count_one()
+                : m.common_episodes_count({ count: numberOfEpisodes })}</span
             >
           {/if}
           {#if genres.length}
@@ -574,16 +572,13 @@
           />
         </div>
 
-        <!-- Not interested -->
-        <Button
-                variant={dismissed ? "destructive" : "outline"}
-                size="icon"
-                class="size-12 shrink-0 rounded-lg"
-                onclick={toggleDismissed}
-                title={dismissed ? "Undo not interested" : "Not interested"}
-        >
-          <ThumbsDown class="size-4" />
-        </Button>
+        <MobileMediaActionsSheet
+          {media}
+          {libraryEntry}
+          {dismissed}
+          {hasProgress}
+          class="size-12 shrink-0 rounded-lg"
+        />
 
         <!-- Star rating -->
         <StarRating
@@ -644,7 +639,7 @@
               onclick={toggleOverview}
               type="button"
             >
-              {overviewExpanded ? "Show less" : "Show more"}
+              {overviewExpanded ? m.common_less() : m.calendar_show_more()}
             </button>
           {/if}
         </div>
@@ -659,7 +654,7 @@
       <!-- Cast row (names only — cast credits do not include profile photos) -->
       {#if castNames.length}
         <div class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-foreground">Cast</h3>
+          <h3 class="text-sm font-semibold text-foreground">{m.media_cast()}</h3>
           <div
             class="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]"
             style="-webkit-overflow-scrolling: touch;"
@@ -678,7 +673,7 @@
       <!-- More like this (horizontal poster scroll) -->
       {#if similar.length}
         <div class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-foreground">More like this</h3>
+          <h3 class="text-sm font-semibold text-foreground">{m.media_more_like_this()}</h3>
           <div
             class="flex gap-3 overflow-x-auto pb-2 [scrollbar-width:none]"
             style="-webkit-overflow-scrolling: touch;"

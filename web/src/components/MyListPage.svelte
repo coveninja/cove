@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, STATUS_LABELS, STATUS_COLORS, type LibraryStatus } from "$lib/api";
+  import { api, statusLabel, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
@@ -15,6 +15,7 @@
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import { SvelteSet } from "svelte/reactivity";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     onSelectMedia,
@@ -44,14 +45,14 @@
     | "title_asc";
 
   const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-    { value: "default", label: "Recommended" },
-    { value: "watched_desc", label: "Recently watched" },
-    { value: "added_desc", label: "Recently added" },
-    { value: "added_asc", label: "Oldest added" },
-    { value: "release_desc", label: "Release date" },
-    { value: "tmdb_desc", label: "TMDB rating" },
-    { value: "personal_desc", label: "Your rating" },
-    { value: "title_asc", label: "Title (A–Z)" },
+    { value: "default", label: m.my_list_sort_recommended() },
+    { value: "watched_desc", label: m.my_list_sort_recently_watched() },
+    { value: "added_desc", label: m.my_list_sort_recently_added() },
+    { value: "added_asc", label: m.my_list_sort_oldest_added() },
+    { value: "release_desc", label: m.my_list_sort_release_date() },
+    { value: "tmdb_desc", label: m.my_list_sort_tmdb_rating() },
+    { value: "personal_desc", label: m.my_list_sort_your_rating() },
+    { value: "title_asc", label: m.my_list_sort_title() },
   ];
 
   let sortKey = $state<SortKey>("default");
@@ -67,16 +68,16 @@
   // Trigger labels for the selects (shadcn Select renders the label ourselves).
   const typeLabel = $derived(
     activeType === "movie"
-      ? "Movies"
+      ? m.my_list_movies()
       : activeType === "tv"
-        ? "TV Shows"
-        : "All",
+        ? m.my_list_shows()
+        : m.my_list_all(),
   );
   const sortLabel = $derived(
-    SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? "Sort",
+    SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? m.my_list_sort(),
   );
   const genreLabel = $derived(
-    activeGenre === "all" ? "All genres" : activeGenre,
+    activeGenre === "all" ? m.my_list_all_genres() : activeGenre,
   );
 
   // ── Data ─────────────────────────────────────────────────────────────────────
@@ -139,7 +140,13 @@
     "dropped",
   ];
 
-  const TAB_LABELS: Record<string, string> = { all: "All", ...STATUS_LABELS };
+  const TAB_LABELS: Record<string, string> = {
+    all: m.my_list_all(),
+    watching: statusLabel("watching"),
+    watch_later: statusLabel("watch_later"),
+    finished: statusLabel("finished"),
+    dropped: statusLabel("dropped"),
+  };
 
   const counts = $derived(
     Object.fromEntries(
@@ -185,7 +192,7 @@
     (activeStatus === "all" ? SECTION_ORDER : [activeStatus])
       .map((status) => ({
         status,
-        label: STATUS_LABELS[status],
+        label: statusLabel(status),
         entries: entries
           .filter(
             (e) =>
@@ -374,24 +381,24 @@
 
   const EMPTY_MESSAGES: Record<string, { heading: string; sub: string }> = {
     all: {
-      heading: "Your list is empty",
-      sub: "Open any title and use the status buttons to start tracking.",
+      heading: m.my_list_empty(),
+      sub: m.my_list_empty_tracking(),
     },
     watching: {
-      heading: "Nothing in progress",
-      sub: "Mark something as Watching to see it here.",
+      heading: m.my_list_empty_watching(),
+      sub: m.my_list_empty_watching(),
     },
     watch_later: {
-      heading: "Nothing saved for later",
-      sub: "Found something you want to watch? Hit Watch Later.",
+      heading: m.my_list_empty_later(),
+      sub: m.my_list_empty_later(),
     },
     finished: {
-      heading: "Nothing finished yet",
-      sub: "Mark a title as Finished once you're done.",
+      heading: m.my_list_empty_finished(),
+      sub: m.my_list_empty_finished(),
     },
     dropped: {
-      heading: "Nothing dropped",
-      sub: "Titles you give up on will appear here.",
+      heading: m.my_list_empty_dropped(),
+      sub: m.my_list_empty_dropped(),
     },
   };
 </script>
@@ -408,10 +415,12 @@
     <div class="pointer-events-auto">
       <!-- Title row -->
       <div class="mb-4 flex items-baseline gap-3">
-        <h1 class="text-2xl font-semibold">My List</h1>
+        <h1 class="text-2xl font-semibold">{m.my_list_title()}</h1>
         {#if !loading && entries.length > 0}
           <span class="text-sm text-muted-foreground">
-            {entries.length} title{entries.length !== 1 ? "s" : ""}
+            {entries.length === 1
+              ? m.my_list_title_count_one()
+              : m.my_list_titles_count({ count: entries.length })}
           </span>
         {/if}
       </div>
@@ -433,9 +442,9 @@
                 {typeLabel}
               </Select.Trigger>
               <Select.Content>
-                <Select.Item value="all" label="All">All</Select.Item>
-                <Select.Item value="movie" label="Movies">Movies</Select.Item>
-                <Select.Item value="tv" label="TV Shows">TV Shows</Select.Item>
+                <Select.Item value="all" label={m.my_list_all()}>{m.my_list_all()}</Select.Item>
+                <Select.Item value="movie" label={m.my_list_movies()}>{m.my_list_movies()}</Select.Item>
+                <Select.Item value="tv" label={m.my_list_shows()}>{m.my_list_shows()}</Select.Item>
               </Select.Content>
             </Select.Root>
 
@@ -501,8 +510,8 @@
                   {genreLabel}
                 </Select.Trigger>
                 <Select.Content>
-                  <Select.Item value="all" label="All genres">
-                    All genres
+                  <Select.Item value="all" label={m.my_list_all_genres()}>
+                    {m.my_list_all_genres()}
                   </Select.Item>
                   {#each availableGenres as g (g)}
                     <Select.Item value={g} label={g}>{g}</Select.Item>
@@ -542,9 +551,9 @@
       {#if sections.length === 0}
         <div class="flex h-[60vh] flex-col items-center justify-center gap-4">
           {#if activeGenre !== "all"}
-            <p class="text-base font-medium">No titles in this genre</p>
+            <p class="text-base font-medium">{m.my_list_no_genre()}</p>
             <p class="text-sm text-muted-foreground">
-              Try a different genre or clear the filter.
+                {m.my_list_change_filter()}
             </p>
           {:else}
             <p class="text-base font-medium">

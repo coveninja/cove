@@ -3,8 +3,13 @@ import { mount } from "svelte";
 import "./assets/app.css";
 
 import { isAndroid, isTvMode } from "$lib/platform";
+import { initializeLocalization } from "$lib/i18n";
 
 async function init() {
+  // Locale must be active before any shell mounts. This prevents a flash of
+  // English and ensures the first metadata requests use the profile language.
+  await initializeLocalization();
+
   // The Qt shell's --tv flag appends ?tvui=1 to the initial URL. Persist the
   // preference to localStorage so later reloads don't need the param, then
   // strip it from the address bar so it doesn't accumulate across history

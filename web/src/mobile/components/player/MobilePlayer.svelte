@@ -22,6 +22,8 @@
   import { rankStreams, type StreamSelectionMode } from "$lib/streamSelection";
   import { SvelteSet, SvelteMap } from "svelte/reactivity";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
+  import { languageDisplayName } from "$lib/i18n";
   import TrackSheet from "./TrackSheet.svelte";
   import EpisodeSheet from "./EpisodeSheet.svelte";
   import MobilePlayerControls from "./MobilePlayerControls.svelte";
@@ -677,16 +679,12 @@
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
   function langName(code: string): string {
-    try {
-      return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
-    } catch {
-      return code;
-    }
+    return languageDisplayName(code);
   }
 
   function trackLabel(
     t: { id: number; title: string; lang: string },
-    kind: "Audio" | "Subtitle",
+    kind: string,
   ): string {
     if (t.title) return t.title;
     if (t.lang) return langName(t.lang);
@@ -695,7 +693,9 @@
 
   const sortedAudio = $derived(
     [...Player.audioTracks].sort((a, b) =>
-      trackLabel(a, "Audio").localeCompare(trackLabel(b, "Audio")),
+      trackLabel(a, m.player_audio()).localeCompare(
+        trackLabel(b, m.player_audio()),
+      ),
     ),
   );
 
@@ -706,9 +706,15 @@
     | { kind: "external"; id: string; label: string };
 
   const subtitleItems = $derived.by((): SubItem[] => {
-    const items: SubItem[] = [{ kind: "off", id: "off", label: "Off" }];
+    const items: SubItem[] = [
+      { kind: "off", id: "off", label: m.player_subtitles_off() },
+    ];
     for (const t of Player.subtitleTracks) {
-      items.push({ kind: "embedded", id: t.id, label: trackLabel(t, "Subtitle") });
+      items.push({
+        kind: "embedded",
+        id: t.id,
+        label: trackLabel(t, m.player_subtitle()),
+      });
     }
     for (const s of externalSubtitles) {
       items.push({
@@ -722,7 +728,7 @@
 
   // Subtitle source/language grouping helper (mirroring desktop groupByLang).
   function groupByLang<T>(entries: { lang: string; item: T }[]): { label: string; items: T[] }[] {
-    const OTHER = "Other";
+    const OTHER = m.player_other();
     const groups = new SvelteMap<string, T[]>();
     for (const { lang, item } of entries) {
       const g = lang || OTHER;
@@ -740,14 +746,23 @@
 
   // Grouped subtitle list for the sheet: Off + per-source headers + per-lang headers + tracks.
   const subtitleRows = $derived.by((): SubRowItem[] => {
-    const rows: SubRowItem[] = [{ id: "off", label: "Off" }];
+    const rows: SubRowItem[] = [
+      { id: "off", label: m.player_subtitles_off() },
+    ];
 
     if (Player.subtitleTracks.length > 0) {
-      rows.push({ id: "hdr-embedded", label: "Embedded", header: true });
+      rows.push({
+        id: "hdr-embedded",
+        label: m.player_embedded(),
+        header: true,
+      });
       const embGroups = groupByLang(
         Player.subtitleTracks.map((t) => ({
           lang: t.lang ? langName(t.lang) : t.title || "",
-          item: { id: t.id as string | number, label: trackLabel(t, "Subtitle") },
+          item: {
+            id: t.id as string | number,
+            label: trackLabel(t, m.player_subtitle()),
+          },
         })),
       );
       for (const g of embGroups) {
@@ -757,11 +772,18 @@
     }
 
     if (externalSubtitles.length > 0) {
-      rows.push({ id: "hdr-addons", label: "Add-ons", header: true });
+      rows.push({
+        id: "hdr-addons",
+        label: m.player_addons(),
+        header: true,
+      });
       const extGroups = groupByLang(
         externalSubtitles.map((s) => ({
           lang: s.lang ? langName(s.lang) : "",
-          item: { id: s.id as string | number, label: langName(s.lang) || "Subtitle" },
+          item: {
+            id: s.id as string | number,
+            label: langName(s.lang) || m.player_subtitle(),
+          },
         })),
       );
       for (const g of extGroups) {
@@ -947,7 +969,7 @@
   {#if !Player.available && !streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
       <p class="rounded bg-black/60 px-4 py-2 text-sm text-red-400">
-        Native player unavailable.
+        {m.player_native_unavailable()}
       </p>
     </div>
   {/if}
@@ -1020,8 +1042,11 @@
 
 {#if audioSheetOpen}
   <TrackSheet
-    title="Audio"
-    items={sortedAudio.map((t) => ({ id: t.id, label: trackLabel(t, "Audio") }))}
+    title={m.player_audio()}
+    items={sortedAudio.map((t) => ({
+      id: t.id,
+      label: trackLabel(t, m.player_audio()),
+    }))}
     selectedId={selectedAudio?.id ?? null}
     onSelect={(id) => chooseAudioTrack(id as number)}
     onClose={() => (audioSheetOpen = false)}
@@ -1031,12 +1056,12 @@
 {#snippet subStyleFooter()}
   <div class="border-t border-white/10 px-5 pb-3 pt-3">
     <p class="pb-2 text-xs font-semibold uppercase tracking-widest text-white/40">
-      Style
+      {m.player_style()}
     </p>
     <div class="space-y-4">
       <div class="space-y-2">
         <div class="flex items-center justify-between text-sm">
-          <span>Size</span>
+          <span>{m.player_size()}</span>
           <span class="tabular-nums text-white/50">
             {Math.round($settings?.subtitleSize ?? 100)}%
           </span>
@@ -1048,12 +1073,12 @@
           max={200}
           step={10}
           onValueChange={(v) => updateSubStyle({ subtitleSize: v })}
-          aria-label="Subtitle size"
+          aria-label={m.settings_subtitle_size()}
         />
       </div>
       <div class="space-y-2">
         <div class="flex items-center justify-between text-sm">
-          <span>Position</span>
+          <span>{m.player_position()}</span>
           <span class="tabular-nums text-white/50">
             {Math.round($settings?.subtitlePosition ?? 8)}%
           </span>
@@ -1065,7 +1090,7 @@
           max={90}
           step={1}
           onValueChange={(v) => updateSubStyle({ subtitlePosition: v })}
-          aria-label="Subtitle position"
+          aria-label={m.settings_subtitle_position()}
         />
       </div>
       <button
@@ -1076,7 +1101,7 @@
             subtitleBackground: !($settings?.subtitleBackground ?? false),
           })}
       >
-        <span>Background box</span>
+        <span>{m.player_background_box()}</span>
         <span
           class="relative inline-flex h-6 w-10 items-center rounded-full transition-colors {($settings?.subtitleBackground ??
           false)
@@ -1097,7 +1122,7 @@
 
 {#if subsSheetOpen}
   <TrackSheet
-    title="Subtitles"
+    title={m.player_subtitles()}
     items={subtitleRows}
     selectedId={selectedSubId}
     onSelect={(id) => {
@@ -1119,7 +1144,7 @@
 
 {#if speedSheetOpen}
   <TrackSheet
-    title="Playback speed"
+    title={m.player_speed()}
     items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {

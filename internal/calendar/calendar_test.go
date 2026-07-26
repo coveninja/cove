@@ -48,82 +48,81 @@ func testDay(t *testing.T) (time.Time, time.Time) {
 	return today, today.AddDate(0, 0, 90)
 }
 
-func TestAiredAhead(t *testing.T) {
-	tests := []struct {
-		name                   string
-		airedS, airedE, wS, wE int
-		want                   bool
-	}{
-		{"later episode", 1, 4, 1, 3, true},
-		{"same episode", 1, 3, 1, 3, false},
-		{"earlier episode", 1, 2, 1, 3, false},
-		{"later season", 2, 1, 1, 99, true},
-		{"earlier season", 1, 99, 2, 1, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := airedAhead(tt.airedS, tt.airedE, tt.wS, tt.wE); got != tt.want {
-				t.Fatalf("airedAhead() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNextEpisode(t *testing.T) {
-	seasons := []tmdb.TVSeason{
-		{SeasonNumber: 1, EpisodeCount: 2},
-		{SeasonNumber: 2, EpisodeCount: 3},
-	}
-	tests := []struct {
-		name               string
-		watchedS, watchedE int
-		wantSeason, wantEp int
-	}{
-		{"never started", 0, 0, 1, 1},
-		{"within season", 1, 1, 1, 2},
-		{"crosses season", 1, 2, 2, 1},
-		{"end of known show", 2, 3, 0, 0},
-		{"unknown season", 4, 1, 0, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s, e := nextEpisode(seasons, tt.watchedS, tt.watchedE)
-			if s != tt.wantSeason || e != tt.wantEp {
-				t.Fatalf("nextEpisode() = S%dE%d, want S%dE%d", s, e, tt.wantSeason, tt.wantEp)
-			}
-		})
-	}
-
-	if s, e := nextEpisode(nil, 0, 0); s != 0 || e != 0 {
-		t.Fatalf("nextEpisode(nil) = S%dE%d, want unknown", s, e)
-	}
-}
-
-func TestComputeWaitingAcrossSeasons(t *testing.T) {
+func TestAiredEpisodeBacklogUsesCompletedRecords(t *testing.T) {
 	seasons := []tmdb.TVSeason{
 		{SeasonNumber: 1, EpisodeCount: 4},
 		{SeasonNumber: 2, EpisodeCount: 3},
 		{SeasonNumber: 3, EpisodeCount: 2},
 	}
+
 	tests := []struct {
-		name                               string
-		watchedS, watchedE, airedS, airedE int
-		want                               int
+		name                         string
+		airedS, airedE               int
+		completed                    completedEpisodeSet
+		wantSeason, wantEp, wantWait int
 	}{
-		{"same season", 1, 1, 1, 4, 3},
-		{"adjacent seasons", 1, 3, 2, 2, 3},
-		{"multiple seasons", 1, 2, 3, 1, 6},
-		{"never started", 0, 0, 1, 3, 3},
-		{"defensive minimum", 3, 2, 3, 2, 1},
+		{
+			name:      "fully watched",
+			airedS:    1,
+			airedE:    4,
+			completed: completedSet(episodePosition{1, 1}, episodePosition{1, 2}, episodePosition{1, 3}, episodePosition{1, 4}),
+		},
+		{
+			name:       "non-contiguous gap",
+			airedS:     2,
+			airedE:     2,
+			completed:  completedSet(episodePosition{1, 1}, episodePosition{1, 3}, episodePosition{1, 4}, episodePosition{2, 2}),
+			wantSeason: 1,
+			wantEp:     2,
+			wantWait:   2,
+		},
+		{
+			name:       "never watched",
+			airedS:     1,
+			airedE:     3,
+			wantSeason: 1,
+			wantEp:     1,
+			wantWait:   3,
+		},
+		{
+			name:       "future episodes in current season excluded",
+			airedS:     3,
+			airedE:     1,
+			completed:  completedSet(episodePosition{1, 1}, episodePosition{1, 2}, episodePosition{1, 3}, episodePosition{1, 4}, episodePosition{2, 1}, episodePosition{2, 2}, episodePosition{2, 3}),
+			wantSeason: 3,
+			wantEp:     1,
+			wantWait:   1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := computeWaiting(seasons, tt.watchedS, tt.watchedE, tt.airedS, tt.airedE)
-			if got != tt.want {
-				t.Fatalf("computeWaiting() = %d, want %d", got, tt.want)
+			gotSeason, gotEp, gotWait := airedEpisodeBacklog(
+				seasons,
+				tt.airedS,
+				tt.airedE,
+				tt.completed,
+			)
+			if gotSeason != tt.wantSeason || gotEp != tt.wantEp || gotWait != tt.wantWait {
+				t.Fatalf(
+					"airedEpisodeBacklog() = S%dE%d waiting=%d, want S%dE%d waiting=%d",
+					gotSeason,
+					gotEp,
+					gotWait,
+					tt.wantSeason,
+					tt.wantEp,
+					tt.wantWait,
+				)
 			}
 		})
 	}
+}
+
+func completedSet(positions ...episodePosition) completedEpisodeSet {
+	completed := make(completedEpisodeSet, len(positions))
+	for _, position := range positions {
+		completed[position] = struct{}{}
+	}
+	return completed
 }
 
 func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
@@ -131,7 +130,11 @@ func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
 	fake := &fakeTMDB{
 		details: map[string]*tmdb.Details{
 			"movie:1": {ReleaseDate: "2026-07-22"},
-			"movie:2": {ReleaseDate: "2026-07-23"},
+			"movie:2": {
+				Title:       "Yarın",
+				PosterPath:  "https://image.tmdb.org/t/p/w500/localized.jpg",
+				ReleaseDate: "2026-07-23",
+			},
 			"movie:3": {ReleaseDate: "2026-10-21"},
 			"movie:4": {ReleaseDate: "not-a-date"},
 		},
@@ -139,23 +142,60 @@ func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
 	}
 	s := &Server{tmdb: fake}
 
-	items, err := s.processMovie(&library.LibraryEntry{TmdbID: 1, Title: "Today"}, today, cutoff, nil)
+	items, err := s.processMovie(
+		&library.LibraryEntry{TmdbID: 1, Title: "Today", Status: library.StatusWatching},
+		today,
+		cutoff,
+		nil,
+	)
 	if err != nil || len(items) != 1 || items[0].Kind != "available" {
 		t.Fatalf("today's local release = %#v, %v; want one available item", items, err)
 	}
-
-	items, err = s.processMovie(&library.LibraryEntry{TmdbID: 2, Title: "Tomorrow"}, today, cutoff, nil)
-	if err != nil || len(items) != 1 || items[0].Kind != "movie" {
-		t.Fatalf("tomorrow's release = %#v, %v; want one future movie", items, err)
+	if items[0].Title != "Today" {
+		t.Fatalf("missing localized title did not fall back to library title: %#v", items[0])
 	}
 
-	items, err = s.processMovie(&library.LibraryEntry{TmdbID: 1}, today, cutoff, map[int]bool{1: true})
+	items, err = s.processMovie(
+		&library.LibraryEntry{TmdbID: 2, Title: "Tomorrow", Status: library.StatusWatchLater},
+		today,
+		cutoff,
+		nil,
+	)
+	if err != nil || len(items) != 1 || items[0].Kind != "movie" {
+		t.Fatalf("Watch Later release tomorrow = %#v, %v; want one future movie", items, err)
+	}
+	if items[0].Title != "Yarın" ||
+		items[0].PosterPath != "http://127.0.0.1:6969/api/img/w500/localized.jpg" {
+		t.Fatalf("localized movie presentation was discarded: %#v", items[0])
+	}
+
+	items, err = s.processMovie(
+		&library.LibraryEntry{TmdbID: 1, Title: "Today", Status: library.StatusWatchLater},
+		today,
+		cutoff,
+		nil,
+	)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("released Watch Later movie = %#v, %v; want skipped", items, err)
+	}
+
+	items, err = s.processMovie(
+		&library.LibraryEntry{TmdbID: 1, Status: library.StatusWatching},
+		today,
+		cutoff,
+		map[int]bool{1: true},
+	)
 	if err != nil || len(items) != 0 {
 		t.Fatalf("completed release = %#v, %v; want skipped", items, err)
 	}
 
 	for _, id := range []int{3, 4} {
-		items, err = s.processMovie(&library.LibraryEntry{TmdbID: id}, today, cutoff, nil)
+		items, err = s.processMovie(
+			&library.LibraryEntry{TmdbID: id, Status: library.StatusWatching},
+			today,
+			cutoff,
+			nil,
+		)
 		if err != nil || len(items) != 0 {
 			t.Fatalf("movie %d = %#v, %v; want skipped", id, items, err)
 		}
@@ -195,6 +235,8 @@ func TestCollectFutureEpisodesFiltersAndMapsMetadata(t *testing.T) {
 func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 	today, cutoff := testDay(t)
 	details := &tmdb.Details{
+		Name:       "Yerelleştirilmiş Dizi",
+		PosterPath: "https://image.tmdb.org/t/p/w500/localized.jpg",
 		Seasons: []tmdb.TVSeason{
 			{SeasonNumber: 0, EpisodeCount: 5},
 			{SeasonNumber: 1, EpisodeCount: 2},
@@ -230,7 +272,12 @@ func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 		Status: library.StatusWatching, LastWatchedSeason: intValue(1), LastWatchedEpisode: intValue(2),
 	}
 
-	items, err := s.processTV(entry, today, cutoff)
+	items, err := s.processTV(
+		entry,
+		today,
+		cutoff,
+		completedSet(episodePosition{season: 1, episode: 1}, episodePosition{season: 1, episode: 2}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +288,71 @@ func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 	if backlog.Kind != "available" || *backlog.SeasonNumber != 2 || *backlog.EpisodeNumber != 1 || backlog.WaitingCount != 2 || backlog.EpisodeName != "Backlog" {
 		t.Fatalf("unexpected backlog: %#v", backlog)
 	}
-	if backlog.PosterPath != "http://127.0.0.1:6969/api/img/w500/poster.jpg" {
-		t.Fatalf("poster was not rewritten: %q", backlog.PosterPath)
+	if backlog.Title != "Yerelleştirilmiş Dizi" ||
+		backlog.PosterPath != "http://127.0.0.1:6969/api/img/w500/localized.jpg" {
+		t.Fatalf("localized TV presentation was discarded: %#v", backlog)
 	}
 	if items[1].Kind != "episode" || items[2].Kind != "episode" || *items[2].SeasonNumber != 3 {
 		t.Fatalf("unexpected upcoming items: %#v", items[1:])
+	}
+	if items[1].Title != "Yerelleştirilmiş Dizi" || items[2].Title != "Yerelleştirilmiş Dizi" {
+		t.Fatalf("upcoming episodes lost localized title: %#v", items[1:])
+	}
+}
+
+func TestProcessTVWatchLaterEmitsOnlyNextFutureEpisode(t *testing.T) {
+	today, cutoff := testDay(t)
+	details := &tmdb.Details{
+		Seasons: []tmdb.TVSeason{{SeasonNumber: 2, EpisodeCount: 8}},
+	}
+	details.LastEpisodeToAir = &struct {
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+	}{SeasonNumber: 2, EpisodeNumber: 2, AirDate: "2026-07-16"}
+	details.NextEpisodeToAir = &struct {
+		Name          string `json:"name"`
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+		StillPath     string `json:"still_path"`
+	}{
+		Name: "Premiere", SeasonNumber: 2, EpisodeNumber: 3,
+		AirDate: "2026-07-23", StillPath: "/premiere.jpg",
+	}
+	fake := &fakeTMDB{
+		details: map[string]*tmdb.Details{"tv:20": details},
+		episodesErr: map[[2]int]error{
+			{20, 2}: errors.New("Watch Later must not fetch the full season"),
+		},
+	}
+	s := &Server{tmdb: fake}
+	entry := &library.LibraryEntry{
+		TmdbID: 20, MediaType: "tv", Title: "Saved Series",
+		Status: library.StatusWatchLater,
+	}
+
+	items, err := s.processTV(entry, today, cutoff, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items (%#v), want only the next scheduled episode", len(items), items)
+	}
+	next := items[0]
+	if next.Kind != "episode" ||
+		*next.SeasonNumber != 2 ||
+		*next.EpisodeNumber != 3 ||
+		next.Title != "Saved Series" ||
+		next.EpisodeName != "Premiere" ||
+		next.StillPath != "/premiere.jpg" {
+		t.Fatalf("unexpected Watch Later reminder: %#v", next)
+	}
+
+	details.NextEpisodeToAir.AirDate = today.Format("2006-01-02")
+	items, err = s.processTV(entry, today, cutoff, nil)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("aired Watch Later episode = %#v, %v; want skipped", items, err)
 	}
 }
 
@@ -258,7 +365,70 @@ func TestCalendarHandlerRejectsOtherMethods(t *testing.T) {
 	}
 }
 
-func TestCalendarHandlerFiltersSortsAndSuppressesCompletedMovies(t *testing.T) {
+func TestCalendarHandlerSuppressesFullyWatchedTVBacklog(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	lib, err := library.New("calendar-fully-watched-tv")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	entry := &library.LibraryEntry{
+		ID:                 "weak-hero",
+		TmdbID:             210942,
+		MediaType:          "tv",
+		Title:              "Weak Hero",
+		Status:             library.StatusWatching,
+		LastWatchedSeason:  intValue(1),
+		LastWatchedEpisode: intValue(1), // deliberately stale
+		UpdatedAt:          now,
+	}
+	progress := make([]*library.WatchProgress, 0, 8)
+	for episode := 1; episode <= 8; episode++ {
+		progress = append(progress, &library.WatchProgress{
+			ID:             "weak-hero-" + strconv.Itoa(episode),
+			LibraryEntryID: entry.ID,
+			TmdbID:         entry.TmdbID,
+			MediaType:      "tv",
+			Season:         intValue(1),
+			Episode:        intValue(episode),
+			Completed:      true,
+			WatchedAt:      now,
+		})
+	}
+	if err := lib.MergeFrom([]*library.LibraryEntry{entry}, progress, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	details := &tmdb.Details{
+		Seasons: []tmdb.TVSeason{{SeasonNumber: 1, EpisodeCount: 8}},
+	}
+	details.LastEpisodeToAir = &struct {
+		SeasonNumber  int    `json:"season_number"`
+		EpisodeNumber int    `json:"episode_number"`
+		AirDate       string `json:"air_date"`
+	}{SeasonNumber: 1, EpisodeNumber: 8, AirDate: "2025-05-02"}
+
+	server := New(lib, nil)
+	server.tmdb = &fakeTMDB{
+		details: map[string]*tmdb.Details{"tv:210942": details},
+	}
+	rec := httptest.NewRecorder()
+	server.handleCalendar(rec, httptest.NewRequest(http.MethodGet, "/api/library/calendar", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var items []CalendarItem
+	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("fully watched show produced calendar backlog: %#v", items)
+	}
+}
+
+func TestCalendarHandlerFiltersSortsAndSuppressesCompletedAndReleasedWatchLaterMovies(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	lib, err := library.New("calendar-handler")
 	if err != nil {
@@ -307,11 +477,11 @@ func TestCalendarHandlerFiltersSortsAndSuppressesCompletedMovies(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&items); err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 4 {
-		t.Fatalf("got %d items (%#v), want four visible incomplete movies", len(items), items)
+	if len(items) != 3 {
+		t.Fatalf("got %d items (%#v), want active backlog and two future releases", len(items), items)
 	}
-	wantIDs := []int{101, 102, 103, 104}
-	wantKinds := []string{"available", "available", "movie", "movie"}
+	wantIDs := []int{101, 103, 104}
+	wantKinds := []string{"available", "movie", "movie"}
 	for i := range wantIDs {
 		if items[i].TmdbID != wantIDs[i] || items[i].Kind != wantKinds[i] {
 			t.Fatalf("item %d = %#v, want tmdb=%d kind=%s", i, items[i], wantIDs[i], wantKinds[i])

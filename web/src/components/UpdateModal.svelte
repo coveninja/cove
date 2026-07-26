@@ -2,6 +2,7 @@
   import type { UpdateCheckResult } from "$lib/api";
   import { api } from "$lib/api";
   import { Download, RotateCcw, X } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     info,
@@ -38,19 +39,19 @@
 <div
   class="fixed bottom-6 right-6 z-50 w-80 rounded-xl border border-white/10 bg-background/95 p-5 shadow-2xl backdrop-blur-sm"
   role="dialog"
-  aria-label="Update available"
+  aria-label={m.update_title()}
 >
   {#if phase === "idle"}
     <!-- Header -->
     <div class="mb-3 flex items-start justify-between gap-2">
       <div class="flex items-center gap-2">
         <Download class="h-4 w-4 shrink-0 text-primary" />
-        <span class="text-sm font-semibold">Update Available</span>
+        <span class="text-sm font-semibold">{m.update_title()}</span>
       </div>
       <button
         class="text-muted-foreground hover:text-foreground transition-colors"
         onclick={ondismiss}
-        aria-label="Dismiss"
+        aria-label={m.update_dismiss()}
       >
         <X class="h-4 w-4" />
       </button>
@@ -72,13 +73,13 @@
         class="flex-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
         onclick={update}
       >
-        Update Now
+        {m.update_install()}
       </button>
       <button
         class="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
         onclick={ondismiss}
       >
-        Later
+        {m.update_later()}
       </button>
     </div>
 
@@ -89,8 +90,8 @@
         class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-primary/30 border-t-primary"
       ></div>
       <div>
-        <p class="text-sm font-medium">Downloading update…</p>
-        <p class="text-xs text-muted-foreground">This may take a moment</p>
+        <p class="text-sm font-medium">{m.update_downloading()}</p>
+        <p class="text-xs text-muted-foreground">{m.update_wait()}</p>
       </div>
     </div>
 
@@ -98,18 +99,18 @@
     <div class="flex items-center gap-3">
       <RotateCcw class="h-4 w-4 shrink-0 animate-spin text-primary" />
       <div>
-        <p class="text-sm font-medium">Restarting…</p>
-        <p class="text-xs text-muted-foreground">The app will restart momentarily</p>
+        <p class="text-sm font-medium">{m.update_restarting()}</p>
+        <p class="text-xs text-muted-foreground">{m.update_restart_description()}</p>
       </div>
     </div>
 
   {:else if phase === "error"}
     <div class="mb-3 flex items-start justify-between gap-2">
-      <span class="text-sm font-semibold text-destructive">Update failed</span>
+      <span class="text-sm font-semibold text-destructive">{m.update_failed()}</span>
       <button
         class="text-muted-foreground hover:text-foreground transition-colors"
         onclick={ondismiss}
-        aria-label="Dismiss"
+        aria-label={m.update_dismiss()}
       >
         <X class="h-4 w-4" />
       </button>
@@ -119,7 +120,7 @@
       class="w-full rounded-lg border border-white/10 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       onclick={() => { phase = "idle"; }}
     >
-      Try again
+      {m.update_retry()}
     </button>
   {/if}
 </div>

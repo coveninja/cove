@@ -27,12 +27,13 @@
   import { libraryChanged } from "$lib/stores/library";
   import { mediaFromEntry } from "$lib/mediaFromEntry";
   import { SvelteMap } from "svelte/reactivity";
-  import { nextAiredEpisode as nextAiredEpisodeShared } from "$lib/nextEpisode";
+  import { nextUnwatchedAiredEpisode as nextUnwatchedAiredEpisodeShared } from "$lib/nextEpisode";
   // ── Touch feedback + image fade ──────────────────────────────────────────────
   import { pressable } from "../lib/pressable";
   import { imageFade } from "../lib/imageFade";
   // ── Icons for fallback artwork ───────────────────────────────────────────────
   import { Film, Tv } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -80,15 +81,21 @@
     return eps.find((e) => e.episode_number === episode)?.still_path ?? "";
   }
 
-  // Wraps the shared nextAiredEpisode (see $lib/nextEpisode) with this row's
-  // own per-load season cache, so a show's resume-point lookup and its
-  // roll-forward check share fetches instead of hitting the same season twice.
-  function nextAiredEpisode(
+  // Wraps the shared completed-aware selector with this row's per-load season
+  // cache, so resume artwork and roll-forward checks share season fetches.
+  function nextUnwatchedAiredEpisode(
     id: number,
     season: number,
     episode: number,
+    progress: WatchProgress[],
   ): Promise<{ season: number; episode: TVEpisode } | null> {
-    return nextAiredEpisodeShared(id, season, episode, fetchSeason);
+    return nextUnwatchedAiredEpisodeShared(
+      id,
+      season,
+      episode,
+      progress,
+      fetchSeason,
+    );
   }
 
   function latestProgress(progress: WatchProgress[]): WatchProgress | null {
@@ -175,7 +182,7 @@
     }
 
     // Finished that episode → roll forward to the next aired one ("Up Next").
-    const next = await nextAiredEpisode(entry.tmdb_id, s, e);
+    const next = await nextUnwatchedAiredEpisode(entry.tmdb_id, s, e, progress);
     if (!next) return null; // caught up
     return {
       key,
@@ -253,7 +260,7 @@
 {#if loading || items.length > 0}
   <div class="w-full space-y-2 px-4">
     <div class="px-1">
-      <h2 class="text-base font-semibold">Continue Watching</h2>
+      <h2 class="text-base font-semibold">{m.home_continue_watching()}</h2>
     </div>
 
     <!-- Touch-native horizontal scroll: native inertia, no chevrons. -->
@@ -270,7 +277,9 @@
             use:pressable
             onclick={() => resume(item)}
             class="relative w-56 shrink-0 overflow-hidden rounded-md text-left"
-            aria-label={item.upNext ? `Play ${item.title}` : `Resume ${item.title}`}
+            aria-label={item.upNext
+              ? m.common_play_title({ title: item.title })
+              : m.common_resume_title({ title: item.title })}
           >
             <!-- Artwork: episode still (TV) or poster (movie / fallback) -->
             {#if item.image}

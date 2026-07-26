@@ -19,6 +19,11 @@
   import ActivityBars from "../../components/insights/ActivityBars.svelte";
   import StudioFootprint from "../../components/insights/StudioFootprint.svelte";
   import TasteSignalView from "../../components/insights/TasteSignalView.svelte";
+  import {
+    activityDayLabels,
+    activityHourLabels,
+    activityMonthLabels,
+  } from "../../components/insights/utils";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import {
     RefreshCw,
@@ -32,6 +37,7 @@
     Users,
     BarChart3,
   } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     visible = true,
@@ -212,7 +218,7 @@
     const rest = list.slice(5);
     if (rest.length > 0) {
       top.push({
-        label: "Other",
+        label: m.account_other(),
         value: rest.reduce((a, g) => a + Math.abs(g.score), 0),
         color: palette[5],
       });
@@ -223,13 +229,13 @@
   function mvSlices(s: LibraryStats): Slice[] {
     return [
       {
-        label: "Movies",
+        label: m.my_list_movies(),
         value: s.movie_share,
         color: palette[0],
         count: s.by_type.movie ?? 0,
       },
       {
-        label: "TV",
+        label: m.my_list_shows(),
         value: s.tv_share,
         color: palette[1],
         count: s.by_type.tv ?? 0,
@@ -238,10 +244,10 @@
   }
 
   const statusMeta = [
-    { key: "watching", label: "Watching" },
-    { key: "finished", label: "Finished" },
-    { key: "watch_later", label: "Watch later" },
-    { key: "dropped", label: "Dropped" },
+    { key: "watching", label: m.my_list_watching() },
+    { key: "finished", label: m.my_list_finished() },
+    { key: "watch_later", label: m.my_list_watch_later() },
+    { key: "dropped", label: m.my_list_dropped() },
   ];
 
   function statusSlices(s: LibraryStats): Slice[] {
@@ -256,21 +262,19 @@
   }
 
   const weights = [
-    { label: "Finished a title", value: "+1.5" },
-    { label: "Watched to the end", value: "+1.0" },
-    { label: "Currently watching", value: "+0.5" },
-    { label: "Saved to watch later", value: "+0.5" },
-    { label: "Each ★ above / below 3", value: "±1.5" },
-    { label: "Dropped", value: "−2.0" },
-    { label: "Not interested", value: "−2.0" },
+    { label: m.account_weight_finished(), value: "+1.5" },
+    { label: m.account_weight_watched_end(), value: "+1.0" },
+    { label: m.account_weight_watching(), value: "+0.5" },
+    { label: m.account_weight_watch_later(), value: "+0.5" },
+    { label: m.account_weight_rating(), value: "±1.5" },
+    { label: m.account_weight_dropped(), value: "−2.0" },
+    { label: m.account_weight_not_interested(), value: "−2.0" },
   ];
 
   // ── Activity chart data ───────────────────────────────────────────────────────
-  const MONTH_SHORT = [
-    "Jan","Feb","Mar","Apr","May","Jun",
-    "Jul","Aug","Sep","Oct","Nov","Dec",
-  ];
-  const DOW_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const MONTH_SHORT = activityMonthLabels();
+  const DOW_SHORT = activityDayLabels();
+  const HOUR_LABELS = activityHourLabels();
 
   const monthItems = $derived(
     activity
@@ -288,8 +292,7 @@
   const hourItems = $derived(
     activity
       ? activity.by_hour_of_day.map((v, i) => ({
-          label:
-            i === 0 ? "12a" : i < 12 ? `${i}a` : i === 12 ? "12p" : `${i - 12}p`,
+          label: HOUR_LABELS[i],
           value: v,
         }))
       : [],
@@ -330,20 +333,20 @@
       <div
         use:focusable
         class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-        aria-label="Account section"
+        aria-label={m.account_section()}
       ></div>
 
       <div class="flex flex-col gap-6">
         <header>
-          <h1 class="text-4xl font-bold tracking-tight">My Account</h1>
+          <h1 class="text-4xl font-bold tracking-tight">{m.account_title()}</h1>
           <p class="mt-1 text-lg text-white/50">
-            Manage your account, profiles, and viewing insights.
+            {m.account_page_description()}
           </p>
         </header>
 
         <!-- Account card -->
         <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-4">
-          <h2 class="text-xl font-semibold">Account</h2>
+          <h2 class="text-xl font-semibold">{m.nav_account()}</h2>
           {#if auth.session}
             <p class="text-base text-white/60 truncate">{auth.session.email}</p>
             <div
@@ -362,7 +365,7 @@
                 {:else}
                   <RefreshCw class="size-5" />
                 {/if}
-                Sync now
+                {m.account_sync()}
               </button>
               <button
                 type="button"
@@ -371,12 +374,12 @@
                 class="flex items-center gap-2 rounded-xl bg-white/5 px-6 py-3 text-base font-medium text-white/60 transition-colors focus:bg-white/20 focus:text-white focus:outline-none"
               >
                 <LogOut class="size-5" />
-                Sign out
+                {m.common_sign_out()}
               </button>
             </div>
           {:else}
             <p class="text-base text-white/60">
-              You're browsing as a guest. Sign in to sync your library across devices.
+              {m.account_guest_sync()}
             </p>
             <button
               type="button"
@@ -385,7 +388,7 @@
               class="flex w-fit items-center gap-2 rounded-xl bg-white px-6 py-3 text-base font-semibold text-black transition-colors focus:bg-white/80 focus:outline-none"
             >
               <LogIn class="size-5" />
-              Sign in / Create account
+              {m.onboarding_sign_in()}
             </button>
           {/if}
         </div>
@@ -405,11 +408,11 @@
       <div
         use:focusable
         class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-        aria-label="Profiles section"
+        aria-label={m.account_profiles_section()}
       ></div>
 
       <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-4">
-        <h2 class="text-xl font-semibold">Profiles</h2>
+        <h2 class="text-xl font-semibold">{m.account_profiles()}</h2>
         <div
           use:focusGroup={{ id: "tv-account-profiles", policy: { type: "column" } }}
           class="flex flex-col gap-1"
@@ -432,11 +435,11 @@
                   <span class="flex items-center gap-2 text-sm text-white/50">
                     {#if auth.activeProfile?.id === profile.id}
                       <Check class="size-4 text-green-400" />
-                      <span class="text-green-400">Active</span>
+                      <span class="text-green-400">{m.account_active()}</span>
                     {/if}
                     {#if profile.is_primary}
                       <span class="rounded border border-white/20 px-2 py-0.5 text-xs text-white/40">
-                        Primary
+                        {m.account_primary()}
                       </span>
                     {/if}
                   </span>
@@ -451,7 +454,7 @@
                     deleteError = null;
                   }}
                   class="ml-2 flex size-10 shrink-0 items-center justify-center rounded-xl text-white/40 transition-colors focus:bg-red-500/20 focus:text-red-400 focus:outline-none"
-                  aria-label={`Delete profile ${profile.name}`}
+                  aria-label={m.account_delete_named({ name: profile.name })}
                 >
                   <Trash2 class="size-5" />
                 </button>
@@ -476,7 +479,9 @@
 
     {:else if loadError}
       <section class="rounded-2xl border border-red-500/30 bg-red-500/10 p-6">
-        <p class="text-base text-red-300">Couldn't load your profile: {loadError}</p>
+        <p class="text-base text-red-300">
+          {m.account_load_error({ error: loadError })}
+        </p>
       </section>
 
     {:else}
@@ -492,7 +497,7 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Activity overview section"
+            aria-label={m.account_activity()}
           ></div>
           <div class="flex flex-col gap-6">
             <ActivityHero {activity} />
@@ -509,16 +514,16 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Viewing charts section"
+            aria-label={m.account_insights()}
           ></div>
           <div class="flex flex-col gap-6">
             <!-- By month (full width) -->
             <div class="rounded-2xl bg-white/5 p-6">
               <div class="mb-4 flex items-center gap-2">
                 <BarChart3 class="size-5 text-white/60" />
-                <h3 class="text-lg font-semibold">Hours by Month</h3>
+                <h3 class="text-lg font-semibold">{m.account_hours_month()}</h3>
                 {#if monthSecondary}
-                  <span class="ml-auto text-sm text-white/40">vs last year</span>
+                  <span class="ml-auto text-sm text-white/40">{m.account_vs_last_year()}</span>
                 {/if}
               </div>
               <ActivityBars items={monthItems} secondary={monthSecondary} />
@@ -527,11 +532,11 @@
             <!-- DOW + hour side by side -->
             <div class="grid gap-6 md:grid-cols-2">
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">Hours by Day of Week</h3>
+                <h3 class="mb-4 text-lg font-semibold">{m.account_hours_weekday()}</h3>
                 <ActivityBars items={dowItems} />
               </div>
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">Hours by Hour of Day</h3>
+                <h3 class="mb-4 text-lg font-semibold">{m.account_hours_day()}</h3>
                 <ActivityBars items={hourItems} compact={true} />
               </div>
             </div>
@@ -539,7 +544,7 @@
             <!-- Year over year -->
             {#if showYearChart}
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">Year over Year</h3>
+                <h3 class="mb-4 text-lg font-semibold">{m.account_year_over_year()}</h3>
                 <ActivityBars items={yearItems} />
               </div>
             {/if}
@@ -556,13 +561,13 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Library stats section"
+            aria-label={m.nav_my_list()}
           ></div>
           <div class="flex flex-col gap-6">
             <header>
-              <h2 class="text-3xl font-bold">Your Insights</h2>
+              <h2 class="text-3xl font-bold">{m.account_your_insights()}</h2>
               <p class="mt-1 text-base text-white/50">
-                Your watch history, taste profile, and what makes you unique.
+                {m.account_insights_description()}
               </p>
             </header>
 
@@ -574,13 +579,19 @@
                   <div class="mt-1 text-sm text-white/50">{label}</div>
                 </div>
               {/snippet}
-              {@render statTile(String(stats.total), "in library")}
-              {@render statTile(String(stats.by_status.finished ?? 0), "finished")}
+              {@render statTile(String(stats.total), m.account_in_library())}
+              {@render statTile(
+                String(stats.by_status.finished ?? 0),
+                m.account_finished(),
+              )}
               {@render statTile(
                 stats.rated ? stats.avg_rating.toFixed(1) : "—",
-                `avg rating (${stats.rated} rated)`,
+                m.account_avg_rating({ count: stats.rated }),
               )}
-              {@render statTile(String(stats.dismissed), "not interested")}
+              {@render statTile(
+                String(stats.dismissed),
+                m.account_not_interested(),
+              )}
             </div>
 
             <!-- Movie vs TV + Watch activity donuts -->
@@ -592,7 +603,7 @@
                     <p class="mb-4 text-sm text-white/50">{description}</p>
                   {/if}
                   {#if slices.length === 0}
-                    <p class="text-sm text-white/40">Not enough signal yet.</p>
+                    <p class="text-sm text-white/40">{m.account_not_enough_signal()}</p>
                   {:else}
                     {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
                     <div class="flex items-center gap-6">
@@ -623,14 +634,14 @@
                 </div>
               {/snippet}
               {@render donutCard(
-                "What You Enjoy Most",
+                m.account_enjoy_most(),
                 mvSlices(stats),
-                "Share of what you've finished or are watching.",
+                m.account_enjoy_description(),
               )}
               {@render donutCard(
-                "Watch Activity",
+                m.account_watch_activity(),
                 statusSlices(stats),
-                "Where your titles sit",
+                m.account_watch_activity_description(),
               )}
             </div>
           </div>
@@ -646,13 +657,13 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Titles watched this year section"
+            aria-label={m.account_titles_year()}
           ></div>
           <div class="rounded-2xl bg-white/5 p-6">
             <div class="mb-4 flex items-center gap-2">
               <Film class="size-5 text-white/60" />
-              <h3 class="text-lg font-semibold">Titles watched this year</h3>
-              <span class="ml-1 text-sm text-white/40">Your top picks by watch time</span>
+              <h3 class="text-lg font-semibold">{m.account_titles_year()}</h3>
+              <span class="ml-1 text-sm text-white/40">{m.account_top_watch_time()}</span>
             </div>
             <!-- Horizontal strip — not D-pad-navigable; scroll-stop anchor above handles scroll -->
             <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-none [&::-webkit-scrollbar]:hidden">
@@ -696,7 +707,7 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Studio footprint section"
+            aria-label={m.account_studios_most()}
           ></div>
           <StudioFootprint studios={insights!.top_studios} />
         </section>
@@ -711,14 +722,14 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Genre breakdown section"
+            aria-label={m.media_genres()}
           ></div>
           <div class="grid gap-6 md:grid-cols-2">
             {#snippet genreDonut(title: string, slices: Slice[])}
               <div class="rounded-2xl bg-white/5 p-6">
                 <h3 class="mb-4 text-lg font-semibold">{title}</h3>
                 {#if slices.length === 0}
-                  <p class="text-sm text-white/40">Not enough signal yet.</p>
+                  <p class="text-sm text-white/40">{m.account_not_enough_signal()}</p>
                 {:else}
                   {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
                   <div class="flex items-center gap-6">
@@ -746,8 +757,14 @@
                 {/if}
               </div>
             {/snippet}
-            {@render genreDonut("Top Movie Genres", genreSlices(insights.top_movie_genres))}
-            {@render genreDonut("Top TV Genres", genreSlices(insights.top_tv_genres))}
+            {@render genreDonut(
+              m.account_top_movie_genres(),
+              genreSlices(insights.top_movie_genres),
+            )}
+            {@render genreDonut(
+              m.account_top_tv_genres(),
+              genreSlices(insights.top_tv_genres),
+            )}
           </div>
         </section>
 
@@ -759,7 +776,7 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Taste signals section"
+            aria-label={m.onboarding_taste()}
           ></div>
           <TasteSignalView {insights} />
         </section>
@@ -773,12 +790,12 @@
             <div
               use:focusable
               class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-              aria-label="People section"
+              aria-label={m.search_people()}
             ></div>
             <div class="rounded-2xl bg-white/5 p-6">
               <div class="mb-6 flex items-center gap-2">
                 <Users class="size-5 text-white/60" />
-                <h3 class="text-lg font-semibold">Cast &amp; crew you gravitate to</h3>
+                <h3 class="text-lg font-semibold">{m.account_people_taste()}</h3>
               </div>
               <!--
                 grid policy: cols must match the CSS grid-template-columns count.
@@ -811,18 +828,17 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="How recommendations work section"
+            aria-label={m.account_recommendations_how()}
           ></div>
           <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-5 text-base text-white/60">
             <div class="flex items-center gap-2">
               <Info class="size-5" />
-              <h3 class="text-lg font-semibold text-white">How your recommendations are built</h3>
+              <h3 class="text-lg font-semibold text-white">{m.account_recommendations_how()}</h3>
             </div>
             <p>
-              Your profile is built from
-              <span class="font-semibold text-white">{insights.signals_used}</span>
-              titles you've actively engaged with. Each becomes a like/dislike weight,
-              which is spread across that title's genres and keywords:
+              {m.account_recommendations_intro({
+                count: insights.signals_used,
+              })}
             </p>
             <div class="grid grid-cols-2 gap-x-8 gap-y-2">
               {#each weights as wgt (wgt.label)}
@@ -832,17 +848,8 @@
                 </div>
               {/each}
             </div>
-            <p>
-              Older signals fade over time — a favorite from a year ago still counts at
-              roughly half strength, leveling off at a floor so a multi-year-old favorite
-              is never fully forgotten.
-            </p>
-            <p>
-              A single dropped or "not interested" title needs to be a much stronger signal
-              before it steers you away from an entire genre; once two or more titles agree,
-              a milder signal is enough. Rating a title below ★3 always counts as a
-              dislike, even if you finished it.
-            </p>
+            <p>{m.account_recommendations_decay()}</p>
+            <p>{m.account_recommendations_negative()}</p>
           </div>
         </section>
       {/if}
@@ -856,14 +863,13 @@
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
-            aria-label="Empty insights section"
+            aria-label={m.account_nothing_analyze()}
           ></div>
           <div class="flex flex-col items-center gap-4 rounded-2xl bg-white/5 px-10 py-20 text-center">
             <Sparkles class="size-10 text-white/30" />
-            <p class="text-2xl font-semibold">Nothing to analyze yet</p>
+            <p class="text-2xl font-semibold">{m.account_nothing_analyze()}</p>
             <p class="max-w-md text-base text-white/50">
-              Watch a few titles and your stats will start appearing here. Finish,
-              rate, or drop titles to build your taste profile.
+              {m.account_empty_description()}
             </p>
           </div>
         </section>
@@ -878,9 +884,9 @@
 <!-- ── Dialogs ──────────────────────────────────────────────────────────────── -->
 {#if deleteTarget}
   <ConfirmDialog
-    title="Delete profile?"
-    body={`"${deleteTarget.name}" and all of its watch history, library and settings will be permanently deleted. This cannot be undone.`}
-    confirmLabel="Delete"
+    title={m.account_delete_confirm()}
+    body={m.account_delete_body({ name: deleteTarget.name })}
+    confirmLabel={m.common_delete()}
     loading={deleting}
     onconfirm={confirmDelete}
     oncancel={() => {

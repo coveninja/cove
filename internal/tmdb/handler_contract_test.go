@@ -241,7 +241,7 @@ func TestSetupHandlersCatalogValidationCacheAndFetchFailure(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	}
 
-	client.catalogCacheSet(addonURL+"|movie|top|0|100", []Media{{ID: 7, Title: "Cached"}}, 100)
+	client.catalogCacheSet(client.Locale()+"|"+addonURL+"|movie|top|0|100", []Media{{ID: 7, Title: "Cached"}}, 100)
 	cached := httptest.NewRecorder()
 	cachedPath := "/api/catalog?addonId=catalog.test&catalogType=movie&catalogId=top&limit=999"
 	mux.ServeHTTP(cached, httptest.NewRequest(http.MethodGet, cachedPath, nil))

@@ -5,6 +5,7 @@
   import { X } from "lucide-svelte";
   import { fly } from "svelte/transition";
   import StreamsList from "../StreamsList.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -39,7 +40,7 @@
     size="icon"
     variant="outline"
     onclick={onClose}
-    aria-label="Close episodes"
+    aria-label={m.player_close_episodes()}
   >
     <X class="size-4" />
   </Button>

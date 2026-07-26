@@ -7,6 +7,7 @@
 
 import type { WatchProgress } from "$lib/types/library";
 import { nextAiredEpisode } from "$lib/nextEpisode";
+import * as m from "$lib/paraglide/messages.js";
 
 export interface TvWatchAction {
   label: string; // "Watch" | "Continue SxEy" | "Rewatch"
@@ -27,21 +28,28 @@ export async function resolveTvWatchAction(
     (a, b) =>
       new Date(b.watched_at).getTime() - new Date(a.watched_at).getTime(),
   )[0];
-  if (!latest) return { label: "Watch" };
+  if (!latest) return { label: m.common_watch() };
 
   const s = latest.season ?? 1;
   const e = latest.episode ?? 1;
 
   if (!latest.completed)
-    return { label: `Continue S${s}E${e}`, season: s, episode: e };
+    return {
+      label: m.media_continue_episode({ season: s, episode: e }),
+      season: s,
+      episode: e,
+    };
 
   const next = await nextAiredEpisode(id, s, e);
   if (next)
     return {
-      label: `Continue S${next.season}E${next.episode.episode_number}`,
+      label: m.media_continue_episode({
+        season: next.season,
+        episode: next.episode.episode_number,
+      }),
       season: next.season,
       episode: next.episode.episode_number,
     };
 
-  return { label: "Rewatch", season: 1, episode: 1 };
+  return { label: m.media_rewatch(), season: 1, episode: 1 };
 }

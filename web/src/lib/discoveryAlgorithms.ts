@@ -2,6 +2,7 @@
 //
 // Metadata for the discovery-algorithm picker in Settings. The actual ranking
 // logic lives server-side (internal/discover); this just drives the Select UI.
+import * as m from "$lib/paraglide/messages.js";
 
 export type DiscoveryAlgorithm = "smart" | "popularity" | "custom";
 
@@ -12,20 +13,17 @@ export const DISCOVERY_ALGORITHMS: {
 }[] = [
   {
     value: "smart",
-    label: "Cove Smart",
-    description:
-      "Personalized picks based on your taste profile — genres, keywords, cast/crew, and how recently you watched things.",
+    label: m.discovery_smart(),
+    description: m.discovery_smart_description(),
   },
   {
     value: "popularity",
-    label: "Popularity",
-    description:
-      "Simple trending-first picks with no personalization. Fast and predictable.",
+    label: m.discovery_popularity(),
+    description: m.discovery_popularity_description(),
   },
   {
     value: "custom",
-    label: "Custom (advanced)",
-    description:
-      "Send your taste profile and candidate list to your own HTTP endpoint for scoring.",
+    label: m.discovery_custom(),
+    description: m.discovery_custom_description(),
   },
 ];

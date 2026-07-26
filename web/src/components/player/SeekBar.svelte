@@ -2,6 +2,7 @@
   import { Player } from "$lib/player/player.svelte";
   import { fade } from "svelte/transition";
   import { segmentBgClass, type ChapterBar } from "$lib/player/chapters";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     chapterBars,
@@ -62,7 +63,7 @@
 <!-- Seek bar (full width, custom — no third-party slider) -->
 <div
   role="slider"
-  aria-label="Seek"
+  aria-label={m.player_seek_seconds()}
   aria-valuemin={0}
   aria-valuemax={Player.duration || 0}
   aria-valuenow={displayPos}

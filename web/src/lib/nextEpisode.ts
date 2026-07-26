@@ -6,7 +6,10 @@
 // (F6) so autoplay/roll-forward agree on exactly the same episode.
 
 import { api } from "$lib/api";
+import type { WatchProgress } from "$lib/types/library";
 import type { TVEpisode } from "$lib/types/tmdb";
+
+type FetchSeason = (id: number, season: number) => Promise<TVEpisode[]>;
 
 /** True if ep has aired as of today (local date, midnight-truncated). Plain
  * Date is fine here — this is a one-shot computation, not template-bound
@@ -48,10 +51,7 @@ export async function nextAiredEpisode(
   id: number,
   season: number,
   episode: number,
-  fetchSeason: (
-    id: number,
-    season: number,
-  ) => Promise<TVEpisode[]> = defaultFetchSeason,
+  fetchSeason: FetchSeason = defaultFetchSeason,
 ): Promise<{ season: number; episode: TVEpisode } | null> {
   const same = await fetchSeason(id, season);
   // Prefer the lowest numbered later episode instead of requiring an exact
@@ -68,5 +68,67 @@ export async function nextAiredEpisode(
     .filter((e) => e.episode_number >= 1)
     .toSorted((a, b) => a.episode_number - b.episode_number)[0];
   if (first) return hasAired(first) ? { season: season + 1, episode: first } : null;
+  return null;
+}
+
+/**
+ * Continue Watching's completed-aware roll-forward. Unlike nextAiredEpisode,
+ * this skips aired episodes that already have completed progress records.
+ * It scans through the furthest completed season plus one so stale or tied
+ * watched_at timestamps cannot offer an already-watched episode as "Up Next".
+ */
+export async function nextUnwatchedAiredEpisode(
+  id: number,
+  season: number,
+  episode: number,
+  progress: WatchProgress[],
+  fetchSeason: FetchSeason = defaultFetchSeason,
+): Promise<{ season: number; episode: TVEpisode } | null> {
+  const completed = new Set<string>();
+  let lastSeason = season + 1;
+
+  for (const item of progress) {
+    if (
+      !item.completed ||
+      item.tmdb_id !== id ||
+      item.media_type !== "tv" ||
+      item.season == null ||
+      item.episode == null ||
+      item.season <= 0 ||
+      item.episode <= 0
+    ) {
+      continue;
+    }
+    completed.add(`${item.season}:${item.episode}`);
+    if (item.season >= season) {
+      lastSeason = Math.max(lastSeason, item.season + 1);
+    }
+  }
+
+  // Defensive cap for malformed synced progress. Real shows stay far below
+  // this, while a bogus season number must not trigger hundreds of requests.
+  lastSeason = Math.min(lastSeason, season + 99);
+
+  for (
+    let candidateSeason = season;
+    candidateSeason <= lastSeason;
+    candidateSeason++
+  ) {
+    const afterEpisode = candidateSeason === season ? episode : 0;
+    const candidates = (await fetchSeason(id, candidateSeason))
+      .filter((item) => item.episode_number > afterEpisode)
+      .toSorted((a, b) => a.episode_number - b.episode_number);
+
+    for (const candidate of candidates) {
+      // Episode numbers are chronological within a season. If the earliest
+      // remaining one has not aired, the show is caught up for this row.
+      if (!hasAired(candidate)) return null;
+      if (completed.has(`${candidateSeason}:${candidate.episode_number}`)) {
+        continue;
+      }
+      return { season: candidateSeason, episode: candidate };
+    }
+  }
+
   return null;
 }

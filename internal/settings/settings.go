@@ -47,8 +47,9 @@ type Settings struct {
 	SubtitleBackground  bool    `json:"subtitleBackground"`  // dark box behind subtitle text
 
 	// UI
-	ShowStreamDetails bool `json:"showStreamDetails"` // show codec/resolution badges on stream list
-	HideSpoilers      bool `json:"hideSpoilers"`
+	UILanguage        string `json:"uiLanguage"`        // "" until first frontend boot, then a supported AppLocale
+	ShowStreamDetails bool   `json:"showStreamDetails"` // show codec/resolution badges on stream list
+	HideSpoilers      bool   `json:"hideSpoilers"`
 
 	// Segment skip (via IntroDB)
 	AutoSkipIntro   bool `json:"autoSkipIntro"`
@@ -146,6 +147,7 @@ var defaultSettings = Settings{
 	SubtitleSize:          100,
 	SubtitlePosition:      8,
 	SubtitleBackground:    true,
+	UILanguage:            "",
 	ShowStreamDetails:     true,
 	HideSpoilers:          false,
 	AutoSkipIntro:         false,

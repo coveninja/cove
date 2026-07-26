@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { Media } from "$lib/types/tmdb";
   import type { Person, PersonDetails } from "$lib/api";
   import { api } from "$lib/api";
@@ -110,7 +111,7 @@
         <button
           class="absolute top-3 right-3 z-20 flex size-9 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
           onclick={close}
-          aria-label="Close"
+          aria-label={m.common_close()}
         >
           <X class="size-5" />
         </button>
@@ -190,13 +191,13 @@
               {/each}
             </div>
           {:else if loading}
-            <p class="animate-pulse text-sm text-muted-foreground">Loading…</p>
+            <p class="animate-pulse text-sm text-muted-foreground">{m.common_loading()}</p>
           {/if}
 
           {#if credits.length}
             <div class="space-y-3">
               <Separator />
-              <h3 class="text-base font-semibold">Known for</h3>
+              <h3 class="text-base font-semibold">{m.media_known_for()}</h3>
               <div class="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
                 {#each credits as item (item.media_type + "-" + item.id)}
                   <div

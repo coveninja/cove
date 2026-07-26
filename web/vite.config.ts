@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import tailwindcss from "@tailwindcss/vite";
 import { vite as vidstack } from "vidstack/plugins";
+import { paraglideVitePlugin } from "@inlang/paraglide-js";
 import path from "path";
 
 // The production CSP (in index.html) locks connect-src down to the Go
@@ -27,7 +28,18 @@ function stripCspInDev(): Plugin {
 // built `dist/` over its StaticServer and loads it in QtWebEngine; the Go
 // backend is spawned separately by the shell. Nothing Electron remains.
 export default defineConfig({
-  plugins: [vidstack(), tailwindcss(), svelte(), stripCspInDev()],
+  plugins: [
+    paraglideVitePlugin({
+      project: "./project.inlang",
+      outdir: "./src/lib/paraglide",
+      emitTsDeclarations: true,
+      strategy: ["globalVariable", "baseLocale"],
+    }),
+    vidstack(),
+    tailwindcss(),
+    svelte(),
+    stripCspInDev(),
+  ],
   resolve: {
     alias: {
       $lib: path.resolve(__dirname, "./src/lib"),

@@ -3,6 +3,7 @@
   import { api } from "$lib/api";
   import MobileMediaCard from "../components/MobileMediaCard.svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     addonId,
@@ -91,7 +92,7 @@
 >
   <!-- Compact title header -->
   <div class="shrink-0 px-4 pb-3">
-    <h1 class="text-xl font-semibold">{name || "Catalog"}</h1>
+    <h1 class="text-xl font-semibold">{name || m.common_catalog()}</h1>
   </div>
 
   <!-- Scrollable grid -->
@@ -126,7 +127,7 @@
               onclick={() => loadPage(nextSkip)}
               disabled={loading}
             >
-              {loading ? "Loading…" : "Load more"}
+              {loading ? m.common_loading() : m.common_load_more()}
             </button>
           </div>
         {/if}

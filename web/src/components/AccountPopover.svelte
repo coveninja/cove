@@ -17,6 +17,7 @@
   import AuthDialog from "./AuthDialog.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import type { Page } from "$lib/types/types";
+  import * as m from "$lib/paraglide/messages.js";
 
   let { onSelectPage = () => {} }: { onSelectPage?: (p: Page) => void } =
     $props();
@@ -86,7 +87,7 @@
 <Popover.Root bind:open>
   <Popover.Trigger>
     {#snippet child({ props })}
-      <Button variant="outline" size="icon" aria-label="Account" {...props}>
+      <Button variant="outline" size="icon" aria-label={m.nav_account()} {...props}>
         {#if auth.session}
           <span
             class="flex size-full items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground"
@@ -104,7 +105,7 @@
     <div class="flex flex-col">
       <!-- Profile list -->
       <div class="px-3 py-2">
-        <p class="pb-1 text-xs font-medium text-muted-foreground">Profiles</p>
+        <p class="pb-1 text-xs font-medium text-muted-foreground">{m.account_profiles()}</p>
         {#each auth.profiles as profile (profile.id)}
           <button
             type="button"
@@ -131,7 +132,7 @@
             <!-- svelte-ignore a11y_autofocus -->
             <input
               type="text"
-              placeholder="Profile name"
+              placeholder={m.account_profile_name()}
               class="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               bind:value={newProfileName}
               onkeydown={(e) => {
@@ -159,7 +160,7 @@
             class="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             onclick={() => (showNewProfileInput = true)}
           >
-            <Plus class="size-3.5" /> New profile
+            <Plus class="size-3.5" /> {m.account_new_profile()}
           </button>
         {/if}
       </div>
@@ -175,7 +176,7 @@
             open = false;
           }}
         >
-          <Settings class="size-3.5" /> Manage account &amp; insights
+          <Settings class="size-3.5" /> {m.account_manage_insights()}
         </button>
       </div>
 
@@ -183,7 +184,7 @@
 
       <!-- Account section -->
       <div class="px-3 py-2">
-        <p class="pb-1 text-xs font-medium text-muted-foreground">Account</p>
+        <p class="pb-1 text-xs font-medium text-muted-foreground">{m.nav_account()}</p>
         {#if auth.session}
           <p class="mb-2 truncate text-xs text-muted-foreground">
             {auth.session.email}
@@ -199,7 +200,7 @@
               {#if syncing}<Spinner class="size-3" />{:else}<RefreshCw
                   class="size-3"
                 />{/if}
-              Sync now
+              {m.account_sync()}
             </Button>
             <Button
               variant="ghost"
@@ -207,12 +208,12 @@
               class="gap-1 text-xs text-muted-foreground"
               onclick={logout}
             >
-              <LogOut class="size-3" /> Sign out
+              <LogOut class="size-3" /> {m.common_sign_out()}
             </Button>
           </div>
         {:else}
           <p class="mb-2 text-xs text-muted-foreground">
-            Guest — data is local only
+            {m.account_guest_local()}
           </p>
           <Button
             variant="default"
@@ -223,7 +224,7 @@
               authOpen = true;
             }}
           >
-            <LogIn class="size-3" /> Sign in / Create account
+            <LogIn class="size-3" /> {m.onboarding_sign_in()}
           </Button>
         {/if}
       </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { Media } from "$lib/types/tmdb";
   import MediaCard from "./MediaCard.svelte";
   import { ChevronLeft, ChevronRight } from "lucide-svelte";
@@ -52,7 +53,7 @@
             onclick={onSeeAll}
             class="text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            See all →
+            {m.common_see_all()}
           </button>
         {/if}
       </div>
@@ -63,7 +64,7 @@
         onclick={() => scrollByCards(-1)}
         variant="outline"
         size="icon"
-        aria-label="Scroll left"
+        aria-label={m.common_scroll_left()}
       >
         <ChevronLeft class="size-4" />
       </Button>
@@ -97,7 +98,7 @@
         onclick={() => scrollByCards(1)}
         variant="outline"
         size="icon"
-        aria-label="Scroll right"
+        aria-label={m.common_scroll_right()}
       >
         <ChevronRight class="size-4" />
       </Button>

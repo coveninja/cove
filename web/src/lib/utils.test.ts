@@ -38,6 +38,9 @@ function stream(name: string, title = ""): Stream {
 
 function details(overrides: Partial<Details> = {}): Details {
   return {
+    title: "",
+    name: "",
+    poster_path: "",
     overview: "",
     genres: [],
     runtime: 0,
@@ -50,6 +53,7 @@ function details(overrides: Partial<Details> = {}): Details {
     origin_country: [],
     production_companies: [],
     networks: [],
+    status: "",
     number_of_seasons: 0,
     number_of_episodes: 0,
     seasons: [],
@@ -223,7 +227,7 @@ describe("shared UI utilities", () => {
     expect(formatRating(details())).toBe("");
   });
 
-  it("filters images, permits language-neutral art, and falls back safely", () => {
+  it("filters images, prefers an exact language, and falls back safely", () => {
     const fallback = image("fallback", { iso_639_1: "fr", width: 500 });
     const neutral = image("neutral", {
       iso_639_1: null as unknown as string,
@@ -240,10 +244,46 @@ describe("shared UI utilities", () => {
         voteAverage: 5,
         voteCount: 5,
       }),
+    ).toBe("matching");
+    expect(
+      getImageOpt(set, "backdrops", {
+        iso: "tr",
+        minWidth: 1500,
+      }),
     ).toBe("neutral");
     expect(getImageOpt(set, "backdrops", { height: 999 })).toBe("fallback");
     expect(getImageOpt(undefined, "backdrops")).toBe("");
     expect(getImageOpt(images(), "backdrops")).toBe("");
+  });
+
+  it("uses localized poster language priority before rating", () => {
+    const turkish = image("turkish", {
+      iso_639_1: "tr",
+      vote_average: 0,
+      vote_count: 0,
+    });
+    const english = image("english");
+    // Go decodes TMDB's null iso_639_1 into the string field's zero value.
+    const neutral = image("neutral", { iso_639_1: "" });
+
+    expect(
+      getImageOpt(images([], [], [english, neutral, turkish]), "posters", {
+        iso: "tr",
+        isoFallbacks: ["en", null],
+      }),
+    ).toBe("turkish");
+    expect(
+      getImageOpt(images([], [], [neutral, english]), "posters", {
+        iso: "tr",
+        isoFallbacks: ["en", null],
+      }),
+    ).toBe("english");
+    expect(
+      getImageOpt(images([], [], [neutral]), "posters", {
+        iso: "tr",
+        isoFallbacks: ["en", null],
+      }),
+    ).toBe("neutral");
   });
 
   it("can choose a deterministic random matching image", () => {

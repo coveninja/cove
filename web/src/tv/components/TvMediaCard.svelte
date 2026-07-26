@@ -7,6 +7,7 @@
   import { libraryChanged } from "$lib/stores/library";
   import type { LibraryEntry } from "$lib/types/library";
   import { focusable } from "../focus/actions";
+  import { activeLocale } from "$lib/i18n";
 
   let {
     media,
@@ -42,6 +43,8 @@
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
+  const posterLocale = activeLocale();
+  const posterLocaleFallbacks = posterLocale === "en" ? [null] : ["en", null];
 
   // ── Library state ─────────────────────────────────────────────────────────
   $effect(() => {
@@ -119,8 +122,8 @@
     {#if logoLoaded && images && images.posters.length > 0}
       <img
         src={getImageOpt(images, "posters", {
-          iso: "en",
-          voteAverage: 5,
+          iso: posterLocale,
+          isoFallbacks: posterLocaleFallbacks,
           randomize: true,
         })}
         alt={title}
@@ -149,4 +152,3 @@
     {/if}
   </div>
 </div>
-

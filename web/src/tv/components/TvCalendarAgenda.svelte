@@ -11,6 +11,7 @@
     ChevronUp,
   } from "lucide-svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
+  import * as m from "$lib/paraglide/messages.js";
   import {
     groupByDay,
     calendarSummary,
@@ -210,7 +211,7 @@
         class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-[transform,filter] duration-150 focus:scale-[1.02] focus:brightness-[1.15] focus:outline-none"
       >
         <CalendarDays class="size-5 shrink-0 text-muted-foreground" />
-        <span class="flex-1 text-base font-semibold">Calendar</span>
+        <span class="flex-1 text-base font-semibold">{m.calendar_calendar()}</span>
         {#if expanded}
           <ChevronUp class="size-5 shrink-0 text-muted-foreground" />
         {:else}
@@ -414,7 +415,10 @@
                           <span
                             class="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[10px] font-medium leading-none text-white"
                           >
-                            S{item.season_number}E{item.episode_number}
+                            {m.common_season_episode({
+                              season: item.season_number,
+                              episode: item.episode_number,
+                            })}
                           </span>
                         {/if}
                       </div>
@@ -428,10 +432,14 @@
                           {#if item.media_type === "tv" && item.episode_name}
                             {item.episode_name}{#if item.kind === "available" && item.waiting_count > 1}&nbsp;<span
                                 class="font-medium text-accent-foreground"
-                                >+{item.waiting_count - 1} more</span
+                                >{m.common_more_count({
+                                  count: item.waiting_count - 1,
+                                })}</span
                               >{/if}
                           {:else if item.media_type === "tv" && item.season_number != null}
-                            Season {item.season_number}
+                            {m.common_season_number({
+                              season: item.season_number,
+                            })}
                           {:else}
                             &nbsp;
                           {/if}
@@ -443,11 +451,11 @@
                         <span
                           class="shrink-0 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-accent-foreground"
                         >
-                          Watch
+                          {m.common_watch()}
                         </span>
                       {:else if item.kind === "movie"}
                         <span class="shrink-0 text-sm text-muted-foreground"
-                          >release</span
+                          >{m.common_release()}</span
                         >
                       {/if}
                     </button>
@@ -481,7 +489,7 @@
               class="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-border/50 py-3 text-sm text-muted-foreground transition-colors focus:bg-secondary focus:text-foreground focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-background"
             >
               <ChevronDown class="size-5" />
-              Show {hiddenDayCount} more day{hiddenDayCount !== 1 ? "s" : ""}
+              {m.common_show_more_days({ count: hiddenDayCount })}
             </button>
           </div>
         {/if}

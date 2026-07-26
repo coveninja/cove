@@ -22,6 +22,7 @@
 <script lang="ts">
   import { Play, Film, Tv } from "lucide-svelte";
   import { formatPosition } from "$lib/api";
+  import * as m from "$lib/paraglide/messages.js";
 
   let { item, onResume } = $props<{
     item: ContinueItem;
@@ -47,7 +48,9 @@
   onclick={() => onResume(item)}
   class="group flex w-70 shrink-0 flex-col gap-2 rounded-2xl text-left"
   style="scroll-snap-align: start;"
-  aria-label={item.upNext ? `Play ${item.title}` : `Resume ${item.title}`}
+  aria-label={item.upNext
+    ? m.common_play_title({ title: item.title })
+    : m.common_resume_title({ title: item.title })}
 >
   <span class="relative block overflow-hidden rounded-md">
     {#if item.image}

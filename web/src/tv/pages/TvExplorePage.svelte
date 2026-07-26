@@ -1,5 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import * as m from "$lib/paraglide/messages.js";
+  import { activeLocale } from "$lib/i18n";
   import type { Media, MediaImages } from "$lib/types/tmdb";
   import { api } from "$lib/api";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
@@ -25,7 +27,7 @@
   // Featured row: top panel shows popular or selected-genre medias.
   let featuredRow = $state<Row>({
     key: "featured",
-    header: "Popular movies",
+    header: m.home_popular_movies(),
     medias: [],
     loading: false,
   });
@@ -58,7 +60,7 @@
     api.getImages(media).then((d: MediaImages) => {
       if (featuredMedia?.id !== id) return;
       featuredBackdrop = getImageOpt(d, "backdrops", { iso: "" });
-      featuredLogo = getImageOpt(d, "logos", { iso: "en" });
+      featuredLogo = getImageOpt(d, "logos", { iso: activeLocale() });
     });
 
     api
@@ -81,11 +83,11 @@
     const genre = genreId !== null ? genreList.find((g) => g.id === genreId) : null;
     const header = genre
       ? type === "movie"
-        ? `${genre.name} movies`
-        : `${genre.name} shows`
+        ? m.explore_genre_movies({ genre: genre.name })
+        : m.explore_genre_shows({ genre: genre.name })
       : type === "movie"
-        ? "Popular movies"
-        : "Popular shows";
+        ? m.home_popular_movies()
+        : m.explore_popular_shows();
 
     untrack(() => {
       featuredRow = { key: "featured", header, medias: [], loading: true };
@@ -120,7 +122,10 @@
 
         genreRows = list.slice(0, 8).map((g) => ({
           key: `genre-${g.id}`,
-          header: type === "movie" ? `${g.name} movies` : `${g.name} shows`,
+          header:
+            type === "movie"
+              ? m.explore_genre_movies({ genre: g.name })
+              : m.explore_genre_shows({ genre: g.name }),
           medias: [] as Media[],
           loading: true,
         }));
@@ -165,7 +170,7 @@
     focusable button rows — simpler and more remote-friendly.
   -->
   <div class="shrink-0 bg-card rounded-2xl px-4 py-2">
-    <h1 class="ml-4 text-2xl font-bold">Explore</h1>
+    <h1 class="ml-4 text-2xl font-bold">{m.explore_title()}</h1>
 
     <!--
       Single filter row (one D-pad vertical stop):
@@ -177,7 +182,7 @@
       class="flex gap-2 overflow-x-hidden p-4"
     >
       <!-- Type toggle -->
-      {#each [["movie", "Movies"], ["tv", "TV Shows"]] as [val, label] (val)}
+      {#each [["movie", m.explore_movies()], ["tv", m.explore_tv()]] as [val, label] (val)}
         <button
           type="button"
           use:focusable={{ groupId: "explore-filters" }}
@@ -202,7 +207,7 @@
           null
             ? 'bg-foreground text-background'
             : 'bg-secondary text-muted-foreground'}"
-        >All</button>
+        >{m.my_list_all()}</button>
         {#each genres as genre (genre.id)}
           <button
             type="button"
@@ -272,7 +277,7 @@
                 onclick={watchFeatured}
               >
                 <Play class="size-5 fill-current" />
-                Watch
+                {m.common_watch()}
               </button>
               <button
                 type="button"
@@ -281,7 +286,7 @@
                 onclick={() => featuredMedia && openDetail?.(featuredMedia)}
               >
                 <Info class="size-5" />
-                Details
+                {m.media_details()}
               </button>
             </div>
           {/if}

@@ -8,6 +8,7 @@
   import { api } from "$lib/api";
   import { epKey, epProgress, progressPct } from "$lib/utils";
   import { imageFade } from "../../lib/imageFade";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -205,7 +206,7 @@
   onkeydown={() => {}}
   role="dialog"
   tabindex={-1}
-  aria-label="Episodes"
+  aria-label={m.player_episodes()}
 >
   <!-- Drag handle pill -->
   <div class="flex shrink-0 justify-center pb-1 pt-3">
@@ -213,7 +214,7 @@
   </div>
 
   <!-- Sheet title -->
-  <p class="shrink-0 px-5 pb-1 pt-3 text-base font-semibold">Episodes</p>
+  <p class="shrink-0 px-5 pb-1 pt-3 text-base font-semibold">{m.player_episodes()}</p>
 
   <!-- Season chip strip (only when more than one season) -->
   {#if seasons.length > 1}
@@ -228,7 +229,8 @@
               : 'bg-white/10 text-white/70'}"
             onclick={() => (selectedSeason = s.season_number)}
           >
-            {s.name || `Season ${s.season_number}`}
+            {s.name ||
+              m.common_season_number({ season: s.season_number })}
           </button>
         {/each}
       </div>
@@ -272,7 +274,7 @@
             {#if ep.still_path}
               <img
                 src={ep.still_path}
-                alt="Episode {ep.episode_number}"
+                alt={m.common_episode_number({ episode: ep.episode_number })}
                 class="aspect-video w-full rounded-md object-cover bg-muted"
                 use:imageFade
               />
@@ -297,7 +299,7 @@
                   ? 'text-accent'
                   : ''}"
               >
-                E{ep.episode_number} · {ep.name}
+                {m.common_episode_short({ episode: ep.episode_number })} · {ep.name}
               </span>
               {#if completed}
                 <CircleCheckBig class="size-4 shrink-0 text-accent" />
@@ -305,8 +307,8 @@
             </span>
             <span class="block text-xs leading-snug text-white/50">
               {#if isCurrent}
-                <span class="font-medium text-accent/80">Now playing</span>{#if ep.air_date || ep.runtime} · {/if}
-              {/if}{#if ep.air_date}{formatAirDate(ep.air_date)}{/if}{#if ep.air_date && ep.runtime} · {/if}{#if ep.runtime}{ep.runtime}m{/if}
+                <span class="font-medium text-accent/80">{m.player_now_playing()}</span>{#if ep.air_date || ep.runtime} · {/if}
+              {/if}{#if ep.air_date}{formatAirDate(ep.air_date)}{/if}{#if ep.air_date && ep.runtime} · {/if}{#if ep.runtime}{m.common_minutes_short({ minutes: ep.runtime })}{/if}
             </span>
           </span>
         </button>

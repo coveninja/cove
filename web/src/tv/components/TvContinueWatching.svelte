@@ -27,11 +27,12 @@
   import { libraryChanged } from "$lib/stores/library";
   import { mediaFromEntry } from "$lib/mediaFromEntry";
   import { SvelteMap } from "svelte/reactivity";
-  import { nextAiredEpisode as nextAiredEpisodeShared } from "$lib/nextEpisode";
+  import { nextUnwatchedAiredEpisode as nextUnwatchedAiredEpisodeShared } from "$lib/nextEpisode";
   // ── TV focus engine ──────────────────────────────────────────────────────────
   import { focusGroup, focusable } from "../focus/actions";
   // ── Icons for fallback artwork ───────────────────────────────────────────────
   import { Play, Film, Tv } from "lucide-svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     onWatch,
@@ -71,12 +72,19 @@
     return eps.find((e) => e.episode_number === episode)?.still_path ?? "";
   }
 
-  function nextAiredEpisode(
+  function nextUnwatchedAiredEpisode(
     id: number,
     season: number,
     episode: number,
+    progress: WatchProgress[],
   ): Promise<{ season: number; episode: TVEpisode } | null> {
-    return nextAiredEpisodeShared(id, season, episode, fetchSeason);
+    return nextUnwatchedAiredEpisodeShared(
+      id,
+      season,
+      episode,
+      progress,
+      fetchSeason,
+    );
   }
 
   function latestProgress(progress: WatchProgress[]): WatchProgress | null {
@@ -159,7 +167,7 @@
       };
     }
 
-    const next = await nextAiredEpisode(entry.tmdb_id, s, e);
+    const next = await nextUnwatchedAiredEpisode(entry.tmdb_id, s, e, progress);
     if (!next) return null;
     return {
       key,
@@ -236,7 +244,7 @@
       convention so D-pad Left/Right doesn't land on text.
     -->
     <div class="flex items-center">
-      <h2 class="text-xl font-semibold">Continue Watching</h2>
+      <h2 class="text-xl font-semibold">{m.home_continue_watching()}</h2>
     </div>
 
     <!--
@@ -274,7 +282,9 @@
             role="button"
             tabindex="-1"
             class="relative w-70 shrink-0 cursor-pointer overflow-hidden rounded-md transition-[transform,filter,scale] duration-150 ease-[ease] focus:scale-[1.08] focus:brightness-[1.15]"
-            aria-label={item.upNext ? `Play ${item.title}` : `Resume ${item.title}`}
+            aria-label={item.upNext
+              ? m.common_play_title({ title: item.title })
+              : m.common_resume_title({ title: item.title })}
           >
             <!-- Artwork: episode still (TV) or poster (movie / fallback) -->
             {#if item.image}

@@ -21,12 +21,76 @@ const secondary: Profile = {
   name_updated_at: "2026-01-01T00:00:00Z",
 };
 
+function searchTitle(id: number, type: "movie" | "tv", popularity: number) {
+  return {
+    id,
+    title: type === "movie" ? `Movie ${id}` : "",
+    name: type === "tv" ? `TV ${id}` : "",
+    overview: "",
+    release_date: "",
+    first_air_date: "",
+    poster_path: `https://images.test/${type}-${id}.jpg`,
+    vote_average: popularity / 10,
+    media_type: type,
+    trailer_url: "",
+    clip_urls: "",
+    images: [],
+    popularity,
+  };
+}
+
+const unifiedSearchResults = {
+  movies: [
+    searchTitle(101, "movie", 10),
+    searchTitle(102, "movie", 80),
+    searchTitle(103, "movie", 30),
+    searchTitle(104, "movie", 60),
+  ],
+  tv: [
+    searchTitle(201, "tv", 20),
+    searchTitle(202, "tv", 70),
+    searchTitle(203, "tv", 40),
+    searchTitle(204, "tv", 50),
+  ],
+  people: [
+    {
+      id: 301,
+      name: "Search Person",
+      profile_path: "",
+      known_for_department: "Acting",
+      popularity: 10,
+      known_for: [],
+    },
+  ],
+  providers: [
+    {
+      provider_id: 401,
+      provider_name: "Search Provider",
+      logo_path: "",
+      display_priority: 1,
+    },
+  ],
+  title_order: [
+    "tv:201",
+    "movie:101",
+    "tv:202",
+    "movie:102",
+    "tv:203",
+    "movie:103",
+    "tv:204",
+    "movie:104",
+  ],
+};
+
 async function mockBackend(
   page: Page,
   options: {
     savedSession?: boolean;
     profiles?: Profile[];
     syncPushError?: string;
+    onboardingDone?: boolean;
+    uiLanguage?: string;
+    settingsUpdates?: Array<Record<string, unknown>>;
   } = {},
 ): Promise<void> {
   const profiles = (options.profiles ?? [primary]).map((profile) => ({
@@ -60,7 +124,18 @@ async function mockBackend(
       return;
     }
     if (path === "/api/settings") {
-      await route.fulfill({ json: { onboardingDone: true } });
+      if (request.method() === "PUT") {
+        const update = request.postDataJSON() as Record<string, unknown>;
+        options.settingsUpdates?.push(update);
+        await route.fulfill({ json: update });
+      } else {
+        await route.fulfill({
+          json: {
+            onboardingDone: options.onboardingDone ?? true,
+            uiLanguage: options.uiLanguage ?? "en",
+          },
+        });
+      }
       return;
     }
     if (path === "/api/update/check") {
@@ -127,9 +202,61 @@ async function mockBackend(
       await route.fulfill({ json: { movie_share: 0, tv_share: 0 } });
       return;
     }
+    if (path === "/api/search/multi") {
+      await route.fulfill({ json: unifiedSearchResults });
+      return;
+    }
+    if (path === "/api/keywords") {
+      await route.fulfill({
+        json: [
+          { id: 501, name: "Time Travel" },
+          { id: 502, name: "Science Fiction" },
+        ],
+      });
+      return;
+    }
+    if (path === "/api/images") {
+      await route.fulfill({
+        json: { backdrops: [], logos: [], posters: [] },
+      });
+      return;
+    }
+    if (path === "/api/quality/batch") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body: "",
+      });
+      return;
+    }
 
     await route.fulfill({ status: 404, body: "" });
   });
+}
+
+async function expectCategorizedSearchOrder(page: Page): Promise<void> {
+  const sections = page.locator("[data-search-section]:visible");
+  await expect(sections).toHaveCount(5);
+  expect(
+    await sections.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-search-section")),
+    ),
+  ).toEqual(["top-results", "people", "providers", "movies", "tv"]);
+}
+
+async function fillSearch(page: Page, mode: "desktop" | "mobile" | "tv") {
+  if (mode === "desktop") {
+    const input = page.getByRole("searchbox");
+    await page.getByRole("search").hover();
+    await expect(input).toBeEnabled();
+    await input.fill("unified");
+  } else {
+    await page.getByLabel("Search", { exact: true }).click();
+    await page.getByRole("searchbox").fill("unified");
+  }
+  await expect(
+    page.getByRole("heading", { name: "Top Results", exact: true }),
+  ).toBeVisible();
 }
 
 test("desktop shell boots with an unavailable optional backend", async ({
@@ -145,6 +272,138 @@ test("desktop shell boots with an unavailable optional backend", async ({
   await expect(page.getByLabel("Account")).toBeVisible({ timeout: 30_000 });
   expect(errors).toEqual([]);
 });
+
+test("onboarding chooses the UI language immediately after welcome", async ({
+  page,
+}) => {
+  const settingsUpdates: Array<Record<string, unknown>> = [];
+  await mockBackend(page, {
+    onboardingDone: false,
+    uiLanguage: "en",
+    settingsUpdates,
+  });
+
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Welcome to Cove", exact: true }),
+  ).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Get started", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Choose Your Language", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Türkçe", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Dilinizi Seçin", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "İleri", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Hesabınız", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() => settingsUpdates.some((update) => update.uiLanguage === "tr"))
+    .toBe(true);
+});
+
+test("onboarding can switch the interface to Portuguese", async ({ page }) => {
+  const settingsUpdates: Array<Record<string, unknown>> = [];
+  await mockBackend(page, {
+    onboardingDone: false,
+    uiLanguage: "en",
+    settingsUpdates,
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Get started", exact: true }).click();
+  await page.getByRole("button", { name: "Português", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Escolha seu idioma", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Próximo", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Sua conta", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() => settingsUpdates.some((update) => update.uiLanguage === "pt"))
+    .toBe(true);
+});
+
+for (const language of [
+  {
+    locale: "es",
+    nativeName: "Español",
+    languageHeading: "Elige tu idioma",
+    next: "Siguiente",
+    accountHeading: "Tu cuenta",
+  },
+  {
+    locale: "it",
+    nativeName: "Italiano",
+    languageHeading: "Scegli la tua lingua",
+    next: "Avanti",
+    accountHeading: "Il tuo account",
+  },
+  {
+    locale: "de",
+    nativeName: "Deutsch",
+    languageHeading: "Wähle deine Sprache",
+    next: "Weiter",
+    accountHeading: "Dein Konto",
+  },
+  {
+    locale: "ja",
+    nativeName: "日本語",
+    languageHeading: "言語を選択",
+    next: "次へ",
+    accountHeading: "アカウント",
+  },
+]) {
+  test(`onboarding can switch the interface to ${language.nativeName}`, async ({
+    page,
+  }) => {
+    const settingsUpdates: Array<Record<string, unknown>> = [];
+    await mockBackend(page, {
+      onboardingDone: false,
+      uiLanguage: "en",
+      settingsUpdates,
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Get started", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: language.nativeName, exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: language.languageHeading,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: language.next, exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: language.accountHeading,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        settingsUpdates.some((update) => update.uiLanguage === language.locale),
+      )
+      .toBe(true);
+  });
+}
 
 test("a guest can sign in and persist the client session", async ({ page }) => {
   await mockBackend(page);
@@ -246,6 +505,52 @@ test("My Account uses explicit profile actions and supports renaming", async ({
   expect(activationRequests).toBe(1);
 });
 
+test("account, popover, and insights follow the selected UI language", async ({
+  page,
+}) => {
+  await mockBackend(page, {
+    savedSession: true,
+    uiLanguage: "tr",
+  });
+  await page.goto("/");
+
+  await page.getByLabel("Hesap", { exact: true }).click();
+  await expect(
+    page.getByRole("button", {
+      name: "Hesabı ve içgörüleri yönet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Şimdi eşitle", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Oturumu kapat", exact: true }),
+  ).toBeVisible();
+
+  await page
+    .getByRole("button", {
+      name: "Hesabı ve içgörüleri yönet",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Hesabım", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Hesabınızı, profillerinizi ve izleme içgörülerinizi yönetin.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "İzleme geçmişiniz, zevk profiliniz ve sizi benzersiz kılan özellikler.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+});
+
 test("a restored session surfaces a deduplicated sync push error", async ({
   page,
 }) => {
@@ -259,4 +564,135 @@ test("a restored session surfaces a deduplicated sync push error", async ({
   await expect(
     page.getByText("Sync issue: some data failed to upload"),
   ).toBeVisible({ timeout: 30_000 });
+});
+
+test("desktop search leads with six unified results and keeps full categories", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await page.goto("/");
+  await fillSearch(page, "desktop");
+
+  await expectCategorizedSearchOrder(page);
+  const grid = page.locator(
+    '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
+  );
+  await expect(grid).toHaveClass(/xl:grid-cols-6/);
+  await expect(grid.locator(":scope > *")).toHaveCount(6);
+  const posters = grid.locator("img");
+  await expect(posters).toHaveCount(6);
+  expect(
+    await posters.evaluateAll((images) => images.map((image) => image.alt)),
+  ).toEqual([
+    "TV 201",
+    "Movie 101",
+    "TV 202",
+    "Movie 102",
+    "TV 203",
+    "Movie 103",
+  ]);
+
+  await page.getByRole("button", { name: "Relevance", exact: true }).click();
+  await page.getByRole("option", { name: "Popularity" }).click();
+  await expect(posters.first()).toHaveAttribute("alt", "Movie 102");
+  await expect(posters).toHaveCount(6);
+  expect(
+    await posters.evaluateAll((images) => images.map((image) => image.alt)),
+  ).toEqual([
+    "Movie 102",
+    "TV 202",
+    "Movie 104",
+    "TV 204",
+    "TV 203",
+    "Movie 103",
+  ]);
+
+  await page.getByLabel("Movies", { exact: true }).click();
+  await page.getByLabel("TV Shows", { exact: true }).click();
+  await expect(
+    page.locator('[data-search-section="top-results"]:visible'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-search-section="people"]:visible'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('[data-search-section="providers"]:visible'),
+  ).toHaveCount(1);
+});
+
+test("Android search renders the unified six as a three-column grid", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await page.goto("/?mobile=1");
+  await fillSearch(page, "mobile");
+
+  await expectCategorizedSearchOrder(page);
+  const grid = page.locator(
+    '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
+  );
+  await expect(grid).toHaveClass(/grid-cols-3/);
+  await expect(grid.locator(":scope > *")).toHaveCount(6);
+});
+
+test("TV search navigates filters, suggestions, top results, and result rows", async ({
+  page,
+}) => {
+  await mockBackend(page);
+  await page.goto("/?tv=1");
+  await fillSearch(page, "tv");
+
+  await expectCategorizedSearchOrder(page);
+  const input = page.getByRole("searchbox");
+  const filters = page.locator('[data-tv-focus-group="search-filters"] button');
+  const suggestions = page.locator(
+    '[data-tv-focus-group="search-suggestions"] button',
+  );
+  const grid = page.locator(
+    '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
+  );
+  const cards = grid.locator("[data-tv-focusable]");
+  await expect(grid).toHaveClass(/grid-cols-6/);
+  await expect(cards).toHaveCount(6);
+
+  await expect(input).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  const enteredFilterIndex = await filters.evaluateAll((elements) =>
+    elements.findIndex((element) => element === document.activeElement),
+  );
+  expect(enteredFilterIndex).toBeGreaterThanOrEqual(0);
+  for (let index = enteredFilterIndex - 1; index >= 0; index -= 1) {
+    await page.keyboard.press("ArrowLeft");
+    await expect(filters.nth(index)).toBeFocused();
+  }
+  for (let index = 1; index < 4; index += 1) {
+    await page.keyboard.press("ArrowRight");
+    await expect(filters.nth(index)).toBeFocused();
+  }
+  for (let index = 2; index >= 0; index -= 1) {
+    await page.keyboard.press("ArrowLeft");
+    await expect(filters.nth(index)).toBeFocused();
+  }
+
+  await page.keyboard.press("ArrowDown");
+  await expect(suggestions.nth(0)).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(suggestions.nth(1)).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  expect(
+    await cards.evaluateAll((elements) =>
+      elements.some((element) => element === document.activeElement),
+    ),
+  ).toBe(true);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("button", { name: "Search Person", exact: true }),
+  ).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("button", { name: "Search Provider", exact: true }),
+  ).toBeFocused();
 });

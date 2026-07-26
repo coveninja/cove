@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import { Star } from "lucide-svelte";
   import { api } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
@@ -160,7 +161,7 @@
         // rating (e.g. an unrate looks like it did nothing on Android).
         if (e.pointerType === "mouse") animateHoverIn(star);
       }}
-      aria-label="Rate {star} star{star !== 1 ? 's' : ''}"
+      aria-label={m.media_rate_stars({ stars: star })}
       class="rounded p-0.5"
       style="will-change: transform;"
     >
@@ -178,7 +179,7 @@
     class="flex shrink-0 items-center gap-0.5"
     onmouseleave={animateHoverOut}
     role="group"
-    aria-label="Rating"
+    aria-label={m.media_rating()}
   >
     {@render starButtons()}
   </div>
@@ -186,7 +187,7 @@
   <div
     class="flex shrink-0 items-center"
     role="group"
-    aria-label="Rating"
+    aria-label={m.media_rating()}
     onpointerenter={(e) => {
       if (e.pointerType === "mouse") expanded = true;
     }}
@@ -219,8 +220,8 @@
           (e.currentTarget as HTMLElement).blur();
           expanded = true;
         }}
-        aria-label="Rate"
-        title="Rate"
+        aria-label={m.media_rate()}
+        title={m.media_rate()}
       >
         <div class="">
           <Star class="size-4 {rated ? 'fill-yellow-400 text-yellow-400' : ''}" />

@@ -105,7 +105,7 @@ describe("settings store", () => {
     expect(get(store).autoPlay).toBe(true);
   });
 
-  it("retains an optimistic value and absorbs persistence failures", async () => {
+  it("retains an optimistic value and reports persistence failures", async () => {
     const store = createSettingsStore();
     const error = new Error("disk full");
     apiMock.updateSettings.mockRejectedValue(error);
@@ -113,12 +113,24 @@ describe("settings store", () => {
       .spyOn(console, "error")
       .mockImplementation(() => {});
 
-    await expect(store.save({ hideSpoilers: true })).resolves.toBeUndefined();
+    await expect(store.save({ hideSpoilers: true })).resolves.toBe(false);
 
     expect(get(store).hideSpoilers).toBe(true);
     expect(consoleError).toHaveBeenCalledWith(
       "Failed to save settings:",
       error,
     );
+  });
+
+  it("exposes the latest snapshot without a subscription round trip", async () => {
+    const store = createSettingsStore();
+    apiMock.updateSettings.mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      uiLanguage: "tr",
+    });
+
+    await expect(store.save({ uiLanguage: "tr" })).resolves.toBe(true);
+
+    expect(store.getCurrent().uiLanguage).toBe("tr");
   });
 });

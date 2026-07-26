@@ -17,6 +17,7 @@
   import { CircleCheckBig, HeartOff } from "lucide-svelte";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
+  import { activeLocale } from "$lib/i18n";
 
   let {
     media,
@@ -72,11 +73,15 @@
   let lastAiredEpisode = $state<number | null>(null);
   let videoUrl = $state<string>();
   let libraryEntry = $state<LibraryEntry | null>(null);
+  let dismissed = $state(false);
+  let hasProgress = $state(false);
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
+  const posterLocale = activeLocale();
+  const posterLocaleFallbacks = posterLocale === "en" ? [null] : ["en", null];
 
   // ── Data fetching (hover card only) ─────────────────────────────────────────
   function fetchData(): void {
@@ -208,6 +213,8 @@
       .libraryGet(media.id, media.media_type)
       .then((result) => {
         libraryEntry = result?.entry ?? null;
+        dismissed = result?.dismissed ?? false;
+        hasProgress = (result?.progress.length ?? 0) > 0;
       })
       .catch((err) => {
         // Backend unreachable (e.g. dev server restart) — keep the last known
@@ -293,8 +300,8 @@
         {#if logoLoaded && images.posters.length > 0}
           <img
             src={getImageOpt(images, "posters", {
-              iso: "en",
-              voteAverage: 5,
+              iso: posterLocale,
+              isoFallbacks: posterLocaleFallbacks,
               randomize: true,
             })}
             alt={title}
@@ -341,7 +348,14 @@
     </div>
   </ContextMenu.Trigger>
   <ContextMenu.Content>
-    <LibraryContextMenuContent {libraryEntry} {media} />
+    <LibraryContextMenuContent
+      {libraryEntry}
+      {dismissed}
+      {hasProgress}
+      {media}
+      {lastAiredSeason}
+      {lastAiredEpisode}
+    />
   </ContextMenu.Content>
 </ContextMenu.Root>
 

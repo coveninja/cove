@@ -7,6 +7,7 @@
 package tmdb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 type Client struct {
 	apiKey string
 	client *http.Client
+	locale LocaleSource
 
 	// IMDB-id cache. Keyed "movie:<tmdbID>" / "tv:<tmdbID>" — a movie and a TV
 	// show can share a numeric TMDB id, so the type prefix disambiguates them.
@@ -52,7 +54,8 @@ type Client struct {
 	qualityCacheMu sync.Mutex
 	qualityCache   map[string]qualityCacheEntry
 
-	// GetDetails cache (D2). Keyed "movie:<id>"/"tv:<id>", TTL 24h — a
+	// GetDetails cache (D2). Keyed "<locale>:movie:<id>"/"<locale>:tv:<id>",
+	// TTL 24h — a
 	// title's genres/cast/keywords/etc. change rarely enough that a day-old
 	// answer is fine. This defuses the discover package's BuildProfile
 	// stampede: without it, a progress tick every ~10s used to bump the
@@ -63,19 +66,264 @@ type Client struct {
 	detailsCache   map[string]detailsCacheEntry
 	detailsSF      singleflight.Group
 
-	// GetEpisodesCached cache. Keyed "<tmdbID>:<seasonNumber>", TTL 6h — season
-	// episode lists change only when TMDB gets updated metadata. Mirrors the
-	// detailsCache field layout exactly (mutex + map + singleflight.Group).
+	// GetEpisodesCached cache. Keyed
+	// "<locale>:<tmdbID>:<seasonNumber>", TTL 6h — season episode lists change
+	// only when TMDB gets updated metadata. Mirrors the detailsCache field layout
+	// exactly (mutex + map + singleflight.Group).
 	episodesCacheMu sync.Mutex
 	episodesCache   map[string]episodesCacheEntry
 	episodesSF      singleflight.Group
 
 	// Catalog page cache for /api/catalog. Keyed
-	// addonURL+"|"+type+"|"+id+"|"+skip+"|"+limit, TTL catalogCacheTTL.
+	// locale+"|"+addonURL+"|"+type+"|"+id+"|"+skip+"|"+limit,
+	// TTL catalogCacheTTL.
 	// Expired entries are swept on insert (same inline-expiry style as
 	// qualityCache / addons.Manager.streamCache).
 	catalogCacheMu sync.Mutex
 	catalogCache   map[string]catalogPageEntry
+}
+
+// LocaleSource returns the active profile's UI language. Values are normalized
+// to Cove's supported language set by Client.Locale, so callers may safely
+// return an empty, legacy, or otherwise unsupported value.
+type LocaleSource func() string
+
+// Option configures a Client without breaking existing New("key") callers.
+type Option func(*Client)
+
+// WithLocaleSource makes TMDB presentation metadata follow the active profile.
+// The source is read once per request/cache operation so profile switches and
+// language changes take effect without reconstructing the server.
+func WithLocaleSource(source LocaleSource) Option {
+	return func(c *Client) {
+		if source != nil {
+			c.locale = source
+		}
+	}
+}
+
+// Locale returns the canonical Cove locale used for cache partitioning.
+func (c *Client) Locale() string {
+	if c != nil && c.locale != nil {
+		return normalizeAppLocale(c.locale())
+	}
+	return "en"
+}
+
+func normalizeAppLocale(value string) string {
+	base := strings.ToLower(strings.TrimSpace(value))
+	if separator := strings.IndexAny(base, "-_"); separator >= 0 {
+		base = base[:separator]
+	}
+	switch base {
+	case "tr", "pt", "es", "it", "de", "ja":
+		return base
+	default:
+		return "en"
+	}
+}
+
+func tmdbLocale(appLocale string) string {
+	switch appLocale {
+	case "tr":
+		return "tr-TR"
+	case "pt":
+		return "pt-BR"
+	case "es":
+		return "es-ES"
+	case "it":
+		return "it-IT"
+	case "de":
+		return "de-DE"
+	case "ja":
+		return "ja-JP"
+	default:
+		return "en-US"
+	}
+}
+
+type localizedTransport struct {
+	base   http.RoundTripper
+	locale LocaleSource
+}
+
+func (t *localizedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	appLocale := "en"
+	if t.locale != nil {
+		appLocale = normalizeAppLocale(t.locale())
+	}
+	localized := cloneLocalizedRequest(req, tmdbLocale(appLocale))
+	res, err := t.base.RoundTrip(localized)
+	if err != nil || appLocale == "en" || res.StatusCode != http.StatusOK {
+		return res, err
+	}
+
+	localBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return res, nil
+	}
+	_ = res.Body.Close()
+	res.Body = io.NopCloser(bytes.NewReader(localBody))
+	res.ContentLength = int64(len(localBody))
+
+	var localJSON any
+	if json.Unmarshal(localBody, &localJSON) != nil || !needsEnglishFallback(localized.URL.Path, localJSON) {
+		return res, nil
+	}
+
+	englishReq := cloneLocalizedRequest(req, tmdbLocale("en"))
+	englishRes, err := t.base.RoundTrip(englishReq)
+	if err != nil {
+		return res, nil
+	}
+	defer englishRes.Body.Close()
+	if englishRes.StatusCode != http.StatusOK {
+		return res, nil
+	}
+	englishBody, err := io.ReadAll(englishRes.Body)
+	if err != nil {
+		return res, nil
+	}
+	var englishJSON any
+	if json.Unmarshal(englishBody, &englishJSON) != nil {
+		return res, nil
+	}
+
+	mergeLocalizedJSON(localJSON, englishJSON)
+	merged, err := json.Marshal(localJSON)
+	if err != nil {
+		return res, nil
+	}
+	res.Body = io.NopCloser(bytes.NewReader(merged))
+	res.ContentLength = int64(len(merged))
+	res.Header.Set("Content-Length", strconv.Itoa(len(merged)))
+	return res, nil
+}
+
+func cloneLocalizedRequest(req *http.Request, locale string) *http.Request {
+	clone := req.Clone(req.Context())
+	urlCopy := *req.URL
+	q := urlCopy.Query()
+	q.Set("language", locale)
+	if strings.HasSuffix(urlCopy.Path, "/images") {
+		base := strings.Split(locale, "-")[0]
+		if base == "en" {
+			q.Set("include_image_language", "en,null")
+		} else {
+			q.Set("include_image_language", base+",en,null")
+		}
+	}
+	urlCopy.RawQuery = q.Encode()
+	clone.URL = &urlCopy
+	return clone
+}
+
+var localizableJSONFields = map[string]struct{}{
+	"biography":            {},
+	"department":           {},
+	"job":                  {},
+	"known_for_department": {},
+	"name":                 {},
+	"overview":             {},
+	"place_of_birth":       {},
+	"status":               {},
+	"tagline":              {},
+	"title":                {},
+}
+
+func needsEnglishFallback(path string, value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		if strings.HasSuffix(path, "/videos") {
+			if results, ok := typed["results"].([]any); ok && len(results) == 0 {
+				return true
+			}
+		}
+		for key, child := range typed {
+			if _, localized := localizableJSONFields[key]; localized {
+				if text, ok := child.(string); ok && strings.TrimSpace(text) == "" {
+					return true
+				}
+			}
+			if needsEnglishFallback(path, child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if needsEnglishFallback(path, child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeLocalizedJSON(local, fallback any) {
+	switch target := local.(type) {
+	case map[string]any:
+		source, ok := fallback.(map[string]any)
+		if !ok {
+			return
+		}
+		for key, sourceValue := range source {
+			targetValue, exists := target[key]
+			if _, localized := localizableJSONFields[key]; localized {
+				text, isText := targetValue.(string)
+				if !exists || (isText && strings.TrimSpace(text) == "") {
+					if replacement, ok := sourceValue.(string); ok && replacement != "" {
+						target[key] = replacement
+					}
+					continue
+				}
+			}
+			if !exists {
+				continue
+			}
+			if key == "results" {
+				targetItems, targetIsArray := targetValue.([]any)
+				sourceItems, sourceIsArray := sourceValue.([]any)
+				if targetIsArray && sourceIsArray && len(targetItems) == 0 && len(sourceItems) > 0 {
+					target[key] = sourceItems
+					continue
+				}
+			}
+			mergeLocalizedJSON(targetValue, sourceValue)
+		}
+	case []any:
+		source, ok := fallback.([]any)
+		if !ok {
+			return
+		}
+		for i, item := range target {
+			match := matchingLocalizedItem(item, source, i)
+			if match != nil {
+				mergeLocalizedJSON(item, match)
+			}
+		}
+	}
+}
+
+func matchingLocalizedItem(target any, candidates []any, index int) any {
+	targetMap, isMap := target.(map[string]any)
+	if isMap {
+		for _, identity := range []string{"id", "episode_number", "season_number", "provider_id"} {
+			value, exists := targetMap[identity]
+			if !exists {
+				continue
+			}
+			for _, candidate := range candidates {
+				candidateMap, ok := candidate.(map[string]any)
+				if ok && candidateMap[identity] == value {
+					return candidate
+				}
+			}
+		}
+	}
+	if index >= 0 && index < len(candidates) {
+		return candidates[index]
+	}
+	return nil
 }
 
 type detailsCacheEntry struct {
@@ -193,16 +441,27 @@ func (c *Client) catalogCacheSet(key string, medias []Media, nextSkip int) {
 // New returns a TMDB client. The 15s timeout matters because http.DefaultClient
 // has none, so a stalled TMDB response would otherwise hold a request goroutine
 // open forever; TMDB is normally fast, so 15s only trips on a dead connection.
-func New(apiKey string) *Client {
-	return &Client{
+func New(apiKey string, options ...Option) *Client {
+	c := &Client{
 		apiKey:        apiKey,
-		client:        &http.Client{Timeout: 15 * time.Second},
+		locale:        func() string { return "en" },
 		imdbCache:     make(map[string]string),
 		qualityCache:  make(map[string]qualityCacheEntry),
 		detailsCache:  make(map[string]detailsCacheEntry),
 		catalogCache:  make(map[string]catalogPageEntry),
 		episodesCache: make(map[string]episodesCacheEntry),
 	}
+	for _, option := range options {
+		option(c)
+	}
+	c.client = &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &localizedTransport{
+			base:   http.DefaultTransport,
+			locale: c.Locale,
+		},
+	}
+	return c
 }
 
 // imdbCacheCap bounds the IMDB-id cache so a pathological caller (or a very
@@ -300,8 +559,11 @@ type TVEpisode struct {
 }
 
 type Details struct {
-	Overview string `json:"overview"`
-	Genres   []struct {
+	Title      string `json:"title"`
+	Name       string `json:"name"`
+	PosterPath string `json:"poster_path"`
+	Overview   string `json:"overview"`
+	Genres     []struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"genres"`
@@ -359,6 +621,9 @@ type Details struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"networks"`
+	// Status is TMDB's lifecycle label for a TV show (for example
+	// "Returning Series", "Ended", or "Canceled"). Empty for movies.
+	Status           string     `json:"status"`
 	NumberOfSeasons  int        `json:"number_of_seasons"`
 	NumberOfEpisodes int        `json:"number_of_episodes"`
 	Seasons          []TVSeason `json:"seasons"`
@@ -410,10 +675,11 @@ type Provider struct {
 
 // SearchResults is the sectioned payload for /api/search/multi.
 type SearchResults struct {
-	Movies    []Media    `json:"movies"`
-	TV        []Media    `json:"tv"`
-	People    []Person   `json:"people"`
-	Providers []Provider `json:"providers"`
+	Movies     []Media    `json:"movies"`
+	TV         []Media    `json:"tv"`
+	People     []Person   `json:"people"`
+	Providers  []Provider `json:"providers"`
+	TitleOrder []string   `json:"title_order"`
 }
 
 // PersonDetails is the full /person/{id} payload used by the person overlay:
@@ -753,9 +1019,39 @@ func (c *Client) SearchProviders(query string) ([]Provider, error) {
 	return out, nil
 }
 
+// splitSearchTitles sections a ranked title list without discarding its
+// cross-type order. Keyword matches are appended after regular search results;
+// duplicate typed IDs keep their first (highest-ranked) position.
+func splitSearchTitles(titleLists ...[]Media) (movies, tv []Media, titleOrder []string) {
+	movies = []Media{}
+	tv = []Media{}
+	titleOrder = []string{}
+
+	seen := make(map[string]bool)
+	for _, titles := range titleLists {
+		for _, m := range titles {
+			if m.MediaType != "movie" && m.MediaType != "tv" {
+				continue
+			}
+			key := fmt.Sprintf("%s:%d", m.MediaType, m.ID)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			titleOrder = append(titleOrder, key)
+			if m.MediaType == "tv" {
+				tv = append(tv, m)
+			} else {
+				movies = append(movies, m)
+			}
+		}
+	}
+	return movies, tv, titleOrder
+}
+
 // MultiSearch fans out across titles, people, and providers and returns them in
-// separate sections. Titles reuse the scored Search + keyword merge, split by
-// media type so relevance order is preserved within each section.
+// separate sections. Titles reuse the scored Search + keyword merge, with
+// TitleOrder retaining the combined movie/TV relevance ranking.
 func (c *Client) MultiSearch(query string) (SearchResults, error) {
 	regular, err := c.Search(query)
 	if err != nil {
@@ -763,26 +1059,7 @@ func (c *Client) MultiSearch(query string) (SearchResults, error) {
 	}
 	byKeyword, _ := c.SearchByKeywords(query)
 
-	seen := make(map[string]bool)
-	movies, tv := []Media{}, []Media{}
-	add := func(m Media) {
-		key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		if m.MediaType == "tv" {
-			tv = append(tv, m)
-		} else {
-			movies = append(movies, m)
-		}
-	}
-	for _, m := range regular {
-		add(m)
-	}
-	for _, m := range byKeyword {
-		add(m)
-	}
+	movies, tv, titleOrder := splitSearchTitles(regular, byKeyword)
 
 	// People and providers are best-effort: a failure in either shouldn't sink
 	// the whole search. Coerce nils so each section marshals as [] not null.
@@ -795,7 +1072,13 @@ func (c *Client) MultiSearch(query string) (SearchResults, error) {
 		providers = []Provider{}
 	}
 
-	return SearchResults{Movies: movies, TV: tv, People: people, Providers: providers}, nil
+	return SearchResults{
+		Movies:     movies,
+		TV:         tv,
+		People:     people,
+		Providers:  providers,
+		TitleOrder: titleOrder,
+	}, nil
 }
 
 // GetPerson returns a person's bio and their filmography (combined credits),
@@ -1048,7 +1331,7 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 // episodesCacheTTL and coalesced across concurrent callers (same pattern as
 // GetDetails). Callers must treat the returned slice as read-only.
 func (c *Client) GetEpisodesCached(tmdbID, seasonNumber int) ([]TVEpisode, error) {
-	key := fmt.Sprintf("%d:%d", tmdbID, seasonNumber)
+	key := fmt.Sprintf("%s:%d:%d", c.Locale(), tmdbID, seasonNumber)
 
 	c.episodesCacheMu.Lock()
 	if entry, ok := c.episodesCache[key]; ok && time.Now().Before(entry.expires) {
@@ -1168,7 +1451,7 @@ func (m *Media) DisplayDate() string {
 // Callers must treat the returned *Details as read-only: a cache hit shares
 // the same pointer across every caller until the entry expires.
 func (c *Client) GetDetails(tmdbID int, mediaType string) (*Details, error) {
-	key := fmt.Sprintf("%s:%d", mediaType, tmdbID)
+	key := fmt.Sprintf("%s:%s:%d", c.Locale(), mediaType, tmdbID)
 
 	c.detailsCacheMu.Lock()
 	if entry, ok := c.detailsCache[key]; ok && time.Now().Before(entry.expires) {
@@ -1229,10 +1512,25 @@ func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 	if err := json.NewDecoder(res.Body).Decode(&details); err != nil {
 		return nil, err
 	}
+	if details.PosterPath != "" {
+		details.PosterPath = imgURL("w500", details.PosterPath)
+	}
 	if details.NextEpisodeToAir != nil && details.NextEpisodeToAir.StillPath != "" {
 		details.NextEpisodeToAir.StillPath = imgURL("w300", details.NextEpisodeToAir.StillPath)
 	}
 	return &details, nil
+}
+
+// DisplayTitle returns the localized movie or TV title carried by a details
+// response. Movies use title while TV shows use name.
+func (d *Details) DisplayTitle() string {
+	if d == nil {
+		return ""
+	}
+	if d.Title != "" {
+		return d.Title
+	}
+	return d.Name
 }
 
 // GetMediaByID fetches a single movie or TV show directly by ID. Exists so
@@ -2205,7 +2503,7 @@ func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
 			}
 		}
 
-		cacheKey := addonURL + "|" + catalogType + "|" + catalogID + "|" + strconv.Itoa(skip) + "|" + strconv.Itoa(limit)
+		cacheKey := c.Locale() + "|" + addonURL + "|" + catalogType + "|" + catalogID + "|" + strconv.Itoa(skip) + "|" + strconv.Itoa(limit)
 		if medias, nextSkip, ok := c.catalogCacheGet(cacheKey); ok {
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(struct {

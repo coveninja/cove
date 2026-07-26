@@ -2,6 +2,7 @@
   import type { Media } from "$lib/types/tmdb";
   import TvMediaCard from "./TvMediaCard.svelte";
   import { focusGroup, focusable } from "../focus/actions";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Same data contract as MobileMediaRow plus a required `id` for the focusGroup.
   // Parent derives `id` from the row key (e.g. `row-mg-123`) so groups are stable.
@@ -71,11 +72,10 @@
             onclick={onSeeAll}
             class="w-20 shrink-0 self-stretch flex items-center justify-center rounded-lg bg-secondary/60 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
-            See all →
+            {m.common_see_all()}
           </button>
         {/if}
       {/if}
     </div>
   </div>
 {/if}
-

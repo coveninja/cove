@@ -1,9 +1,14 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import type { ActivityStats } from "$lib/api";
-  import { fmtHours } from "./utils";
+  import {
+    activityWeekdayLabels,
+    buildActivityCalendar,
+    fmtHours,
+    type ActivityCalendarCell,
+  } from "./utils";
   import * as Card from "$lib/components/ui/card/index.js";
   import { CalendarDays } from "lucide-svelte";
-  import {SvelteDate} from "svelte/reactivity";
 
   let { activity }: { activity: ActivityStats } = $props();
 
@@ -13,109 +18,9 @@
   const STEP = CELL_PX + GAP_PX; // column/row step
   const DAY_LABEL_W = 20; // left label column width in px
 
-  // Day-of-week labels: show Mon (1), Wed (3), Fri (5); others hidden
-  const DOW_LABELS = ["", "M", "", "W", "", "F", ""];
-
-  const MONTH_NAMES = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-
-  // ── Build calendar cells ──────────────────────────────────────────────────
-
-  type CalCell = {
-    dateStr: string; // YYYY-MM-DD
-    label: string; // "Jan 5"
-    seconds: number;
-    level: number; // 0-4
-    weekIdx: number;
-    dayIdx: number; // 0=Sun
-    inRange: boolean;
-  };
-
-  type MonthLabel = { weekIdx: number; name: string };
-
-  const calData = $derived.by(() => {
-    const calendar = activity.calendar;
-
-    // Find max value for scaling (at least 1 to avoid ÷0)
-    let maxVal = 1;
-    for (const v of Object.values(calendar)) {
-      if (v > maxVal) maxVal = v;
-    }
-
-    const today = new SvelteDate();
-    today.setHours(0, 0, 0, 0);
-
-    // Trailing 12 months: start one year ago (inclusive)
-    const rangeStart = new SvelteDate(today);
-    rangeStart.setFullYear(rangeStart.getFullYear() - 1);
-    rangeStart.setDate(rangeStart.getDate() + 1);
-
-    // Snap back to the Sunday on or before rangeStart
-    const gridStart = new SvelteDate(rangeStart);
-    gridStart.setDate(gridStart.getDate() - gridStart.getDay());
-
-    const cells: CalCell[] = [];
-    const monthLabels: MonthLabel[] = [];
-    let seenMonth = -1;
-    let weekIdx = 0;
-    const cur = new SvelteDate(gridStart);
-
-    while (cur <= today) {
-      const dayIdx = cur.getDay();
-      if (dayIdx === 0 && cells.length > 0) weekIdx++;
-
-      const inRange = cur >= rangeStart;
-      const y = cur.getFullYear();
-      const mo = cur.getMonth();
-      const d = cur.getDate();
-      const dateStr = `${y}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      const seconds = inRange ? (calendar[dateStr] ?? 0) : 0;
-
-      // 4 intensity levels (0 = no data)
-      let level = 0;
-      if (inRange && seconds > 0) {
-        const frac = seconds / maxVal;
-        if (frac <= 0.25) level = 1;
-        else if (frac <= 0.5) level = 2;
-        else if (frac <= 0.75) level = 3;
-        else level = 4;
-      }
-
-      // Track first week of each month (only within range)
-      const month = cur.getMonth();
-      if (inRange && month !== seenMonth) {
-        seenMonth = month;
-        monthLabels.push({ weekIdx, name: MONTH_NAMES[month] });
-      }
-
-      cells.push({
-        dateStr,
-        label: `${MONTH_NAMES[mo]} ${d}`,
-        seconds,
-        level,
-        weekIdx,
-        dayIdx,
-        inRange,
-      });
-
-      cur.setDate(cur.getDate() + 1);
-    }
-
-    const totalWeeks = weekIdx + 1;
-    return { cells, monthLabels, totalWeeks };
-  });
+  // Day-of-week labels: show Mon (1), Wed (3), Fri (5); others hidden.
+  const DOW_LABELS = activityWeekdayLabels();
+  const calData = $derived(buildActivityCalendar(activity.calendar));
 
   // ── Cell color (sequential: one hue, muted→indigo) ───────────────────────
   // Using rgba so we don't depend on Tailwind purge for these dynamic values.
@@ -130,11 +35,12 @@
   type HoverTooltip = { x: number; y: number; text: string } | null;
   let tooltip = $state<HoverTooltip>(null);
 
-  function onCellEnter(e: MouseEvent, cell: CalCell): void {
+  function onCellEnter(e: MouseEvent, cell: ActivityCalendarCell): void {
     if (!cell.inRange) return;
     const el = e.currentTarget as HTMLElement;
     const rect = el.getBoundingClientRect();
-    const timeStr = cell.seconds > 0 ? fmtHours(cell.seconds) : "no activity";
+    const timeStr =
+      cell.seconds > 0 ? fmtHours(cell.seconds) : m.account_no_activity();
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top,
@@ -153,9 +59,9 @@
   <Card.Header>
     <Card.Title class="flex items-center gap-2 text-sm">
       <CalendarDays class="size-4" />
-      Activity calendar
+      {m.account_activity()}
     </Card.Title>
-    <Card.Description>Trailing 12 months</Card.Description>
+    <Card.Description>{m.account_trailing_months()}</Card.Description>
   </Card.Header>
 
   <Card.Content>

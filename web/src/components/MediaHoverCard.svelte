@@ -14,6 +14,7 @@
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import LibraryContextMenuContent from "./LibraryContextMenuContent.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -65,14 +66,18 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let dismissed = $state(false);
+  let hasProgress = $state(false);
 
   $effect(() => {
+    $libraryChanged;
     api
       .libraryGet(media.id, media.media_type)
       .then((result) => {
+        libraryEntry = result?.entry ?? null;
+        dismissed = result?.dismissed ?? false;
+        hasProgress = (result?.progress.length ?? 0) > 0;
+        movieProgress = null;
         if (!result) return;
-        libraryEntry = result.entry;
-        dismissed = result.dismissed;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         }
@@ -236,7 +241,9 @@
           variant={dismissed ? "destructive" : "outline"}
           size="icon"
           onclick={toggleDismissed}
-          title={dismissed ? "Undo not interested" : "Not interested"}
+          title={dismissed
+            ? m.media_undo_not_interested()
+            : m.media_not_interested()}
         >
           <ThumbsDown class="size-4" />
         </Button>
@@ -255,7 +262,14 @@
   </span>
           </ContextMenu.Trigger>
     <ContextMenu.Content>
-      <LibraryContextMenuContent {libraryEntry} {media} />
+      <LibraryContextMenuContent
+        {libraryEntry}
+        {dismissed}
+        {hasProgress}
+        {media}
+        {lastAiredSeason}
+        {lastAiredEpisode}
+      />
     </ContextMenu.Content>
   </ContextMenu.Root>
 </span>

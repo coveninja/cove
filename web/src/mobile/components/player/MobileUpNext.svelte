@@ -2,6 +2,7 @@
   import type { TVEpisode } from "$lib/types/tmdb";
   import { SkipForward, X } from "lucide-svelte";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     nextEp,
@@ -29,13 +30,16 @@
   <div class="p-4">
     <div class="flex items-start justify-between gap-2">
       <p class="text-xs font-medium uppercase tracking-wide text-white/60">
-        Up next · S{nextEp.season}E{nextEp.episode.episode_number}
+        {m.player_up_next({
+          season: nextEp.season,
+          episode: nextEp.episode.episode_number,
+        })}
       </p>
       <button
         type="button"
         class="flex size-6 shrink-0 items-center justify-center rounded-full text-white/60 active:bg-white/20"
         onclick={() => onDismiss()}
-        aria-label="Dismiss"
+        aria-label={m.player_dismiss()}
       >
         <X class="size-4" />
       </button>
@@ -49,11 +53,13 @@
       onclick={() => onAdvance()}
     >
       <SkipForward class="size-4" />
-      Watch now
+      {m.player_watch_now()}
     </button>
     {#if countdownSecs !== null}
       <div class="mt-3">
-        <p class="mb-1.5 text-xs text-white/60">Playing in {countdownSecs}s</p>
+        <p class="mb-1.5 text-xs text-white/60">
+          {m.player_playing_in({ seconds: countdownSecs })}
+        </p>
         <div class="h-1 w-full overflow-hidden rounded-full bg-white/20">
           <div
             class="h-full bg-white transition-[width] duration-1000 ease-linear"

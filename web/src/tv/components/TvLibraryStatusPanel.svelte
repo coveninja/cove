@@ -5,13 +5,14 @@
      This fork replaces the Popover with TvTrackPanel, which renders inline and
      manages its own focus trap + keyboard handling independently. -->
 <script lang="ts">
-  import { api, type LibraryStatus, STATUS_LABELS, STATUS_COLORS } from "$lib/api";
+  import { api, statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import { Button } from "$lib/components/ui/button/index.js";
   import { BookmarkIcon, BookmarkPlus } from "lucide-svelte";
   import { libraryChanged } from "$lib/stores/library";
   import TvTrackPanel from "./player/TvTrackPanel.svelte";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     libraryEntry,
@@ -32,9 +33,9 @@
   let panelOpen = $state(false);
 
   const statusItems = $derived(
-    Object.entries(STATUS_LABELS).map(([value, label]) => ({
+    (["watch_later", "watching", "finished", "dropped"] as LibraryStatus[]).map((value) => ({
       id: value,
-      label,
+      label: statusLabel(value),
       dot: STATUS_COLORS[value as LibraryStatus].dot,
     })),
   );
@@ -85,7 +86,7 @@
 
 {#if panelOpen}
   <TvTrackPanel
-    title="My List"
+    title={m.my_list_title()}
     items={statusItems}
     selectedId={libraryEntry?.status ?? null}
     onSelect={(id) => handleStatus(id as LibraryStatus)}

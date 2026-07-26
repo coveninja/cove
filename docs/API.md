@@ -22,7 +22,7 @@ enforce an HTTP method — any verb works, GET by convention.
 |---|---|---|
 | `GET /api/keywords` | `q` (required) | `[]Keyword{id, name}` |
 | `GET /api/search` | `q` (required) | `[]Media` (regular + keyword search, merged/deduped) |
-| `GET /api/search/multi` | `q` (required) | `SearchResults{movies, tv []Media, people []Person, providers []Provider}` |
+| `GET /api/search/multi` | `q` (required) | `SearchResults{movies, tv []Media, people []Person, providers []Provider, title_order []string}` |
 | `GET /api/person` | `id` (required int) | `PersonDetails{id, name, biography, profile_path, known_for_department, birthday, place_of_birth, credits []Media}` |
 | `GET /api/provider` | `id` (required int), `limit` (default 40) | `[]Media` (blended movie+tv titles for that provider, US region) |
 | `GET /api/images` | `id` (required int), `type` (required: `movie`\|`tv`) | `MediaImages{backdrops, logos, posters []MediaImageObject}` |

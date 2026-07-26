@@ -3,6 +3,7 @@
   import type { ComponentType } from "svelte";
   import type { Page } from "$lib/types/types";
   import { animate } from "animejs";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     currentPage,
@@ -22,31 +23,31 @@
 
   const tabs: Tab[] = [
     {
-      label: "Home",
+      label: m.nav_home(),
       makePage: () => ({ type: "home" }),
       activeFor: ["home"],
       Icon: House,
     },
     {
-      label: "My List",
+      label: m.nav_my_list(),
       makePage: () => ({ type: "myList" }),
       activeFor: ["myList"],
       Icon: Bookmark,
     },
     {
-      label: "Explore",
+      label: m.nav_explore(),
       makePage: () => ({ type: "explore" }),
       activeFor: ["explore"],
       Icon: Flame,
     },
     {
-      label: "Search",
+      label: m.nav_search(),
       makePage: () => ({ type: "query", query: "" }),
       activeFor: ["query"],
       Icon: Search,
     },
     {
-      label: "Account",
+      label: m.nav_account(),
       makePage: () => ({ type: "account" }),
       // Settings page highlights the Account tab so tapping Account is
       // always available even while the user is browsing settings.

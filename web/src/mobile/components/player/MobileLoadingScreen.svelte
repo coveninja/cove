@@ -3,6 +3,7 @@
   import { Spinner } from "$lib/components/ui/spinner";
   import { X } from "lucide-svelte";
   import { fade } from "svelte/transition";
+  import * as m from "$lib/paraglide/messages.js";
 
   let {
     media,
@@ -32,7 +33,7 @@
     class="absolute left-4 z-10 flex size-11 items-center justify-center rounded-full text-white active:bg-white/20"
     style="top: max(1rem, var(--safe-top));"
     onclick={() => onclose?.()}
-    aria-label="Close player"
+    aria-label={m.player_close()}
   >
     <X class="size-6" />
   </button>
@@ -65,7 +66,7 @@
       class="relative z-10 mt-2 text-xs text-white/40"
       transition:fade={{ duration: 150 }}
     >
-      This is taking a while…
+      {m.player_taking_while()}
     </p>
   {/if}
   {#if cancelVisible || takingAWhile}
@@ -74,7 +75,7 @@
       class="relative z-10 mt-4 rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"
       onclick={() => onCancel()}
     >
-      Cancel
+      {m.common_cancel()}
     </button>
   {/if}
 </div>

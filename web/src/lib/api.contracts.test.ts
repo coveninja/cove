@@ -363,6 +363,40 @@ const libraryAndDiscoveryContracts: Contract[] = [
     },
   },
   {
+    name: "bulk progress save",
+    invoke: () =>
+      api.progressBulkSave({
+        tmdb_id: 1396,
+        media_type: "tv",
+        title: "Breaking Bad",
+        completed: true,
+        status: "finished",
+        episodes: [
+          {
+            season: 1,
+            episode: 1,
+            duration_seconds: 3480,
+          },
+        ],
+      }),
+    path: "/library/progress/bulk",
+    method: "POST",
+    body: {
+      tmdb_id: 1396,
+      media_type: "tv",
+      title: "Breaking Bad",
+      completed: true,
+      status: "finished",
+      episodes: [
+        {
+          season: 1,
+          episode: 1,
+          duration_seconds: 3480,
+        },
+      ],
+    },
+  },
+  {
     name: "discovery options",
     invoke: () => api.discover("all", { limit: 0, profile: "kid" }),
     path: "/discover?type=all&limit=0&profile=kid",

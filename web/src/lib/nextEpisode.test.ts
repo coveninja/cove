@@ -6,7 +6,12 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock("$lib/api", () => ({ api: apiMock }));
 
-import { hasAired, nextAiredEpisode } from "$lib/nextEpisode";
+import {
+  hasAired,
+  nextAiredEpisode,
+  nextUnwatchedAiredEpisode,
+} from "$lib/nextEpisode";
+import type { WatchProgress } from "$lib/types/library";
 import type { TVEpisode } from "$lib/types/tmdb";
 
 function episode(number: number, airDate: string): TVEpisode {
@@ -17,6 +22,25 @@ function episode(number: number, airDate: string): TVEpisode {
     still_path: "",
     air_date: airDate,
     runtime: 45,
+  };
+}
+
+function progress(
+  season: number,
+  episodeNumber: number,
+  completed = true,
+): WatchProgress {
+  return {
+    id: `progress-${season}-${episodeNumber}`,
+    library_entry_id: "entry-10",
+    tmdb_id: 10,
+    media_type: "tv",
+    season,
+    episode: episodeNumber,
+    position_seconds: completed ? 45 : 20,
+    duration_seconds: 45,
+    completed,
+    watched_at: "2026-07-19T12:00:00Z",
   };
 }
 
@@ -97,5 +121,70 @@ describe("next episode resolution", () => {
 
     await expect(nextAiredEpisode(10, 1, 8)).resolves.toBeNull();
     expect(apiMock.tvEpisodes).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips completed aired episodes and returns the first unwatched gap", async () => {
+    const fetchSeason = vi
+      .fn()
+      .mockResolvedValue([
+        episode(1, "2026-07-01"),
+        episode(2, "2026-07-02"),
+        episode(3, "2026-07-03"),
+        episode(4, "2026-07-04"),
+      ]);
+
+    await expect(
+      nextUnwatchedAiredEpisode(
+        10,
+        1,
+        1,
+        [
+          progress(1, 1),
+          progress(1, 2),
+          progress(1, 3, false),
+          progress(1, 4),
+        ],
+        fetchSeason,
+      ),
+    ).resolves.toEqual({
+      season: 1,
+      episode: episode(3, "2026-07-03"),
+    });
+    expect(fetchSeason).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns caught-up when every later aired episode is completed", async () => {
+    const seasons = new Map<number, TVEpisode[]>([
+      [
+        1,
+        [
+          episode(1, "2026-07-01"),
+          episode(2, "2026-07-02"),
+          episode(3, "2026-07-03"),
+        ],
+      ],
+      [2, [episode(1, "2026-07-10"), episode(2, "2026-07-17")]],
+      [3, []],
+    ]);
+    const fetchSeason = vi.fn(
+      async (_id: number, season: number) => seasons.get(season) ?? [],
+    );
+
+    await expect(
+      nextUnwatchedAiredEpisode(
+        10,
+        1,
+        1, // Deliberately stale/tied "latest" record.
+        [
+          progress(1, 1),
+          progress(1, 2),
+          progress(1, 3),
+          progress(2, 1),
+          progress(2, 2),
+        ],
+        fetchSeason,
+      ),
+    ).resolves.toBeNull();
+    expect(fetchSeason.mock.calls.map((call) => call[1])).toEqual([1, 2, 3]);
   });
 });

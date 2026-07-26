@@ -8,15 +8,16 @@
 // note in api.ts), so every access is guarded.
 
 import { ASPECT_MODES, type AspectMode } from "./player.svelte";
+import * as m from "$lib/paraglide/messages.js";
 
 const KEY_PREFIX = "cove-aspect:";
 
 /** Human labels for the aspect button + desktop flash. */
 export const ASPECT_LABELS: Record<AspectMode, string> = {
-  fit: "Fit",
-  fill: "Fill",
-  stretch: "Stretch",
-  zoom: "Zoom",
+  fit: m.player_aspect_fit(),
+  fill: m.player_aspect_fill(),
+  stretch: m.player_aspect_stretch(),
+  zoom: m.player_aspect_zoom(),
 };
 
 function isAspectMode(v: string | null): v is AspectMode {

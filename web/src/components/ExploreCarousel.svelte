@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from "$lib/paraglide/messages.js";
   import { animate } from "animejs";
   import { untrack } from "svelte";
   import { fade } from "svelte/transition";
@@ -192,7 +193,7 @@
               onclick={() => onSelect(featuredMedia!)}
             >
               <Info class="size-4" />
-              Details
+              {m.media_details()}
             </Button>
             <LibraryStatusPanel
               libraryEntry={featuredLibraryEntry}
@@ -204,7 +205,7 @@
       </div>
 
       <!-- ── Prev button ────────────────────────────────────────────── -->
-      <Button variant="outline" size="icon" onclick={() => scrollByCards(-1)} aria-label="Scroll left">
+      <Button variant="outline" size="icon" onclick={() => scrollByCards(-1)} aria-label={m.common_scroll_left()}>
         <ChevronLeft class="size-4" />
       </Button>
       <!-- ── Poster track ───────────────────────────────────────────── -->
@@ -234,7 +235,7 @@
 
 
       <!-- ── Next button ────────────────────────────────────────────── -->
-      <Button variant="outline" size="icon" onclick={() => scrollByCards(1)} aria-label="Scroll right">
+      <Button variant="outline" size="icon" onclick={() => scrollByCards(1)} aria-label={m.common_scroll_right()}>
         <ChevronRight class="size-4" />
       </Button>
     </div>

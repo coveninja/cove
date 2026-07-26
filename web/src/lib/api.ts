@@ -19,6 +19,7 @@ import type { Profile } from "$lib/types/profiles"; // tygo-generated
 import type { Stats as ActivityStats, TitleSeconds } from "$lib/types/activity"; // tygo-generated
 import type { CheckResult as UpdateCheckResult } from "$lib/types/updater"; // tygo-generated
 import type { CalendarItem } from "$lib/types/calendar"; // tygo-generated
+import * as m from "$lib/paraglide/messages.js";
 export type { ActivityStats, TitleSeconds, UpdateCheckResult };
 
 // Single source of truth for the backend origin. Override per-environment with
@@ -210,6 +211,19 @@ export const STATUS_LABELS: Record<LibraryStatus, string> = {
   dropped: "Dropped",
 };
 
+export function statusLabel(status: LibraryStatus): string {
+  switch (status) {
+    case "watch_later":
+      return m.my_list_watch_later();
+    case "watching":
+      return m.my_list_watching();
+    case "finished":
+      return m.my_list_finished();
+    case "dropped":
+      return m.my_list_dropped();
+  }
+}
+
 /** Accent color per library status, for at-a-glance color coding across the UI. */
 export const STATUS_COLORS: Record<
   LibraryStatus,
@@ -323,6 +337,7 @@ export interface SearchResults {
   tv: Media[];
   people: Person[];
   providers: Provider[];
+  title_order: string[];
 }
 
 // Full person payload for the person overlay (bio + filmography).
@@ -858,6 +873,30 @@ export const api = {
     completed: boolean;
   }): Promise<WatchProgress> =>
     request(`/library/progress`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    }),
+
+  // Atomically marks a whole movie/TV title watched, or resets every saved
+  // progress row for it. TV callers provide the aired episode positions when
+  // marking watched; reset operations use the server's existing rows.
+  progressBulkSave: (p: {
+    tmdb_id: number;
+    media_type: string;
+    title?: string;
+    poster_path?: string;
+    vote_average?: number;
+    completed: boolean;
+    status?: LibraryStatus;
+    duration_seconds?: number;
+    episodes?: {
+      season: number;
+      episode: number;
+      duration_seconds: number;
+    }[];
+  }): Promise<{ entry: LibraryEntry | null; progress: WatchProgress[] }> =>
+    request(`/library/progress/bulk`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(p),

@@ -4,6 +4,7 @@
   import TvMediaCard from "../components/TvMediaCard.svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { focusGroup } from "../focus/actions";
+  import * as m from "$lib/paraglide/messages.js";
 
   // Grid columns: keep this in sync with CSS grid-template-columns below.
   // Defined once so focusGroup policy and the visual layout never diverge.
@@ -93,7 +94,7 @@
 <div class="flex h-full flex-col">
   <!-- Page title -->
   <div class="shrink-0 py-4">
-    <h1 class="text-2xl font-bold">{name || "Catalog"}</h1>
+    <h1 class="text-2xl font-bold">{name || m.common_catalog()}</h1>
   </div>
 
   <!-- Scrollable grid -->
@@ -141,7 +142,7 @@
               onclick={() => loadPage(nextSkip)}
               disabled={loading}
             >
-              {loading ? "Loading…" : "Load more"}
+              {loading ? m.common_loading() : m.common_load_more()}
             </button>
           </div>
         {/if}
@@ -149,4 +150,3 @@
     </div>
   </div>
 </div>
-
