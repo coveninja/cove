@@ -193,7 +193,12 @@ async function mockBackend(
       return;
     }
     if (path === "/api/keywords") {
-      await route.fulfill({ json: [] });
+      await route.fulfill({
+        json: [
+          { id: 501, name: "Time Travel" },
+          { id: 502, name: "Science Fiction" },
+        ],
+      });
       return;
     }
     if (path === "/api/images") {
@@ -438,7 +443,7 @@ test("Android search renders the unified six as a three-column grid", async ({
   await expect(grid.locator(":scope > *")).toHaveCount(6);
 });
 
-test("TV search exposes the unified six as one navigable D-pad group", async ({
+test("TV search navigates filters, suggestions, top results, and result rows", async ({
   page,
 }) => {
   await mockBackend(page);
@@ -446,6 +451,11 @@ test("TV search exposes the unified six as one navigable D-pad group", async ({
   await fillSearch(page, "tv");
 
   await expectCategorizedSearchOrder(page);
+  const input = page.getByPlaceholder("Search movies & TV…");
+  const filters = page.locator('[data-tv-focus-group="search-filters"] button');
+  const suggestions = page.locator(
+    '[data-tv-focus-group="search-suggestions"] button',
+  );
   const grid = page.locator(
     '[data-search-section="top-results"]:visible [data-search-grid="top-results"]',
   );
@@ -453,7 +463,44 @@ test("TV search exposes the unified six as one navigable D-pad group", async ({
   await expect(grid).toHaveClass(/grid-cols-6/);
   await expect(cards).toHaveCount(6);
 
-  await cards.first().focus();
+  await expect(input).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  const enteredFilterIndex = await filters.evaluateAll((elements) =>
+    elements.findIndex((element) => element === document.activeElement),
+  );
+  expect(enteredFilterIndex).toBeGreaterThanOrEqual(0);
+  for (let index = enteredFilterIndex - 1; index >= 0; index -= 1) {
+    await page.keyboard.press("ArrowLeft");
+    await expect(filters.nth(index)).toBeFocused();
+  }
+  for (let index = 1; index < 4; index += 1) {
+    await page.keyboard.press("ArrowRight");
+    await expect(filters.nth(index)).toBeFocused();
+  }
+  for (let index = 2; index >= 0; index -= 1) {
+    await page.keyboard.press("ArrowLeft");
+    await expect(filters.nth(index)).toBeFocused();
+  }
+
+  await page.keyboard.press("ArrowDown");
+  await expect(suggestions.nth(0)).toBeFocused();
   await page.keyboard.press("ArrowRight");
-  await expect(cards.nth(1)).toBeFocused();
+  await expect(suggestions.nth(1)).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  expect(
+    await cards.evaluateAll((elements) =>
+      elements.some((element) => element === document.activeElement),
+    ),
+  ).toBe(true);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("button", { name: "Search Person", exact: true }),
+  ).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("button", { name: "Search Provider", exact: true }),
+  ).toBeFocused();
 });

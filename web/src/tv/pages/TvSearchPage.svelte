@@ -166,22 +166,22 @@
 
 <div class="flex h-full flex-col overflow-hidden px-4">
   <!--
-    Combined search-bar group: input (always visible) + type chips (when query
-    is active) in ONE row focusGroup so there is only one vertical D-pad stop
-    for the entire search header.
+    The input and filters must be separate vertical D-pad stops. Single-line
+    text inputs retain Left/Right for caret movement, so placing filter chips
+    in the input's row group makes them unreachable from the keyboard.
 
-    The input is a native focusable and is auto-discovered by the focus engine
-    via containment; chip buttons are registered via use:focusable.
-
-    NOT auto-focused on mount — on TV the user navigates to it via D-pad,
-    which triggers the IME naturally without popping it prematurely.
+    The input is NOT auto-focused on mount; navigating to it opens the TV IME
+    only when the user explicitly enters the search field.
   -->
-  <div
-    use:focusGroup={{ id: "search-bar", policy: { type: "row" } }}
-    class="shrink-0 flex items-center gap-3 py-4"
-  >
+  <div class="shrink-0 space-y-3 py-4">
     <div
+      use:focusGroup={{
+        id: "search-input",
+        policy: { type: "row" },
+        rememberFocus: false,
+      }}
       class="flex flex-1 items-center gap-3 rounded-xl bg-secondary px-4 py-3"
+      data-tv-focus-group="search-input"
     >
       {#if loading}
         <Spinner class="size-5 shrink-0" />
@@ -198,32 +198,51 @@
     </div>
 
     {#if query.trim()}
-      {#each [["movie", "Movies"], ["tv", "TV"], ["person", "People"], ["provider", "Providers"]] as [key, label] (key)}
-        <button
-          type="button"
-          use:focusable={{ groupId: "search-bar" }}
-          onclick={() => toggleType(key)}
-          class="shrink-0 rounded-xl px-5 py-2 text-sm font-medium transition-colors {selectedTypes.includes(
-            key,
-          )
-            ? 'bg-foreground text-background'
-            : 'bg-secondary text-muted-foreground'}">{label}</button
-        >
-      {/each}
+      <div
+        use:focusGroup={{
+          id: "search-filters",
+          policy: { type: "row" },
+          rememberFocus: true,
+        }}
+        class="flex items-center gap-3"
+        data-tv-focus-group="search-filters"
+      >
+        {#each [["movie", "Movies"], ["tv", "TV"], ["person", "People"], ["provider", "Providers"]] as [key, label] (key)}
+          <button
+            type="button"
+            use:focusable={{ groupId: "search-filters" }}
+            onclick={() => toggleType(key)}
+            class="shrink-0 rounded-xl px-5 py-2 text-sm font-medium transition-colors {selectedTypes.includes(
+              key,
+            )
+              ? 'bg-foreground text-background'
+              : 'bg-secondary text-muted-foreground'}">{label}</button
+          >
+        {/each}
+      </div>
     {/if}
   </div>
 
   {#if query.trim()}
-    <!-- Keyword suggestions — native buttons, geometric fallback navigates them -->
+    <!-- Keyword suggestions: one horizontal D-pad row. -->
     {#if !loading && keywords.length > 1}
       <div class="shrink-0">
         <p class="ml-4 mb-2 text-sm font-medium text-muted-foreground">
           More to Explore:
         </p>
-        <div class="flex gap-2 overflow-x-hidden p-4">
+        <div
+          use:focusGroup={{
+            id: "search-suggestions",
+            policy: { type: "row" },
+            rememberFocus: true,
+          }}
+          class="flex gap-2 overflow-x-hidden p-4"
+          data-tv-focus-group="search-suggestions"
+        >
           {#each keywords as kw (kw.id)}
             <button
               type="button"
+              use:focusable={{ groupId: "search-suggestions" }}
               class="shrink-0 rounded-lg bg-secondary px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
               onclick={() => (query = kw.name)}>{kw.name}</button
             >
@@ -271,7 +290,15 @@
               >
                 People
               </h2>
-              <div class="flex gap-5 overflow-x-hidden pb-1">
+              <div
+                use:focusGroup={{
+                  id: "search-people-row",
+                  policy: { type: "row" },
+                  rememberFocus: true,
+                }}
+                class="flex gap-5 overflow-x-hidden pb-1"
+                data-tv-focus-group="search-people-row"
+              >
                 {#each people as person (person.id)}
                   <div class="w-24 shrink-0">
                     <PersonCard {person} />
@@ -289,7 +316,15 @@
               >
                 Providers
               </h2>
-              <div class="flex gap-4 overflow-x-hidden pb-1">
+              <div
+                use:focusGroup={{
+                  id: "search-providers-row",
+                  policy: { type: "row" },
+                  rememberFocus: true,
+                }}
+                class="flex gap-4 overflow-x-hidden pb-1"
+                data-tv-focus-group="search-providers-row"
+              >
                 {#each providers as provider (provider.provider_id)}
                   <div class="w-24 shrink-0">
                     <ProviderCard {provider} />
