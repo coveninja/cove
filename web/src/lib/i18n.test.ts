@@ -19,6 +19,7 @@ import {
   activateLocale,
   initializeLocalization,
   intlLocale,
+  localeDefinition,
   normalizeAppLocale,
   resolveInitialLocale,
 } from "$lib/i18n";
@@ -34,6 +35,8 @@ describe("localization", () => {
   it.each([
     ["tr-TR", "tr"],
     ["TR_tr", "tr"],
+    ["pt-BR", "pt"],
+    ["PT_pt", "pt"],
     ["en-US", "en"],
     ["de-DE", null],
     ["", null],
@@ -47,8 +50,20 @@ describe("localization", () => {
   });
 
   it("uses the first supported browser language and falls back to English", () => {
-    expect(resolveInitialLocale("", ["de-DE", "tr-TR", "en-US"])).toBe("tr");
+    expect(resolveInitialLocale("", ["de-DE", "pt-BR", "tr-TR"])).toBe("pt");
     expect(resolveInitialLocale("", ["de-DE"])).toBe("en");
+  });
+
+  it("uses Brazilian Portuguese for localized metadata and Intl formatting", () => {
+    activateLocale("pt");
+
+    expect(localeDefinition()).toMatchObject({
+      appLocale: "pt",
+      tmdbLocale: "pt-BR",
+      nativeName: "Português",
+    });
+    expect(intlLocale()).toBe("pt-BR");
+    expect(document.documentElement.lang).toBe("pt");
   });
 
   it("persists and activates the first-run device locale", async () => {

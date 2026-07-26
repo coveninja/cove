@@ -2,6 +2,7 @@
   "$schema": "https://inlang.com/schema/inlang-message-format",
   "language_english": "İngilizce",
   "language_turkish": "Türkçe",
+  "language_portuguese": "Portekizce",
   "language_label": "Dil",
   "language_description": "Cove ve katalog bilgilerinde kullanılacak dili seçin.",
   "language_save_error": "Dil tercihi kaydedilemedi. Lütfen tekrar deneyin.",

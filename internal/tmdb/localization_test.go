@@ -53,6 +53,35 @@ func TestLocalizedTransportAddsTurkishLanguageAndImageFallbacks(t *testing.T) {
 	}
 }
 
+func TestLocalizedTransportAddsPortugueseLanguageAndImageFallbacks(t *testing.T) {
+	var gotLanguage, gotImageLanguage string
+	transport := &localizedTransport{
+		locale: func() string { return "pt" },
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotLanguage = req.URL.Query().Get("language")
+			gotImageLanguage = req.URL.Query().Get("include_image_language")
+			return jsonResponse(req, `{"posters":[{"file_path":"/poster.jpg"}]}`), nil
+		}),
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://api.themoviedb.org/3/movie/1/images", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+
+	if gotLanguage != "pt-BR" {
+		t.Fatalf("language = %q, want pt-BR", gotLanguage)
+	}
+	if gotImageLanguage != "pt,en,null" {
+		t.Fatalf("include_image_language = %q, want pt,en,null", gotImageLanguage)
+	}
+}
+
 func TestLocalizedTransportFillsMissingTurkishMetadataFromEnglish(t *testing.T) {
 	var mu sync.Mutex
 	var languages []string
@@ -159,6 +188,10 @@ func TestClientLocaleNormalizesUnsupportedValues(t *testing.T) {
 	client := New("", WithLocaleSource(func() string { return active }))
 	if got := client.Locale(); got != "tr" {
 		t.Fatalf("Locale() = %q, want tr", got)
+	}
+	active = "pt-BR"
+	if got := client.Locale(); got != "pt" {
+		t.Fatalf("Portuguese Locale() = %q, want pt", got)
 	}
 	active = "de"
 	if got := client.Locale(); got != "en" {

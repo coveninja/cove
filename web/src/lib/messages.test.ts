@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import english from "../../messages/en.json";
+import portuguese from "../../messages/pt.json";
 import turkish from "../../messages/tr.json";
 import { activateLocale, languageDisplayName, regionDisplayName } from "$lib/i18n";
 import * as m from "$lib/paraglide/messages.js";
@@ -13,10 +14,12 @@ function messageKeys(catalog: Record<string, string>): string[] {
 describe("message catalogs", () => {
   afterEach(() => activateLocale("en"));
 
-  it("keeps English and Turkish catalogs in parity with no empty messages", () => {
-    expect(messageKeys(turkish)).toEqual(messageKeys(english));
-    for (const [key, value] of Object.entries(turkish)) {
-      if (key !== "$schema") expect(value.trim(), key).not.toBe("");
+  it("keeps every translated catalog in parity with no empty messages", () => {
+    for (const catalog of [turkish, portuguese]) {
+      expect(messageKeys(catalog)).toEqual(messageKeys(english));
+      for (const [key, value] of Object.entries(catalog)) {
+        if (key !== "$schema") expect(value.trim(), key).not.toBe("");
+      }
     }
   });
 
@@ -33,5 +36,18 @@ describe("message catalogs", () => {
     expect(m.common_season_episode({ season: 2, episode: 4 })).toBe("S2B4");
     expect(languageDisplayName("de")).toMatch(/Almanca/i);
     expect(regionDisplayName("US")).toMatch(/Amerika Birleşik Devletleri/i);
+  });
+
+  it("renders Portuguese messages and Intl display names after activation", () => {
+    activateLocale("pt");
+
+    expect(m.settings_title()).toBe("Configurações");
+    expect(m.onboarding_language()).toBe("Escolha seu idioma");
+    expect(m.onboarding_selected_count({ count: 3 })).toBe("3 selecionados");
+    expect(m.explore_genre_movies({ genre: "Ação" })).toBe("Filmes de Ação");
+    expect(m.explore_genre_shows({ genre: "Drama" })).toBe("Séries de Drama");
+    expect(m.common_season_episode({ season: 2, episode: 4 })).toBe("T2E4");
+    expect(languageDisplayName("de")).toMatch(/alemão/i);
+    expect(regionDisplayName("US")).toMatch(/Estados Unidos/i);
   });
 });

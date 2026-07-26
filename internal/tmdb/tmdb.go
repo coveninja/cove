@@ -104,17 +104,34 @@ func WithLocaleSource(source LocaleSource) Option {
 
 // Locale returns the canonical Cove locale used for cache partitioning.
 func (c *Client) Locale() string {
-	if c != nil && c.locale != nil && strings.EqualFold(strings.TrimSpace(c.locale()), "tr") {
-		return "tr"
+	if c != nil && c.locale != nil {
+		return normalizeAppLocale(c.locale())
 	}
 	return "en"
 }
 
-func tmdbLocale(appLocale string) string {
-	if appLocale == "tr" {
-		return "tr-TR"
+func normalizeAppLocale(value string) string {
+	base := strings.ToLower(strings.TrimSpace(value))
+	if separator := strings.IndexAny(base, "-_"); separator >= 0 {
+		base = base[:separator]
 	}
-	return "en-US"
+	switch base {
+	case "tr", "pt":
+		return base
+	default:
+		return "en"
+	}
+}
+
+func tmdbLocale(appLocale string) string {
+	switch appLocale {
+	case "tr":
+		return "tr-TR"
+	case "pt":
+		return "pt-BR"
+	default:
+		return "en-US"
+	}
 }
 
 type localizedTransport struct {
@@ -124,8 +141,8 @@ type localizedTransport struct {
 
 func (t *localizedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	appLocale := "en"
-	if t.locale != nil && strings.EqualFold(strings.TrimSpace(t.locale()), "tr") {
-		appLocale = "tr"
+	if t.locale != nil {
+		appLocale = normalizeAppLocale(t.locale())
 	}
 	localized := cloneLocalizedRequest(req, tmdbLocale(appLocale))
 	res, err := t.base.RoundTrip(localized)

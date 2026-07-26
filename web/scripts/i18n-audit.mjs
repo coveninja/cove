@@ -379,7 +379,7 @@ if (!base) throw new Error("messages/en.json is required as the base catalog");
 const baseKeys = messageKeys(base);
 const catalogErrors = [];
 const rows = [];
-const languageNames = { en: "English", tr: "Türkçe" };
+const languageNames = { en: "English", tr: "Türkçe", pt: "Português" };
 
 for (const [locale, catalog] of catalogs) {
   const translated = baseKeys.filter(

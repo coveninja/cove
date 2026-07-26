@@ -17,6 +17,16 @@ describe("localized formatting", () => {
     ).toBe("2 izlenmeye hazır · 1 bugün · 3 bu hafta");
   });
 
+  it("uses Portuguese labels for runtime, countries, and calendar summaries", () => {
+    activateLocale("pt");
+
+    expect(formatRuntime({ runtime: 125 } as Details)).toBe("2 h 5 min");
+    expect(countryName("US")).toMatch(/Estados Unidos/i);
+    expect(
+      summaryLabel({ available: 2, today: 1, thisWeek: 3, upcoming: 4 }),
+    ).toBe("2 prontos para assistir · 1 hoje · 3 esta semana");
+  });
+
   it("uses the active Intl locale for date labels", () => {
     activateLocale("tr");
     const today = new Date();

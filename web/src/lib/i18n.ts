@@ -5,11 +5,11 @@ import {
   type Locale,
 } from "$lib/paraglide/runtime.js";
 
-export type AppLocale = "en" | "tr";
+export type AppLocale = "en" | "tr" | "pt";
 
 export interface LocaleDefinition {
   appLocale: AppLocale;
-  tmdbLocale: "en-US" | "tr-TR";
+  tmdbLocale: "en-US" | "tr-TR" | "pt-BR";
   nativeName: string;
   direction: "ltr" | "rtl";
 }
@@ -27,6 +27,12 @@ export const LOCALES: readonly LocaleDefinition[] = [
     nativeName: "Türkçe",
     direction: "ltr",
   },
+  {
+    appLocale: "pt",
+    tmdbLocale: "pt-BR",
+    nativeName: "Português",
+    direction: "ltr",
+  },
 ];
 
 const localeByCode = new Map(LOCALES.map((locale) => [locale.appLocale, locale]));
@@ -34,7 +40,7 @@ const localeByCode = new Map(LOCALES.map((locale) => [locale.appLocale, locale])
 export function normalizeAppLocale(value: string | null | undefined): AppLocale | null {
   if (!value) return null;
   const base = value.trim().toLowerCase().split(/[-_]/)[0];
-  return base === "en" || base === "tr" ? base : null;
+  return base === "en" || base === "tr" || base === "pt" ? base : null;
 }
 
 export function resolveInitialLocale(

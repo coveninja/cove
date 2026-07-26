@@ -45,7 +45,7 @@ export interface Settings {
   /**
    * UI
    */
-  uiLanguage: string; // "" until first frontend boot, then "en" | "tr"
+  uiLanguage: string; // "" until first frontend boot, then "en" | "tr" | "pt"
   showStreamDetails: boolean; // show codec/resolution badges on stream list
   hideSpoilers: boolean;
   /**

@@ -310,6 +310,33 @@ test("onboarding chooses the UI language immediately after welcome", async ({
     .toBe(true);
 });
 
+test("onboarding can switch the interface to Portuguese", async ({ page }) => {
+  const settingsUpdates: Array<Record<string, unknown>> = [];
+  await mockBackend(page, {
+    onboardingDone: false,
+    uiLanguage: "en",
+    settingsUpdates,
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Get started", exact: true }).click();
+  await page.getByRole("button", { name: "Português", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Escolha seu idioma", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Próximo", exact: true }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Sua conta", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      settingsUpdates.some((update) => update.uiLanguage === "pt"),
+    )
+    .toBe(true);
+});
+
 test("a guest can sign in and persist the client session", async ({ page }) => {
   await mockBackend(page);
   await page.goto("/");
