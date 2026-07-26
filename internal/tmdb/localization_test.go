@@ -82,6 +82,50 @@ func TestLocalizedTransportAddsPortugueseLanguageAndImageFallbacks(t *testing.T)
 	}
 }
 
+func TestLocalizedTransportAddsAdditionalLanguagesAndImageFallbacks(t *testing.T) {
+	tests := []struct {
+		appLocale   string
+		tmdbLocale  string
+		imageLocale string
+	}{
+		{appLocale: "es", tmdbLocale: "es-ES", imageLocale: "es,en,null"},
+		{appLocale: "it", tmdbLocale: "it-IT", imageLocale: "it,en,null"},
+		{appLocale: "de", tmdbLocale: "de-DE", imageLocale: "de,en,null"},
+		{appLocale: "ja", tmdbLocale: "ja-JP", imageLocale: "ja,en,null"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.appLocale, func(t *testing.T) {
+			var gotLanguage, gotImageLanguage string
+			transport := &localizedTransport{
+				locale: func() string { return tt.appLocale },
+				base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					gotLanguage = req.URL.Query().Get("language")
+					gotImageLanguage = req.URL.Query().Get("include_image_language")
+					return jsonResponse(req, `{"posters":[{"file_path":"/poster.jpg"}]}`), nil
+				}),
+			}
+
+			req, err := http.NewRequest(http.MethodGet, "https://api.themoviedb.org/3/movie/1/images", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := transport.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+
+			if gotLanguage != tt.tmdbLocale {
+				t.Fatalf("language = %q, want %s", gotLanguage, tt.tmdbLocale)
+			}
+			if gotImageLanguage != tt.imageLocale {
+				t.Fatalf("include_image_language = %q, want %s", gotImageLanguage, tt.imageLocale)
+			}
+		})
+	}
+}
+
 func TestLocalizedTransportFillsMissingTurkishMetadataFromEnglish(t *testing.T) {
 	var mu sync.Mutex
 	var languages []string
@@ -193,7 +237,14 @@ func TestClientLocaleNormalizesUnsupportedValues(t *testing.T) {
 	if got := client.Locale(); got != "pt" {
 		t.Fatalf("Portuguese Locale() = %q, want pt", got)
 	}
-	active = "de"
+	for _, locale := range []string{"es-MX", "it_IT", "DE-de", "ja-JP"} {
+		active = locale
+		want := strings.ToLower(locale[:2])
+		if got := client.Locale(); got != want {
+			t.Fatalf("Locale(%q) = %q, want %q", locale, got, want)
+		}
+	}
+	active = "fr"
 	if got := client.Locale(); got != "en" {
 		t.Fatalf("unsupported Locale() = %q, want en", got)
 	}

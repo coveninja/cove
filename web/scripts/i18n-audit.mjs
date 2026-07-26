@@ -37,12 +37,7 @@ const visibleProperties = new Set([
   "placeholder",
   "title",
 ]);
-const technicalText = new Set([
-  "Cove",
-  "DV",
-  "HDR",
-  "TMDB",
-]);
+const technicalText = new Set(["Cove", "DV", "HDR", "TMDB"]);
 
 async function sourceFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -80,10 +75,7 @@ function isVisibleText(value) {
 
 function outputLiterals(expression) {
   if (!expression || typeof expression !== "object") return [];
-  if (
-    expression.type === "Literal" &&
-    typeof expression.value === "string"
-  ) {
+  if (expression.type === "Literal" && typeof expression.value === "string") {
     return [{ value: expression.value, node: expression }];
   }
   if (expression.type === "TemplateLiteral") {
@@ -161,10 +153,7 @@ function scanSvelte(file, source) {
       }
       return;
     }
-    if (
-      node.type === "MustacheTag" ||
-      node.type === "RawMustacheTag"
-    ) {
+    if (node.type === "MustacheTag" || node.type === "RawMustacheTag") {
       for (const literal of outputLiterals(node.expression)) {
         add("expression", literal.value, literal.node);
       }
@@ -181,9 +170,7 @@ function scanSvelte(file, source) {
 
     for (const [key, value] of Object.entries(node)) {
       if (
-        ["expression", "loc", "metadata", "start", "end", "type"].includes(
-          key,
-        )
+        ["expression", "loc", "metadata", "start", "end", "type"].includes(key)
       ) {
         continue;
       }
@@ -194,10 +181,7 @@ function scanSvelte(file, source) {
 
   function scanScript(node) {
     if (!node || typeof node !== "object") return;
-    if (
-      node.type === "Property" &&
-      visibleProperties.has(propertyName(node))
-    ) {
+    if (node.type === "Property" && visibleProperties.has(propertyName(node))) {
       for (const literal of outputLiterals(node.value)) {
         add(`script ${propertyName(node)}`, literal.value, literal.node);
       }
@@ -281,9 +265,7 @@ function messageKeys(catalog) {
 }
 
 function placeholders(message) {
-  return [
-    ...String(message).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g),
-  ]
+  return [...String(message).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)]
     .map((match) => match[1])
     .sort();
 }
@@ -379,7 +361,15 @@ if (!base) throw new Error("messages/en.json is required as the base catalog");
 const baseKeys = messageKeys(base);
 const catalogErrors = [];
 const rows = [];
-const languageNames = { en: "English", tr: "Türkçe", pt: "Português" };
+const languageNames = {
+  en: "English",
+  tr: "Türkçe",
+  pt: "Português",
+  es: "Español",
+  it: "Italiano",
+  de: "Deutsch",
+  ja: "日本語",
+};
 
 for (const [locale, catalog] of catalogs) {
   const translated = baseKeys.filter(

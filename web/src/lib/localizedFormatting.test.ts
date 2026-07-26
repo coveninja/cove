@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { activateLocale } from "$lib/i18n";
+import { activateLocale, type AppLocale } from "$lib/i18n";
 import { dayLabel, shortDateLabel, summaryLabel } from "$lib/calendar";
 import { countryName, formatRuntime } from "$lib/utils";
 import type { Details } from "$lib/types/tmdb";
@@ -27,10 +27,29 @@ describe("localized formatting", () => {
     ).toBe("2 prontos para assistir · 1 hoje · 3 esta semana");
   });
 
+  it.each([
+    ["es", "2 h 5 min", /Estados Unidos/i],
+    ["it", "2 h 5 min", /Stati Uniti/i],
+    ["de", "2 Std. 5 Min.", /Vereinigte Staaten/i],
+    ["ja", "2時間5分", /アメリカ合衆国/],
+  ] as const)(
+    "uses %s labels for runtime and countries",
+    (locale, runtime, country) => {
+      activateLocale(locale as AppLocale);
+
+      expect(formatRuntime({ runtime: 125 } as Details)).toBe(runtime);
+      expect(countryName("US")).toMatch(country);
+    },
+  );
+
   it("uses the active Intl locale for date labels", () => {
     activateLocale("tr");
     const today = new Date();
-    const target = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+    const target = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate() + 1,
+    );
     const tomorrow = [
       target.getFullYear(),
       String(target.getMonth() + 1).padStart(2, "0"),

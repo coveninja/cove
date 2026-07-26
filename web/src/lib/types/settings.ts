@@ -45,7 +45,7 @@ export interface Settings {
   /**
    * UI
    */
-  uiLanguage: string; // "" until first frontend boot, then "en" | "tr" | "pt"
+  uiLanguage: string; // "" until first frontend boot, then a supported AppLocale
   showStreamDetails: boolean; // show codec/resolution badges on stream list
   hideSpoilers: boolean;
   /**
@@ -141,5 +141,4 @@ export interface Settings {
  * Store owns the package's mutable state. Fields are unexported, so tygo emits
  * nothing for Store — only the Settings data type crosses into the generated TS.
  */
-export interface Store {
-}
+export interface Store {}

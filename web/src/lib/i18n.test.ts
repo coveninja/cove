@@ -37,8 +37,12 @@ describe("localization", () => {
     ["TR_tr", "tr"],
     ["pt-BR", "pt"],
     ["PT_pt", "pt"],
+    ["es-MX", "es"],
+    ["it-IT", "it"],
+    ["DE_de", "de"],
+    ["ja-JP", "ja"],
     ["en-US", "en"],
-    ["de-DE", null],
+    ["fr-FR", null],
     ["", null],
     [undefined, null],
   ])("normalizes %j to %j", (input, expected) => {
@@ -50,8 +54,8 @@ describe("localization", () => {
   });
 
   it("uses the first supported browser language and falls back to English", () => {
-    expect(resolveInitialLocale("", ["de-DE", "pt-BR", "tr-TR"])).toBe("pt");
-    expect(resolveInitialLocale("", ["de-DE"])).toBe("en");
+    expect(resolveInitialLocale("", ["fr-FR", "pt-BR", "tr-TR"])).toBe("pt");
+    expect(resolveInitialLocale("", ["fr-FR"])).toBe("en");
   });
 
   it("uses Brazilian Portuguese for localized metadata and Intl formatting", () => {
@@ -65,6 +69,26 @@ describe("localization", () => {
     expect(intlLocale()).toBe("pt-BR");
     expect(document.documentElement.lang).toBe("pt");
   });
+
+  it.each([
+    ["es", "es-ES", "Español"],
+    ["it", "it-IT", "Italiano"],
+    ["de", "de-DE", "Deutsch"],
+    ["ja", "ja-JP", "日本語"],
+  ] as const)(
+    "uses the canonical metadata and Intl locale for %s",
+    (appLocale, tmdbLocale, nativeName) => {
+      activateLocale(appLocale);
+
+      expect(localeDefinition()).toMatchObject({
+        appLocale,
+        tmdbLocale,
+        nativeName,
+      });
+      expect(intlLocale()).toBe(tmdbLocale);
+      expect(document.documentElement.lang).toBe(appLocale);
+    },
+  );
 
   it("persists and activates the first-run device locale", async () => {
     Object.defineProperty(navigator, "languages", {

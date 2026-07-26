@@ -47,7 +47,7 @@ type Settings struct {
 	SubtitleBackground  bool    `json:"subtitleBackground"`  // dark box behind subtitle text
 
 	// UI
-	UILanguage        string `json:"uiLanguage"`        // "" until first frontend boot, then "en" | "tr" | "pt"
+	UILanguage        string `json:"uiLanguage"`        // "" until first frontend boot, then a supported AppLocale
 	ShowStreamDetails bool   `json:"showStreamDetails"` // show codec/resolution badges on stream list
 	HideSpoilers      bool   `json:"hideSpoilers"`
 

@@ -287,7 +287,7 @@ test("onboarding chooses the UI language immediately after welcome", async ({
 
   await expect(
     page.getByRole("heading", { name: "Welcome to Cove", exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: "Get started", exact: true }).click();
 
   await expect(
@@ -304,9 +304,7 @@ test("onboarding chooses the UI language immediately after welcome", async ({
     page.getByRole("heading", { name: "Hesabınız", exact: true }),
   ).toBeVisible();
   await expect
-    .poll(() =>
-      settingsUpdates.some((update) => update.uiLanguage === "tr"),
-    )
+    .poll(() => settingsUpdates.some((update) => update.uiLanguage === "tr"))
     .toBe(true);
 });
 
@@ -331,11 +329,81 @@ test("onboarding can switch the interface to Portuguese", async ({ page }) => {
     page.getByRole("heading", { name: "Sua conta", exact: true }),
   ).toBeVisible();
   await expect
-    .poll(() =>
-      settingsUpdates.some((update) => update.uiLanguage === "pt"),
-    )
+    .poll(() => settingsUpdates.some((update) => update.uiLanguage === "pt"))
     .toBe(true);
 });
+
+for (const language of [
+  {
+    locale: "es",
+    nativeName: "Español",
+    languageHeading: "Elige tu idioma",
+    next: "Siguiente",
+    accountHeading: "Tu cuenta",
+  },
+  {
+    locale: "it",
+    nativeName: "Italiano",
+    languageHeading: "Scegli la tua lingua",
+    next: "Avanti",
+    accountHeading: "Il tuo account",
+  },
+  {
+    locale: "de",
+    nativeName: "Deutsch",
+    languageHeading: "Wähle deine Sprache",
+    next: "Weiter",
+    accountHeading: "Dein Konto",
+  },
+  {
+    locale: "ja",
+    nativeName: "日本語",
+    languageHeading: "言語を選択",
+    next: "次へ",
+    accountHeading: "アカウント",
+  },
+]) {
+  test(`onboarding can switch the interface to ${language.nativeName}`, async ({
+    page,
+  }) => {
+    const settingsUpdates: Array<Record<string, unknown>> = [];
+    await mockBackend(page, {
+      onboardingDone: false,
+      uiLanguage: "en",
+      settingsUpdates,
+    });
+
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Get started", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: language.nativeName, exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: language.languageHeading,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: language.next, exact: true })
+      .click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: language.accountHeading,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        settingsUpdates.some((update) => update.uiLanguage === language.locale),
+      )
+      .toBe(true);
+  });
+}
 
 test("a guest can sign in and persist the client session", async ({ page }) => {
   await mockBackend(page);

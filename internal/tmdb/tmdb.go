@@ -116,7 +116,7 @@ func normalizeAppLocale(value string) string {
 		base = base[:separator]
 	}
 	switch base {
-	case "tr", "pt":
+	case "tr", "pt", "es", "it", "de", "ja":
 		return base
 	default:
 		return "en"
@@ -129,6 +129,14 @@ func tmdbLocale(appLocale string) string {
 		return "tr-TR"
 	case "pt":
 		return "pt-BR"
+	case "es":
+		return "es-ES"
+	case "it":
+		return "it-IT"
+	case "de":
+		return "de-DE"
+	case "ja":
+		return "ja-JP"
 	default:
 		return "en-US"
 	}
