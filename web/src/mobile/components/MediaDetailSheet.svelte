@@ -2,7 +2,7 @@
   import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
   import type { Stream } from "$lib/types/addons";
   import { onMount } from "svelte";
-  import { X, Play, ListVideo, ChevronDown, ThumbsDown, Volume2, VolumeOff } from "lucide-svelte";
+  import { X, Play, ListVideo, ChevronDown, Volume2, VolumeOff } from "lucide-svelte";
   import { api, formatPosition } from "$lib/api";
   import { getImageOpt, getVideoOpt, formatRuntime, formatRating } from "$lib/utils";
   import PlayerSimple from "../../components/PlayerSimple.svelte";
@@ -15,6 +15,7 @@
   import { Button } from "$lib/components/ui/button";
   import { animate } from "animejs";
   import { pressable } from "../lib/pressable";
+  import MobileMediaActionsSheet from "./MobileMediaActionsSheet.svelte";
 
   let {
     media,
@@ -106,9 +107,11 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let dismissed = $state(false);
+  let hasProgress = $state(false);
   let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
+    $libraryChanged;
     let stale = false;
     api
       .libraryGet(media.id, media.media_type)
@@ -118,11 +121,13 @@
           libraryEntry = null;
           movieProgress = null;
           dismissed = false;
+          hasProgress = false;
           tvWatchAction = null;
           return;
         }
         libraryEntry = result.entry;
         dismissed = result.dismissed;
+        hasProgress = result.progress.length > 0;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         } else {
@@ -138,18 +143,6 @@
       stale = true;
     };
   });
-
-  async function toggleDismissed(): Promise<void> {
-    const next = !dismissed;
-    dismissed = next;
-    try {
-      if (next) await api.notInterested(media);
-      else await api.undoNotInterested(media);
-      libraryChanged.update((n) => n + 1);
-    } catch {
-      dismissed = !next;
-    }
-  }
 
   // ── Library panel bounce ───────────────────────────────────────────────────
   let libraryPanelEl = $state<HTMLElement | null>(null);
@@ -574,16 +567,13 @@
           />
         </div>
 
-        <!-- Not interested -->
-        <Button
-                variant={dismissed ? "destructive" : "outline"}
-                size="icon"
-                class="size-12 shrink-0 rounded-lg"
-                onclick={toggleDismissed}
-                title={dismissed ? "Undo not interested" : "Not interested"}
-        >
-          <ThumbsDown class="size-4" />
-        </Button>
+        <MobileMediaActionsSheet
+          {media}
+          {libraryEntry}
+          {dismissed}
+          {hasProgress}
+          class="size-12 shrink-0 rounded-lg"
+        />
 
         <!-- Star rating -->
         <StarRating

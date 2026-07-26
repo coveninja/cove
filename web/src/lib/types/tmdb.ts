@@ -139,6 +139,11 @@ export interface Details {
     id: number /* int */;
     name: string;
   }[];
+  /**
+   * Status is TMDB's lifecycle label for a TV show (for example
+   * "Returning Series", "Ended", or "Canceled"). Empty for movies.
+   */
+  status: string;
   number_of_seasons: number /* int */;
   number_of_episodes: number /* int */;
   seasons: TVSeason[];

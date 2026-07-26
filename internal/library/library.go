@@ -1089,6 +1089,7 @@ func newUUID() string {
 func (l *Library) SetupHandlers(mux *http.ServeMux) {
 	// /api/library/progress must be registered before /api/library/ so Go's mux
 	// matches it as the more-specific fixed path.
+	mux.HandleFunc("/api/library/progress/bulk", utils.CorsMiddleware(l.handleProgressBulk))
 	mux.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
 	mux.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
 	mux.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
@@ -1195,6 +1196,185 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleProgressBulk atomically marks a movie or a set of TV episodes watched,
+// or resets every saved progress row for a title. The frontend resolves aired
+// TV episodes through TMDB, then sends them in one request so a whole-show
+// action cannot leave partially-updated local state.
+func (l *Library) handleProgressBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		TmdbID          int     `json:"tmdb_id"`
+		MediaType       string  `json:"media_type"`
+		Title           string  `json:"title"`
+		PosterPath      string  `json:"poster_path"`
+		VoteAverage     float64 `json:"vote_average"`
+		Completed       bool    `json:"completed"`
+		Status          Status  `json:"status"`
+		DurationSeconds float64 `json:"duration_seconds"`
+		Episodes        []struct {
+			Season          int     `json:"season"`
+			Episode         int     `json:"episode"`
+			DurationSeconds float64 `json:"duration_seconds"`
+		} `json:"episodes"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+		http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
+		return
+	}
+	if body.Status != "" && !validStatus(body.Status) {
+		http.Error(w, "invalid status", http.StatusBadRequest)
+		return
+	}
+	if body.DurationSeconds < 0 || len(body.Episodes) > 5000 {
+		http.Error(w, "invalid duration or too many episodes", http.StatusBadRequest)
+		return
+	}
+
+	type episodeInput struct {
+		season, episode int
+		duration        float64
+	}
+	episodes := make([]episodeInput, 0, len(body.Episodes))
+	seen := make(map[[2]int]struct{}, len(body.Episodes))
+	for _, ep := range body.Episodes {
+		if ep.Season <= 0 || ep.Episode <= 0 || ep.DurationSeconds < 0 {
+			http.Error(w, "episodes require positive season/episode and non-negative duration", http.StatusBadRequest)
+			return
+		}
+		key := [2]int{ep.Season, ep.Episode}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		episodes = append(episodes, episodeInput{
+			season: ep.Season, episode: ep.Episode, duration: ep.DurationSeconds,
+		})
+	}
+	if body.MediaType == "tv" && body.Completed && len(episodes) == 0 {
+		http.Error(w, "at least one aired episode is required", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	l.mu.Lock()
+	entryKeyValue := entryKey(body.TmdbID, body.MediaType)
+	entry := l.db.Entries[entryKeyValue]
+	if entry == nil && body.Completed {
+		entry = &LibraryEntry{
+			ID:        newUUID(),
+			TmdbID:    body.TmdbID,
+			MediaType: body.MediaType,
+			AddedAt:   now,
+			Status:    StatusWatching,
+		}
+		l.db.Entries[entryKeyValue] = entry
+		delete(l.db.Removed, entryKeyValue)
+		l.relinkProgress(entry)
+	}
+	if entry != nil {
+		if body.Title != "" {
+			entry.Title = body.Title
+		}
+		if body.PosterPath != "" {
+			entry.PosterPath = body.PosterPath
+		}
+		entry.VoteAverage = body.VoteAverage
+		if body.Status != "" {
+			entry.Status = body.Status
+		}
+		entry.UpdatedAt = now
+	}
+
+	upsert := func(season, episode *int, duration float64, completed bool) {
+		key := progressKey(body.TmdbID, body.MediaType, season, episode)
+		progress := l.db.Progress[key]
+		if progress == nil {
+			progress = &WatchProgress{
+				ID:             newUUID(),
+				LibraryEntryID: entry.ID,
+				TmdbID:         body.TmdbID,
+				MediaType:      body.MediaType,
+				Season:         clonePtr(season),
+				Episode:        clonePtr(episode),
+			}
+			l.db.Progress[key] = progress
+		}
+		progress.LibraryEntryID = entry.ID
+		progress.PositionSeconds = 0
+		progress.DurationSeconds = 0
+		progress.Completed = completed
+		progress.WatchedAt = now
+		if completed {
+			if duration <= 0 {
+				duration = 1
+			}
+			progress.PositionSeconds = duration
+			progress.DurationSeconds = duration
+		}
+	}
+
+	if body.Completed {
+		entry.LastWatchedAt = &now
+		if body.MediaType == "movie" {
+			upsert(nil, nil, body.DurationSeconds, true)
+		} else {
+			lastSeason, lastEpisode := 0, 0
+			for _, ep := range episodes {
+				season, episode := ep.season, ep.episode
+				upsert(&season, &episode, ep.duration, true)
+				if season > lastSeason || (season == lastSeason && episode > lastEpisode) {
+					lastSeason, lastEpisode = season, episode
+				}
+			}
+			entry.LastWatchedSeason = clonePtr(&lastSeason)
+			entry.LastWatchedEpisode = clonePtr(&lastEpisode)
+		}
+	} else {
+		for _, progress := range l.db.Progress {
+			if progress.TmdbID == body.TmdbID && progress.MediaType == body.MediaType {
+				progress.PositionSeconds = 0
+				progress.DurationSeconds = 0
+				progress.Completed = false
+				progress.WatchedAt = now
+				if entry != nil {
+					progress.LibraryEntryID = entry.ID
+				}
+			}
+		}
+		if entry != nil {
+			entry.LastWatchedAt = nil
+			entry.LastWatchedSeason = nil
+			entry.LastWatchedEpisode = nil
+		}
+	}
+
+	progressOut := make([]*WatchProgress, 0)
+	for _, progress := range l.db.Progress {
+		if progress.TmdbID == body.TmdbID && progress.MediaType == body.MediaType {
+			progressOut = append(progressOut, cloneProgress(progress))
+		}
+	}
+	entryOut := cloneEntry(entry)
+	l.gen.Add(1)
+	l.markDirty()
+	l.mu.Unlock()
+	l.tasteGen.Add(1)
+
+	if entryOut != nil {
+		entryOut.PosterPath = rewritePosterURL(entryOut.PosterPath)
+	}
+	jsonOK(w, map[string]any{"entry": entryOut, "progress": progressOut})
 }
 
 // ── Handler: /api/library/progress ────────────────────────────────────────────

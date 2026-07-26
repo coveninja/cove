@@ -483,6 +483,119 @@ func TestCollectionAndProgressRequestBoundaries(t *testing.T) {
 		libraryRequest(t, l, http.MethodPut, "/api/library/progress", `{}`).Code)
 }
 
+func TestBulkProgressMarksAndResetsWholeTVTitle(t *testing.T) {
+	l := newLib(t)
+
+	marked := libraryRequest(t, l, http.MethodPost, "/api/library/progress/bulk", `{
+		"tmdb_id":21,
+		"media_type":"tv",
+		"title":"Whole Show",
+		"poster_path":"/poster.jpg",
+		"vote_average":8.5,
+		"completed":true,
+		"status":"finished",
+		"episodes":[
+			{"season":1,"episode":1,"duration_seconds":2400},
+			{"season":1,"episode":2,"duration_seconds":0},
+			{"season":1,"episode":2,"duration_seconds":2400}
+		]
+	}`)
+	require.Equal(t, http.StatusOK, marked.Code, marked.Body.String())
+
+	var result struct {
+		Entry    *LibraryEntry    `json:"entry"`
+		Progress []*WatchProgress `json:"progress"`
+	}
+	require.NoError(t, json.NewDecoder(marked.Body).Decode(&result))
+	require.NotNil(t, result.Entry)
+	assert.Equal(t, StatusFinished, result.Entry.Status)
+	assert.Equal(t, "Whole Show", result.Entry.Title)
+	require.NotNil(t, result.Entry.LastWatchedSeason)
+	require.NotNil(t, result.Entry.LastWatchedEpisode)
+	assert.Equal(t, 1, *result.Entry.LastWatchedSeason)
+	assert.Equal(t, 2, *result.Entry.LastWatchedEpisode)
+	require.Len(t, result.Progress, 2, "duplicate episode positions must be coalesced")
+	for _, progress := range result.Progress {
+		assert.True(t, progress.Completed)
+		assert.Equal(t, progress.DurationSeconds, progress.PositionSeconds)
+		assert.Greater(t, progress.DurationSeconds, float64(0))
+	}
+
+	reset := libraryRequest(t, l, http.MethodPost, "/api/library/progress/bulk", `{
+		"tmdb_id":21,
+		"media_type":"tv",
+		"completed":false,
+		"status":"watching"
+	}`)
+	require.Equal(t, http.StatusOK, reset.Code, reset.Body.String())
+	require.NoError(t, json.NewDecoder(reset.Body).Decode(&result))
+	assert.Equal(t, StatusWatching, result.Entry.Status)
+	assert.Nil(t, result.Entry.LastWatchedAt)
+	assert.Nil(t, result.Entry.LastWatchedSeason)
+	assert.Nil(t, result.Entry.LastWatchedEpisode)
+	require.Len(t, result.Progress, 2)
+	for _, progress := range result.Progress {
+		assert.False(t, progress.Completed)
+		assert.Zero(t, progress.PositionSeconds)
+		assert.Zero(t, progress.DurationSeconds)
+	}
+
+	// Resetting preserved history after "Remove from My List" must not silently
+	// add the title back to the library.
+	require.Equal(t, http.StatusNoContent,
+		libraryRequest(t, l, http.MethodDelete, "/api/library/21/tv", "").Code)
+	resetRemoved := libraryRequest(t, l, http.MethodPost, "/api/library/progress/bulk", `{
+		"tmdb_id":21,
+		"media_type":"tv",
+		"completed":false,
+		"status":"watching"
+	}`)
+	require.Equal(t, http.StatusOK, resetRemoved.Code, resetRemoved.Body.String())
+	require.NoError(t, json.NewDecoder(resetRemoved.Body).Decode(&result))
+	assert.Nil(t, result.Entry)
+	require.Len(t, result.Progress, 2)
+}
+
+func TestBulkProgressMarksMovieAndValidatesRequests(t *testing.T) {
+	l := newLib(t)
+
+	marked := libraryRequest(t, l, http.MethodPost, "/api/library/progress/bulk", `{
+		"tmdb_id":22,
+		"media_type":"movie",
+		"title":"Film",
+		"completed":true,
+		"status":"finished",
+		"duration_seconds":7200
+	}`)
+	require.Equal(t, http.StatusOK, marked.Code, marked.Body.String())
+	progress := l.AllProgress()
+	require.Len(t, progress, 1)
+	assert.True(t, progress[0].Completed)
+	assert.Nil(t, progress[0].Season)
+	assert.Nil(t, progress[0].Episode)
+	assert.Equal(t, float64(7200), progress[0].DurationSeconds)
+
+	cases := []struct {
+		method string
+		body   string
+	}{
+		{http.MethodGet, ""},
+		{http.MethodPost, "{"},
+		{http.MethodPost, `{"tmdb_id":1,"media_type":"album"}`},
+		{http.MethodPost, `{"tmdb_id":1,"media_type":"tv","completed":true}`},
+		{http.MethodPost, `{"tmdb_id":1,"media_type":"tv","completed":true,"episodes":[{"season":0,"episode":1}]}`},
+		{http.MethodPost, `{"tmdb_id":1,"media_type":"movie","status":"paused"}`},
+	}
+	for _, tc := range cases {
+		response := libraryRequest(t, l, tc.method, "/api/library/progress/bulk", tc.body)
+		if tc.method == http.MethodGet {
+			assert.Equal(t, http.StatusMethodNotAllowed, response.Code)
+		} else {
+			assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestItemDismissAndStatsRequestBoundaries(t *testing.T) {
 	l := newLib(t)
 	require.Equal(t, http.StatusOK, libraryRequest(t, l, http.MethodPost, "/api/library",

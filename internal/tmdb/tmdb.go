@@ -359,6 +359,9 @@ type Details struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"networks"`
+	// Status is TMDB's lifecycle label for a TV show (for example
+	// "Returning Series", "Ended", or "Canceled"). Empty for movies.
+	Status           string     `json:"status"`
 	NumberOfSeasons  int        `json:"number_of_seasons"`
 	NumberOfEpisodes int        `json:"number_of_episodes"`
 	Seasons          []TVSeason `json:"seasons"`

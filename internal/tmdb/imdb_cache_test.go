@@ -157,7 +157,7 @@ func TestGetDetails_MovieAndTVDoNotCollide(t *testing.T) {
 			fmt.Fprint(w, `{"runtime":100}`)
 			return
 		}
-		fmt.Fprint(w, `{"runtime":45}`)
+		fmt.Fprint(w, `{"runtime":45,"status":"Returning Series"}`)
 	}))
 	defer srv.Close()
 	withTestBaseURL(t, srv)
@@ -171,6 +171,7 @@ func TestGetDetails_MovieAndTVDoNotCollide(t *testing.T) {
 
 	assert.Equal(t, 100, movie.Runtime)
 	assert.Equal(t, 45, tv.Runtime)
+	assert.Equal(t, "Returning Series", tv.Status)
 }
 
 func TestGetDetails_ConcurrentCallsCoalesce(t *testing.T) {

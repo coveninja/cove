@@ -2,19 +2,35 @@
   import { api, type LibraryStatus, STATUS_LABELS, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
-  import { BookmarkIcon, List } from "lucide-svelte";
+  import {
+    BookmarkIcon,
+    CheckCheck,
+    List,
+    RotateCcw,
+    ThumbsDown,
+    Trash2,
+  } from "lucide-svelte";
   import { animate } from "animejs";
   import { libraryChanged } from "$lib/stores/library";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
+  import {
+    mediaUtilityItems,
+    performMediaUtilityAction,
+    type MediaUtilityAction,
+  } from "$lib/mediaActions";
 
   let {
     libraryEntry,
+    dismissed,
+    hasProgress,
     media,
     lastAiredSeason = null,
     lastAiredEpisode = null,
     onpopoverchange,
   } = $props<{
-    libraryEntry: LibraryEntry;
+    libraryEntry: LibraryEntry | null;
+    dismissed: boolean;
+    hasProgress: boolean;
     media: Media;
     lastAiredSeason?: number | null;
     lastAiredEpisode?: number | null;
@@ -22,6 +38,10 @@
   }>();
 
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
+  let working = $state<MediaUtilityAction | null>(null);
+  const utilityItems = $derived(
+    mediaUtilityItems(media, { entry: libraryEntry, dismissed, hasProgress }),
+  );
 
   function animateBookmarkIn(el: HTMLElement): void {
     animate(el, {
@@ -63,7 +83,47 @@
       console.error("library status:", e);
     }
   }
+
+  async function handleUtility(action: MediaUtilityAction): Promise<void> {
+    if (working) return;
+    working = action;
+    try {
+      await performMediaUtilityAction(action, media, {
+        entry: libraryEntry,
+        dismissed,
+        hasProgress,
+      });
+      onpopoverchange?.(false);
+    } catch (error) {
+      console.error("media action:", error);
+    } finally {
+      working = null;
+    }
+  }
 </script>
+
+{#each utilityItems as item (item.id)}
+  <ContextMenu.Item
+    variant={item.destructive ? "destructive" : "default"}
+    disabled={working !== null}
+    onclick={(event) => {
+      event.stopPropagation();
+      handleUtility(item.id);
+    }}
+  >
+    {#if item.id === "mark-watched"}
+      <CheckCheck />
+    {:else if item.id === "mark-unwatched"}
+      <RotateCcw />
+    {:else if item.id === "toggle-not-interested"}
+      <ThumbsDown />
+    {:else}
+      <Trash2 />
+    {/if}
+    <span>{item.label}</span>
+  </ContextMenu.Item>
+{/each}
+<ContextMenu.Separator />
 
 <ContextMenu.Sub>
   <ContextMenu.SubTrigger>

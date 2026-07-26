@@ -863,6 +863,30 @@ export const api = {
       body: JSON.stringify(p),
     }),
 
+  // Atomically marks a whole movie/TV title watched, or resets every saved
+  // progress row for it. TV callers provide the aired episode positions when
+  // marking watched; reset operations use the server's existing rows.
+  progressBulkSave: (p: {
+    tmdb_id: number;
+    media_type: string;
+    title?: string;
+    poster_path?: string;
+    vote_average?: number;
+    completed: boolean;
+    status?: LibraryStatus;
+    duration_seconds?: number;
+    episodes?: {
+      season: number;
+      episode: number;
+      duration_seconds: number;
+    }[];
+  }): Promise<{ entry: LibraryEntry | null; progress: WatchProgress[] }> =>
+    request(`/library/progress/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    }),
+
   // ── Discovery ────────────────────────────────────────────────────────────────
   discover: (
     type: "movie" | "tv" | "all",

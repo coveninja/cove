@@ -72,6 +72,8 @@
   let lastAiredEpisode = $state<number | null>(null);
   let videoUrl = $state<string>();
   let libraryEntry = $state<LibraryEntry | null>(null);
+  let dismissed = $state(false);
+  let hasProgress = $state(false);
   const isWatched = $derived(libraryEntry?.status === "finished");
   const isDropped = $derived(libraryEntry?.status === "dropped");
 
@@ -208,6 +210,8 @@
       .libraryGet(media.id, media.media_type)
       .then((result) => {
         libraryEntry = result?.entry ?? null;
+        dismissed = result?.dismissed ?? false;
+        hasProgress = (result?.progress.length ?? 0) > 0;
       })
       .catch((err) => {
         // Backend unreachable (e.g. dev server restart) — keep the last known
@@ -341,7 +345,14 @@
     </div>
   </ContextMenu.Trigger>
   <ContextMenu.Content>
-    <LibraryContextMenuContent {libraryEntry} {media} />
+    <LibraryContextMenuContent
+      {libraryEntry}
+      {dismissed}
+      {hasProgress}
+      {media}
+      {lastAiredSeason}
+      {lastAiredEpisode}
+    />
   </ContextMenu.Content>
 </ContextMenu.Root>
 

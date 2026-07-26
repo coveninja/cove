@@ -65,14 +65,18 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let dismissed = $state(false);
+  let hasProgress = $state(false);
 
   $effect(() => {
+    $libraryChanged;
     api
       .libraryGet(media.id, media.media_type)
       .then((result) => {
+        libraryEntry = result?.entry ?? null;
+        dismissed = result?.dismissed ?? false;
+        hasProgress = (result?.progress.length ?? 0) > 0;
+        movieProgress = null;
         if (!result) return;
-        libraryEntry = result.entry;
-        dismissed = result.dismissed;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         }
@@ -255,7 +259,14 @@
   </span>
           </ContextMenu.Trigger>
     <ContextMenu.Content>
-      <LibraryContextMenuContent {libraryEntry} {media} />
+      <LibraryContextMenuContent
+        {libraryEntry}
+        {dismissed}
+        {hasProgress}
+        {media}
+        {lastAiredSeason}
+        {lastAiredEpisode}
+      />
     </ContextMenu.Content>
   </ContextMenu.Root>
 </span>

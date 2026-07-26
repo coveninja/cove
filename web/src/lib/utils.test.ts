@@ -50,6 +50,7 @@ function details(overrides: Partial<Details> = {}): Details {
     origin_country: [],
     production_companies: [],
     networks: [],
+    status: "",
     number_of_seasons: 0,
     number_of_episodes: 0,
     seasons: [],

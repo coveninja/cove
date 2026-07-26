@@ -12,7 +12,7 @@
     footer,
   }: {
     title: string;
-    items: { id: string | number; label: string; sublabel?: string; header?: boolean; indent?: boolean }[];
+    items: { id: string | number; label: string; sublabel?: string; destructive?: boolean; header?: boolean; indent?: boolean }[];
     selectedId?: string | number | null;
     onSelect: (id: string | number) => void;
     onClose: () => void;
@@ -164,7 +164,7 @@
       {:else}
         <button
           type="button"
-          class="flex min-h-[52px] w-full items-center gap-3 px-5 py-3 text-left transition-colors active:bg-white/10"
+          class="flex min-h-[52px] w-full items-center gap-3 px-5 py-3 text-left transition-colors active:bg-white/10 {item.destructive ? 'text-red-400' : ''}"
           onclick={() => {
             onSelect(item.id);
             onClose();

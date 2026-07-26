@@ -5,7 +5,7 @@
   import { animate } from "animejs";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button";
-  import { ChevronDown, ListVideo, Play, Star, ThumbsDown, X } from "lucide-svelte";
+  import { ChevronDown, ListVideo, Play, Star, X } from "lucide-svelte";
   import {
     countryName,
     formatRating,
@@ -21,6 +21,7 @@
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import StarRating from "./StarRating.svelte";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
+  import MediaActionsPanel from "./MediaActionsPanel.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import { resolveTvWatchAction, type TvWatchAction } from "$lib/watchAction";
 
@@ -165,6 +166,7 @@
   let tvWatchAction = $state<TvWatchAction | null>(null);
 
   $effect(() => {
+    $libraryChanged;
     let stale = false;
     api
       .libraryGet(media.id, media.media_type)
@@ -193,18 +195,6 @@
     return () => { stale = true; };
   });
 
-  async function toggleDismissed(): Promise<void> {
-    const next = !dismissed;
-    dismissed = next;
-    try {
-      if (next) await api.notInterested(media);
-      else await api.undoNotInterested(media);
-      libraryChanged.update((n) => n + 1);
-    } catch {
-      dismissed = !next;
-    }
-  }
-
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
@@ -216,6 +206,11 @@
   );
   const episodesWatched = $derived(
     tvProgressList.filter((p) => p.completed).length,
+  );
+  const hasProgress = $derived(
+    media.media_type === "movie"
+      ? movieProgress !== null
+      : tvProgressList.length > 0,
   );
   const hasIncompleteMovieProgress = $derived(
     media.media_type === "movie" &&
@@ -369,20 +364,18 @@
                 {lastAiredSeason}
                 {lastAiredEpisode}
               />
-              <Button
-                variant={dismissed ? "destructive" : "outline"}
-                size="icon"
-                onclick={toggleDismissed}
-                title={dismissed ? "Undo not interested" : "Not interested"}
-              >
-                <ThumbsDown class="size-4" />
-              </Button>
               <LibraryStatusPanel
                 {libraryEntry}
                 {media}
                 {lastAiredSeason}
                 {lastAiredEpisode}
                 size="icon"
+              />
+              <MediaActionsPanel
+                {media}
+                {libraryEntry}
+                {dismissed}
+                {hasProgress}
               />
             </div>
           </div>
