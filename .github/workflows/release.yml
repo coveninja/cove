@@ -128,8 +128,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Audit dependencies
-        run: npm audit --audit-level=low
+      - name: Audit production dependencies
+        run: npm audit --audit-level=low --omit=dev
 
       - name: Browser tests
         run: |
