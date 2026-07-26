@@ -130,7 +130,11 @@ func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
 	fake := &fakeTMDB{
 		details: map[string]*tmdb.Details{
 			"movie:1": {ReleaseDate: "2026-07-22"},
-			"movie:2": {ReleaseDate: "2026-07-23"},
+			"movie:2": {
+				Title:       "Yarın",
+				PosterPath:  "https://image.tmdb.org/t/p/w500/localized.jpg",
+				ReleaseDate: "2026-07-23",
+			},
 			"movie:3": {ReleaseDate: "2026-10-21"},
 			"movie:4": {ReleaseDate: "not-a-date"},
 		},
@@ -147,6 +151,9 @@ func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
 	if err != nil || len(items) != 1 || items[0].Kind != "available" {
 		t.Fatalf("today's local release = %#v, %v; want one available item", items, err)
 	}
+	if items[0].Title != "Today" {
+		t.Fatalf("missing localized title did not fall back to library title: %#v", items[0])
+	}
 
 	items, err = s.processMovie(
 		&library.LibraryEntry{TmdbID: 2, Title: "Tomorrow", Status: library.StatusWatchLater},
@@ -156,6 +163,10 @@ func TestProcessMovieUsesCalendarDateInLocalTimezone(t *testing.T) {
 	)
 	if err != nil || len(items) != 1 || items[0].Kind != "movie" {
 		t.Fatalf("Watch Later release tomorrow = %#v, %v; want one future movie", items, err)
+	}
+	if items[0].Title != "Yarın" ||
+		items[0].PosterPath != "http://127.0.0.1:6969/api/img/w500/localized.jpg" {
+		t.Fatalf("localized movie presentation was discarded: %#v", items[0])
 	}
 
 	items, err = s.processMovie(
@@ -224,6 +235,8 @@ func TestCollectFutureEpisodesFiltersAndMapsMetadata(t *testing.T) {
 func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 	today, cutoff := testDay(t)
 	details := &tmdb.Details{
+		Name:       "Yerelleştirilmiş Dizi",
+		PosterPath: "https://image.tmdb.org/t/p/w500/localized.jpg",
 		Seasons: []tmdb.TVSeason{
 			{SeasonNumber: 0, EpisodeCount: 5},
 			{SeasonNumber: 1, EpisodeCount: 2},
@@ -275,11 +288,15 @@ func TestProcessTVBuildsBacklogAndTwoUpcomingSeasons(t *testing.T) {
 	if backlog.Kind != "available" || *backlog.SeasonNumber != 2 || *backlog.EpisodeNumber != 1 || backlog.WaitingCount != 2 || backlog.EpisodeName != "Backlog" {
 		t.Fatalf("unexpected backlog: %#v", backlog)
 	}
-	if backlog.PosterPath != "http://127.0.0.1:6969/api/img/w500/poster.jpg" {
-		t.Fatalf("poster was not rewritten: %q", backlog.PosterPath)
+	if backlog.Title != "Yerelleştirilmiş Dizi" ||
+		backlog.PosterPath != "http://127.0.0.1:6969/api/img/w500/localized.jpg" {
+		t.Fatalf("localized TV presentation was discarded: %#v", backlog)
 	}
 	if items[1].Kind != "episode" || items[2].Kind != "episode" || *items[2].SeasonNumber != 3 {
 		t.Fatalf("unexpected upcoming items: %#v", items[1:])
+	}
+	if items[1].Title != "Yerelleştirilmiş Dizi" || items[2].Title != "Yerelleştirilmiş Dizi" {
+		t.Fatalf("upcoming episodes lost localized title: %#v", items[1:])
 	}
 }
 
@@ -326,6 +343,7 @@ func TestProcessTVWatchLaterEmitsOnlyNextFutureEpisode(t *testing.T) {
 	if next.Kind != "episode" ||
 		*next.SeasonNumber != 2 ||
 		*next.EpisodeNumber != 3 ||
+		next.Title != "Saved Series" ||
 		next.EpisodeName != "Premiere" ||
 		next.StillPath != "/premiere.jpg" {
 		t.Fatalf("unexpected Watch Later reminder: %#v", next)

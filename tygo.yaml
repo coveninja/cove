@@ -1,6 +1,9 @@
 packages:
   - path: "github.com/coveninja/cove/internal/tmdb"
     output_path: "web/src/lib/types/tmdb.ts"
+    # Exported Go callback/option types are emitted as `any`; they are not used
+    # by the web runtime, but remain part of tygo's package-level output.
+    frontmatter: "/* eslint-disable @typescript-eslint/no-explicit-any */"
   - path: "github.com/coveninja/cove/internal/addons"
     output_path: "web/src/lib/types/addons.ts"
   - path: "github.com/coveninja/cove/internal/player"

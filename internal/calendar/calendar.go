@@ -187,6 +187,23 @@ func rewritePosterURL(s string) string {
 	return s
 }
 
+// localizedPresentation prefers the active-locale metadata returned by TMDB.
+// Library values are retained as an offline/partial-response fallback.
+func localizedPresentation(
+	e *library.LibraryEntry,
+	details *tmdb.Details,
+) (title, poster string) {
+	title = details.DisplayTitle()
+	if title == "" {
+		title = e.Title
+	}
+	poster = rewritePosterURL(details.PosterPath)
+	if poster == "" {
+		poster = rewritePosterURL(e.PosterPath)
+	}
+	return title, poster
+}
+
 // processMovie emits zero or one CalendarItem for a movie library entry.
 func (s *Server) processMovie(
 	e *library.LibraryEntry,
@@ -207,13 +224,14 @@ func (s *Server) processMovie(
 	if rel.After(cutoffFuture) {
 		return nil, nil // too far out
 	}
+	title, poster := localizedPresentation(e, det)
 
 	item := CalendarItem{
 		Date:       det.ReleaseDate,
 		TmdbID:     e.TmdbID,
 		MediaType:  "movie",
-		Title:      e.Title,
-		PosterPath: rewritePosterURL(e.PosterPath),
+		Title:      title,
+		PosterPath: poster,
 	}
 
 	if !rel.After(today) {
@@ -254,7 +272,7 @@ func (s *Server) processTV(
 		return realSeasons[i].SeasonNumber < realSeasons[j].SeasonNumber
 	})
 
-	poster := rewritePosterURL(e.PosterPath)
+	title, poster := localizedPresentation(e, det)
 	var items []CalendarItem
 
 	// ── Backlog: aired-but-unwatched episodes (watching status only) ─────────
@@ -268,7 +286,7 @@ func (s *Server) processTV(
 				Kind:          "available",
 				TmdbID:        e.TmdbID,
 				MediaType:     "tv",
-				Title:         e.Title,
+				Title:         title,
 				PosterPath:    poster,
 				SeasonNumber:  intPtr(nextS),
 				EpisodeNumber: intPtr(nextE),
@@ -314,7 +332,7 @@ func (s *Server) processTV(
 			Kind:          "episode",
 			TmdbID:        e.TmdbID,
 			MediaType:     "tv",
-			Title:         e.Title,
+			Title:         title,
 			PosterPath:    poster,
 			SeasonNumber:  intPtr(next.SeasonNumber),
 			EpisodeNumber: intPtr(next.EpisodeNumber),
@@ -330,7 +348,7 @@ func (s *Server) processTV(
 		det.NextEpisodeToAir.SeasonNumber > 0 {
 
 		nextSeason := det.NextEpisodeToAir.SeasonNumber
-		upcoming, err := s.collectFutureEps(e.TmdbID, nextSeason, today, cutoffFuture, e.Title, poster)
+		upcoming, err := s.collectFutureEps(e.TmdbID, nextSeason, today, cutoffFuture, title, poster)
 		if err != nil {
 			log.Printf("calendar: collectFutureEps tv:%d s%d: %v", e.TmdbID, nextSeason, err)
 		} else {
@@ -340,7 +358,7 @@ func (s *Server) processTV(
 				nextNextSeason := nextSeason + 1
 				for _, s2 := range det.Seasons {
 					if s2.SeasonNumber == nextNextSeason && s2.EpisodeCount > 0 {
-						extra, err2 := s.collectFutureEps(e.TmdbID, nextNextSeason, today, cutoffFuture, e.Title, poster)
+						extra, err2 := s.collectFutureEps(e.TmdbID, nextNextSeason, today, cutoffFuture, title, poster)
 						if err2 == nil {
 							upcoming = append(upcoming, extra...)
 						}

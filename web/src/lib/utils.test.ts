@@ -38,6 +38,9 @@ function stream(name: string, title = ""): Stream {
 
 function details(overrides: Partial<Details> = {}): Details {
   return {
+    title: "",
+    name: "",
+    poster_path: "",
     overview: "",
     genres: [],
     runtime: 0,

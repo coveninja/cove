@@ -261,9 +261,9 @@ func TestDetailsCacheIsPartitionedByLocale(t *testing.T) {
 		languages = append(languages, language)
 		mu.Unlock()
 		if language == "tr-TR" {
-			return jsonResponse(req, `{"id":5,"title":"Türkçe","overview":"Yerel açıklama"}`), nil
+			return jsonResponse(req, `{"id":5,"title":"Türkçe","poster_path":"/turkish.jpg","overview":"Yerel açıklama"}`), nil
 		}
-		return jsonResponse(req, `{"id":5,"title":"English","overview":"English overview"}`), nil
+		return jsonResponse(req, `{"id":5,"title":"English","poster_path":"/english.jpg","overview":"English overview"}`), nil
 	})
 
 	turkish, err := client.GetDetails(5, "movie")
@@ -283,6 +283,13 @@ func TestDetailsCacheIsPartitionedByLocale(t *testing.T) {
 
 	if turkish.Overview != "Yerel açıklama" || english.Overview != "English overview" {
 		t.Fatalf("localized details = %q / %q", turkish.Overview, english.Overview)
+	}
+	if turkish.DisplayTitle() != "Türkçe" || english.DisplayTitle() != "English" {
+		t.Fatalf("localized titles = %q / %q", turkish.DisplayTitle(), english.DisplayTitle())
+	}
+	if turkish.PosterPath != "http://127.0.0.1:6969/api/img/w500/turkish.jpg" ||
+		english.PosterPath != "http://127.0.0.1:6969/api/img/w500/english.jpg" {
+		t.Fatalf("localized posters = %q / %q", turkish.PosterPath, english.PosterPath)
 	}
 	if turkishAgain != turkish {
 		t.Fatal("returning to Turkish did not reuse the Turkish cache entry")

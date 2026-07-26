@@ -559,8 +559,11 @@ type TVEpisode struct {
 }
 
 type Details struct {
-	Overview string `json:"overview"`
-	Genres   []struct {
+	Title      string `json:"title"`
+	Name       string `json:"name"`
+	PosterPath string `json:"poster_path"`
+	Overview   string `json:"overview"`
+	Genres     []struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"genres"`
@@ -1509,10 +1512,25 @@ func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 	if err := json.NewDecoder(res.Body).Decode(&details); err != nil {
 		return nil, err
 	}
+	if details.PosterPath != "" {
+		details.PosterPath = imgURL("w500", details.PosterPath)
+	}
 	if details.NextEpisodeToAir != nil && details.NextEpisodeToAir.StillPath != "" {
 		details.NextEpisodeToAir.StillPath = imgURL("w300", details.NextEpisodeToAir.StillPath)
 	}
 	return &details, nil
+}
+
+// DisplayTitle returns the localized movie or TV title carried by a details
+// response. Movies use title while TV shows use name.
+func (d *Details) DisplayTitle() string {
+	if d == nil {
+		return ""
+	}
+	if d.Title != "" {
+		return d.Title
+	}
+	return d.Name
 }
 
 // GetMediaByID fetches a single movie or TV show directly by ID. Exists so
