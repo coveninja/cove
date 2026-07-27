@@ -12,7 +12,11 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1 --port 4173",
+    // Exercise the same production bundle embedded by the desktop, Android,
+    // and TV shells. Building here also keeps standalone E2E runs independent
+    // of Vite's cold-start dependency optimizer.
+    command:
+      "npm run build && npm run preview -- --host 127.0.0.1 --port 4173",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
