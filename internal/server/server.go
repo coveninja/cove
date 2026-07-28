@@ -7,7 +7,6 @@ package server
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -146,9 +145,7 @@ func lanTokenMiddleware(st *settings.Store, next http.Handler) http.Handler {
 		if !s.RemoteAccessEnabled ||
 			expected == "" ||
 			subtle.ConstantTimeCompare([]byte(expected), []byte(clientToken)) != 1 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(w).Encode(map[string]string{
+			utils.WriteJSONStatus(w, http.StatusUnauthorized, map[string]string{
 				"error": "unauthorized: missing or invalid X-Cove-Token",
 			})
 			return
@@ -419,10 +416,8 @@ func Start(cfg Config) (*Handle, error) {
 	clientsession.SetupHandlers(mux)
 	webstatic.Mount(mux)
 
-	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-			log.Println(err)
-		}
+	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, _ *http.Request) {
+		utils.WriteJSON(w, map[string]string{"status": "ok"})
 	}))
 
 	ctx, cancel := context.WithCancel(context.Background())

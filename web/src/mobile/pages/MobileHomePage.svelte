@@ -3,12 +3,9 @@
   import MobileMediaRow from "../components/MobileMediaRow.svelte";
   import MobileContinueWatching from "../components/MobileContinueWatching.svelte";
   import type { Media } from "$lib/types/tmdb";
-  import { api, type DiscoverInsights, type LibraryStats } from "$lib/api";
-  import type { CatalogRef } from "$lib/types/addons";
+  import { HomeFeedController } from "$lib/homeFeed.svelte";
   import type { Page } from "$lib/types/types";
   import { onMount, tick } from "svelte";
-  import * as m from "$lib/paraglide/messages.js";
-  import { SvelteMap } from "svelte/reactivity";
 
   // Same contract as desktop HomePage so MobileApp.svelte can slot this in
   // with identical prop bindings.
@@ -24,83 +21,7 @@
     onChangePage?: (p: Page) => void;
   } = $props();
 
-  // ── Row management (same approach as HomePage) ────────────────────────────
-  type Row = { key: string; header: string; medias: Media[]; loading: boolean };
-  type RowSpec = { key: string; header: string; load: () => Promise<Media[]> };
-
-  let rows = $state<Row[]>([]);
-  let catalogRows = $state<Row[]>([]);
-  const catalogRefMap = new SvelteMap<string, CatalogRef>();
-
-  const PER_BUCKET = 2;
-  const ROW_LIMIT = 20;
-  const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-
-  function patchRow(key: string, patch: Partial<Row>): void {
-    const i = rows.findIndex((r) => r.key === key);
-    if (i !== -1) rows[i] = { ...rows[i], ...patch };
-  }
-
-  function startRow(spec: RowSpec): void {
-    rows = [...rows, { key: spec.key, header: spec.header, medias: [], loading: true }];
-    spec
-      .load()
-      .then((d) => patchRow(spec.key, { medias: d }))
-      .catch(() => patchRow(spec.key, { medias: [] }))
-      .finally(() => patchRow(spec.key, { loading: false }));
-  }
-
-  function patchCatalogRow(key: string, patch: Partial<Row>): void {
-    const i = catalogRows.findIndex((r) => r.key === key);
-    if (i !== -1) catalogRows[i] = { ...catalogRows[i], ...patch };
-  }
-
-  function startCatalogRow(spec: RowSpec): void {
-    catalogRows = [
-      ...catalogRows,
-      { key: spec.key, header: spec.header, medias: [], loading: true },
-    ];
-    spec
-      .load()
-      .then((d) => patchCatalogRow(spec.key, { medias: d }))
-      .catch(() => patchCatalogRow(spec.key, { medias: [] }))
-      .finally(() => patchCatalogRow(spec.key, { loading: false }));
-  }
-
-  function tasteSpecs(
-    insights: DiscoverInsights,
-    primaryType: "movie" | "tv",
-  ): RowSpec[] {
-    const mg = insights.top_movie_genres.slice(0, PER_BUCKET);
-    const tg = insights.top_tv_genres.slice(0, PER_BUCKET);
-    const kw = insights.top_keywords.slice(0, PER_BUCKET);
-    const specs: RowSpec[] = [];
-    for (let i = 0; i < Math.max(mg.length, tg.length, kw.length); i++) {
-      const movieGenre = mg[i];
-      if (movieGenre)
-        specs.push({
-          key: `mg-${movieGenre.id}`,
-          header: m.explore_genre_movies({ genre: movieGenre.name }),
-          load: () => api.discoverByGenre("movie", movieGenre.id, { limit: ROW_LIMIT }),
-        });
-      const tvGenre = tg[i];
-      if (tvGenre)
-        specs.push({
-          key: `tg-${tvGenre.id}`,
-          header: m.explore_genre_shows({ genre: tvGenre.name }),
-          load: () => api.discoverByGenre("tv", tvGenre.id, { limit: ROW_LIMIT }),
-        });
-      const keyword = kw[i];
-      if (keyword)
-        specs.push({
-          key: `kw-${keyword.id}`,
-          header: cap(keyword.name),
-          load: () =>
-            api.discoverByKeyword(primaryType, keyword.id, { limit: ROW_LIMIT }),
-        });
-    }
-    return specs;
-  }
+  const feed = new HomeFeedController();
 
   // ── Watch / select wrappers (pause hero timer while overlay is open) ───────
   let heroVisible = $state(true);
@@ -121,41 +42,7 @@
     onSelectMedia(m);
   }
 
-  onMount(() => {
-    startRow({
-      key: "tastes",
-      header: m.home_based_on_tastes(),
-      load: () => api.discover("all", { limit: ROW_LIMIT }),
-    });
-
-    Promise.all([
-      api.discoverInsights().catch(() => null),
-      api.libraryStats().catch(() => null),
-    ]).then(([insights, stats]: [DiscoverInsights | null, LibraryStats | null]) => {
-      if (!insights || insights.signals_used === 0) return;
-      const primaryType =
-        stats && stats.tv_share > stats.movie_share ? "tv" : "movie";
-      for (const spec of tasteSpecs(insights, primaryType)) startRow(spec);
-    });
-
-    api
-      .getCatalogs()
-      .catch(() => [] as CatalogRef[])
-      .then((refs) => {
-        for (const ref of refs) {
-          const key = `catalog-${ref.addonId}-${ref.catalogType}/${ref.catalogId}`;
-          catalogRefMap.set(key, ref);
-          startCatalogRow({
-            key,
-            header: ref.name,
-            load: () =>
-              api
-                .catalogPage(ref.addonId, ref.catalogType, ref.catalogId, 0, 20, ref.addonUrl)
-                .then((r) => r.medias),
-          });
-        }
-      });
-  });
+  onMount(() => void feed.load());
 
   // Resume timer when page becomes visible again.
   $effect(() => {
@@ -163,16 +50,21 @@
   });
 </script>
 
-<div class="h-full w-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+<div
+  class="h-full w-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+>
   <div class="flex flex-col gap-4 pb-8">
     <!-- Full-bleed hero (no top padding — goes under status bar) -->
     <MobileHero visible={visible && heroVisible} />
 
     <!-- Continue watching -->
-    <MobileContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} />
+    <MobileContinueWatching
+      onWatch={handleOnWatch}
+      onSelectMedia={handleSelectMedia}
+    />
     <!-- Catalog rows (addon catalogs, e.g. Debrid) -->
-    {#each catalogRows as row (row.key)}
-      {@const ref = catalogRefMap.get(row.key)}
+    {#each feed.catalogRows as row (row.key)}
+      {@const ref = feed.catalogRefs.get(row.key)}
       <MobileMediaRow
         header={row.header}
         medias={row.medias}
@@ -194,7 +86,7 @@
     {/each}
 
     <!-- Taste-driven rows -->
-    {#each rows as row (row.key)}
+    {#each feed.rows as row (row.key)}
       <MobileMediaRow
         header={row.header}
         medias={row.medias}

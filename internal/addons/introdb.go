@@ -3,7 +3,6 @@ package addons
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 )
@@ -44,11 +43,7 @@ func fetchIntroDBApp(client *http.Client, imdbID string, season, episode int) (*
 		log.Printf("introdb.app: request failed: %v", err)
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	log.Printf("introdb.app: HTTP %d", res.StatusCode)
 	if res.StatusCode == http.StatusNotFound {
@@ -131,11 +126,7 @@ func fetchTimestamps(client *http.Client, tmdbID int, season, episode *int) (*Ti
 		log.Printf("introdb: request failed: %v", err)
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	log.Printf("introdb: HTTP %d", res.StatusCode)
 	if res.StatusCode == http.StatusNotFound {

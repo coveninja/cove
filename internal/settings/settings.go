@@ -411,17 +411,14 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			if out.RemoteAccessToken != "" {
 				out.RemoteAccessToken = "***"
 			}
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(out); err != nil {
-				log.Println("settings encode:", err)
-			}
+			utils.WriteJSON(w, out)
 			return
 		}
 
 		// PUT /api/settings — validate, apply token policy, persist
 		if r.Method == http.MethodPut {
 			var incoming Settings
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 			if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 				http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 				return
@@ -456,8 +453,7 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			if out.RemoteAccessToken != "" {
 				out.RemoteAccessToken = "***"
 			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(out)
+			utils.WriteJSON(w, out)
 			return
 		}
 
@@ -480,17 +476,13 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 			data, err := os.ReadFile(path)
 			if err != nil {
 				if os.IsNotExist(err) {
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`""`))
+					utils.WriteJSON(w, "")
 					return
 				}
 				http.Error(w, "could not read mpv.conf: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(string(data)); err != nil {
-				log.Println("settings mpv-conf encode:", err)
-			}
+			utils.WriteJSON(w, string(data))
 			return
 		}
 
@@ -523,17 +515,10 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 	// POST /api/settings/reveal-token — returns the real RemoteAccessToken.
 	// Kept behind a separate intentional endpoint so the token isn't leaked by
 	// a routine GET /api/settings (e.g. a log scraper or devtools screenshot).
-	mux.HandleFunc("/api/settings/reveal-token", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/settings/reveal-token", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
 		token := s.cached.RemoteAccessToken
 		s.mu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"token": token}); err != nil {
-			log.Println("settings reveal-token:", err)
-		}
-	}))
+		utils.WriteJSON(w, map[string]string{"token": token})
+	})))
 }

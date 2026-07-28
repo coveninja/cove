@@ -1,12 +1,7 @@
 <script lang="ts">
   import { focusable } from "../../focus/actions";
   import * as m from "$lib/paraglide/messages.js";
-
-  export type ChapterBar = {
-    startFrac: number;
-    endFrac: number;
-    type: "content" | "intro" | "recap" | "credits" | "preview";
-  };
+  import { segmentBgClass, type ChapterBar } from "$lib/player/chapters";
 
   let {
     chapterBars,
@@ -23,16 +18,6 @@
     duration: number;
     onkeydown: (e: KeyboardEvent) => void;
   } = $props();
-
-  function segmentBgClass(type: ChapterBar["type"]): string {
-    switch (type) {
-      case "intro":   return "bg-amber-400/50";
-      case "recap":   return "bg-blue-400/50";
-      case "credits": return "bg-purple-400/50";
-      case "preview": return "bg-green-400/50";
-      default:        return "";
-    }
-  }
 
   function pillFill(chapter: ChapterBar, frac: number): number {
     if (frac >= chapter.endFrac) return 100;

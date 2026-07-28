@@ -21,6 +21,7 @@
   import { cubicOut } from "svelte/easing";
   import MobileSeekBar from "./MobileSeekBar.svelte";
   import * as m from "$lib/paraglide/messages.js";
+  import { formatPlaybackTime as fmt } from "$lib/player/format";
 
   let {
     title,
@@ -82,15 +83,6 @@
     scrubPos = pos;
     onScrub(pos);
   }
-
-  function fmt(t: number): string {
-    if (!isFinite(t) || t < 0) t = 0;
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    const mm = h ? String(m).padStart(2, "0") : String(m);
-    return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
-  }
 </script>
 
 <!--
@@ -150,7 +142,9 @@
     <button
       type="button"
       class="flex size-12 items-center justify-center rounded-full text-white active:bg-white/20"
-      onclick={() => { onNudgeBack(); }}
+      onclick={() => {
+        onNudgeBack();
+      }}
       aria-label={m.player_seek_back()}
     >
       <SkipBack class="size-6" />
@@ -160,7 +154,10 @@
     <button
       type="button"
       class="flex size-16 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm active:bg-white/35"
-      onclick={() => { Player.togglePause(); onShowControls(); }}
+      onclick={() => {
+        Player.togglePause();
+        onShowControls();
+      }}
       aria-label={Player.paused ? m.player_play() : m.player_pause()}
     >
       {#key Player.paused}
@@ -181,7 +178,9 @@
     <button
       type="button"
       class="flex size-12 items-center justify-center rounded-full text-white active:bg-white/20"
-      onclick={() => { onNudgeForward(); }}
+      onclick={() => {
+        onNudgeForward();
+      }}
       aria-label={m.player_seek_forward()}
     >
       <SkipForward class="size-6" />
@@ -210,12 +209,7 @@
     {/if}
 
     <!-- Seek bar -->
-    <MobileSeekBar
-      {chapterBars}
-      {isHash}
-      {torrent}
-      onScrub={handleScrub}
-    />
+    <MobileSeekBar {chapterBars} {isHash} {torrent} onScrub={handleScrub} />
 
     <!-- Time row -->
     <div
@@ -232,7 +226,10 @@
         <button
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-          onclick={() => { audioSheetOpen = true; onShowControls(); }}
+          onclick={() => {
+            audioSheetOpen = true;
+            onShowControls();
+          }}
           aria-label={m.player_audio_tracks()}
         >
           <Headphones class="size-4 shrink-0" />
@@ -247,7 +244,10 @@
         <button
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-          onclick={() => { subsSheetOpen = true; onShowControls(); }}
+          onclick={() => {
+            subsSheetOpen = true;
+            onShowControls();
+          }}
           aria-label={m.player_subtitles()}
         >
           <Captions class="size-4 shrink-0" />
@@ -263,7 +263,10 @@
       <button
         type="button"
         class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-        onclick={() => { onCycleAspect(); onShowControls(); }}
+        onclick={() => {
+          onCycleAspect();
+          onShowControls();
+        }}
         aria-label={m.player_aspect_ratio()}
       >
         <Ratio class="size-5 shrink-0" />
@@ -274,12 +277,17 @@
       <button
         type="button"
         class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-        onclick={() => { speedSheetOpen = true; onShowControls(); }}
+        onclick={() => {
+          speedSheetOpen = true;
+          onShowControls();
+        }}
         aria-label={m.player_speed()}
       >
         <Gauge class="size-5 shrink-0" />
         <span class="text-sm"
-          >{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span
+          >{Player.playbackSpeed === 1
+            ? "1×"
+            : `${Player.playbackSpeed}×`}</span
         >
       </button>
 
@@ -302,7 +310,10 @@
         <button
           type="button"
           class="flex min-h-11 items-center gap-1.5 rounded-lg px-3 py-2 text-white active:bg-white/15"
-          onclick={() => { episodesSheetOpen = true; onShowControls(); }}
+          onclick={() => {
+            episodesSheetOpen = true;
+            onShowControls();
+          }}
           aria-label={m.player_episodes()}
         >
           <ListVideo class="size-5 shrink-0" />

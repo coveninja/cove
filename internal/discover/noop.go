@@ -29,9 +29,12 @@ import (
 	"github.com/coveninja/cove/internal/utils"
 )
 
+// Mirrors the proprietary build's TasteProvider (see discover.go) so the same
+// caller satisfies both editions. TasteGeneration() — not Generation() — is the
+// taste-relevant counter; it only bumps on mutations that change taste.
 type TasteProvider interface {
 	TasteSignals() []library.TasteSignal
-	Generation() uint64
+	TasteGeneration() uint64
 }
 
 type Service struct {
@@ -50,8 +53,7 @@ func New(t *tmdb.Client, lib TasteProvider, st *settings.Store) *Service {
 
 func (s *Service) SetupHandlers(mux *http.ServeMux) {
 	empty := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		utils.WriteJSON(w, []tmdb.Media{})
 	}
 	mux.HandleFunc("/api/discover", utils.CorsMiddleware(s.handleRecommend))
 	mux.HandleFunc("/api/discover/genres", utils.CorsMiddleware(empty))
@@ -59,8 +61,7 @@ func (s *Service) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/discover/genre", utils.CorsMiddleware(empty))
 	mux.HandleFunc("/api/discover/keyword", utils.CorsMiddleware(empty))
 	mux.HandleFunc("/api/discover/insights", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(struct{}{})
+		utils.WriteJSON(w, struct{}{})
 	}))
 	mux.HandleFunc("/api/genres", utils.CorsMiddleware(s.handleGenreList))
 	mux.HandleFunc("/api/discover/algorithm/test", utils.CorsMiddleware(s.handleTestAlgorithm))
@@ -85,8 +86,7 @@ func (s *Service) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		algorithm, customURL = cfg.DiscoveryAlgorithm, cfg.CustomAlgorithmURL
 	}
 	if algorithm != "custom" || customURL == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		utils.WriteJSON(w, []tmdb.Media{})
 		return
 	}
 
@@ -96,8 +96,7 @@ func (s *Service) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		MinVoteCount: 50,
 	})
 	if err != nil || res == nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		utils.WriteJSON(w, []tmdb.Media{})
 		return
 	}
 	candidates := make([]tmdb.Media, 0, len(res.Results))
@@ -117,8 +116,7 @@ func (s *Service) handleRecommend(w http.ResponseWriter, r *http.Request) {
 		candidates = candidates[:limit]
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(candidates)
+	utils.WriteJSON(w, candidates)
 }
 
 func (s *Service) handleGenreList(w http.ResponseWriter, r *http.Request) {
@@ -132,8 +130,7 @@ func (s *Service) handleGenreList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(genres)
+	utils.WriteJSON(w, genres)
 }
 
 // ── Custom discovery algorithm (OSS-build variant) ────────────────────────────
@@ -234,10 +231,9 @@ func (s *Service) handleTestAlgorithm(w http.ResponseWriter, r *http.Request) {
 		{ID: 2, Title: "Sample Movie Two", GenreIDs: []int{35}, Rating: 6.5, Popularity: 18},
 	}
 	_, err := fetchCustomScoresOSS(body.URL, "movie", sample)
-	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+		utils.WriteJSON(w, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	utils.WriteJSON(w, map[string]any{"ok": true})
 }

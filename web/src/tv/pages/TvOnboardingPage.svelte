@@ -1,321 +1,68 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { CheckCircle, Check, Loader2, ArrowLeft, ArrowRight } from "lucide-svelte";
+  import {
+    CheckCircle,
+    Check,
+    Loader2,
+    ArrowLeft,
+    ArrowRight,
+  } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Separator } from "$lib/components/ui/separator/index.js";
   import TvAuthPanel from "../components/TvAuthPanel.svelte";
   import StarRating from "../../components/StarRating.svelte";
-  import { settings } from "$lib/stores/settings";
   import { auth } from "$lib/stores/auth.svelte";
-  import { api } from "$lib/api";
-  import type { Media } from "$lib/types/tmdb";
-  import type { LibraryEntry } from "$lib/types/library";
   import CoveIcon from "../../assets/CoveIcon.svelte";
-  import { SvelteSet } from "svelte/reactivity";
   import { focusGroup } from "../focus/actions";
-  import { focusAfterKeyRelease, focusFirst } from "../focus/focusStore.svelte";
-  import * as msg from "$lib/paraglide/messages.js";
   import {
-    activeLocale,
-    activateLocale,
-    languageDisplayName,
-    LOCALES,
-    type AppLocale,
-  } from "$lib/i18n";
+    focusAfterKeyRelease,
+    focusFirst,
+    isEditable,
+  } from "../focus/focusStore.svelte";
+  import * as msg from "$lib/paraglide/messages.js";
+  import { AUDIO_LANGUAGES, LANGUAGES } from "$lib/mediaLanguages";
+  import {
+    audioLangLabel,
+    langLabel,
+    OnboardingController,
+    STEPS,
+  } from "$lib/onboarding.svelte";
+  import { LOCALES } from "$lib/i18n";
 
   let { onclose }: { onclose: () => void } = $props();
 
-  type StepId =
-    | "welcome"
-    | "language"
-    | "account"
-    | "genres"
-    | "seen"
-    | "rate"
-    | "preferences"
-    | "done";
-  type StepMeta = { id: StepId; title: () => string; skippable: boolean };
-  const STEPS: StepMeta[] = [
-    { id: "welcome",     title: msg.onboarding_welcome,     skippable: false },
-    { id: "language",    title: msg.onboarding_language,    skippable: false },
-    { id: "account",     title: msg.onboarding_account,     skippable: false },
-    { id: "genres",      title: msg.onboarding_taste,       skippable: false },
-    { id: "seen",        title: msg.onboarding_seen,        skippable: true },
-    { id: "rate",        title: msg.onboarding_rate,        skippable: true },
-    { id: "preferences", title: msg.onboarding_preferences, skippable: true },
-    { id: "done",        title: msg.onboarding_ready,       skippable: false },
-  ];
+  // Step definitions, navigation and every step's data live in
+  // $lib/onboarding.svelte.ts, shared with OnboardingPage. What stays here is
+  // TV-only: the aria label, the cycle buttons, the Next re-entry guard and
+  // the D-pad focus management below.
+  const ctl = new OnboardingController({ onClose: () => onclose() });
 
-  const LANGUAGES = [
-    { value: "en" },
-    { value: "es" },
-    { value: "fr" },
-    { value: "de" },
-    { value: "pt" },
-    { value: "it" },
-    { value: "ja" },
-    { value: "ko" },
-    { value: "zh" },
-    { value: "ar" },
-    { value: "ru" },
-  ];
-
-  // Audio-only: "original" plays whatever track matches the title's TMDB
-  // original_language — see SettingsPage.svelte / Player.svelte for the same
-  // concept.
-  const AUDIO_LANGUAGES = [
-    { value: "original" },
-    ...LANGUAGES,
-  ];
-
-  function langLabel(v: string): string {
-    return languageDisplayName(v);
-  }
-
-  function audioLangLabel(v: string): string {
-    return v === "original" ? msg.common_original() : languageDisplayName(v);
-  }
-
-  let selectedMovieGenreIds = new SvelteSet<number>();
-  let selectedTvGenreIds    = new SvelteSet<number>();
-  const initialUiLanguage = activeLocale();
-  let selectedUiLanguage = $state<AppLocale>(initialUiLanguage);
-  let languageSaveError = $state(false);
-
-  function selectUiLanguage(locale: AppLocale): void {
-    selectedUiLanguage = locale;
-    languageSaveError = false;
-    activateLocale(locale);
-  }
-
-  // ── Navigation ────────────────────────────────────────────────────────────────
-  let stepIndex = $state(0);
-  const step = $derived(STEPS[stepIndex]);
-  const stepTitle = $derived.by(() => {
-    selectedUiLanguage;
-    return step.title();
-  });
+  // Re-derives on locale change so the label follows the chosen language.
   const onboardingAriaLabel = $derived.by(() => {
-    selectedUiLanguage;
+    ctl.selectedUiLanguage;
     return msg.aria_onboarding();
   });
-  const isFirst = $derived(stepIndex === 0);
-  const isLast = $derived(stepIndex === STEPS.length - 1);
-  const canProceed = $derived(
-    step.id === "genres"
-      ? selectedMovieGenreIds.size > 0 || selectedTvGenreIds.size > 0
-      : true,
-  );
 
-  function stepIndexFor(id: StepId): number {
-    return STEPS.findIndex((candidate) => candidate.id === id);
-  }
-
-  // ── Account step ──────────────────────────────────────────────────────────────
-  let authOpen = $state(false);
-
-  // ── Genre step ────────────────────────────────────────────────────────────────
-  let movieGenres = $state<{ id: number; name: string }[]>([]);
-  let tvGenres    = $state<{ id: number; name: string }[]>([]);
-  let loadingGenres = $state(false);
-  let genresLanguage: AppLocale | null = null;
-
-  function toggleMovieGenre(id: number): void {
-    if (selectedMovieGenreIds.has(id)) selectedMovieGenreIds.delete(id);
-    else selectedMovieGenreIds.add(id);
-  }
-  function toggleTvGenre(id: number): void {
-    if (selectedTvGenreIds.has(id)) selectedTvGenreIds.delete(id);
-    else selectedTvGenreIds.add(id);
-  }
-
-  async function loadGenres(): Promise<void> {
-    if (genresLanguage === selectedUiLanguage) return;
-    loadingGenres = true;
-    [movieGenres, tvGenres] = await Promise.all([
-      api.genreList("movie").catch(() => []),
-      api.genreList("tv").catch(() => []),
-    ]);
-    genresLanguage = selectedUiLanguage;
-    loadingGenres = false;
-  }
-
-  // ── Seen step ─────────────────────────────────────────────────────────────────
-  let browseMedia   = $state<Media[]>([]);
-  let mediaQuery    = $state("");
-  let searchResults = $state<Media[]>([]);
-  let loadingMedia  = $state(false);
-  let seenMedia     = $state<Media[]>([]);
-
-  const seenIds = $derived(new Set(seenMedia.map((m) => `${m.media_type}-${m.id}`)));
-  const displayMedia = $derived(mediaQuery.trim() ? searchResults : browseMedia);
-
-  function toggleSeenMedia(m: Media): void {
-    const key = `${m.media_type}-${m.id}`;
-    if (seenIds.has(key)) {
-      seenMedia = seenMedia.filter((x) => `${x.media_type}-${x.id}` !== key);
-    } else {
-      seenMedia = [...seenMedia, m];
-    }
-  }
-
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
-  function onMediaQueryChange(q: string): void {
-    mediaQuery = q;
-    if (searchTimer) clearTimeout(searchTimer);
-    if (!q.trim()) { searchResults = []; return; }
-    searchTimer = setTimeout(async () => {
-      searchResults = await api.search(q).catch(() => []);
-    }, 350);
-  }
-
-  async function loadBrowseMedia(): Promise<void> {
-    loadingMedia = true;
-    try {
-      const movieIds = [...selectedMovieGenreIds];
-      const tvIds    = [...selectedTvGenreIds];
-      if (movieIds.length === 0 && tvIds.length === 0) {
-        const [movies, tv] = await Promise.all([
-          api.discover("movie", { limit: 15 }),
-          api.discover("tv",    { limit: 15 }),
-        ]);
-        browseMedia = [...movies, ...tv];
-      } else {
-        const results = await Promise.all([
-          ...movieIds.map((id) => api.discoverByGenre("movie", id, { limit: 12 })),
-          ...tvIds.map((id)    => api.discoverByGenre("tv",    id, { limit: 12 })),
-        ]);
-        const seen = new SvelteSet<string>();
-        browseMedia = results.flat().filter((m) => {
-          const k = `${m.media_type}-${m.id}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
-      }
-    } catch {
-      browseMedia = [];
-    }
-    loadingMedia = false;
-  }
-
-  // ── Rate step ─────────────────────────────────────────────────────────────────
-  let seenEntries      = $state<(LibraryEntry | null)[]>([]);
-  let preparingEntries = $state(false);
-
-  // ── Preferences step ─────────────────────────────────────────────────────────
-  let subtitleLang     = $state($settings?.defaultSubtitleLang ?? "en");
-  let audioLang        = $state($settings?.defaultAudioLang    ?? "en");
-  let autoPlay         = $state($settings?.autoPlay            ?? false);
-  let rememberPosition = $state($settings?.rememberPosition    ?? true);
-  let autoSkipIntro    = $state($settings?.autoSkipIntro       ?? false);
-  let autoSkipRecap    = $state($settings?.autoSkipRecap       ?? false);
-  let autoSkipCredits  = $state($settings?.autoSkipCredits     ?? false);
-  let autoSkipPreview  = $state($settings?.autoSkipPreview     ?? false);
-
+  // Cycle buttons replace the desktop selects — Enter advances one option.
   function cycleSubtitleLang(): void {
-    const idx = LANGUAGES.findIndex((l) => l.value === subtitleLang);
-    subtitleLang = LANGUAGES[(idx + 1) % LANGUAGES.length].value;
+    const idx = LANGUAGES.findIndex((l) => l.value === ctl.subtitleLang);
+    ctl.subtitleLang = LANGUAGES[(idx + 1) % LANGUAGES.length].value;
   }
 
   function cycleAudioLang(): void {
-    const idx = AUDIO_LANGUAGES.findIndex((l) => l.value === audioLang);
-    audioLang = AUDIO_LANGUAGES[(idx + 1) % AUDIO_LANGUAGES.length].value;
+    const idx = AUDIO_LANGUAGES.findIndex((l) => l.value === ctl.audioLang);
+    ctl.audioLang = AUDIO_LANGUAGES[(idx + 1) % AUDIO_LANGUAGES.length].value;
   }
 
-  // ── Navigation handlers ───────────────────────────────────────────────────────
-  async function next(): Promise<void> {
-    if (step.id === "language") {
-      languageSaveError = !(await settings.save({ uiLanguage: selectedUiLanguage }));
-      if (languageSaveError) return;
-    }
-    if (step.id === "account") {
-      languageSaveError = !(await settings.save({ uiLanguage: selectedUiLanguage }));
-      if (languageSaveError) return;
-      await loadGenres();
-    }
-    if (step.id === "genres") {
-      await loadBrowseMedia();
-    }
-    if (step.id === "seen") {
-      if (seenMedia.length === 0) {
-        stepIndex = stepIndexFor("preferences");
-        return;
-      }
-      preparingEntries = true;
-      seenEntries = await Promise.all(
-        seenMedia.map((m) =>
-          api
-            .libraryUpsert({
-              tmdb_id: m.id,
-              media_type: m.media_type,
-              title: m.media_type === "movie" ? m.title : m.name,
-              poster_path: m.poster_path,
-              vote_average: m.vote_average,
-              status: "finished",
-            })
-            .catch(() => null),
-        ),
-      );
-      preparingEntries = false;
-    }
-    if (step.id === "preferences") {
-      await settings.save({
-        uiLanguage: selectedUiLanguage,
-        defaultSubtitleLang: subtitleLang,
-        defaultAudioLang: audioLang,
-        autoPlay,
-        rememberPosition,
-        autoSkipIntro,
-        autoSkipRecap,
-        autoSkipCredits,
-        autoSkipPreview,
-      });
-    }
-    if (isLast) {
-      const saved = await settings.save({
-        onboardingDone: true,
-        uiLanguage: selectedUiLanguage,
-      });
-      if (!saved) return;
-      if (selectedUiLanguage !== initialUiLanguage) {
-        window.location.reload();
-      } else {
-        onclose();
-      }
-    } else {
-      stepIndex += 1;
-    }
-  }
-
-  function back(): void {
-    if (step.id === "preferences" && seenMedia.length === 0) {
-      // Skipped rating step on the way in — go back to seen step
-      stepIndex = stepIndexFor("seen");
-    } else {
-      stepIndex -= 1;
-    }
-  }
-
-  function skip(): void {
-    // Skipping "Seen" with nothing selected also skips "Rate" since it'd be empty
-    if (step.id === "seen" && seenMedia.length === 0) {
-      stepIndex = stepIndexFor("preferences");
-    } else {
-      stepIndex += 1;
-    }
-  }
-
-  let nextLoading = $state(false);
   async function handleNext(): Promise<void> {
     // Re-entry guard instead of disabling the button: disabling a focused
     // button drops focus to <body>, and the async step transitions
     // (loadBrowseMedia, library upserts) leave it there for seconds — an
     // arrow press in that window would strand the D-pad behind the overlay.
-    if (nextLoading) return;
-    nextLoading = true;
-    await next();
-    nextLoading = false;
+    if (ctl.nextLoading) return;
+    ctl.nextLoading = true;
+    await ctl.next();
+    ctl.nextLoading = false;
   }
 
   // ── Focus management ──────────────────────────────────────────────────────────
@@ -334,7 +81,9 @@
   let authPanel = $state<{ escapeBack(): boolean } | null>(null);
 
   function getNextBtn(): HTMLButtonElement | null {
-    const btn = nextBtnWrap?.querySelector("button") as HTMLButtonElement | null;
+    const btn = nextBtnWrap?.querySelector(
+      "button",
+    ) as HTMLButtonElement | null;
     return btn;
   }
 
@@ -342,7 +91,7 @@
   // container so Escape-blur of an auth input doesn't yank focus to the nav
   // bar; otherwise prefer the Next button if enabled, then focusFirst(rootEl).
   function rescueFocus(): void {
-    if (authOpen && authWrap) {
+    if (ctl.authOpen && authWrap) {
       focusFirst(authWrap);
       return;
     }
@@ -360,8 +109,8 @@
   // focus resting outside rootEl is always wrong while onboarding is mounted.
   $effect(() => {
     // Reactive dependencies: stepIndex and nextLoading.
-    const _step = stepIndex;
-    const _loading = nextLoading;
+    const _step = ctl.stepIndex;
+    const _loading = ctl.nextLoading;
     void tick().then(() => {
       const active = document.activeElement;
       if (
@@ -380,7 +129,7 @@
   let cancelAuthFocus: (() => void) | undefined;
   let authWasOpen = false;
   $effect(() => {
-    if (authOpen) {
+    if (ctl.authOpen) {
       authWasOpen = true;
       // Focus the first interactive element in the dialog after key release,
       // so the Enter press that opened the dialog can't immediately activate it.
@@ -395,7 +144,9 @@
         authWasOpen = false;
         // Refocus: sign-in button if still mounted, else Next button.
         void tick().then(() => {
-          const signInBtn = signInBtnWrap?.querySelector("button") as HTMLElement | null;
+          const signInBtn = signInBtnWrap?.querySelector(
+            "button",
+          ) as HTMLElement | null;
           if (signInBtn?.isConnected) {
             signInBtn.focus();
           } else {
@@ -409,14 +160,6 @@
   // ── Escape / Back intercept ───────────────────────────────────────────────────
   // Capture phase so we beat TvApp's bubble-phase handler on every Escape press.
   // Arrow keys are NOT touched — TvApp's navigate() handles those.
-  const EDITABLE_TYPES = new Set(["text", "search", "url", "email", "password", "number", ""]);
-  function isEditable(el: Element): boolean {
-    if (el instanceof HTMLTextAreaElement) return true;
-    if (el instanceof HTMLInputElement && EDITABLE_TYPES.has(el.type.toLowerCase())) return true;
-    if ((el as HTMLElement).isContentEditable) return true;
-    return false;
-  }
-
   function handleEscape(e: KeyboardEvent): void {
     if (e.key !== "Escape") return;
     e.preventDefault();
@@ -432,15 +175,15 @@
       return;
     }
     // 2. Step back through auth sub-views; only close the panel from "choose".
-    if (authOpen) {
+    if (ctl.authOpen) {
       if (!authPanel?.escapeBack()) {
-        authOpen = false;
+        ctl.authOpen = false;
       }
       return;
     }
     // 3. Go back a step (unless on the first step — can't exit via Escape)
-    if (!isFirst) {
-      back();
+    if (!ctl.isFirst) {
+      ctl.back();
     }
     // On first step: do nothing — app stays in onboarding
   }
@@ -478,7 +221,11 @@
 <div
   bind:this={rootEl}
   class="flex h-full w-full flex-col bg-background"
-  use:focusGroup={{ id: "tv-onboarding", policy: { type: "free" }, trapFocus: true }}
+  use:focusGroup={{
+    id: "tv-onboarding",
+    policy: { type: "free" },
+    trapFocus: true,
+  }}
   role="dialog"
   aria-modal="true"
   aria-label={onboardingAriaLabel}
@@ -487,9 +234,9 @@
   <div class="flex shrink-0 items-center justify-center gap-2.5 px-16 pt-10">
     {#each STEPS as _, i}
       <div
-        class="h-2 rounded-full transition-all duration-300 {i === stepIndex
+        class="h-2 rounded-full transition-all duration-300 {i === ctl.stepIndex
           ? 'w-8 bg-accent'
-          : i < stepIndex
+          : i < ctl.stepIndex
             ? 'w-4 bg-accent/40'
             : 'w-4 bg-muted'}"
       ></div>
@@ -498,64 +245,77 @@
 
   <!-- Step content -->
   <div class="flex min-h-0 flex-1 flex-col px-16 py-8">
-
-    {#if stepIndex === 0}
+    {#if ctl.stepIndex === 0}
       <!-- Welcome -->
-      <div class="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+      <div
+        class="flex flex-1 flex-col items-center justify-center gap-6 text-center"
+      >
         <div class="flex items-center justify-center rounded-2xl">
           <CoveIcon size={120} />
         </div>
-        <h1 class="text-2xl font-bold tracking-tight">{msg.onboarding_welcome()}</h1>
+        <h1 class="text-2xl font-bold tracking-tight">
+          {msg.onboarding_welcome()}
+        </h1>
         <p class="max-w-lg text-base text-muted-foreground">
           {msg.onboarding_welcome_description()}
         </p>
       </div>
-
-    {:else if stepIndex === 1}
+    {:else if ctl.stepIndex === 1}
       <!-- Language -->
-      {#key selectedUiLanguage}
-        <h2 class="mb-2 text-2xl font-semibold">{stepTitle}</h2>
-        <p class="mb-8 text-base text-muted-foreground">{msg.onboarding_language_prompt()}</p>
+      {#key ctl.selectedUiLanguage}
+        <h2 class="mb-2 text-2xl font-semibold">{ctl.stepTitle}</h2>
+        <p class="mb-8 text-base text-muted-foreground">
+          {msg.onboarding_language_prompt()}
+        </p>
       {/key}
       <div class="grid grid-cols-2 gap-5 p-4">
         {#each LOCALES as locale}
           <button
             type="button"
-            onclick={() => selectUiLanguage(locale.appLocale)}
-            aria-pressed={selectedUiLanguage === locale.appLocale}
+            onclick={() => ctl.selectUiLanguage(locale.appLocale)}
+            aria-pressed={ctl.selectedUiLanguage === locale.appLocale}
             class="flex min-h-28 items-center justify-between rounded-xl border px-8 py-6 text-left transition-colors
-              {selectedUiLanguage === locale.appLocale
-                ? 'border-accent bg-accent/10'
-                : 'border-border hover:border-accent/60 hover:bg-muted/30'}"
+              {ctl.selectedUiLanguage === locale.appLocale
+              ? 'border-accent bg-accent/10'
+              : 'border-border hover:border-accent/60 hover:bg-muted/30'}"
           >
             <span class="text-2xl font-semibold">{locale.nativeName}</span>
-            {#if selectedUiLanguage === locale.appLocale}
-              <span class="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground">
+            {#if ctl.selectedUiLanguage === locale.appLocale}
+              <span
+                class="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground"
+              >
                 <Check class="size-6" />
               </span>
             {/if}
           </button>
         {/each}
       </div>
-      {#if languageSaveError}
-        <p class="mt-5 text-base text-destructive">{msg.language_save_error()}</p>
+      {#if ctl.languageSaveError}
+        <p class="mt-5 text-base text-destructive">
+          {msg.language_save_error()}
+        </p>
       {/if}
-
-    {:else if stepIndex === 2}
+    {:else if ctl.stepIndex === 2}
       <!-- Account -->
-      <h2 class="mb-6 text-2xl font-semibold">{stepTitle}</h2>
+      <h2 class="mb-6 text-2xl font-semibold">{ctl.stepTitle}</h2>
       {#if auth.isGuest}
-        {#if authOpen}
+        {#if ctl.authOpen}
           <!-- Inline auth panel — no fixed overlay, D-pad stays inside the trap -->
           <div bind:this={authWrap} class="flex justify-center">
-            <TvAuthPanel bind:this={authPanel} ondone={() => (authOpen = false)} />
+            <TvAuthPanel
+              bind:this={authPanel}
+              ondone={() => (ctl.authOpen = false)}
+            />
           </div>
         {:else}
           <p class="text-base text-muted-foreground">
             {msg.onboarding_guest_description()}
           </p>
           <div bind:this={signInBtnWrap} class="mt-6">
-            <Button onclick={() => (authOpen = true)} class="h-12 w-full px-8 text-lg">
+            <Button
+              onclick={() => (ctl.authOpen = true)}
+              class="h-12 w-full px-8 text-lg"
+            >
               {msg.onboarding_sign_in()}
             </Button>
           </div>
@@ -564,15 +324,21 @@
           </p>
         {/if}
       {:else}
-        <div class="flex items-center gap-4 rounded-xl border border-border p-6">
+        <div
+          class="flex items-center gap-4 rounded-xl border border-border p-6"
+        >
           <div
             class="flex size-14 shrink-0 items-center justify-center rounded-full bg-accent text-xl font-semibold text-accent-foreground"
           >
             {auth.activeProfile?.name?.charAt(0).toUpperCase() ?? "?"}
           </div>
           <div class="min-w-0 flex-1">
-            <p class="truncate text-lg font-medium">{auth.activeProfile?.name ?? msg.onboarding_profile()}</p>
-            <p class="truncate text-base text-muted-foreground">{auth.session?.email}</p>
+            <p class="truncate text-lg font-medium">
+              {auth.activeProfile?.name ?? msg.onboarding_profile()}
+            </p>
+            <p class="truncate text-base text-muted-foreground">
+              {auth.session?.email}
+            </p>
           </div>
           <CheckCircle class="size-8 shrink-0 text-green-500" />
         </div>
@@ -580,43 +346,52 @@
           {msg.onboarding_account_connected()}
         </p>
       {/if}
-
-    {:else if stepIndex === 3}
+    {:else if ctl.stepIndex === 3}
       <!-- Genres -->
-      <h2 class="mb-2 text-2xl font-semibold">{stepTitle}</h2>
-      <p class="mb-6 text-base text-muted-foreground">{msg.onboarding_genre_prompt()}</p>
+      <h2 class="mb-2 text-2xl font-semibold">{ctl.stepTitle}</h2>
+      <p class="mb-6 text-base text-muted-foreground">
+        {msg.onboarding_genre_prompt()}
+      </p>
       <div class="min-h-0 flex-1 overflow-y-auto">
-        {#if loadingGenres}
+        {#if ctl.loadingGenres}
           <div class="flex items-center justify-center py-12">
             <Loader2 class="size-8 animate-spin text-muted-foreground" />
           </div>
         {:else}
-          {#if movieGenres.length > 0}
-            <p class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">{msg.search_movies()}</p>
+          {#if ctl.movieGenres.length > 0}
+            <p
+              class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground"
+            >
+              {msg.search_movies()}
+            </p>
             <div class="mb-6 p-4 flex flex-wrap gap-3">
-              {#each movieGenres as g (g.id)}
+              {#each ctl.movieGenres as g (g.id)}
                 <button
-                  onclick={() => toggleMovieGenre(g.id)}
+                  onclick={() => ctl.toggleMovieGenre(g.id)}
                   class="rounded-full border px-5 py-2.5 text-lg transition-colors
-                    {selectedMovieGenreIds.has(g.id)
-                      ? 'border-accent bg-accent text-accent-foreground'
-                      : 'border-border hover:border-accent/60 hover:text-foreground'}"
+                    {ctl.selectedMovieGenreIds.has(g.id)
+                    ? 'border-accent bg-accent text-accent-foreground'
+                    : 'border-border hover:border-accent/60 hover:text-foreground'}"
                 >
                   {g.name}
                 </button>
               {/each}
             </div>
           {/if}
-          {#if tvGenres.length > 0}
-            <p class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground">{msg.search_tv_shows()}</p>
+          {#if ctl.tvGenres.length > 0}
+            <p
+              class="mb-3 text-sm font-medium uppercase tracking-wider text-muted-foreground"
+            >
+              {msg.search_tv_shows()}
+            </p>
             <div class="flex flex-wrap gap-3">
-              {#each tvGenres as g (g.id)}
+              {#each ctl.tvGenres as g (g.id)}
                 <button
-                  onclick={() => toggleTvGenre(g.id)}
+                  onclick={() => ctl.toggleTvGenre(g.id)}
                   class="rounded-full border px-5 py-2.5 text-lg transition-colors
-                    {selectedTvGenreIds.has(g.id)
-                      ? 'border-accent bg-accent text-accent-foreground'
-                      : 'border-border hover:border-accent/60 hover:text-foreground'}"
+                    {ctl.selectedTvGenreIds.has(g.id)
+                    ? 'border-accent bg-accent text-accent-foreground'
+                    : 'border-border hover:border-accent/60 hover:text-foreground'}"
                 >
                   {g.name}
                 </button>
@@ -625,42 +400,47 @@
           {/if}
         {/if}
       </div>
-
-    {:else if stepIndex === 4}
+    {:else if ctl.stepIndex === 4}
       <!-- Seen Before -->
       <div class="mb-2 flex shrink-0 items-center justify-between">
-        <h2 class="text-2xl font-semibold">{stepTitle}</h2>
-        {#if seenMedia.length > 0}
-          <span class="rounded-full bg-accent/20 px-3 py-1 text-base font-medium text-accent">
-            {msg.onboarding_selected_count({ count: seenMedia.length })}
+        <h2 class="text-2xl font-semibold">{ctl.stepTitle}</h2>
+        {#if ctl.seenMedia.length > 0}
+          <span
+            class="rounded-full bg-accent/20 px-3 py-1 text-base font-medium text-accent"
+          >
+            {msg.onboarding_selected_count({ count: ctl.seenMedia.length })}
           </span>
         {/if}
       </div>
-      <p class="mb-5 shrink-0 text-base text-muted-foreground">{msg.onboarding_seen_prompt()}</p>
+      <p class="mb-5 shrink-0 text-base text-muted-foreground">
+        {msg.onboarding_seen_prompt()}
+      </p>
       <input
         type="search"
         placeholder={msg.onboarding_search_media()}
-        value={mediaQuery}
-        oninput={(e) => onMediaQueryChange(e.currentTarget.value)}
+        value={ctl.mediaQuery}
+        oninput={(e) => ctl.onMediaQueryChange(e.currentTarget.value)}
         class="mb-4 h-12 shrink-0 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <div class="min-h-0 flex-1 overflow-y-auto">
-        {#if loadingMedia}
+        {#if ctl.loadingMedia}
           <div class="flex items-center justify-center py-12">
             <Loader2 class="size-8 animate-spin text-muted-foreground" />
           </div>
-        {:else if displayMedia.length === 0}
+        {:else if ctl.displayMedia.length === 0}
           <p class="py-8 text-center text-lg text-muted-foreground">
-            {mediaQuery.trim() ? msg.search_no_results() : msg.onboarding_no_media()}
+            {ctl.mediaQuery.trim()
+              ? msg.search_no_results()
+              : msg.onboarding_no_media()}
           </p>
         {:else}
           <div class="grid grid-cols-6 gap-3">
-            {#each displayMedia as m (`${m.media_type}-${m.id}`)}
+            {#each ctl.displayMedia as m (`${m.media_type}-${m.id}`)}
               {@const title = m.media_type === "movie" ? m.title : m.name}
-              {@const selected = seenIds.has(`${m.media_type}-${m.id}`)}
+              {@const selected = ctl.seenIds.has(`${m.media_type}-${m.id}`)}
               <button
-                onclick={() => toggleSeenMedia(m)}
-                title={title}
+                onclick={() => ctl.toggleSeenMedia(m)}
+                {title}
                 class="group relative overflow-hidden rounded-lg border-2 transition-colors
                   {selected ? 'border-accent' : 'border-transparent'}"
               >
@@ -673,12 +453,16 @@
                     class="aspect-2/3 w-full object-cover"
                   />
                 {:else}
-                  <div class="flex aspect-2/3 w-full items-center justify-center bg-muted text-sm text-muted-foreground">
+                  <div
+                    class="flex aspect-2/3 w-full items-center justify-center bg-muted text-sm text-muted-foreground"
+                  >
                     {title}
                   </div>
                 {/if}
                 {#if selected}
-                  <div class="absolute inset-0 flex items-center justify-center bg-accent/30">
+                  <div
+                    class="absolute inset-0 flex items-center justify-center bg-accent/30"
+                  >
                     <Check class="size-8 text-white drop-shadow" />
                   </div>
                 {/if}
@@ -687,21 +471,20 @@
           </div>
         {/if}
       </div>
-
-    {:else if stepIndex === 5}
+    {:else if ctl.stepIndex === 5}
       <!-- Rate Them -->
-      <h2 class="mb-2 shrink-0 text-2xl font-semibold">{stepTitle}</h2>
+      <h2 class="mb-2 shrink-0 text-2xl font-semibold">{ctl.stepTitle}</h2>
       <p class="mb-6 shrink-0 text-base text-muted-foreground">
         {msg.onboarding_rate_prompt()}
       </p>
-      {#if preparingEntries}
+      {#if ctl.preparingEntries}
         <div class="flex flex-1 items-center justify-center">
           <Loader2 class="size-8 animate-spin text-muted-foreground" />
         </div>
       {:else}
         <div class="min-h-0 flex-1 overflow-y-auto overflow-x-clip">
           <div class="flex flex-col gap-4">
-            {#each seenMedia as m, i (`${m.media_type}-${m.id}`)}
+            {#each ctl.seenMedia as m, i (`${m.media_type}-${m.id}`)}
               {@const title = m.media_type === "movie" ? m.title : m.name}
               <div class="flex items-center gap-4">
                 {#if m.poster_path}
@@ -715,19 +498,23 @@
                 {:else}
                   <div class="h-16 w-11 shrink-0 rounded bg-muted"></div>
                 {/if}
-                <p class="min-w-0 flex-1 truncate text-lg font-medium">{title}</p>
-                <StarRating libraryEntry={seenEntries[i] ?? null} media={m} variant="inline" />
+                <p class="min-w-0 flex-1 truncate text-lg font-medium">
+                  {title}
+                </p>
+                <StarRating
+                  libraryEntry={ctl.seenEntries[i] ?? null}
+                  media={m}
+                  variant="inline"
+                />
               </div>
             {/each}
           </div>
         </div>
       {/if}
-
-    {:else if stepIndex === 6}
+    {:else if ctl.stepIndex === 6}
       <!-- Preferences -->
-      <h2 class="mb-6 shrink-0 text-2xl font-semibold">{stepTitle}</h2>
+      <h2 class="mb-6 shrink-0 text-2xl font-semibold">{ctl.stepTitle}</h2>
       <div class="min-h-0 flex-1 p-4 overflow-y-auto overflow-x-clip">
-
         <!-- Subtitle language cycle button -->
         <button
           onclick={cycleSubtitleLang}
@@ -735,10 +522,14 @@
         >
           <div>
             <p class="text-lg font-medium">{msg.onboarding_subtitles()}</p>
-            <p class="text-sm text-muted-foreground">{msg.onboarding_subtitle_description()}</p>
+            <p class="text-sm text-muted-foreground">
+              {msg.onboarding_subtitle_description()}
+            </p>
           </div>
-          <span class="ml-6 shrink-0 rounded-lg bg-muted px-4 py-2 text-lg font-semibold">
-            {langLabel(subtitleLang)}
+          <span
+            class="ml-6 shrink-0 rounded-lg bg-muted px-4 py-2 text-lg font-semibold"
+          >
+            {langLabel(ctl.subtitleLang)}
           </span>
         </button>
 
@@ -749,10 +540,14 @@
         >
           <div>
             <p class="text-lg font-medium">{msg.onboarding_audio()}</p>
-            <p class="text-sm text-muted-foreground">{msg.onboarding_audio_description()}</p>
+            <p class="text-sm text-muted-foreground">
+              {msg.onboarding_audio_description()}
+            </p>
           </div>
-          <span class="ml-6 shrink-0 rounded-lg bg-muted px-4 py-2 text-lg font-semibold">
-            {audioLangLabel(audioLang)}
+          <span
+            class="ml-6 shrink-0 rounded-lg bg-muted px-4 py-2 text-lg font-semibold"
+          >
+            {audioLangLabel(ctl.audioLang)}
           </span>
         </button>
 
@@ -760,84 +555,115 @@
 
         <!-- Toggle rows -->
         <button
-          onclick={() => (autoPlay = !autoPlay)}
+          onclick={() => (ctl.autoPlay = !ctl.autoPlay)}
           class="flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <div>
             <p class="text-lg font-medium">{msg.settings_autoplay()}</p>
-            <p class="text-sm text-muted-foreground">{msg.onboarding_autoplay_description()}</p>
+            <p class="text-sm text-muted-foreground">
+              {msg.onboarding_autoplay_description()}
+            </p>
           </div>
-          <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
-            {autoPlay ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoPlay ? msg.common_on() : msg.common_off()}
+          <span
+            class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
+            {ctl.autoPlay
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground'}"
+          >
+            {ctl.autoPlay ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
         <button
-          onclick={() => (rememberPosition = !rememberPosition)}
+          onclick={() => (ctl.rememberPosition = !ctl.rememberPosition)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <div>
             <p class="text-lg font-medium">{msg.onboarding_remember()}</p>
-            <p class="text-sm text-muted-foreground">{msg.onboarding_remember_description()}</p>
+            <p class="text-sm text-muted-foreground">
+              {msg.onboarding_remember_description()}
+            </p>
           </div>
-          <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
-            {rememberPosition ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {rememberPosition ? msg.common_on() : msg.common_off()}
+          <span
+            class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
+            {ctl.rememberPosition
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground'}"
+          >
+            {ctl.rememberPosition ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
         <Separator class="my-5" />
 
         <button
-          onclick={() => (autoSkipIntro = !autoSkipIntro)}
+          onclick={() => (ctl.autoSkipIntro = !ctl.autoSkipIntro)}
           class="flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <p class="text-lg font-medium">{msg.onboarding_skip_intros()}</p>
-          <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
-            {autoSkipIntro ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipIntro ? msg.common_on() : msg.common_off()}
+          <span
+            class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
+            {ctl.autoSkipIntro
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground'}"
+          >
+            {ctl.autoSkipIntro ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
         <button
-          onclick={() => (autoSkipRecap = !autoSkipRecap)}
+          onclick={() => (ctl.autoSkipRecap = !ctl.autoSkipRecap)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <p class="text-lg font-medium">{msg.onboarding_skip_recaps()}</p>
-          <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
-            {autoSkipRecap ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipRecap ? msg.common_on() : msg.common_off()}
+          <span
+            class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
+            {ctl.autoSkipRecap
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground'}"
+          >
+            {ctl.autoSkipRecap ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
         <button
-          onclick={() => (autoSkipCredits = !autoSkipCredits)}
+          onclick={() => (ctl.autoSkipCredits = !ctl.autoSkipCredits)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <p class="text-lg font-medium">{msg.onboarding_skip_credits()}</p>
-          <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
-            {autoSkipCredits ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipCredits ? msg.common_on() : msg.common_off()}
+          <span
+            class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
+            {ctl.autoSkipCredits
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground'}"
+          >
+            {ctl.autoSkipCredits ? msg.common_on() : msg.common_off()}
           </span>
         </button>
 
         <button
-          onclick={() => (autoSkipPreview = !autoSkipPreview)}
+          onclick={() => (ctl.autoSkipPreview = !ctl.autoSkipPreview)}
           class="mt-3 flex w-full items-center justify-between rounded-xl border border-border px-6 py-4 text-left transition-colors hover:bg-muted/30"
         >
           <p class="text-lg font-medium">{msg.onboarding_skip_previews()}</p>
-          <span class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
-            {autoSkipPreview ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'}">
-            {autoSkipPreview ? msg.common_on() : msg.common_off()}
+          <span
+            class="ml-6 shrink-0 rounded-full px-5 py-1.5 text-base font-semibold
+            {ctl.autoSkipPreview
+              ? 'bg-accent text-accent-foreground'
+              : 'bg-muted text-muted-foreground'}"
+          >
+            {ctl.autoSkipPreview ? msg.common_on() : msg.common_off()}
           </span>
         </button>
       </div>
-
-    {:else if stepIndex === 7}
+    {:else if ctl.stepIndex === 7}
       <!-- Done -->
-      <div class="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-        <div class="flex size-24 items-center justify-center rounded-full bg-accent/20">
+      <div
+        class="flex flex-1 flex-col items-center justify-center gap-6 text-center"
+      >
+        <div
+          class="flex size-24 items-center justify-center rounded-full bg-accent/20"
+        >
           <CheckCircle class="size-12 text-accent" />
         </div>
         <h2 class="text-3xl font-semibold">{msg.onboarding_ready()}</h2>
@@ -846,37 +672,51 @@
         </p>
       </div>
     {/if}
-
   </div>
 
   <!-- Navigation bar -->
-  <div class="flex shrink-0 items-center justify-between border-t border-border px-16 py-6">
+  <div
+    class="flex shrink-0 items-center justify-between border-t border-border px-16 py-6"
+  >
     <div class="w-36">
-      {#if !isFirst}
-        <Button variant="ghost" onclick={back} disabled={nextLoading} class="h-12 px-8 text-lg">
+      {#if !ctl.isFirst}
+        <Button
+          variant="ghost"
+          onclick={ctl.back}
+          disabled={ctl.nextLoading}
+          class="h-12 px-8 text-lg"
+        >
           <ArrowLeft class="size-5" />
           {msg.common_back()}
         </Button>
       {/if}
     </div>
-    {#key selectedUiLanguage}
+    {#key ctl.selectedUiLanguage}
       <div class="flex items-center gap-3">
-        {#if step.skippable && !nextLoading}
-          <Button variant="ghost" class="h-12 px-8 text-lg text-muted-foreground" onclick={skip}>
+        {#if ctl.step.skippable && !ctl.nextLoading}
+          <Button
+            variant="ghost"
+            class="h-12 px-8 text-lg text-muted-foreground"
+            onclick={ctl.skip}
+          >
             {msg.onboarding_skip()}
           </Button>
         {/if}
         <div bind:this={nextBtnWrap}>
           <Button
             onclick={handleNext}
-            disabled={!canProceed}
+            disabled={!ctl.canProceed}
             class="h-12 min-w-36 px-8 text-lg"
           >
-            {#if nextLoading}
+            {#if ctl.nextLoading}
               <Loader2 class="size-5 animate-spin" />
             {:else}
-              {isFirst ? msg.onboarding_get_started() : isLast ? msg.onboarding_finish() : msg.onboarding_next()}
-              {#if !isLast && !isFirst}
+              {ctl.isFirst
+                ? msg.onboarding_get_started()
+                : ctl.isLast
+                  ? msg.onboarding_finish()
+                  : msg.onboarding_next()}
+              {#if !ctl.isLast && !ctl.isFirst}
                 <ArrowRight class="size-5" />
               {/if}
             {/if}
@@ -885,5 +725,4 @@
       </div>
     {/key}
   </div>
-
 </div>

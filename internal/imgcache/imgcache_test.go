@@ -147,8 +147,12 @@ func TestHandle_MethodNotAllowed(t *testing.T) {
 	c := newTestCache(t, upstream)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/img/w500/abc123.jpg", nil)
+	// The method guard lives on the route registration, so exercise the real
+	// mux rather than calling handle() directly.
+	mux := http.NewServeMux()
+	c.SetupHandlers(mux)
 	rec := httptest.NewRecorder()
-	c.handle(rec, req)
+	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

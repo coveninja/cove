@@ -90,6 +90,28 @@ func newHandlerServer(t *testing.T, fakeTrakt *httptest.Server) *Server {
 	return newHandlerServerAt(t, fakeTrakt.URL)
 }
 
+// doRoute drives a request through s's real mux registration rather than
+// calling a handler directly. Method rejection lives in the utils.MethodGuard
+// wrapper applied at registration time, so a 405 is only observable through
+// the mux — and going this way also proves each route is wired to the method
+// it should be.
+func doRoute(t *testing.T, s *Server, method, target string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	s.SetupHandlers(mux)
+
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest(method, target, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, target, nil)
+	}
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
+
 // doHandler calls h with a new recorder and returns the recorder.
 func doHandler(h http.HandlerFunc, method, target string, body []byte) *httptest.ResponseRecorder {
 	var req *http.Request
@@ -120,7 +142,7 @@ func TestHandleDeviceCode_MethodNotAllowed(t *testing.T) {
 	defer fake.Close()
 	s := newHandlerServer(t, fake)
 
-	w := doHandler(s.handleDeviceCode, http.MethodGet, "/api/trakt/device-code", nil)
+	w := doRoute(t, s, http.MethodGet, "/api/trakt/device-code", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
@@ -168,7 +190,7 @@ func TestHandlePoll_MethodNotAllowed(t *testing.T) {
 	defer fake.Close()
 	s := newHandlerServer(t, fake)
 
-	w := doHandler(s.handlePoll, http.MethodGet, "/api/trakt/poll", nil)
+	w := doRoute(t, s, http.MethodGet, "/api/trakt/poll", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
@@ -214,7 +236,7 @@ func TestHandleStatus_MethodNotAllowed(t *testing.T) {
 	defer fake.Close()
 	s := newHandlerServer(t, fake)
 
-	w := doHandler(s.handleStatus, http.MethodPost, "/api/trakt/status", nil)
+	w := doRoute(t, s, http.MethodPost, "/api/trakt/status", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
@@ -262,7 +284,7 @@ func TestHandleUnlink_MethodNotAllowed(t *testing.T) {
 	defer fake.Close()
 	s := newHandlerServer(t, fake)
 
-	w := doHandler(s.handleUnlink, http.MethodGet, "/api/trakt/unlink", nil)
+	w := doRoute(t, s, http.MethodGet, "/api/trakt/unlink", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
@@ -292,7 +314,7 @@ func TestHandleScrobble_MethodNotAllowed(t *testing.T) {
 	defer fake.Close()
 	s := newHandlerServer(t, fake)
 
-	w := doHandler(s.handleScrobble, http.MethodGet, "/api/trakt/scrobble", nil)
+	w := doRoute(t, s, http.MethodGet, "/api/trakt/scrobble", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
@@ -375,7 +397,7 @@ func TestHandleSync_MethodNotAllowed(t *testing.T) {
 	defer fake.Close()
 	s := newHandlerServer(t, fake)
 
-	w := doHandler(s.handleSync, http.MethodGet, "/api/trakt/sync", nil)
+	w := doRoute(t, s, http.MethodGet, "/api/trakt/sync", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 

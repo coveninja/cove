@@ -12,6 +12,7 @@ import (
 	"github.com/coveninja/cove/internal/library"
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 const (
@@ -67,32 +68,11 @@ func (sw *SyncWorker) Notify() {
 // Run drives the sync loop: startupDelay, then syncTickInterval cadence, plus
 // debounced re-runs on Notify(). Blocks until ctx is cancelled.
 func (sw *SyncWorker) Run(ctx context.Context) {
-	startup := time.NewTimer(syncStartupDelay)
-	defer startup.Stop()
-
-	ticker := time.NewTicker(syncTickInterval)
-	defer ticker.Stop()
-
-	debounce := time.NewTimer(time.Hour)
-	defer debounce.Stop()
-	if !debounce.Stop() {
-		<-debounce.C
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-startup.C:
-			sw.runCycle()
-		case <-ticker.C:
-			sw.runCycle()
-		case <-sw.notify:
-			debounce.Reset(syncDebounce)
-		case <-debounce.C:
-			sw.runCycle()
-		}
-	}
+	utils.RunScheduled(ctx, utils.Schedule{
+		StartupDelay: syncStartupDelay,
+		Interval:     syncTickInterval,
+		Debounce:     syncDebounce,
+	}, sw.notify, sw.runCycle)
 }
 
 // runCycle performs one full sync: pull history + watchlist from Trakt, push

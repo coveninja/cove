@@ -276,11 +276,7 @@ func (m *Manager) FetchManifest(ctx context.Context, addonURL string) (Manifest,
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return Manifest{}, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
@@ -303,11 +299,7 @@ func (m *Manager) FetchStreams(ctx context.Context, addonURL string, mediaType s
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
@@ -328,11 +320,7 @@ func (m *Manager) FetchSubtitles(ctx context.Context, addonURL string, mediaType
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
@@ -362,11 +350,7 @@ func (m *Manager) FetchCatalog(ctx context.Context, addonURL, catalogType, catal
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("addon returned HTTP %d", res.StatusCode)
@@ -390,16 +374,13 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(m.GetEntries()); err != nil {
-				log.Println("addons list:", err)
-			}
+			utils.WriteJSON(w, m.GetEntries())
 
 		case http.MethodPost:
 			var body struct {
 				URL string `json:"url"`
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
 				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
 				return
@@ -409,10 +390,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 				http.Error(w, "could not add addon: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(entry); err != nil {
-				log.Println("addons add:", err)
-			}
+			utils.WriteJSON(w, entry)
 
 		case http.MethodPatch:
 			id := r.URL.Query().Get("id")
@@ -424,7 +402,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				Enabled *bool `json:"enabled"`
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return
@@ -454,11 +432,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 	}))
 
 	// GET /api/timestamps?id=<tmdbID>&season=1&episode=2
-	mux.HandleFunc("/api/timestamps", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/timestamps", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		if tmdbIDStr == "" {
 			http.Error(w, "missing ?id=", http.StatusBadRequest)
@@ -493,38 +467,24 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			log.Println("timestamps:", err)
 			data = &TimestampData{}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(data); err != nil {
-			log.Println("timestamps encode:", err)
-		}
-	}))
+		utils.WriteJSON(w, data)
+	})))
 
 	// GET /api/catalogs — list enabled, home-eligible catalogs across all stremio addons.
-	mux.HandleFunc("/api/catalogs", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/catalogs", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
 		refs := m.GetEnabledCatalogs()
 		if refs == nil {
 			refs = []CatalogRef{}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(refs); err != nil {
-			log.Println("catalogs list:", err)
-		}
-	}))
+		utils.WriteJSON(w, refs)
+	})))
 
 	// PATCH /api/addons/catalog?id=<addonID>&catalog=<type/id>[&url=<addonURL>]
 	// body: {"enabled":bool} — toggle a specific catalog on or off (204 on success).
 	// When ?url= is supplied, matching is by URL only (required for addons with
 	// duplicate manifest IDs); otherwise matching falls back to ?id=.
 	// Either ?id= or ?url= must be present; ?catalog= is always required.
-	mux.HandleFunc("/api/addons/catalog", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/addons/catalog", utils.CorsMiddleware(utils.MethodGuard(http.MethodPatch, func(w http.ResponseWriter, r *http.Request) {
 		addonID := r.URL.Query().Get("id")
 		addonURL := r.URL.Query().Get("url")
 		catalogKey := r.URL.Query().Get("catalog")
@@ -535,7 +495,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		var body struct {
 			Enabled *bool `json:"enabled"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -545,14 +505,10 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 
 	// POST /api/addons/refresh?id=X[&url=Y] — re-fetch manifest, preserve enabled/catalog state
-	mux.HandleFunc("/api/addons/refresh", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/addons/refresh", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		addonURL := r.URL.Query().Get("url")
 		if id == "" && addonURL == "" {
@@ -568,18 +524,11 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(entry); err != nil {
-			log.Println("addons refresh:", err)
-		}
-	}))
+		utils.WriteJSON(w, entry)
+	})))
 
 	// GET /api/watch-options?id=<tmdbID>&type=movie|tv
-	mux.HandleFunc("/api/watch-options", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/watch-options", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		if tmdbID == "" || mediaType == "" {
@@ -600,9 +549,6 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			log.Println("watch-options:", err)
 			options = []WatchOption{}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(options); err != nil {
-			log.Println("watch-options encode:", err)
-		}
-	}))
+		utils.WriteJSON(w, options)
+	})))
 }

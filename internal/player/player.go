@@ -11,7 +11,6 @@ package player
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,8 +66,7 @@ type Player struct {
 	// URLs found here — anything else is an open-redirect/SSRF attempt, not a
 	// stream we offered. Entries expire after streamHeadersTTL, refreshed on
 	// every lookup so long playback sessions stay valid.
-	streamHeadersMu sync.Mutex
-	streamHeaders   map[string]streamHeaderEntry
+	streamHeaders *utils.TTLCache[string, streamHeaderEntry]
 
 	// Background next-episode prefetch (F7) — a single slot, not a queue.
 	// Switching shows (or advancing episodes) while an earlier prefetch is
@@ -121,9 +119,11 @@ type playerNuvio interface {
 	GetStreams(ctx context.Context, mediaType string, tmdbID int, imdbID, title string, year int, season, episode *int) []addons.Stream
 }
 
+// streamHeaderEntry is the per-stream request headers an addon supplied, held
+// so /api/play can replay them upstream. Expiry is owned by the surrounding
+// utils.TTLCache, not stored here.
 type streamHeaderEntry struct {
 	headers map[string]string
-	expires time.Time
 }
 
 const streamHeadersTTL = 30 * time.Minute
@@ -297,7 +297,7 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 		tmdbClient:        tmdbClient,
 		addonMgr:          addonMgr,
 		nuvioMgr:          nuvioMgr,
-		streamHeaders:     map[string]streamHeaderEntry{},
+		streamHeaders:     utils.NewTTLCache[string, streamHeaderEntry](0),
 		dataDir:           dataDir,
 		proxyTransport:    safeTransport,
 		proxyTransportLAN: transport,
@@ -332,20 +332,11 @@ func (p *Player) Close() {
 
 // rememberStream records a stream URL the backend returned to the client
 // (with any extra headers its origin requires — nil for most), authorizing
-// it for later /api/play use. Sweeps expired entries on every call instead
-// of running a background goroutine, since inserts only happen when streams
-// are listed and that stays cheap.
+// it for later /api/play use. Expiry sweep and concurrency are handled by
+// the TTLCache.
 func (p *Player) rememberStream(streamURL string, headers map[string]string) {
 	if streamURL == "" {
 		return
-	}
-	p.streamHeadersMu.Lock()
-	defer p.streamHeadersMu.Unlock()
-	now := time.Now()
-	for k, v := range p.streamHeaders {
-		if now.After(v.expires) {
-			delete(p.streamHeaders, k)
-		}
 	}
 	storedHeaders := make(map[string]string, len(headers))
 	for k, v := range headers {
@@ -354,24 +345,19 @@ func (p *Player) rememberStream(streamURL string, headers map[string]string) {
 	if headers == nil {
 		storedHeaders = nil
 	}
-	p.streamHeaders[streamURL] = streamHeaderEntry{headers: storedHeaders, expires: now.Add(streamHeadersTTL)}
+	p.streamHeaders.Set(streamURL, streamHeaderEntry{headers: storedHeaders}, streamHeadersTTL)
 }
 
 // lookupStream reports whether streamURL is one the backend itself offered,
 // returning its remembered headers (usually nil). A hit refreshes the entry's
 // TTL so mpv's follow-up Range requests during a long watch never expire it.
 func (p *Player) lookupStream(streamURL string) (headers map[string]string, known bool) {
-	p.streamHeadersMu.Lock()
-	defer p.streamHeadersMu.Unlock()
-	entry, ok := p.streamHeaders[streamURL]
-	if !ok || time.Now().After(entry.expires) {
-		if ok {
-			delete(p.streamHeaders, streamURL)
-		}
+	entry, ok := p.streamHeaders.Get(streamURL)
+	if !ok {
 		return nil, false
 	}
-	entry.expires = time.Now().Add(streamHeadersTTL)
-	p.streamHeaders[streamURL] = entry
+	// Refresh the entry's TTL so long playback sessions stay valid.
+	p.streamHeaders.Set(streamURL, entry, streamHeadersTTL)
 	headers = make(map[string]string, len(entry.headers))
 	for k, v := range entry.headers {
 		headers[k] = v
@@ -1229,440 +1215,20 @@ func positiveInt(raw string) (int, bool) {
 	return value, err == nil && value > 0
 }
 
+// SetupHandlers registers all /api/* routes for the player package. Handler
+// implementations live in player_handlers.go. CorsMiddleware is always
+// outermost so OPTIONS preflights are answered 204 before MethodGuard can
+// 405 them.
 func (p *Player) SetupHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-		if mediaType == "" {
-			mediaType = "movie"
-		}
-		if mediaType != "movie" && mediaType != "tv" {
-			http.Error(w, "type must be movie or tv", http.StatusBadRequest)
-			return
-		}
-		id, validID := positiveInt(tmdbID)
-		if !validID {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-
-		var imdbID string
-		var err error
-		if mediaType == "tv" {
-			imdbID, err = p.tmdbClient.GetTVIMDBId(id)
-		} else {
-			imdbID, err = p.tmdbClient.GetIMDBId(id)
-		}
-		if err != nil || imdbID == "" {
-			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
-			return
-		}
-
-		stremioID := imdbID
-		if mediaType == "tv" {
-			season := r.URL.Query().Get("season")
-			episode := r.URL.Query().Get("episode")
-			if season != "" || episode != "" {
-				if _, ok := positiveInt(season); !ok {
-					http.Error(w, "invalid season", http.StatusBadRequest)
-					return
-				}
-				if _, ok := positiveInt(episode); !ok {
-					http.Error(w, "invalid episode", http.StatusBadRequest)
-					return
-				}
-				stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
-			}
-		}
-
-		allSubs := p.addonMgr.GetAllSubtitles(r.Context(), mediaType, stremioID)
-		if allSubs == nil {
-			allSubs = []addons.Subtitle{}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(allSubs)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}))
-
-	// /api/streams?id=<tmdbID>&type=movie|tv[&season=N&episode=N]
-	mux.HandleFunc("/api/streams", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-		if mediaType == "" {
-			mediaType = "movie"
-		}
-		if mediaType != "movie" && mediaType != "tv" {
-			http.Error(w, "type must be movie or tv", http.StatusBadRequest)
-			return
-		}
-
-		id, validID := positiveInt(tmdbID)
-		if !validID {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		var err error
-
-		var imdbID string
-		if mediaType == "tv" {
-			imdbID, err = p.tmdbClient.GetTVIMDBId(id)
-		} else {
-			imdbID, err = p.tmdbClient.GetIMDBId(id)
-		}
-		if err != nil || imdbID == "" {
-			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
-			return
-		}
-
-		// For TV, append season:episode to build the Stremio stream ID
-		stremioID := imdbID
-		var seasonNum, episodeNum *int
-		if mediaType == "tv" {
-			season := r.URL.Query().Get("season")
-			episode := r.URL.Query().Get("episode")
-			if season == "" || episode == "" {
-				http.Error(w, "season and episode are required for tv streams", http.StatusBadRequest)
-				return
-			}
-			sv, seasonOK := positiveInt(season)
-			ev, episodeOK := positiveInt(episode)
-			if !seasonOK || !episodeOK {
-				http.Error(w, "season and episode must be positive integers", http.StatusBadRequest)
-				return
-			}
-			stremioID = fmt.Sprintf("%s:%d:%d", imdbID, sv, ev)
-			seasonNum, episodeNum = &sv, &ev
-		}
-
-		// Stremio addons and Nuvio scrapers are independent legs with no shared
-		// state — run them concurrently so the response latency is max(leg),
-		// not sum(leg). (A4)
-		ctx := r.Context()
-		var addonStreams []addons.Stream
-		var addonErr error
-		var nuvioStreams []addons.Stream
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			addonStreams, addonErr = p.addonMgr.GetAllStreams(ctx, mediaType, stremioID)
-		}()
-
-		// Skip the extra TMDB lookup entirely for the common case (no Nuvio
-		// scrapers enabled) — it exists purely to feed Nuvio's metadata.
-		if p.nuvioMgr != nil && p.nuvioMgr.HasEnabledScrapers() {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				var title string
-				var year int
-				if media, mErr := p.tmdbClient.GetMediaByID(id, mediaType); mErr == nil && media != nil {
-					title = firstNonEmpty(media.Title, media.Name)
-					year = parseYear(firstNonEmpty(media.Released, media.FirstAir))
-				}
-				nuvioStreams = p.nuvioMgr.GetStreams(ctx, mediaType, id, imdbID, title, year, seasonNum, episodeNum)
-			}()
-		}
-		wg.Wait()
-
-		if addonErr != nil {
-			http.Error(w, addonErr.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Response stays a single JSON array, nuvio appended after addons
-		// (frontend contract unchanged).
-		streams := addonStreams
-		if streams == nil {
-			streams = []addons.Stream{}
-		}
-		streams = append(streams, nuvioStreams...)
-
-		// Register every direct-URL stream we're about to offer — /api/play
-		// only accepts URLs from this registry (see rememberStream).
-		for _, s := range streams {
-			p.rememberStream(s.URL, s.Headers)
-		}
-
-		err = json.NewEncoder(w).Encode(streams)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}))
-
-	// POST /api/streams/probe — HEAD-checks a batch of direct-URL streams and
-	// reports which are reachable. Only URLs previously issued by /api/streams
-	// (in the rememberStream registry) are probed — unknown URLs return alive:false
-	// without making any outbound request, so this can't be used as a proxy.
-	//
-	// Request:  {"streams":[{"url":"..."}], "timeoutMs":700}
-	// Response: {"results":[{"url":"...","alive":true,"contentLength":123}]}
-	mux.HandleFunc("/api/streams/probe", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req struct {
-			Streams []struct {
-				URL string `json:"url"`
-			} `json:"streams"`
-			TimeoutMs int `json:"timeoutMs"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		if len(req.Streams) == 0 || len(req.Streams) > 10 {
-			http.Error(w, "streams must contain 1–10 entries", http.StatusBadRequest)
-			return
-		}
-
-		timeoutMs := req.TimeoutMs
-		if timeoutMs == 0 {
-			timeoutMs = 700
-		}
-		if timeoutMs < 100 {
-			timeoutMs = 100
-		}
-		if timeoutMs > 800 {
-			timeoutMs = 800
-		}
-
-		type probeResult struct {
-			URL           string `json:"url"`
-			Alive         bool   `json:"alive"`
-			ContentLength int64  `json:"contentLength,omitempty"`
-		}
-
-		results := make([]probeResult, len(req.Streams))
-		for i, s := range req.Streams {
-			results[i].URL = s.URL
-		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutMs)*time.Millisecond)
-		defer cancel()
-
-		var wg sync.WaitGroup
-		for i, s := range req.Streams {
-			headers, known := p.lookupStream(s.URL)
-			if !known {
-				continue // results[i].Alive stays false — not our URL
-			}
-			wg.Add(1)
-			go func(idx int, streamURL string, hdrs map[string]string) {
-				defer wg.Done()
-				alive, cl := p.probeURL(ctx, streamURL, hdrs)
-				results[idx].Alive = alive
-				if cl > 0 {
-					results[idx].ContentLength = cl
-				}
-			}(i, s.URL, headers)
-		}
-		wg.Wait()
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(struct {
-			Results []probeResult `json:"results"`
-		}{Results: results})
-	}))
-
-	mux.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		infoHash := r.URL.Query().Get("hash")
-		streamURL := r.URL.Query().Get("url")
-
-		// Direct http(s) sources: redirect mpv straight to them, unless the
-		// origin needs extra headers (e.g. Referer) that a redirect can't
-		// carry — in that case proxy the request instead. Only URLs this
-		// backend itself returned from /api/streams are accepted; anything
-		// else would make this an open redirect / request proxy.
-		if streamURL != "" {
-			if u, err := url.Parse(streamURL); err != nil ||
-				(u.Scheme != "http" && u.Scheme != "https") {
-				http.Error(w, "invalid stream url", http.StatusBadRequest)
-				return
-			}
-			headers, known := p.lookupStream(streamURL)
-			if !known {
-				// Loud on purpose: mpv sees this 403 but the UI only shows a
-				// generic spinner-then-fail, and the registry losing an entry
-				// (backend restart, 30-min TTL) is otherwise undiagnosable.
-				log.Printf("play: rejected stream url not in registry (restarted backend or entry expired?): %.120s", streamURL)
-				http.Error(w, "unknown stream url (list streams first)", http.StatusForbidden)
-				return
-			}
-			if len(headers) > 0 {
-				p.proxyStream(streamURL, headers, w, r)
-				return
-			}
-			http.Redirect(w, r, streamURL, http.StatusTemporaryRedirect)
-			return
-		}
-
-		// Torrent sources: stream the selected file (largest, or the matching
-		// episode of a season pack — see selectFile/D1) as seekable http. mpv
-		// handles every codec/container natively, so no transcoding involved.
-		if infoHash != "" {
-			season, episode := parseSeasonEpisode(r)
-			fileIdx := parseFileIdx(r)
-			p.StreamTorrent(infoHash, season, episode, fileIdx, w, r)
-			return
-		}
-
-		http.Error(w, "missing hash or url", http.StatusBadRequest)
-	}))
-
-	// POST /api/prefetch-download?hash=&season=&episode= — background-download
-	// the next episode's torrent (F7) ahead of the user getting there. Fires
-	// PrefetchTorrent in a goroutine and returns immediately: metadata fetch
-	// alone can take up to 45s (getTorrentFile's GotInfo timeout), and this is
-	// a fire-and-forget warm, not something the caller waits on. Same policy
-	// as /api/play?hash= — a hash play isn't gated on rememberStream, so this
-	// isn't either — but the hash format IS validated here (unlike /api/play,
-	// which just lets AddMagnet reject garbage) since a malformed value would
-	// otherwise burn a full metadata-fetch attempt in the background goroutine
-	// before failing.
-	//
-	// A single-flight guard (prefetchInFlight) ensures at most one goroutine
-	// is running at a time — PrefetchTorrent's bookkeeping is a single slot,
-	// so concurrent metadata fetches are never useful and only waste resources.
-	// Callers that arrive while a fetch is already in flight get 202 with
-	// {"started": false} and should not retry immediately.
-	mux.HandleFunc("/api/prefetch-download", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		infoHash := r.URL.Query().Get("hash")
-		if err := validateInfoHash(infoHash); err != nil {
-			http.Error(w, "invalid or missing ?hash= (expected a 40-char hex infohash)", http.StatusBadRequest)
-			return
-		}
-		season, episode := parseSeasonEpisode(r)
-		fileIdx := parseFileIdx(r)
-
-		if !p.prefetchInFlight.CompareAndSwap(false, true) {
-			// Another PrefetchTorrent is already running; a second concurrent
-			// fetch would race on the same single-slot bookkeeping and waste a
-			// full metadata-fetch attempt for nothing.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusAccepted)
-			_ = json.NewEncoder(w).Encode(map[string]bool{"started": false})
-			return
-		}
-		go func() {
-			defer p.prefetchInFlight.Store(false)
-			if err := p.PrefetchTorrent(infoHash, season, episode, fileIdx); err != nil {
-				log.Println("prefetch-download:", err)
-			}
-		}()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
-	}))
-
-	// Legacy polling endpoint — kept for compatibility; prefer /api/progress/stream (SSE).
-	mux.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		hash := r.URL.Query().Get("hash")
-		season, episode := parseSeasonEpisode(r)
-		fileIdx := parseFileIdx(r)
-		err := json.NewEncoder(w).Encode(p.GetProgress(hash, season, episode, fileIdx))
-		if err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		hash := r.URL.Query().Get("hash")
-		season, episode := parseSeasonEpisode(r)
-		fileIdx := parseFileIdx(r)
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-ticker.C:
-				data, _ := json.Marshal(p.GetProgress(hash, season, episode, fileIdx))
-				fmt.Fprintf(w, "data: %s\n\n", data)
-				flusher.Flush()
-			}
-		}
-	}))
-
-	// GET /api/speedtest — streams a fixed-size payload so the client can
-	// measure raw download throughput for the "Match My Internet Speed"
-	// stream-selection mode. Not a rigorous benchmark (single connection,
-	// no compression, local network only) but good enough as a rough guide.
-	mux.HandleFunc("/api/speedtest", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		const payloadSize = 25 * 1024 * 1024 // 25 MiB
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
-		w.Header().Set("Cache-Control", "no-store")
-
-		buf := make([]byte, 1<<20) // 1 MiB chunks
-		flusher, _ := w.(http.Flusher)
-		for written := 0; written < payloadSize; {
-			n := len(buf)
-			if remaining := payloadSize - written; remaining < n {
-				n = remaining
-			}
-			if _, err := w.Write(buf[:n]); err != nil {
-				return // client aborted — nothing to clean up
-			}
-			written += n
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-	}))
-
-	mux.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		rawURL := r.URL.Query().Get("url")
-		if rawURL == "" {
-			http.Error(w, "missing url", http.StatusBadRequest)
-			return
-		}
-		// Subtitle URLs come from third-party addons; only plain http(s) to
-		// public hosts is allowed (SafeHTTPClient refuses local/private IPs).
-		if _, err := utils.ValidatePublicURL(rawURL); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		resp, err := utils.SafeHTTPClient.Do(req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		writeSubtitleResponse(w, resp)
-	}))
+	mux.HandleFunc("/api/subtitles", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handleSubtitles)))
+	mux.HandleFunc("/api/streams", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handleStreams)))
+	mux.HandleFunc("/api/streams/probe", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, p.handleStreamsProbe)))
+	mux.HandleFunc("/api/play", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handlePlay)))
+	mux.HandleFunc("/api/prefetch-download", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, p.handlePrefetchDownload)))
+	mux.HandleFunc("/api/progress", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handleProgress)))
+	mux.HandleFunc("/api/progress/stream", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handleProgressStream)))
+	mux.HandleFunc("/api/speedtest", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handleSpeedtest)))
+	mux.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, p.handleSubtitleProxy)))
 }
 
 // writeSubtitleResponse validates and emits an already-fetched subtitle
@@ -1701,27 +1267,4 @@ func writeSubtitleResponse(w http.ResponseWriter, resp *http.Response) {
 	if _, err := fmt.Fprint(w, content); err != nil {
 		log.Println(err)
 	}
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// parseYear extracts the year from a TMDB-style "YYYY-MM-DD" date string.
-// Returns 0 (not an error) for an empty or malformed date, since a Nuvio
-// scraper's metadata.year is best-effort context, not something to fail over.
-func parseYear(date string) int {
-	if len(date) < 4 {
-		return 0
-	}
-	year, err := strconv.Atoi(date[:4])
-	if err != nil {
-		return 0
-	}
-	return year
 }

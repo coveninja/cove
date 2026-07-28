@@ -357,9 +357,15 @@ func TestProcessTVWatchLaterEmitsOnlyNextFutureEpisode(t *testing.T) {
 }
 
 func TestCalendarHandlerRejectsOtherMethods(t *testing.T) {
+	// Goes through the mux: method rejection lives in the utils.MethodGuard
+	// wrapper applied at registration, so it is only observable on the real
+	// route — which also proves the route is registered as GET-only.
 	s := &Server{}
+	mux := http.NewServeMux()
+	s.SetupHandlers(mux)
+
 	rec := httptest.NewRecorder()
-	s.handleCalendar(rec, httptest.NewRequest(http.MethodPost, "/api/library/calendar", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/library/calendar", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}

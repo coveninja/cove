@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, statusLabel, STATUS_COLORS, type LibraryStatus } from "$lib/api";
+  import { statusLabel, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import MobileMediaCard from "../components/MobileMediaCard.svelte";
@@ -12,6 +12,15 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import { SvelteSet } from "svelte/reactivity";
   import * as m from "$lib/paraglide/messages.js";
+  import {
+    hasNewEpisodes,
+    compareEntries,
+    sortOptions,
+    toMediaKey,
+    type SortKey,
+    genresFor,
+  } from "$lib/myList";
+  import { MyListDataController } from "$lib/myList.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
 
   let {
@@ -24,41 +33,19 @@
 
   // ── State ────────────────────────────────────────────────────────────────────
 
-  let entries = $state<LibraryEntry[]>([]);
-  let loading = $state(true);
+  const data = new MyListDataController();
+  const entries = $derived(data.entries);
+  const loading = $derived(data.loading);
+  const mediaByKey = $derived(data.mediaByKey);
+  const genreNames = $derived(data.genreNames);
   let activeType = $state<"all" | "movie" | "tv">("all");
   let activeStatus = $state<LibraryStatus | "all">("all");
 
   // ── Sort & genre filter ───────────────────────────────────────────────────────
 
-  type SortKey =
-    | "default"
-    | "watched_desc"
-    | "added_desc"
-    | "added_asc"
-    | "release_desc"
-    | "tmdb_desc"
-    | "personal_desc"
-    | "title_asc";
-
-  const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-    { value: "default", label: m.my_list_sort_recommended() },
-    { value: "watched_desc", label: m.my_list_sort_recently_watched() },
-    { value: "added_desc", label: m.my_list_sort_recently_added() },
-    { value: "added_asc", label: m.my_list_sort_oldest_added() },
-    { value: "release_desc", label: m.my_list_sort_release_date() },
-    { value: "tmdb_desc", label: m.my_list_sort_tmdb_rating() },
-    { value: "personal_desc", label: m.my_list_sort_your_rating() },
-    { value: "title_asc", label: m.my_list_sort_title() },
-  ];
-
+  const SORT_OPTIONS = sortOptions();
   let sortKey = $state<SortKey>("default");
   let activeGenre = $state<string>("all");
-
-  let genreNames = $state<{
-    movie: Record<number, string>;
-    tv: Record<number, string>;
-  }>({ movie: {}, tv: {} });
 
   const sortLabel = $derived(
     SORT_OPTIONS.find((o) => o.value === sortKey)?.label ?? m.my_list_sort(),
@@ -66,39 +53,9 @@
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
-  async function loadEntries(showSpinner = true): Promise<void> {
-    if (showSpinner) loading = true;
-    try {
-      entries = await api.libraryList();
-    } finally {
-      if (showSpinner) loading = false;
-    }
-  }
-
-  async function loadGenreNames(): Promise<void> {
-    try {
-      const [movie, tv] = await Promise.all([
-        api.genreList("movie"),
-        api.genreList("tv"),
-      ]);
-      genreNames = {
-        movie: Object.fromEntries(movie.map((g) => [g.id, g.name])) as Record<
-          number,
-          string
-        >,
-        tv: Object.fromEntries(tv.map((g) => [g.id, g.name])) as Record<
-          number,
-          string
-        >,
-      };
-    } catch {
-      // non-fatal
-    }
-  }
-
   onMount(() => {
-    loadEntries(true);
-    loadGenreNames();
+    void data.loadEntries(true);
+    void data.loadGenreNames();
   });
 
   let initialized = $state(false);
@@ -108,7 +65,7 @@
       initialized = true;
       return;
     }
-    loadEntries(false);
+    void data.loadEntries(false);
   });
 
   // ── Derived ──────────────────────────────────────────────────────────────────
@@ -156,7 +113,7 @@
     const set = new SvelteSet<string>();
     for (const e of entries) {
       if (activeType !== "all" && e.media_type !== activeType) continue;
-      for (const g of genresFor(e)) set.add(g);
+      for (const g of genresFor(e, mediaByKey, genreNames)) set.add(g);
     }
     return [...set].sort((a, b) => a.localeCompare(b));
   });
@@ -173,7 +130,7 @@
               (activeType === "all" || e.media_type === activeType) &&
               matchesGenre(e),
           )
-          .toSorted(compareEntries),
+          .toSorted((a, b) => compareEntries(a, b, sortKey, mediaByKey)),
       }))
       .filter((section) => section.entries.length > 0),
   );
@@ -186,137 +143,10 @@
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  function hasNewEpisodes(entry: LibraryEntry): boolean {
-    if (entry.media_type !== "tv" || entry.status !== "watching") return false;
-    const airedS = entry.last_aired_season;
-    const airedE = entry.last_aired_episode;
-    if (airedS == null || airedE == null) return false;
-    const watchedS = entry.last_watched_season ?? 0;
-    const watchedE = entry.last_watched_episode ?? 0;
-    if (airedS > watchedS) return true;
-    return airedS === watchedS && airedE > watchedE;
-  }
-
-  function ts(d?: string | null): number {
-    if (!d) return 0;
-    const t = new Date(d).getTime();
-    return Number.isNaN(t) ? 0 : t;
-  }
-
-  function genresFor(entry: LibraryEntry): string[] {
-    const media = mediaByKey[toMediaKey(entry)] as
-      | (Media & {
-          genres?: { id: number; name: string }[];
-          genre_ids?: number[];
-        })
-      | undefined;
-    if (!media) return [];
-    if (Array.isArray(media.genres) && media.genres.length) {
-      return media.genres.map((g) => g.name).filter(Boolean);
-    }
-    const ids = media.genre_ids ?? [];
-    const map = genreNames[entry.media_type as "movie" | "tv"] ?? {};
-    return ids.map((id) => map[id]).filter(Boolean);
-  }
-
-  function tmdbRating(entry: LibraryEntry): number {
-    const onEntry = (entry as LibraryEntry & { vote_average?: number })
-      .vote_average;
-    if (typeof onEntry === "number" && onEntry > 0) return onEntry;
-    const media = mediaByKey[toMediaKey(entry)] as
-      | (Media & { vote_average?: number })
-      | undefined;
-    return media?.vote_average ?? 0;
-  }
-
-  function personalRating(entry: LibraryEntry): number {
-    return entry.rating ?? -1;
-  }
-
-  function lastWatchedAt(entry: LibraryEntry): number {
-    const e = entry as LibraryEntry & {
-      last_watched_at?: string;
-      watched_at?: string;
-      updated_at?: string;
-    };
-    return ts(
-      e.last_watched_at ?? e.watched_at ?? e.updated_at ?? entry.added_at,
-    );
-  }
-
-  function releaseDate(entry: LibraryEntry): number {
-    const media = mediaByKey[toMediaKey(entry)] as
-      | (Media & {
-          release_date?: string;
-          first_air_date?: string;
-          last_air_date?: string;
-        })
-      | undefined;
-    return ts(
-      entry.last_air_date ??
-        media?.release_date ??
-        media?.first_air_date ??
-        media?.last_air_date,
-    );
-  }
-
-  function titleOf(entry: LibraryEntry): string {
-    return (entry.title ?? "").toLowerCase();
-  }
-
-  function defaultCompare(a: LibraryEntry, b: LibraryEntry): number {
-    const aNew = hasNewEpisodes(a) ? 1 : 0;
-    const bNew = hasNewEpisodes(b) ? 1 : 0;
-    if (bNew !== aNew) return bNew - aNew;
-    return ts(b.last_air_date || b.added_at) - ts(a.last_air_date || a.added_at);
-  }
-
-  function compareEntries(a: LibraryEntry, b: LibraryEntry): number {
-    switch (sortKey) {
-      case "added_desc":
-        return ts(b.added_at) - ts(a.added_at);
-      case "added_asc":
-        return ts(a.added_at) - ts(b.added_at);
-      case "title_asc":
-        return titleOf(a).localeCompare(titleOf(b));
-      case "tmdb_desc":
-        return tmdbRating(b) - tmdbRating(a);
-      case "personal_desc":
-        return personalRating(b) - personalRating(a);
-      case "watched_desc":
-        return lastWatchedAt(b) - lastWatchedAt(a);
-      case "release_desc":
-        return releaseDate(b) - releaseDate(a);
-      default:
-        return defaultCompare(a, b);
-    }
-  }
-
   function matchesGenre(entry: LibraryEntry): boolean {
     if (activeGenre === "all") return true;
-    return genresFor(entry).includes(activeGenre);
+    return genresFor(entry, mediaByKey, genreNames).includes(activeGenre);
   }
-
-  function toMediaKey(entry: LibraryEntry): string {
-    return `${entry.tmdb_id}-${entry.media_type}`;
-  }
-
-  let mediaByKey = $state<Record<string, Media>>({});
-
-  async function ensureMediaLoaded(entry: LibraryEntry): Promise<void> {
-    const key = toMediaKey(entry);
-    if (mediaByKey[key]) return;
-    try {
-      mediaByKey[key] = await api.getMediaByID(entry.tmdb_id, entry.media_type);
-    } catch {
-      // non-fatal
-    }
-  }
-
-  $effect(() => {
-    if (entries?.length === 0) return;
-    for (const entry of entries) ensureMediaLoaded(entry);
-  });
 
   const EMPTY_MESSAGES: Record<string, { heading: string; sub: string }> = {
     all: {
@@ -375,8 +205,8 @@
             class="shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors {activeType ===
             val
               ? 'bg-foreground text-background'
-              : 'bg-secondary text-muted-foreground'}"
-          >{label}</button>
+              : 'bg-secondary text-muted-foreground'}">{label}</button
+          >
         {/each}
 
         <div class="mx-0.5 w-px shrink-0 self-stretch bg-border"></div>
@@ -393,7 +223,11 @@
                 ? 'bg-foreground text-background'
                 : 'bg-secondary text-muted-foreground'}"
             >
-              {#if tab !== "all"}<span class="size-1.5 shrink-0 rounded-full {STATUS_COLORS[tab as LibraryStatus].dot}"></span>{/if}{TAB_LABELS[tab]}
+              {#if tab !== "all"}<span
+                  class="size-1.5 shrink-0 rounded-full {STATUS_COLORS[
+                    tab as LibraryStatus
+                  ].dot}"
+                ></span>{/if}{TAB_LABELS[tab]}
               <span class="tabular-nums opacity-60">{count}</span>
             </button>
           {/if}
@@ -438,7 +272,9 @@
               {activeGenre === "all" ? m.my_list_all_genres() : activeGenre}
             </Select.Trigger>
             <Select.Content>
-              <Select.Item value="all" label={m.my_list_all_genres()}>{m.my_list_all_genres()}</Select.Item>
+              <Select.Item value="all" label={m.my_list_all_genres()}
+                >{m.my_list_all_genres()}</Select.Item
+              >
               {#each availableGenres as g (g)}
                 <Select.Item value={g} label={g}>{g}</Select.Item>
               {/each}
@@ -454,14 +290,14 @@
     <div class="flex flex-1 items-center justify-center">
       <Spinner class="size-8" />
     </div>
-
   {:else if entries.length === 0}
-    <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+    <div
+      class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center"
+    >
       <BookMarked class="size-12 text-muted-foreground/30" />
       <p class="text-base font-medium">{EMPTY_MESSAGES.all.heading}</p>
       <p class="text-sm text-muted-foreground">{EMPTY_MESSAGES.all.sub}</p>
     </div>
-
   {:else}
     <div
       class="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -476,7 +312,7 @@
             {#if activeGenre !== "all"}
               <p class="text-base font-medium">{m.my_list_no_genre()}</p>
               <p class="text-sm text-muted-foreground">
-              {m.my_list_change_filter()}
+                {m.my_list_change_filter()}
               </p>
             {:else}
               <p class="text-base font-medium">
@@ -491,7 +327,11 @@
           {#each sections as section (section.status)}
             <section class="mt-6 first:mt-4">
               <div class="mb-3 flex items-baseline gap-2 px-1">
-                <span class="size-2 shrink-0 self-center rounded-full {STATUS_COLORS[section.status].dot}"></span>
+                <span
+                  class="size-2 shrink-0 self-center rounded-full {STATUS_COLORS[
+                    section.status
+                  ].dot}"
+                ></span>
                 <h2 class="text-base font-semibold">{section.label}</h2>
                 <span class="text-sm text-muted-foreground tabular-nums">
                   {section.entries.length}

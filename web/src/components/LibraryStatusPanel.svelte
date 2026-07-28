@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
+  import { statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import * as Popover from "$lib/components/ui/popover/index.js";
@@ -7,7 +7,7 @@
   import { BookmarkIcon, BookmarkPlus } from "lucide-svelte";
   import { animate } from "animejs";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
-  import { libraryChanged } from "$lib/stores/library";
+  import { setMediaLibraryStatus } from "$lib/mediaActions";
 
   let {
     libraryEntry,
@@ -27,8 +27,6 @@
     class?: string;
   }>();
 
-  const title = $derived(media.media_type === "tv" ? media.name : media.title);
-
   let popoverOpen = $state(false);
 
   function animateBookmarkIn(el: HTMLElement): void {
@@ -42,30 +40,10 @@
 
   async function handleStatus(status: LibraryStatus): Promise<void> {
     try {
-      if (libraryEntry?.status === status) {
-        await api.libraryRemove(media.id, media.media_type);
-        libraryEntry = null;
-      } else if (libraryEntry) {
-        libraryEntry = await api.librarySetStatus(
-          media.id,
-          media.media_type,
-          status,
-        );
-      } else {
-        libraryEntry = await api.libraryUpsert({
-          tmdb_id: media.id,
-          media_type: media.media_type,
-          title,
-          poster_path: media.poster_path ?? "",
-          vote_average: media.vote_average ?? 0,
-          last_air_date: media.last_air_date ?? "",
-          last_aired_season: lastAiredSeason,
-          last_aired_episode: lastAiredEpisode,
-          status,
-        });
-      }
-
-      libraryChanged.update((n) => n + 1);
+      libraryEntry = await setMediaLibraryStatus(media, libraryEntry, status, {
+        lastAiredSeason,
+        lastAiredEpisode,
+      });
       // Set directly rather than relying solely on onOpenChange: mutating a
       // bind:open value doesn't reliably re-fire the component's own
       // onOpenChange callback, so the parent's popoverOpen tracking (and the
@@ -79,7 +57,12 @@
   }
 
   const inLibrary = $derived(!!libraryEntry);
-  const statuses: LibraryStatus[] = ["watch_later", "watching", "finished", "dropped"];
+  const statuses: LibraryStatus[] = [
+    "watch_later",
+    "watching",
+    "finished",
+    "dropped",
+  ];
 </script>
 
 <Popover.Root
@@ -89,7 +72,10 @@
   <Popover.Trigger>
     <Button variant="secondary" {size} class={className}>
       {#if inLibrary}
-        <BookmarkIcon class="size-4 {STATUS_COLORS[libraryEntry.status as LibraryStatus].text}" />
+        <BookmarkIcon
+          class="size-4 {STATUS_COLORS[libraryEntry.status as LibraryStatus]
+            .text}"
+        />
       {:else}
         <BookmarkPlus />
       {/if}
@@ -111,11 +97,17 @@
             <span class="size-4 shrink-0">
               {#if isActive}
                 <span use:animateBookmarkIn>
-                  <BookmarkIcon class="size-4 {STATUS_COLORS[value as LibraryStatus].text}" />
+                  <BookmarkIcon
+                    class="size-4 {STATUS_COLORS[value as LibraryStatus].text}"
+                  />
                 </span>
               {/if}
             </span>
-            <span class="size-2 shrink-0 rounded-full {STATUS_COLORS[value as LibraryStatus].dot}"></span>
+            <span
+              class="size-2 shrink-0 rounded-full {STATUS_COLORS[
+                value as LibraryStatus
+              ].dot}"
+            ></span>
             {statusLabel(value)}
           </span>
         </Button>

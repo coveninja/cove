@@ -13,9 +13,13 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { auth } from "$lib/stores/auth.svelte";
-  import { api } from "$lib/api";
   import AuthDialog from "./AuthDialog.svelte";
-  import { libraryChanged } from "$lib/stores/library";
+  import {
+    activateAccountProfile,
+    createAccountProfile,
+    logoutAccount,
+    syncAccount,
+  } from "$lib/accountActions";
   import type { Page } from "$lib/types/types";
   import * as m from "$lib/paraglide/messages.js";
 
@@ -37,7 +41,7 @@
 
   async function switchProfile(id: string): Promise<void> {
     try {
-      await api.profileActivate(id);
+      await activateAccountProfile(id);
       window.location.reload();
     } catch (e) {
       console.error("switch profile:", e);
@@ -49,13 +53,7 @@
     if (!name) return;
     creatingProfile = true;
     try {
-      await api.profileCreate(name);
-      const profs = await api.profilesList();
-      auth.setProfiles(
-        profs.profiles,
-        profs.profiles.find((p) => p.id === profs.active_profile_id) ??
-          profs.profiles[0],
-      );
+      await createAccountProfile(name);
       newProfileName = "";
       showNewProfileInput = false;
     } catch (e) {
@@ -68,8 +66,7 @@
   async function sync(): Promise<void> {
     syncing = true;
     try {
-      await api.authSync();
-      libraryChanged.update((n) => n + 1);
+      await syncAccount();
     } catch (e) {
       console.error("sync:", e);
     } finally {
@@ -78,8 +75,7 @@
   }
 
   async function logout(): Promise<void> {
-    await api.authLogout();
-    await auth.logout();
+    await logoutAccount();
     open = false;
   }
 </script>
@@ -87,7 +83,12 @@
 <Popover.Root bind:open>
   <Popover.Trigger>
     {#snippet child({ props })}
-      <Button variant="outline" size="icon" aria-label={m.nav_account()} {...props}>
+      <Button
+        variant="outline"
+        size="icon"
+        aria-label={m.nav_account()}
+        {...props}
+      >
         {#if auth.session}
           <span
             class="flex size-full items-center justify-center rounded-full bg-accent text-xs font-semibold text-accent-foreground"
@@ -105,7 +106,9 @@
     <div class="flex flex-col">
       <!-- Profile list -->
       <div class="px-3 py-2">
-        <p class="pb-1 text-xs font-medium text-muted-foreground">{m.account_profiles()}</p>
+        <p class="pb-1 text-xs font-medium text-muted-foreground">
+          {m.account_profiles()}
+        </p>
         {#each auth.profiles as profile (profile.id)}
           <button
             type="button"
@@ -160,7 +163,8 @@
             class="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             onclick={() => (showNewProfileInput = true)}
           >
-            <Plus class="size-3.5" /> {m.account_new_profile()}
+            <Plus class="size-3.5" />
+            {m.account_new_profile()}
           </button>
         {/if}
       </div>
@@ -176,7 +180,8 @@
             open = false;
           }}
         >
-          <Settings class="size-3.5" /> {m.account_manage_insights()}
+          <Settings class="size-3.5" />
+          {m.account_manage_insights()}
         </button>
       </div>
 
@@ -184,7 +189,9 @@
 
       <!-- Account section -->
       <div class="px-3 py-2">
-        <p class="pb-1 text-xs font-medium text-muted-foreground">{m.nav_account()}</p>
+        <p class="pb-1 text-xs font-medium text-muted-foreground">
+          {m.nav_account()}
+        </p>
         {#if auth.session}
           <p class="mb-2 truncate text-xs text-muted-foreground">
             {auth.session.email}
@@ -208,7 +215,8 @@
               class="gap-1 text-xs text-muted-foreground"
               onclick={logout}
             >
-              <LogOut class="size-3" /> {m.common_sign_out()}
+              <LogOut class="size-3" />
+              {m.common_sign_out()}
             </Button>
           </div>
         {:else}
@@ -224,7 +232,8 @@
               authOpen = true;
             }}
           >
-            <LogIn class="size-3" /> {m.onboarding_sign_in()}
+            <LogIn class="size-3" />
+            {m.onboarding_sign_in()}
           </Button>
         {/if}
       </div>

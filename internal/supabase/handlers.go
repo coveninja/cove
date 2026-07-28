@@ -187,32 +187,23 @@ func NewServer(
 
 // SetupHandlers registers all /api/auth/* endpoints on mux.
 func (s *Server) SetupHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/api/auth/register", utils.CorsMiddleware(s.handleRegister))
-	mux.HandleFunc("/api/auth/register/confirm", utils.CorsMiddleware(s.handleConfirmRegistration))
-	mux.HandleFunc("/api/auth/login", utils.CorsMiddleware(s.handleLogin))
-	mux.HandleFunc("/api/auth/otp", utils.CorsMiddleware(s.handleOTP))
-	mux.HandleFunc("/api/auth/verify-otp", utils.CorsMiddleware(s.handleVerifyOTP))
-	mux.HandleFunc("/api/auth/logout", utils.CorsMiddleware(s.handleLogout))
-	mux.HandleFunc("/api/auth/me", utils.CorsMiddleware(s.handleMe))
-	mux.HandleFunc("/api/auth/sync", utils.CorsMiddleware(s.handleSync))
+	mux.HandleFunc("/api/auth/register", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleRegister)))
+	mux.HandleFunc("/api/auth/register/confirm", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleConfirmRegistration)))
+	mux.HandleFunc("/api/auth/login", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleLogin)))
+	mux.HandleFunc("/api/auth/otp", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleOTP)))
+	mux.HandleFunc("/api/auth/verify-otp", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleVerifyOTP)))
+	mux.HandleFunc("/api/auth/logout", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleLogout)))
+	mux.HandleFunc("/api/auth/me", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, s.handleMe)))
+	mux.HandleFunc("/api/auth/sync", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleSync)))
 }
 
 func (s *Server) notConfigured(w http.ResponseWriter) {
 	http.Error(w, "Supabase not configured", http.StatusServiceUnavailable)
 }
 
-func jsonOK(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 // POST /api/auth/register  {email, password, profile_name}
 // Creates a Supabase account, links the active local profile, pushes local data.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.cfg == nil {
 		s.notConfigured(w)
 		return
@@ -236,7 +227,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	if accessToken == "" {
 		// Email confirmation is required. Tell the frontend to show OTP input.
-		jsonOK(w, map[string]any{"confirmation_required": true})
+		utils.WriteJSON(w, map[string]any{"confirmation_required": true})
 		return
 	}
 
@@ -247,10 +238,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // POST /api/auth/register/confirm  {email, token, profile_name}
 // Verifies the OTP from the signup confirmation email and creates the session.
 func (s *Server) handleConfirmRegistration(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.cfg == nil {
 		s.notConfigured(w)
 		return
@@ -308,7 +295,7 @@ func (s *Server) finishRegistration(w http.ResponseWriter, userID, accessToken, 
 
 	s.pushAsync(accessToken, activeProfile.ID, "supabase register")
 
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"profile":       s.profileStore.ActiveProfile(),
@@ -318,10 +305,6 @@ func (s *Server) finishRegistration(w http.ResponseWriter, userID, accessToken, 
 // POST /api/auth/login  {email, password}
 // Signs in, pulls remote data, merges into local store.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.cfg == nil {
 		s.notConfigured(w)
 		return
@@ -347,7 +330,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"profiles":      s.profileStore.All(),
@@ -358,10 +341,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 // POST /api/auth/otp  {email}
 // Sends an OTP / magic-link email.
 func (s *Server) handleOTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.cfg == nil {
 		s.notConfigured(w)
 		return
@@ -379,15 +358,11 @@ func (s *Server) handleOTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	jsonOK(w, map[string]string{"status": "ok"})
+	utils.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
 // POST /api/auth/verify-otp  {email, token}
 func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.cfg == nil {
 		s.notConfigured(w)
 		return
@@ -413,7 +388,7 @@ func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"profiles":      s.profileStore.All(),
@@ -423,25 +398,17 @@ func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/auth/logout — clear the SupabaseUID link from the active profile.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if err := s.profileStore.UnlinkSupabase(s.profileStore.ActiveProfile().ID); err != nil {
 		http.Error(w, "could not unlink local profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, map[string]string{"status": "ok"})
+	utils.WriteJSON(w, map[string]string{"status": "ok"})
 }
 
 // GET /api/auth/me — return current auth state.
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	active := s.profileStore.ActiveProfile()
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"profile": active,
 		"linked":  active.SupabaseUID != nil,
 	})
@@ -449,10 +416,6 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/auth/sync — pull remote data and merge.
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.cfg == nil {
 		s.notConfigured(w)
 		return
@@ -489,7 +452,7 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	// library_generation lets the frontend tell whether the merge actually
 	// changed anything, so an idle focus-triggered sync doesn't force a full
 	// UI refetch.
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"status":             "ok",
 		"library_generation": s.lib.Generation(),
 		"push_error":         lastErr,

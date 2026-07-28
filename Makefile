@@ -35,8 +35,9 @@ _ANDROID_TAGS := embedweb$(if $(_BUILD_TAGS),$(,)$(_BUILD_TAGS))
 
 # Android SDK paths — override on the command line if your SDK lives elsewhere.
 # ANDROID_NDK_HOME points to the versioned NDK installed by sdkmanager.
-ANDROID_HOME     ?= $(HOME)/Android/Sdk
-ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
+ANDROID_NDK_VERSION := 27.2.12479018
+ANDROID_HOME        ?= $(HOME)/Android/Sdk
+ANDROID_NDK_HOME    ?= $(ANDROID_HOME)/ndk/$(ANDROID_NDK_VERSION)
 
 # Targets that drive the Android toolchain export these so that gomobile,
 # sdkmanager, avdmanager, and Gradle all pick up the same SDK without
@@ -44,7 +45,7 @@ ANDROID_NDK_HOME ?= $(ANDROID_HOME)/ndk/27.2.12479018
 export ANDROID_HOME
 export ANDROID_NDK_HOME
 
-.PHONY: all build run dev go web qt qt-configure generate web-dev shell test test-all test-go test-web test-build test-workflows test-release-notes test-security test-qt test-android test-android-connected test-private patch minor major clean android-aar android android-install tv-avd tv-install
+.PHONY: all build run run-debug dev go web qt qt-configure generate web-dev shell test test-all test-go test-web test-build test-workflows test-release-notes test-security test-qt test-android test-android-connected test-private patch minor major clean android-aar android android-install tv-avd tv-install hot hot-debug inject-private
 
 all: build
 
@@ -129,6 +130,7 @@ test-build:
 ## Lint the GitHub Actions definitions. Go downloads actionlint on first use.
 test-workflows: test-release-notes
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required for full workflow linting (Arch: sudo pacman -S shellcheck)."; exit 1; }
+	bash scripts/workflow-local-actions_test.sh
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
 
 ## Verify that generated release notes contain only user-facing fixes/features.
@@ -284,12 +286,11 @@ tv-avd:
 
 ## Install + launch on the TV emulator/device. Same APK as android-install —
 ## the app picks the TV shell at runtime (UiModeManager → __covePlatform).
-tv-install: android
-	adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-	adb shell am start -n com.coveninja.cove/.WebViewActivity
+tv-install: android-install
 
 ## Remove build artifacts.
 clean:
 	rm -f $(GO_BIN)
+	rm -f coverage-*.out
 	rm -rf $(WEB_DIR)/dist
 	rm -rf $(QT_BUILD)

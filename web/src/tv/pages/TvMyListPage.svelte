@@ -1,12 +1,18 @@
 <script lang="ts">
-  import { api, statusLabel, STATUS_COLORS, type LibraryStatus } from "$lib/api";
-  import type { LibraryEntry } from "$lib/types/library";
-  import type { Media } from "$lib/types/tmdb";
+  import { statusLabel, STATUS_COLORS, type LibraryStatus } from "$lib/api";
   import TvMediaCard from "../components/TvMediaCard.svelte";
   import TvCalendarAgenda from "../components/TvCalendarAgenda.svelte";
   import { BookMarked, Star } from "lucide-svelte";
   import { onMount } from "svelte";
   import * as m from "$lib/paraglide/messages.js";
+  import {
+    hasNewEpisodes,
+    compareEntries,
+    sortOptions,
+    toMediaKey,
+    type SortKey,
+  } from "$lib/myList";
+  import { MyListDataController } from "$lib/myList.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import { focusGroup, focusable } from "../focus/actions";
@@ -17,48 +23,21 @@
 
   // ── State ────────────────────────────────────────────────────────────────────
 
-  let entries = $state<LibraryEntry[]>([]);
-  let loading = $state(true);
+  const data = new MyListDataController();
+  const entries = $derived(data.entries);
+  const loading = $derived(data.loading);
+  const mediaByKey = $derived(data.mediaByKey);
   let activeType = $state<"all" | "movie" | "tv">("all");
 
   // ── Sort ─────────────────────────────────────────────────────────────────────
 
-  type SortKey =
-    | "default"
-    | "watched_desc"
-    | "added_desc"
-    | "added_asc"
-    | "release_desc"
-    | "tmdb_desc"
-    | "personal_desc"
-    | "title_asc";
-
-  const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-    { value: "default", label: m.my_list_sort_recommended() },
-    { value: "watched_desc", label: m.my_list_sort_recently_watched() },
-    { value: "added_desc", label: m.my_list_sort_recently_added() },
-    { value: "added_asc", label: m.my_list_sort_oldest_added() },
-    { value: "release_desc", label: m.my_list_sort_release_date() },
-    { value: "tmdb_desc", label: m.my_list_sort_tmdb_rating() },
-    { value: "personal_desc", label: m.my_list_sort_your_rating() },
-    { value: "title_asc", label: m.my_list_sort_title() },
-  ];
-
+  const SORT_OPTIONS = sortOptions();
   let sortKey = $state<SortKey>("default");
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
-  async function loadEntries(showSpinner = true): Promise<void> {
-    if (showSpinner) loading = true;
-    try {
-      entries = await api.libraryList();
-    } finally {
-      if (showSpinner) loading = false;
-    }
-  }
-
   onMount(() => {
-    loadEntries(true);
+    void data.loadEntries(true);
   });
 
   let initialized = $state(false);
@@ -68,7 +47,7 @@
       initialized = true;
       return;
     }
-    loadEntries(false);
+    void data.loadEntries(false);
   });
 
   // ── Derived ──────────────────────────────────────────────────────────────────
@@ -81,136 +60,26 @@
   ];
 
   const sections = $derived(
-    SECTION_ORDER
-      .map((status) => ({
-        status,
-        label: statusLabel(status),
-        entries: entries
-          .filter(
-            (e) =>
-              e.status === status &&
-              (activeType === "all" || e.media_type === activeType),
-          )
-          .toSorted(compareEntries),
-      }))
-      .filter((section) => section.entries.length > 0),
+    SECTION_ORDER.map((status) => ({
+      status,
+      label: statusLabel(status),
+      entries: entries
+        .filter(
+          (e) =>
+            e.status === status &&
+            (activeType === "all" || e.media_type === activeType),
+        )
+        .toSorted((a, b) => compareEntries(a, b, sortKey, mediaByKey)),
+    })).filter((section) => section.entries.length > 0),
   );
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
-
-  function hasNewEpisodes(entry: LibraryEntry): boolean {
-    if (entry.media_type !== "tv" || entry.status !== "watching") return false;
-    const airedS = entry.last_aired_season;
-    const airedE = entry.last_aired_episode;
-    if (airedS == null || airedE == null) return false;
-    const watchedS = entry.last_watched_season ?? 0;
-    const watchedE = entry.last_watched_episode ?? 0;
-    if (airedS > watchedS) return true;
-    return airedS === watchedS && airedE > watchedE;
-  }
-
-  function ts(d?: string | null): number {
-    if (!d) return 0;
-    const t = new Date(d).getTime();
-    return Number.isNaN(t) ? 0 : t;
-  }
-
-  function tmdbRating(entry: LibraryEntry): number {
-    const onEntry = (entry as LibraryEntry & { vote_average?: number }).vote_average;
-    if (typeof onEntry === "number" && onEntry > 0) return onEntry;
-    const media = mediaByKey[toMediaKey(entry)] as
-      | (Media & { vote_average?: number })
-      | undefined;
-    return media?.vote_average ?? 0;
-  }
-
-  function personalRating(entry: LibraryEntry): number {
-    return entry.rating ?? -1;
-  }
-
-  function lastWatchedAt(entry: LibraryEntry): number {
-    const e = entry as LibraryEntry & {
-      last_watched_at?: string;
-      watched_at?: string;
-      updated_at?: string;
-    };
-    return ts(e.last_watched_at ?? e.watched_at ?? e.updated_at ?? entry.added_at);
-  }
-
-  function releaseDate(entry: LibraryEntry): number {
-    const media = mediaByKey[toMediaKey(entry)] as
-      | (Media & {
-          release_date?: string;
-          first_air_date?: string;
-          last_air_date?: string;
-        })
-      | undefined;
-    return ts(
-      entry.last_air_date ??
-        media?.release_date ??
-        media?.first_air_date ??
-        media?.last_air_date,
-    );
-  }
-
-  function titleOf(entry: LibraryEntry): string {
-    return (entry.title ?? "").toLowerCase();
-  }
-
-  function defaultCompare(a: LibraryEntry, b: LibraryEntry): number {
-    const aNew = hasNewEpisodes(a) ? 1 : 0;
-    const bNew = hasNewEpisodes(b) ? 1 : 0;
-    if (bNew !== aNew) return bNew - aNew;
-    return ts(b.last_air_date || b.added_at) - ts(a.last_air_date || a.added_at);
-  }
-
-  function compareEntries(a: LibraryEntry, b: LibraryEntry): number {
-    switch (sortKey) {
-      case "added_desc":
-        return ts(b.added_at) - ts(a.added_at);
-      case "added_asc":
-        return ts(a.added_at) - ts(b.added_at);
-      case "title_asc":
-        return titleOf(a).localeCompare(titleOf(b));
-      case "tmdb_desc":
-        return tmdbRating(b) - tmdbRating(a);
-      case "personal_desc":
-        return personalRating(b) - personalRating(a);
-      case "watched_desc":
-        return lastWatchedAt(b) - lastWatchedAt(a);
-      case "release_desc":
-        return releaseDate(b) - releaseDate(a);
-      default:
-        return defaultCompare(a, b);
-    }
-  }
-
-  function toMediaKey(entry: LibraryEntry): string {
-    return `${entry.tmdb_id}-${entry.media_type}`;
-  }
 
   /** Advance sortKey to the next option in the cycle (for the TV sort button). */
   function cycleSortKey(): void {
     const idx = SORT_OPTIONS.findIndex((o) => o.value === sortKey);
     sortKey = SORT_OPTIONS[(idx + 1) % SORT_OPTIONS.length].value;
   }
-
-  let mediaByKey = $state<Record<string, Media>>({});
-
-  async function ensureMediaLoaded(entry: LibraryEntry): Promise<void> {
-    const key = toMediaKey(entry);
-    if (mediaByKey[key]) return;
-    try {
-      mediaByKey[key] = await api.getMediaByID(entry.tmdb_id, entry.media_type);
-    } catch {
-      // non-fatal
-    }
-  }
-
-  $effect(() => {
-    if (entries?.length === 0) return;
-    for (const entry of entries) ensureMediaLoaded(entry);
-  });
 
   const EMPTY_MESSAGES: Record<string, { heading: string; sub: string }> = {
     all: {
@@ -268,8 +137,8 @@
             class="rounded-xl px-5 py-2 text-sm font-medium transition-colors {activeType ===
             val
               ? 'bg-foreground text-background'
-              : 'bg-secondary text-muted-foreground'}"
-          >{label}</button>
+              : 'bg-secondary text-muted-foreground'}">{label}</button
+          >
         {/each}
 
         <div class="h-6 w-px shrink-0 bg-white/20"></div>
@@ -293,14 +162,14 @@
     <div class="flex flex-1 items-center justify-center">
       <Spinner class="size-12" />
     </div>
-
   {:else if entries.length === 0}
-    <div class="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+    <div
+      class="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center"
+    >
       <BookMarked class="size-16 text-muted-foreground/30" />
       <p class="text-xl font-medium">{EMPTY_MESSAGES.all.heading}</p>
       <p class="text-base text-muted-foreground">{EMPTY_MESSAGES.all.sub}</p>
     </div>
-
   {:else}
     <div
       class="min-h-0 px-4 flex-1 overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden rounded-2xl"
@@ -309,15 +178,23 @@
         <TvCalendarAgenda />
 
         {#if sections.length === 0}
-          <div class="flex h-[40vh] flex-col items-center justify-center gap-3 text-center">
+          <div
+            class="flex h-[40vh] flex-col items-center justify-center gap-3 text-center"
+          >
             <p class="text-xl font-medium">{m.my_list_no_filter()}</p>
-            <p class="text-base text-muted-foreground">{m.my_list_change_filter()}</p>
+            <p class="text-base text-muted-foreground">
+              {m.my_list_change_filter()}
+            </p>
           </div>
         {:else}
           {#each sections as section (section.status)}
             <section class="mt-8 first:mt-4">
               <div class="mb-4 flex items-baseline gap-3">
-                <span class="size-3 shrink-0 self-center rounded-full {STATUS_COLORS[section.status].dot}"></span>
+                <span
+                  class="size-3 shrink-0 self-center rounded-full {STATUS_COLORS[
+                    section.status
+                  ].dot}"
+                ></span>
                 <h2 class="text-xl font-semibold">{section.label}</h2>
                 <span class="text-base text-muted-foreground tabular-nums">
                   {section.entries.length}

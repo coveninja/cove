@@ -29,6 +29,7 @@
   import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import { startAutoSync } from "$lib/sync";
+  import { createPlaybackChime } from "$lib/playbackChime";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
   // avoiding any $effect timing gap between auth state changing and the token
@@ -64,7 +65,11 @@
   let currentPage = $state<Page>({ type: "home" });
   let pageHistory = $state<Page[]>([]);
 
-  const canGoBack = $derived(playback.playerMode === "full" || pageHistory.length > 0 || !!playback.quickPlayPending);
+  const canGoBack = $derived(
+    playback.playerMode === "full" ||
+      pageHistory.length > 0 ||
+      !!playback.quickPlayPending,
+  );
 
   // Whether the active/floating stream belongs to the media page currently
   // on screen — used to stop the trailer from playing underneath it, and to
@@ -150,8 +155,14 @@
       // Vidstack rejects pending media requests with "provider destroyed"
       // when a player is torn down mid-flight. These are harmless; swallow
       // only this exact message so real rejections still surface.
-      const msg = typeof e.reason === "string" ? e.reason : (e.reason as { message?: string } | null)?.message;
-      if (msg === "provider destroyed") { e.preventDefault(); return; }
+      const msg =
+        typeof e.reason === "string"
+          ? e.reason
+          : (e.reason as { message?: string } | null)?.message;
+      if (msg === "provider destroyed") {
+        e.preventDefault();
+        return;
+      }
       if (isAbort(e.reason)) e.preventDefault();
     };
     const onError = (e: ErrorEvent) => {
@@ -233,81 +244,12 @@
     playback.quickPlay(m, s, e),
   );
 
-  // Wire up shell callbacks the playback module needs: the start chime
-  // (AudioContext lives here, not in the module) and the detail overlay
-  // (selectedMedia lives here, not in the module).
-  playback.init({ playStartSound, openMediaDetail: selectMedia });
-
-  // Short synthesized "thud" played whenever a stream actually starts —
-  // the same kind of confirmation chime Netflix plays on play. No audio
-  // asset needed; it's just a quick pitch-dropping tone through Web Audio.
-  let audioCtx: AudioContext | null = null;
-
-  function getAudioCtx(): AudioContext {
-    if (!audioCtx) {
-      audioCtx = new AudioContext();
-    }
-    return audioCtx;
-  }
-
-  // Browsers create a fresh AudioContext in "suspended" state until a real
-  // user gesture unlocks it. Auto-select (StreamsList's setTimeout-fired
-  // pick) isn't itself a gesture, so without this, the very first sound —
-  // whichever path triggers it first — could end up scheduled against a
-  // context that hadn't actually started ticking yet and just stay silent.
-  // Unlocking eagerly on the first real interaction anywhere in the app
-  // sidesteps that entirely; by the time anything calls playStartSound,
-  // the context is already running.
-  onMount(() => {
-    const unlock = () => {
-      getAudioCtx()
-        .resume()
-        .catch(() => {});
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
-    window.addEventListener("pointerdown", unlock);
-    window.addEventListener("keydown", unlock);
-    return () => {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
+  const playbackChime = createPlaybackChime();
+  playback.init({
+    playStartSound: playbackChime.play,
+    openMediaDetail: selectMedia,
   });
-
-  async function playStartSound(): Promise<void> {
-    try {
-      const ctx = getAudioCtx();
-      if (ctx.state === "suspended") {
-        await ctx.resume();
-      }
-
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.exponentialRampToValueAtTime(70, now + 0.15);
-
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.35, now + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.25);
-      // The destination retains connected nodes even after stop() — without
-      // this, every episode start leaks an oscillator+gain pair in the graph.
-      osc.addEventListener("ended", () => {
-        osc.disconnect();
-        gain.disconnect();
-      });
-    } catch (e) {
-      console.error("playStartSound failed", e);
-    }
-  }
+  onMount(playbackChime.unlockOnInteraction);
 
   // mpv's surface always fills the whole window behind the web UI. Make the app
   // background transparent (revealing it) ONLY while the player is full-size;
@@ -433,7 +375,12 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "home"}>
-            <HomePage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} visible={currentPage.type === "home"} onChangePage={changePage} />
+            <HomePage
+              onSelectMedia={selectMedia}
+              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
+              visible={currentPage.type === "home"}
+              onChangePage={changePage}
+            />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "account"}>
             <MyAccountPage
@@ -442,18 +389,32 @@
             />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "myList"}>
-            <MyListPage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} />
+            <MyListPage
+              onSelectMedia={selectMedia}
+              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
+            />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "explore"}>
-            <ExplorePage onSelectMedia={selectMedia} onWatch={(m, s, e) => playback.quickPlay(m, s, e)} />
+            <ExplorePage
+              onSelectMedia={selectMedia}
+              onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
+            />
           </div>
           <div class="h-full" class:hidden={currentPage.type !== "catalog"}>
             <CatalogGridPage
-              addonId={currentPage.type === "catalog" ? currentPage.addonId : ""}
-              catalogType={currentPage.type === "catalog" ? currentPage.catalogType : ""}
-              catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
+              addonId={currentPage.type === "catalog"
+                ? currentPage.addonId
+                : ""}
+              catalogType={currentPage.type === "catalog"
+                ? currentPage.catalogType
+                : ""}
+              catalogId={currentPage.type === "catalog"
+                ? currentPage.catalogId
+                : ""}
               name={currentPage.type === "catalog" ? currentPage.name : ""}
-              addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
+              addonUrl={currentPage.type === "catalog"
+                ? currentPage.addonUrl
+                : undefined}
               onSelectMedia={selectMedia}
               onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
             />
@@ -504,7 +465,16 @@
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
-              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+              if (m)
+                playback.startPlayback(
+                  m,
+                  stream,
+                  s,
+                  e,
+                  name,
+                  candidates ?? [],
+                  0,
+                );
             }}
             onclose={() => playback.closePlayer()}
           />

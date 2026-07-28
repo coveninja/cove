@@ -62,9 +62,12 @@ const EDITABLE_TYPES = new Set([
  * Returns true when `el` currently holds editable text — i.e. arrow keys
  * should move the cursor, not the spatial focus.
  */
-function isEditable(el: Element): boolean {
+export function isEditable(el: Element): boolean {
   if (el instanceof HTMLTextAreaElement) return true;
-  if (el instanceof HTMLInputElement && EDITABLE_TYPES.has(el.type.toLowerCase()))
+  if (
+    el instanceof HTMLInputElement &&
+    EDITABLE_TYPES.has(el.type.toLowerCase())
+  )
     return true;
   if ((el as HTMLElement).isContentEditable) return true;
   return false;
@@ -89,13 +92,15 @@ export function editableKeepsArrow(el: Element, dir: Direction): boolean {
 
 /** Returns true when `el` is rendered and reachable via programmatic focus. */
 function isVisible(el: HTMLElement): boolean {
-  if (el.offsetParent === null && el.getClientRects().length === 0) return false;
+  if (el.offsetParent === null && el.getClientRects().length === 0)
+    return false;
   const rect = el.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return false;
   // `visibility: hidden` elements (e.g. pages behind the open player, hidden
   // via the `invisible` class) still have offsetParent and client rects —
   // checkVisibility() is the only cheap way to exclude them.
-  if (typeof el.checkVisibility === "function" && !el.checkVisibility()) return false;
+  if (typeof el.checkVisibility === "function" && !el.checkVisibility())
+    return false;
   let node: Element | null = el;
   while (node) {
     if (node.getAttribute("aria-hidden") === "true") return false;
@@ -162,7 +167,11 @@ function domOrder(a: HTMLElement, b: HTMLElement): number {
 function focusEl(el: HTMLElement): void {
   el.focus({ preventScroll: true });
   const anchor = el.closest<HTMLElement>("[data-tv-scroll-anchor]") ?? el;
-  anchor.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  anchor.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+    behavior: "smooth",
+  });
 }
 
 // ── Group member resolution ───────────────────────────────────────────────────
@@ -192,9 +201,9 @@ function groupMembers(entry: GroupEntry): HTMLElement[] {
   });
 
   const all = [...new Set([...registered, ...native])];
-  return all.filter(
-    (el) => isVisible(el) && !(el as HTMLInputElement).disabled,
-  ).sort(domOrder);
+  return all
+    .filter((el) => isVisible(el) && !(el as HTMLInputElement).disabled)
+    .sort(domOrder);
 }
 
 // ── Policy navigation ─────────────────────────────────────────────────────────
@@ -262,7 +271,8 @@ function policyNavigate(
       targetIdx = idx - cols;
     } else {
       // down
-      if (row >= totalRows - 1 || idx + cols >= members.length) return "unhandled";
+      if (row >= totalRows - 1 || idx + cols >= members.length)
+        return "unhandled";
       targetIdx = idx + cols;
     }
 
@@ -504,7 +514,9 @@ export function unregisterGroup(id: string): void {
  *
  * Returns a cleanup function; call it if the surface unmounts before focus.
  */
-export function focusAfterKeyRelease(getEl: () => HTMLElement | null): () => void {
+export function focusAfterKeyRelease(
+  getEl: () => HTMLElement | null,
+): () => void {
   let done = false;
 
   const run = () => {
@@ -591,7 +603,8 @@ export function navigate(dir: Direction): void {
         sourceGroup.entry.opts.policy.type === "grid")
     ) {
       const containerRect = sourceGroup.entry.el.getBoundingClientRect();
-      if (navigateBetweenGroups(dir, containerRect, active, sourceGroup.id)) return;
+      if (navigateBetweenGroups(dir, containerRect, active, sourceGroup.id))
+        return;
     }
   } else if (dir === "up" || dir === "down") {
     // Ungrouped active element (e.g. hero button area before any group is

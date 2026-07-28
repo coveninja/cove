@@ -7,168 +7,32 @@
     InputOTPSlot,
     InputOTPSeparator,
   } from "$lib/components/ui/input-otp/index.js";
-  import { api } from "$lib/api";
-  import { auth } from "$lib/stores/auth.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import { libraryChanged } from "$lib/stores/library";
-  import { settings } from "$lib/stores/settings";
   import { focusFirst } from "../focus/focusStore.svelte";
   import * as m from "$lib/paraglide/messages.js";
+  import { AuthController, type AuthView } from "$lib/authController.svelte";
 
   let { ondone }: { ondone: () => void } = $props();
 
-  // No "success" view — the account step's connected-account card serves as
-  // the success state after ondone() flips authOpen false.
-  type View = "choose" | "login" | "otp-email" | "otp-code" | "register" | "register-otp";
-  let view = $state<View>("choose");
-  let loading = $state(false);
-  let error = $state("");
-
-  // Form fields
-  let email = $state("");
-  let password = $state("");
-  let profileName = $state("");
-  let otpCode = $state("");
-  let otpEmail = $state("");
-
-  // Pending registration — carried from register view into register-otp view
-  let pendingEmail = $state("");
-  let pendingPassword = $state("");
-  let pendingProfileName = $state("");
-
-  function reset(): void {
-    email = "";
-    password = "";
-    profileName = "";
-    otpCode = "";
-    otpEmail = "";
-    error = "";
-    loading = false;
-  }
-
-  function setView(v: View): void {
-    reset();
-    view = v;
-  }
-
-  // ── Auth operations (identical logic to AuthDialog, ondone() replaces onclose()) ──
-
-  async function login(): Promise<void> {
-    if (!email || !password) { error = m.auth_required_credentials(); return; }
-    loading = true; error = "";
-    try {
-      const res = await api.authLogin(email, password);
-      await auth.setSession(res.access_token, email, res.profiles, res.active, res.refresh_token);
-      await settings.load();
-      libraryChanged.update((n) => n + 1);
-      ondone();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function sendOTP(): Promise<void> {
-    if (!email) { error = m.auth_required_email(); return; }
-    loading = true; error = "";
-    try {
-      await api.authSendOTP(email);
-      otpEmail = email;
-      view = "otp-code";
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function verifyOTP(): Promise<void> {
-    if (loading || !otpCode || otpCode.length < 8) return;
-    loading = true; error = "";
-    try {
-      const res = await api.authVerifyOTP(otpEmail, otpCode);
-      await auth.setSession(res.access_token, otpEmail, res.profiles, res.active, res.refresh_token);
-      await settings.load();
-      libraryChanged.update((n) => n + 1);
-      ondone();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      otpCode = "";
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function register(): Promise<void> {
-    if (!email || !password) { error = m.auth_required_credentials(); return; }
-    loading = true; error = "";
-    try {
-      api.authRegister(email, password, profileName || undefined).then((e) => {
-        console.log(e);
-      });
-      pendingEmail = email;
-      pendingPassword = password;
-      pendingProfileName = profileName;
-      otpCode = "";
-      error = "";
-      loading = false;
-      view = "register-otp";
-      return;
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function confirmRegistration(): Promise<void> {
-    if (loading || !otpCode || otpCode.length < 8) return;
-    loading = true; error = "";
-    try {
-      const res = await api.authConfirmRegister(
-        pendingEmail,
-        otpCode,
-        pendingPassword,
-        pendingProfileName || undefined,
-      );
-      await auth.setSession(res.access_token, pendingEmail, [res.profile], res.profile, res.refresh_token);
-      await settings.load();
-      libraryChanged.update((n) => n + 1);
-      // Skip "success" view — call ondone() directly; the account step's
-      // connected-account card serves as the success confirmation.
-      ondone();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      otpCode = "";
-    } finally {
-      loading = false;
-    }
-  }
+  const controller = new AuthController({ onDone: () => ondone() });
+  const view = $derived(controller.view);
+  const loading = $derived(controller.loading);
+  const error = $derived(controller.error);
+  const otpCode = $derived(controller.otpCode);
+  const otpEmail = $derived(controller.otpEmail);
+  const pendingEmail = $derived(controller.pendingEmail);
+  const setView = (view: AuthView) => controller.setView(view);
+  const login = () => controller.login();
+  const sendOTP = () => controller.sendOTP();
+  const verifyOTP = () => controller.verifyOTP();
+  const register = () => controller.register();
+  const confirmRegistration = () => controller.confirmRegistration();
 
   // ── Exported back-navigation for the page's Escape handler ───────────────────
   // Returns true if it handled the Escape (moved to a previous sub-view);
   // returns false if already at "choose" (caller should close the panel).
   export function escapeBack(): boolean {
-    if (view === "otp-code") {
-      // Assign AFTER setView — its reset() wipes email/otpEmail.
-      const prevEmail = otpEmail;
-      setView("otp-email");
-      email = prevEmail;
-      return true;
-    }
-    if (view === "register-otp") {
-      setView("register");
-      email = pendingEmail;
-      profileName = pendingProfileName;
-      return true;
-    }
-    if (view === "login" || view === "otp-email" || view === "register") {
-      setView("choose");
-      return true;
-    }
-    // Already at "choose"
-    return false;
+    return controller.escapeBack();
   }
 
   // ── Focus rescue on sub-view change ──────────────────────────────────────────
@@ -192,15 +56,24 @@
   group) contains it, so D-pad navigation stays inside the overlay naturally.
 -->
 <div bind:this={panelRoot} class="w-full max-w-xl">
-
   {#if view === "choose"}
     <h3 class="mb-2 text-2xl font-semibold">{m.auth_sign_in_title()}</h3>
-    <p class="mb-6 text-base text-muted-foreground">{m.auth_sync_description()}</p>
+    <p class="mb-6 text-base text-muted-foreground">
+      {m.auth_sync_description()}
+    </p>
     <div class="flex flex-col gap-3">
-      <Button variant="default" class="h-12 w-full text-lg" onclick={() => setView("login")}>
+      <Button
+        variant="default"
+        class="h-12 w-full text-lg"
+        onclick={() => setView("login")}
+      >
         {m.auth_sign_in_password()}
       </Button>
-      <Button variant="outline" class="h-12 w-full text-lg" onclick={() => setView("otp-email")}>
+      <Button
+        variant="outline"
+        class="h-12 w-full text-lg"
+        onclick={() => setView("otp-email")}
+      >
         {m.auth_email_code_title()}
       </Button>
       <div class="relative my-1 flex items-center">
@@ -208,13 +81,20 @@
         <span class="mx-3 text-sm text-muted-foreground">{m.auth_or()}</span>
         <div class="flex-1 border-t border-border"></div>
       </div>
-      <Button variant="ghost" class="h-12 w-full text-lg" onclick={() => setView("register")}>
+      <Button
+        variant="ghost"
+        class="h-12 w-full text-lg"
+        onclick={() => setView("register")}
+      >
         {m.auth_create_account()}
       </Button>
     </div>
-
   {:else if view === "login"}
-    <Button variant="link" class="mb-4 h-auto p-0 text-base text-muted-foreground" onclick={() => setView("choose")}>
+    <Button
+      variant="link"
+      class="mb-4 h-auto p-0 text-base text-muted-foreground"
+      onclick={() => setView("choose")}
+    >
       ← {m.common_back()}
     </Button>
     <h3 class="mb-6 text-2xl font-semibold">{m.common_sign_in()}</h3>
@@ -222,14 +102,14 @@
       <input
         type="email"
         placeholder={m.common_email()}
-        bind:value={email}
+        bind:value={controller.email}
         onkeydown={(e) => e.key === "Enter" && login()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <input
         type="password"
         placeholder={m.auth_password()}
-        bind:value={password}
+        bind:value={controller.password}
         onkeydown={(e) => e.key === "Enter" && login()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
@@ -238,22 +118,31 @@
         {#if loading}<Spinner class="mr-2 size-5" />{/if}
         {m.common_sign_in()}
       </Button>
-      <Button variant="link" class="h-auto p-0 text-base text-muted-foreground" onclick={() => setView("otp-email")}>
+      <Button
+        variant="link"
+        class="h-auto p-0 text-base text-muted-foreground"
+        onclick={() => setView("otp-email")}
+      >
         {m.auth_sign_in_email_instead()}
       </Button>
     </div>
-
   {:else if view === "otp-email"}
-    <Button variant="link" class="mb-4 h-auto p-0 text-base text-muted-foreground" onclick={() => setView("choose")}>
+    <Button
+      variant="link"
+      class="mb-4 h-auto p-0 text-base text-muted-foreground"
+      onclick={() => setView("choose")}
+    >
       ← {m.common_back()}
     </Button>
     <h3 class="mb-2 text-2xl font-semibold">{m.auth_email_code_title()}</h3>
-    <p class="mb-6 text-base text-muted-foreground">{m.auth_email_code_intro()}</p>
+    <p class="mb-6 text-base text-muted-foreground">
+      {m.auth_email_code_intro()}
+    </p>
     <div class="flex flex-col gap-4">
       <input
         type="email"
         placeholder={m.common_email()}
-        bind:value={email}
+        bind:value={controller.email}
         onkeydown={(e) => e.key === "Enter" && sendOTP()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
@@ -263,14 +152,17 @@
         {m.auth_send_code()}
       </Button>
     </div>
-
   {:else if view === "otp-code"}
     <h3 class="mb-2 text-2xl font-semibold">{m.auth_enter_code()}</h3>
     <p class="mb-6 text-base text-muted-foreground">
       {m.auth_check_inbox({ email: otpEmail })}
     </p>
     <div class="flex flex-col items-center gap-5">
-      <InputOTP maxlength={8} bind:value={otpCode} onComplete={verifyOTP}>
+      <InputOTP
+        maxlength={8}
+        bind:value={controller.otpCode}
+        onComplete={verifyOTP}
+      >
         {#snippet children({ cells })}
           <InputOTPGroup>
             <InputOTPSlot cell={cells[0]} />
@@ -287,27 +179,37 @@
           </InputOTPGroup>
         {/snippet}
       </InputOTP>
-      {#if error}<p class="text-sm text-destructive text-center">{error}</p>{/if}
+      {#if error}<p class="text-sm text-destructive text-center">
+          {error}
+        </p>{/if}
       {#if loading}
         <div class="flex items-center gap-2 text-base text-muted-foreground">
-          <Spinner class="size-5" /> {m.auth_verifying()}
+          <Spinner class="size-5" />
+          {m.auth_verifying()}
         </div>
       {:else}
-        <Button class="h-12 w-full text-lg" onclick={verifyOTP} disabled={otpCode.length < 8}>
+        <Button
+          class="h-12 w-full text-lg"
+          onclick={verifyOTP}
+          disabled={otpCode.length < 8}
+        >
           {m.auth_verify()}
         </Button>
       {/if}
       <Button
         variant="link"
         class="h-auto p-0 text-base text-muted-foreground"
-        onclick={() => { const prevEmail = otpEmail; setView("otp-email"); email = prevEmail; }}
+        onclick={() => controller.escapeBack()}
       >
         {m.auth_resend_code()}
       </Button>
     </div>
-
   {:else if view === "register"}
-    <Button variant="link" class="mb-4 h-auto p-0 text-base text-muted-foreground" onclick={() => setView("choose")}>
+    <Button
+      variant="link"
+      class="mb-4 h-auto p-0 text-base text-muted-foreground"
+      onclick={() => setView("choose")}
+    >
       ← {m.common_back()}
     </Button>
     <h3 class="mb-6 text-2xl font-semibold">{m.auth_create_account()}</h3>
@@ -315,19 +217,19 @@
       <input
         type="text"
         placeholder={m.auth_display_name()}
-        bind:value={profileName}
+        bind:value={controller.profileName}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <input
         type="email"
         placeholder={m.common_email()}
-        bind:value={email}
+        bind:value={controller.email}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
       <input
         type="password"
         placeholder={m.auth_password()}
-        bind:value={password}
+        bind:value={controller.password}
         onkeydown={(e) => e.key === "Enter" && register()}
         class="h-12 rounded-lg border border-border bg-input px-4 text-lg text-foreground placeholder:text-muted-foreground focus:border-accent focus:outline-none"
       />
@@ -340,13 +242,18 @@
         {m.auth_existing_library_sync()}
       </p>
     </div>
-
   {:else if view === "register-otp"}
     <h3 class="mb-2 text-2xl font-semibold">{m.auth_check_email()}</h3>
-    <p class="mb-1 text-base text-muted-foreground">{m.auth_confirmation_sent()}</p>
+    <p class="mb-1 text-base text-muted-foreground">
+      {m.auth_confirmation_sent()}
+    </p>
     <p class="mb-6 text-base font-medium">{pendingEmail}</p>
     <div class="flex flex-col items-center gap-5">
-      <InputOTP maxlength={8} bind:value={otpCode} onComplete={confirmRegistration}>
+      <InputOTP
+        maxlength={8}
+        bind:value={controller.otpCode}
+        onComplete={confirmRegistration}
+      >
         {#snippet children({ cells })}
           <InputOTPGroup>
             <InputOTPSlot cell={cells[0]} />
@@ -363,24 +270,30 @@
           </InputOTPGroup>
         {/snippet}
       </InputOTP>
-      {#if error}<p class="text-sm text-destructive text-center">{error}</p>{/if}
+      {#if error}<p class="text-sm text-destructive text-center">
+          {error}
+        </p>{/if}
       {#if loading}
         <div class="flex items-center gap-2 text-base text-muted-foreground">
-          <Spinner class="size-5" /> {m.auth_verifying()}
+          <Spinner class="size-5" />
+          {m.auth_verifying()}
         </div>
       {:else}
-        <Button class="h-12 w-full text-lg" onclick={confirmRegistration} disabled={otpCode.length < 8}>
+        <Button
+          class="h-12 w-full text-lg"
+          onclick={confirmRegistration}
+          disabled={otpCode.length < 8}
+        >
           {m.auth_confirm_account()}
         </Button>
       {/if}
       <Button
         variant="link"
         class="h-auto p-0 text-base text-muted-foreground"
-        onclick={() => { setView("register"); email = pendingEmail; profileName = pendingProfileName; }}
+        onclick={() => controller.escapeBack()}
       >
         {m.auth_back_registration()}
       </Button>
     </div>
   {/if}
-
 </div>

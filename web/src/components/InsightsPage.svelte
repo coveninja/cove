@@ -1,13 +1,6 @@
 <script lang="ts">
   import * as m from "$lib/paraglide/messages.js";
-  import {
-    api,
-    type LibraryStats,
-    type DiscoverInsights,
-    type Taste,
-    type Person,
-    type ActivityStats,
-  } from "$lib/api";
+  import { type Person } from "$lib/api";
   import * as Card from "$lib/components/ui/card/index.js";
   import PersonCard from "./cards/PersonCard.svelte";
   import ActivityHero from "./insights/ActivityHero.svelte";
@@ -21,6 +14,16 @@
     activityHourLabels,
     activityMonthLabels,
   } from "./insights/utils";
+  import {
+    InsightsController,
+    displayInsightPerson as displayPerson,
+    insightConicGradient as conic,
+    insightGenreSlices as genreSlices,
+    insightMediaSlices as mvSlices,
+    insightStatusSlices as statusSlices,
+    insightWeights,
+    type InsightSlice as Slice,
+  } from "$lib/insights.svelte";
   import { libraryChanged } from "$lib/stores/library";
   import {
     Film,
@@ -37,180 +40,26 @@
     onSelectPerson,
   }: { visible?: boolean; onSelectPerson: (p: Person) => void } = $props();
 
-  let stats = $state<LibraryStats | null>(null);
-  let insights = $state<DiscoverInsights | null>(null);
-  let activity = $state<ActivityStats | null>(null);
-  let loading = $state(true); // true only until first fetch attempt completes
-  let loadError = $state<string | null>(null);
-
-  // Tracks whether we've completed the very first fetch (success or failure).
-  // Subsequent refetches don't show the skeleton.
-  let initialLoadDone = false;
-
-  // Version counter: lets each fetch call detect if it was superseded by a newer
-  // one (e.g. from a rapid libraryChanged bump) and skip stale data writes.
-  let fetchVer = 0;
+  const controller = new InsightsController();
+  const stats = $derived(controller.stats);
+  const insights = $derived(controller.insights);
+  const activity = $derived(controller.activity);
+  const loading = $derived(controller.loading);
+  const loadError = $derived(controller.loadError);
+  const peopleSlots = $derived(controller.peopleSlots);
 
   $effect(() => {
     if (!visible) return;
     // Reading $libraryChanged makes this effect re-run when the store bumps.
     void $libraryChanged;
 
-    const ver = ++fetchVer;
-
-    Promise.all([
-      api.libraryStats(),
-      api.discoverInsights(),
-      api.activityStats().catch(() => null as ActivityStats | null),
-    ])
-      .then(([s, i, a]) => {
-        if (ver !== fetchVer) return; // superseded
-        stats = s;
-        insights = i;
-        activity = a;
-        loadPeople(i.top_people);
-      })
-      .catch((e) => {
-        if (ver !== fetchVer) return;
-        loadError = e instanceof Error ? e.message : String(e);
-      })
-      .finally(() => {
-        if (!initialLoadDone) {
-          initialLoadDone = true;
-          loading = false;
-        }
-      });
+    void controller.load();
   });
 
   const hasProfile = $derived((insights?.signals_used ?? 0) > 0);
   const hasActivity = $derived(activity !== null && activity.total_seconds > 0);
 
-  // ── Top people ───────────────────────────────────────────────────────────────
-  type PeopleSlot = { id: number; name: string; person: Person | null };
-  let peopleSlots = $state<PeopleSlot[]>([]);
-
-  function loadPeople(tastes: Taste[]): void {
-    peopleSlots = tastes.map((t) => ({ id: t.id, name: t.name, person: null }));
-    for (const t of tastes) {
-      api
-        .getPerson(t.id)
-        .then((d) => {
-          const i = peopleSlots.findIndex((s) => s.id === t.id);
-          if (i === -1) return;
-          peopleSlots[i] = {
-            ...peopleSlots[i],
-            person: {
-              id: d.id,
-              name: d.name,
-              profile_path: d.profile_path,
-              known_for_department: d.known_for_department,
-              popularity: 0,
-              known_for: [],
-            },
-          };
-        })
-        .catch(() => {});
-    }
-  }
-
-  function displayPerson(slot: PeopleSlot): Person {
-    return (
-      slot.person ?? {
-        id: slot.id,
-        name: slot.name,
-        profile_path: "",
-        known_for_department: "",
-        popularity: 0,
-        known_for: [],
-      }
-    );
-  }
-
-  // ── Chart plumbing ────────────────────────────────────────────────────────
-  type Slice = { label: string; value: number; color: string; count?: number };
-
-  const palette = [
-    "#6366f1", // indigo
-    "#ec4899", // pink
-    "#22c55e", // green
-    "#f59e0b", // amber
-    "#06b6d4", // cyan
-    "#94a3b8", // slate (used for "Other")
-  ];
-
-  function conic(slices: Slice[]): string {
-    const total = slices.reduce((s, x) => s + x.value, 0) || 1;
-    let acc = 0;
-    const stops = slices.map((s) => {
-      const start = (acc / total) * 100;
-      acc += s.value;
-      const end = (acc / total) * 100;
-      return `${s.color} ${start}% ${end}%`;
-    });
-    return `conic-gradient(${stops.join(", ")})`;
-  }
-
-  function genreSlices(list: Taste[]): Slice[] {
-    const top = list.slice(0, 5).map((g, i) => ({
-      label: g.name,
-      value: Math.abs(g.score),
-      color: palette[i],
-    }));
-    const rest = list.slice(5);
-    if (rest.length > 0) {
-      top.push({
-        label: m.account_other(),
-        value: rest.reduce((a, g) => a + Math.abs(g.score), 0),
-        color: palette[5],
-      });
-    }
-    return top;
-  }
-
-  function mvSlices(s: LibraryStats): Slice[] {
-    return [
-      {
-        label: m.my_list_movies(),
-        value: s.movie_share,
-        color: palette[0],
-        count: s.by_type.movie ?? 0,
-      },
-      {
-        label: m.my_list_shows(),
-        value: s.tv_share,
-        color: palette[1],
-        count: s.by_type.tv ?? 0,
-      },
-    ];
-  }
-
-  const statusMeta = [
-    { key: "watching", label: m.my_list_watching() },
-    { key: "finished", label: m.my_list_finished() },
-    { key: "watch_later", label: m.my_list_watch_later() },
-    { key: "dropped", label: m.my_list_dropped() },
-  ];
-
-  function statusSlices(s: LibraryStats): Slice[] {
-    return statusMeta
-      .map((m, i) => ({
-        label: m.label,
-        value: s.by_status[m.key] ?? 0,
-        color: palette[i],
-        count: s.by_status[m.key] ?? 0,
-      }))
-      .filter((x) => x.value > 0);
-  }
-
-  const weights = [
-    { label: m.account_weight_finished(), value: "+1.5" },
-    { label: m.account_weight_watched_end(), value: "+1.0" },
-    { label: m.account_weight_watching(), value: "+0.5" },
-    { label: m.account_weight_watch_later(), value: "+0.5" },
-    { label: m.account_weight_rating(), value: "±1.5" },
-    { label: m.account_weight_dropped(), value: "−2.0" },
-    { label: m.account_weight_not_interested(), value: "−2.0" },
-  ];
+  const weights = insightWeights();
 
   // ── Activity chart helpers ────────────────────────────────────────────────
   const MONTH_SHORT = activityMonthLabels();
@@ -379,7 +228,9 @@
         <div class="grid gap-4 md:grid-cols-2">
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">{m.account_hours_weekday()}</Card.Title>
+              <Card.Title class="text-sm"
+                >{m.account_hours_weekday()}</Card.Title
+              >
             </Card.Header>
             <Card.Content>
               <ActivityBars items={dowItems} />
@@ -400,7 +251,9 @@
         {#if showYearChart}
           <Card.Root>
             <Card.Header>
-              <Card.Title class="text-sm">{m.account_year_over_year()}</Card.Title>
+              <Card.Title class="text-sm"
+                >{m.account_year_over_year()}</Card.Title
+              >
             </Card.Header>
             <Card.Content>
               <ActivityBars items={yearItems} />
@@ -540,7 +393,9 @@
           </Card.Title>
         </Card.Header>
         <Card.Content class="flex flex-col gap-4 text-sm text-muted-foreground">
-          <p>{m.account_recommendations_intro({ count: insights.signals_used })}</p>
+          <p>
+            {m.account_recommendations_intro({ count: insights.signals_used })}
+          </p>
 
           <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
             {#each weights as wgt (wgt.label)}

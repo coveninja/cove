@@ -1,7 +1,13 @@
 <script lang="ts">
-  import { api, type Person } from "$lib/api";
+  import { type Person } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
-  import { libraryChanged } from "$lib/stores/library";
+  import {
+    activateAccountProfile,
+    deleteAccountProfile,
+    logoutAccount,
+    renameAccountProfile,
+    syncAccount,
+  } from "$lib/accountActions";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -32,8 +38,7 @@
   async function sync(): Promise<void> {
     syncing = true;
     try {
-      await api.authSync();
-      libraryChanged.update((n) => n + 1);
+      await syncAccount();
     } catch (e) {
       console.error("sync:", e);
     } finally {
@@ -42,8 +47,7 @@
   }
 
   async function logout(): Promise<void> {
-    await api.authLogout();
-    await auth.logout();
+    await logoutAccount();
   }
 
   // ── Profile switching ────────────────────────────────────────────────────────
@@ -55,21 +59,12 @@
     switchingProfileID = id;
     switchError = null;
     try {
-      await api.profileActivate(id);
+      await activateAccountProfile(id);
       window.location.reload();
     } catch (e) {
       switchError = e instanceof Error ? e.message : String(e);
       switchingProfileID = null;
     }
-  }
-
-  async function refreshProfiles(): Promise<void> {
-    const res = await api.profilesList();
-    auth.setProfiles(
-      res.profiles,
-      res.profiles.find((p) => p.id === res.active_profile_id) ??
-        res.profiles[0],
-    );
   }
 
   // ── Rename flow state ────────────────────────────────────────────────────────
@@ -108,8 +103,7 @@
     renaming = true;
     renameError = null;
     try {
-      await api.profileRename(renamingProfileID, name);
-      await refreshProfiles();
+      await renameAccountProfile(renamingProfileID, name);
       cancelRename();
     } catch (e) {
       renameError = e instanceof Error ? e.message : String(e);
@@ -128,9 +122,7 @@
     deleting = true;
     deleteError = null;
     try {
-      await api.profileDelete(deleteTarget.id);
-      await refreshProfiles();
-      libraryChanged.update((n) => n + 1);
+      await deleteAccountProfile(deleteTarget.id);
       deleteTarget = null;
     } catch (e) {
       deleteError = e instanceof Error ? e.message : String(e);
@@ -179,7 +171,8 @@
               class="text-muted-foreground gap-1 text-xs"
               onclick={logout}
             >
-              <LogOut class="size-3" /> {m.common_sign_out()}
+              <LogOut class="size-3" />
+              {m.common_sign_out()}
             </Button>
           </div>
         {:else}
@@ -192,7 +185,8 @@
             class="w-fit gap-1 text-xs"
             onclick={() => (authOpen = true)}
           >
-            <LogIn class="size-3" /> {m.onboarding_sign_in()}
+            <LogIn class="size-3" />
+            {m.onboarding_sign_in()}
           </Button>
         {/if}
       </Card.Content>

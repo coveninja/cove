@@ -125,12 +125,12 @@ func (s *Server) SetupHandlers(mux *http.ServeMux) {
 		return
 	}
 
-	mux.HandleFunc("/api/trakt/device-code", utils.CorsMiddleware(s.handleDeviceCode))
-	mux.HandleFunc("/api/trakt/poll", utils.CorsMiddleware(s.handlePoll))
-	mux.HandleFunc("/api/trakt/status", utils.CorsMiddleware(s.handleStatus))
-	mux.HandleFunc("/api/trakt/unlink", utils.CorsMiddleware(s.handleUnlink))
-	mux.HandleFunc("/api/trakt/scrobble", utils.CorsMiddleware(s.handleScrobble))
-	mux.HandleFunc("/api/trakt/sync", utils.CorsMiddleware(s.handleSync))
+	mux.HandleFunc("/api/trakt/device-code", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleDeviceCode)))
+	mux.HandleFunc("/api/trakt/poll", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handlePoll)))
+	mux.HandleFunc("/api/trakt/status", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, s.handleStatus)))
+	mux.HandleFunc("/api/trakt/unlink", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleUnlink)))
+	mux.HandleFunc("/api/trakt/scrobble", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleScrobble)))
+	mux.HandleFunc("/api/trakt/sync", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, s.handleSync)))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -139,10 +139,6 @@ func (s *Server) SetupHandlers(mux *http.ServeMux) {
 // Response: {device_code, user_code, verification_url, expires_in, interval}
 // Also starts a backend polling goroutine so the flow survives a backgrounded WebView.
 func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	code, err := s.client.StartDeviceFlow()
 	if err != nil {
 		log.Println("trakt: device-code:", err)
@@ -162,16 +158,12 @@ func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request) {
 
 	go s.runDeviceFlow(ctx, code.DeviceCode, code.Interval, code.ExpiresIn)
 
-	jsonOK(w, code)
+	utils.WriteJSON(w, code)
 }
 
 // POST /api/trakt/poll  {device_code: "..."}
 // Response: {status: "pending"|"authorized"|"expired"|"denied"|"invalid"|"slow_down", username?: "..."}
 func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var body struct {
 		DeviceCode string `json:"device_code"`
 	}
@@ -185,7 +177,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "poll failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"status":   string(result.Status),
 		"username": result.Username,
 	})
@@ -195,10 +187,6 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 // Response: {connected: bool, username: string, expires_at: time.Time, flow_state: string}
 // flow_state is one of: "idle" | "pending" | "authorized" | "expired" | "denied"
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	st := s.store.Get()
 	s.flowMu.Lock()
 	fs := s.flowState
@@ -206,7 +194,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		fs = "idle"
 	}
 	s.flowMu.Unlock()
-	jsonOK(w, map[string]any{
+	utils.WriteJSON(w, map[string]any{
 		"connected":  st.AccessToken != "",
 		"username":   st.Username,
 		"expires_at": st.ExpiresAt,
@@ -216,10 +204,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/trakt/unlink — revokes the token (best-effort) and clears the sidecar.
 func (s *Server) handleUnlink(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// Cancel any in-flight device flow before clearing the store.
 	s.cancelFlow("idle")
 	// Best-effort revoke — fire and forget; we clear locally regardless.
@@ -236,10 +220,6 @@ func (s *Server) handleUnlink(w http.ResponseWriter, r *http.Request) {
 // POST /api/trakt/scrobble — records a playback event (start/pause/stop).
 // Returns 204 when not connected or scrobbling disabled; 202 when accepted.
 func (s *Server) handleScrobble(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	// No-op when disabled or not connected — don't even parse the body.
 	st := s.settings.Get()
@@ -292,10 +272,6 @@ func (s *Server) handleScrobble(w http.ResponseWriter, r *http.Request) {
 // POST /api/trakt/sync — triggers an immediate background sync cycle.
 // Returns 202; the actual sync runs asynchronously.
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	s.syncWorker.Notify()
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -380,10 +356,3 @@ func (s *Server) runDeviceFlow(ctx context.Context, deviceCode string, intervalS
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-func jsonOK(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Println("trakt: json encode:", err)
-	}
-}

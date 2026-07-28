@@ -1,27 +1,10 @@
-<script module lang="ts">
-  import type { Media } from "$lib/types/tmdb";
-
-  // Normalized, render-ready shape the carousel hands each card. Kept here (and
-  // exported) so the carousel and card agree on one type.
-  export interface ContinueItem {
-    key: string; // `${tmdb_id}-${media_type}` — stable {#each} key
-    media: Media; // enough of a Media to resume + open details
-    title: string;
-    image: string; // episode still (tv) or poster (movie / fallback)
-    mediaType: "movie" | "tv";
-    season: number | null; // null for movies
-    episode: number | null; // null for movies
-    upNext: boolean; // true => next episode "Up Next"; false => resume in progress
-    position: number; // seconds watched (0 when upNext)
-    duration: number; // total seconds (0 when upNext)
-    watchedAt: string; // ISO; drives most-recent ordering
-    progress: number; // 0..1, clamped — drives the bar (0 when upNext)
-  }
-</script>
-
 <script lang="ts">
   import { Play, Film, Tv } from "lucide-svelte";
-  import { formatPosition } from "$lib/api";
+  import {
+    continuePercent,
+    continueSubtitle,
+    type ContinueItem,
+  } from "$lib/continueWatching.svelte";
   import * as m from "$lib/paraglide/messages.js";
 
   let { item, onResume } = $props<{
@@ -29,19 +12,8 @@
     onResume: (item: ContinueItem) => void;
   }>();
 
-  // Movies show time left; a resumed episode shows S/E; a rolled-forward
-  // episode shows S/E + "Up Next".
-  const subtitle = $derived.by(() => {
-    if (item.mediaType !== "tv") {
-      return `${formatPosition(Math.max(0, item.duration - item.position))} left`;
-    }
-    const tag = `S${item.season}E${item.episode}`;
-    return item.upNext ? `${tag} · Up Next` : tag;
-  });
-
-  const pct = $derived(
-    Math.round(Math.min(1, Math.max(0, item.progress)) * 100),
-  );
+  const subtitle = $derived(continueSubtitle(item));
+  const pct = $derived(continuePercent(item));
 </script>
 
 <button

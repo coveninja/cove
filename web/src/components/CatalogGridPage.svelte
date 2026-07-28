@@ -1,10 +1,9 @@
 <script lang="ts">
   import type { Media } from "$lib/types/tmdb";
-  import { api } from "$lib/api";
+  import { CatalogPager } from "$lib/catalogPager.svelte";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import MediaCard from "./MediaCard.svelte";
-  import { SvelteSet } from "svelte/reactivity";
   import * as m from "$lib/paraglide/messages.js";
 
   let {
@@ -25,50 +24,7 @@
     onWatch?: (m: Media, season?: number, episode?: number) => void;
   } = $props();
 
-  // Safety backstop: stop offering further loads once the grid reaches this
-  // size. A very long catalog session can otherwise grow medias[] unboundedly,
-  // slowing renders and inflating memory use in the Qt shell.
-  const MAX_CATALOG_ITEMS = 600;
-
-  let medias = $state<Media[]>([]);
-  let nextSkip = $state(0);
-  let hasMore = $state(false);
-  let loading = $state(false);
-
-  // Tracks seen media_type:id pairs so addons that ignore skip don't produce
-  // duplicate cards in the grid — duplicates would break the keyed {#each}.
-  const seen = new SvelteSet<string>();
-
-  // Bumped whenever the identity triple changes so an in-flight page load for
-  // the previous catalog can't append its results into the new one.
-  let generation = 0;
-
-  async function loadPage(skip: number): Promise<void> {
-    if (loading) return;
-    loading = true;
-    const gen = generation;
-    try {
-      const res = await api.catalogPage(addonId, catalogType, catalogId, skip, 40, addonUrl);
-      if (gen !== generation) return;
-      const fresh: Media[] = [];
-      for (const m of res.medias) {
-        const key = `${m.media_type}:${m.id}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          fresh.push(m);
-        }
-      }
-      medias = [...medias, ...fresh];
-      nextSkip = res.nextSkip;
-      hasMore = res.medias.length > 0 && medias.length < MAX_CATALOG_ITEMS;
-    } catch (e) {
-      console.error("CatalogGridPage: failed to load page", e);
-    } finally {
-      // A stale request must not clear the flag out from under the load the
-      // identity switch just started.
-      if (gen === generation) loading = false;
-    }
-  }
+  const pager = new CatalogPager();
 
   // Re-fires whenever the identity triple changes. Skip is passed explicitly so
   // nextSkip is never read synchronously inside this effect — reading it here
@@ -80,15 +36,12 @@
     const catId = catalogId;
     const url = addonUrl;
     if (!id) return;
-    // Suppress unused-variable lint: type/catId/url are read to register as deps.
-    void type; void catId; void url;
-    generation++;
-    medias = [];
-    nextSkip = 0;
-    hasMore = false;
-    loading = false;
-    seen.clear();
-    loadPage(0);
+    pager.reset({
+      addonId: id,
+      catalogType: type,
+      catalogId: catId,
+      addonUrl: url,
+    });
   });
 </script>
 
@@ -99,14 +52,16 @@
 
   <ScrollArea class="h-full">
     <div class="pb-8">
-      {#if loading && medias.length === 0}
+      {#if pager.loading && pager.medias.length === 0}
         <!-- Skeleton grid while initial load is in flight -->
         <div
           class="grid gap-4 pr-4"
           style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
         >
           {#each { length: 20 } as _, i (i)}
-            <div class="aspect-2/3 w-full animate-pulse rounded-md bg-muted"></div>
+            <div
+              class="aspect-2/3 w-full animate-pulse rounded-md bg-muted"
+            ></div>
           {/each}
         </div>
       {:else}
@@ -114,8 +69,10 @@
           class="grid gap-4 pr-4"
           style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
         >
-          {#each medias as media (`${media.media_type}:${media.id}`)}
-            <div style="content-visibility: auto; contain-intrinsic-size: 150px 225px;">
+          {#each pager.medias as media (`${media.media_type}:${media.id}`)}
+            <div
+              style="content-visibility: auto; contain-intrinsic-size: 150px 225px;"
+            >
               <MediaCard
                 {media}
                 onclick={() => onSelectMedia(media)}
@@ -125,14 +82,14 @@
           {/each}
         </div>
 
-        {#if hasMore}
+        {#if pager.hasMore}
           <div class="mt-6 flex justify-center">
             <Button
               variant="outline"
-              onclick={() => loadPage(nextSkip)}
-              disabled={loading}
+              onclick={() => pager.loadMore()}
+              disabled={pager.loading}
             >
-              {loading ? m.common_loading() : m.common_load_more()}
+              {pager.loading ? m.common_loading() : m.common_load_more()}
             </Button>
           </div>
         {/if}

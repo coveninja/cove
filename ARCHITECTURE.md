@@ -35,19 +35,21 @@ instead of starting the embedded one.
 
 At startup, `qt/src/main.cpp` does three things in parallel: starts a small
 built-in static file server for `web/dist` (see below), spawns the Go binary
-as a `QProcess` (`startBackend`, `main.cpp:142-152`, stdout/stderr merged and
-forwarded to Qt's log with a `[go]` prefix), and polls `localhost:6969` with a
-raw TCP connect every 150ms (`waitForBackend`, `main.cpp:154-172` — a
-connectivity check, not an HTTP health check). Once the backend answers, the
-shell loads the QML scene and points the `WebEngineView` at either the static
-server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
+as a `QProcess` (`startBackend()` in `qt/src/main.cpp`, stdout/stderr merged
+and forwarded to Qt's log with a `[go]` prefix), and polls `localhost:6969`
+with a raw TCP connect every 150ms (`BackendProbe::waitFor()` in
+`qt/src/main.cpp` — a connectivity check, not an HTTP health check). Once the
+backend answers, the shell loads the QML scene and points the `WebEngineView`
+at either the static server's URL or, in `--dev` mode, Vite's dev server at
+`localhost:5173`.
 
 ## Backend package map (`internal/*`)
 
 - **`tmdb`** — the TMDB API client and the largest single set of HTTP routes
   (search, details, images, videos, providers, similar-titles, genre lists,
-  a batched quality-probe endpoint). No build-tag variance; always compiled
-  the same way. See `docs/API.md` for the full route list.
+  a batched quality-probe endpoint). Client/domain code lives in `tmdb.go`;
+  HTTP adapters live in `tmdb_handlers.go`. No build-tag variance; always
+  compiled the same way. See `docs/API.md` for the full route list.
 - **`library`** — the local watch history / ratings / "not interested" store,
   persisted as `library-<profileID>.json` under the OS config dir
   (`internal/utils.ConfigPath`). Exposes `TasteSignals()` and `Generation()`
@@ -62,13 +64,14 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
   "official" addons (JustWatch availability, IntroDB timestamps) are hardcoded
   Go integrations; anything else is a user-pasted Stremio manifest URL,
   fetched and classified by resource type at add-time. Fan-out across
-  multiple enabled addons of the same kind is a sequential loop with
-  per-addon failures swallowed (non-fatal, matching the "addon failures don't
-  break the app" principle).
-- **`player`** — owns the `anacrolix/torrent` client and streams the largest
+  multiple enabled addons of the same kind runs concurrently under a shared
+  deadline, with per-addon failures swallowed (non-fatal, matching the
+  "addon failures don't break the app" principle).
+- **`player`** — owns the `anacrolix/torrent` client and streams the selected
   file in a torrent as seekable HTTP (`http.ServeContent`, so mpv's Range
-  requests just work). See "Playback data flow" below — there is no
-  transcoding here.
+  requests just work). Torrent/session code lives in `player.go`; HTTP
+  adapters live in `player_handlers.go`. See "Playback data flow" below —
+  there is no transcoding here.
 - **`nuvio`** — runs community-maintained JS scraper plugins in a sandboxed
   `goja` runtime (pure Go, no CGO, no Node) to produce additional direct-HTTP
   stream candidates alongside `addons`. Off by default: a plugin repo must be
@@ -86,23 +89,40 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
 - **`updater`** — self-update via GitHub releases; skips the check entirely
   on managed distributions (`APPIMAGE`/`FLATPAK_ID` env vars set) or dev
   builds (non-semver version string). Applying an update exits the process
-  with code `42`, which the Qt shell interprets as "restart me"
-  (`main.cpp:352-376`).
+  with code `42`, which the Qt shell interprets as "restart me" (handled in
+  the `launchBackend` lambda in `qt/src/main.cpp`).
 - **`clientsession`** — a tiny opaque JSON blob store
   (`os.UserConfigDir()/cove/session.json`) used for client-side auth token
   persistence, because QtWebEngine's `localStorage` isn't reliably durable
   across restarts.
-- **`utils`** — shared helpers: `ConfigPath` (per-OS config directory
-  resolution), `AtomicWriteFile`, `CorsMiddleware` (wraps nearly every
-  handler in the app; auto-answers `OPTIONS` with 204 before the wrapped
-  handler runs).
+- **`utils`** — shared infrastructure: per-OS config paths and atomic writes,
+  bounded expiring caches, debounced persistence and background schedules,
+  request parameter/method validation, JSON responses, UUID creation, media
+  validation, and local TMDB image URL rewriting. HTTP handlers use these
+  helpers instead of carrying package-local variants.
 - **`discover`** and **`supabase`** — see "The OSS/proprietary split" below;
   these are the two packages with a compile-time swap between an open-source
   stub and proprietary functionality.
 
+**`internal/anet-patch` — vendored Android network fix.** The Go standard
+library's `net.Interfaces()` and `net.InterfaceAddrs()` fail with
+`route ip+net: netlinkrib: permission denied` on Android 11+ because NETLINK
+socket operations are now restricted for ordinary apps (see the `wlynxg/anet`
+upstream README and [golang/go#40569](https://github.com/golang/go/issues/40569)).
+The `anet` package provides replacement implementations that work within
+Android's restrictions. However, `wlynxg/anet` uses `//go:linkname` directives
+to access `net.zoneCache` and `golang.org/x/net/internal/socket.zoneCache`,
+and Go 1.23+ rejects `//go:linkname` references to symbols that have not opted
+in. Rather than pass `-checklinkname=0` globally, the codebase carries a local
+fork at `internal/anet-patch` that removes the linkname directives entirely.
+IPv6 zone-ID caching is the only functionality removed; it has no impact on
+the torrent and HTTP streaming use cases. The fork is wired in via a `replace`
+directive in `go.mod` (`replace github.com/wlynxg/anet => ./internal/anet-patch`)
+so the rest of the dependency graph sees it as the normal upstream module.
+
 ## Playback data flow
 1. The frontend requests candidate streams for a title via `GET /api/streams`
-   (`internal/player/player.go:316`), which fans out to
+   (the `/api/streams` handler in `internal/player/player_handlers.go`), which fans out to
    `addons.Manager.GetAllStreams` — each enabled provider addon contributes
    infohashes and/or direct URLs — and, if any Nuvio scrapers are enabled,
    `nuvio.Manager.GetStreams`, which runs each one in its own sandboxed goja
@@ -113,18 +133,24 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
    `/api/play?hash=<infohash>` or passes a direct URL through unchanged.
 3. The `MpvPlayer` wrapper sends that URL over a `QWebChannel` bridge to the
    native `MpvObject`, which issues an mpv `loadfile` command
-   (`qt/src/MpvObject.cpp:224-233` — deferred until the render context
-   exists, since loading before that silently drops video for that file).
+   (`MpvObject::play()` in `qt/src/MpvObject.cpp` — deferred until the render
+   context exists, since loading before that silently drops video for that file).
 4. **mpv itself opens the URL as an HTTP client**, hitting the Go backend's
    `GET /api/play` route directly (Qt/QML plays no part in the actual byte
    transfer):
    - `?url=<direct>` → `307 Temporary Redirect` straight to the origin
-     server; the Go process isn't in the data path at all
-     (`player.go:368-386`).
-   - `?hash=<infohash>` → `Player.StreamTorrent` resolves the largest file in
-     the torrent (`getLargestTorrentFile`, `player.go:100-141` — a heuristic
-     assuming one file of interest per torrent, with a 45s metadata-fetch
-     timeout), opens a responsive/16MiB-readahead reader, and calls
+     server; the Go process isn't in the data path at all (in the `/api/play`
+     handler in `internal/player/player_handlers.go`).
+   - `?hash=<infohash>` → `Player.StreamTorrent` resolves which file to stream
+     via `selectFile()` in `internal/player/player.go` (with a 45s
+     metadata-fetch timeout). For a movie, or when nothing matches, that is
+     simply the largest video file; for a TV episode it tries increasingly
+     loose filename patterns — `S01E02`, then `1x02`, then a bare episode
+     marker, then an anime-style bare number — so season-pack torrents stream
+     the right episode. The decision logic sits in `selectFileIndex()`, a pure
+     function over `(path, length)` pairs, which is what makes it unit-testable
+     (`torrent.File` has no exported constructor). It then
+     opens a responsive/16MiB-readahead reader, and calls
      `http.ServeContent`. Range-request seeking works because
      `http.ServeContent` handles `Range:` headers and the anacrolix reader's
      `io.ReadSeeker` reprioritizes piece downloads around the seeked offset.
@@ -134,8 +160,8 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
 5. mpv decodes and renders every codec/container it natively supports — no
    transcoding step exists to bridge format gaps.
 
-**The torrent reaper.** `CleanupTorrents()` (`player.go:150-178`) runs on a
-30-minute ticker (`main.go:133-139`). A torrent is dropped and its on-disk
+**The torrent reaper.** `CleanupTorrents()` (in `internal/player/player.go`)
+runs on a 30-minute ticker (in `main.go`). A torrent is dropped and its on-disk
 pieces deleted (from `os.TempDir()/cove-torrents`) only if its reader count is
 `<= 0` **and** it hasn't been used in the last 30 minutes. The reader count is
 incremented for the duration of `StreamTorrent` and `lastUsed` is also
@@ -170,8 +196,8 @@ before touching any Qt signal.
 **"Video behind a transparent web layer"** is ordinary QML z-ordering, not a
 special video flag: `main.qml` declares the `MpvObject` first (bottom of the
 scene graph) and a `WebEngineView` with `backgroundColor: "transparent"`
-after it (on top), filling the same window. Three things in `main()`
-(`main.cpp:266-274`) make this actually render correctly:
+after it (on top), filling the same window. Three things in `main()` in
+`qt/src/main.cpp` make this actually render correctly:
 `Qt::AA_ShareOpenGLContexts` (mpv and Quick's renderer must share GL
 contexts), forcing Quick onto the OpenGL RHI backend to match mpv's OpenGL
 render API, and giving the window's default surface format an 8-bit alpha
@@ -186,16 +212,17 @@ under the id `"mpv"` on a `WebChannel` attached to the `WebEngineView`, which
 causes QtWebEngine to inject `qt.webChannelTransport` into `window`. Since the
 JS-side `QWebChannel` shim class also needs to exist before app code runs,
 `main.cpp` reads Qt's own compiled-in `qwebchannel.js` resource and injects it
-via a `QWebEngineScript` at `DocumentCreation` time (`installBridgeScript`,
-`main.cpp:187-198`) on every page load. On the frontend,
+via a `QWebEngineScript` at `DocumentCreation` time (`installBridgeScript()`
+in `qt/src/main.cpp`) on every page load. On the frontend,
 `web/src/lib/player/player.svelte.ts`'s `MpvPlayer` class is the sole
 consumer: if `window.qt.webChannelTransport`/`window.QWebChannel` aren't
 present (e.g. plain `npm run dev` in a browser via `make web-dev`), it stays
 in an `available: false` no-op state rather than throwing.
 
-**The static file server** (`qt/src/main.cpp:49-139`, a `StaticServer :
-public QTcpServer` subclass) is a small hand-rolled HTTP/1.1 server — not a
-separate binary — that exists purely to serve `web/dist` to the
+**The static file server** (the `StaticServer` class in
+`qt/src/StaticServer.h` and `qt/src/StaticServer.cpp`, a `QTcpServer`
+subclass) is a small hand-rolled HTTP/1.1 server — not a separate binary —
+that exists purely to serve `web/dist` to the
 `WebEngineView` without hitting `file://` URL CORS/fetch restrictions in
 Chromium. It parses only the request line (no Range support, no keep-alive,
 one request per connection), guards against path traversal, and falls back to
@@ -230,8 +257,22 @@ counter other components react to, not a cache).
 Player-adjacent modules (`web/src/lib/player/`): `player.svelte.ts`
 (`MpvPlayer`, the `QWebChannel` bridge described above),
 `progressSaver.svelte.ts` (throttled watch-position saves),
-`torrentProgress.svelte.ts` (SSE-driven download stats). Not in this
+`torrentProgress.svelte.ts` (SSE-driven download stats), `playerCore.svelte.ts`
+(shared player lifecycle), `trackList.ts` (audio/subtitle list shaping), and
+`format.ts` (playback clock formatting). Not in this
 directory but related: `streamSelection.ts` (stream-ranking heuristics).
+
+The desktop, mobile, and TV shells intentionally keep separate markup and
+interaction layers, but share stateful data controllers under `web/src/lib`:
+`homeFeed`, `continueWatching`, `catalogPager`, `myList`, `searchController`,
+`calendarAgenda`, `streamsList`, `settingsController`, `onboarding`, and
+`insights`; `authController` likewise backs both the desktop dialog and TV
+panel, while `accountActions` owns profile/session mutations across account
+surfaces. Platform files should own presentation concerns (touch gestures,
+desktop hover/scroll behavior, and TV D-pad focus); API orchestration,
+sequencing, cache rules, and domain transforms belong in these shared modules.
+`playbackChime.ts` similarly owns the single Web Audio start sound used by all
+three shells.
 
 `web/src/lib/api.ts` is the single point of contact with the backend and
 carries three load-bearing mechanisms worth knowing about before touching it:
@@ -265,8 +306,9 @@ update --init`, then a plain `cp` of
 `_private/cove-auth/*.go` into `internal/supabase/` and
 `_private/cove-discover/*.go` into `internal/discover/`. The `Makefile`'s
 `go` target auto-detects which private files are present
-(`Makefile:18-28`, checking for `internal/supabase/client.go` and
-`internal/discover/discover.go`) and adds the matching `-tags` automatically
+(the `_PRIVATE_TAGS` variable in the `Makefile`, checking for
+`internal/supabase/client.go` and `internal/discover/discover.go`) and adds
+the matching `-tags` automatically
 — so `make inject-private && make go` alone is enough; you don't need to
 remember the tag names. The Supabase implementation is intentionally checked
 in as a mirror so PR CI can compile and test `-tags supabase`; trusted-push

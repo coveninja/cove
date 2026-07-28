@@ -10,6 +10,7 @@ import (
 	"github.com/coveninja/cove/internal/library"
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -591,11 +592,11 @@ func TestNotifyCoalescesAndHelpers(t *testing.T) {
 	w.Notify()
 	w.Notify()
 	assert.Len(t, w.notify, 1)
-	assert.Equal(t, "second", firstNonEmpty("", "second", "third"))
-	assert.Equal(t, "", firstNonEmpty("", ""))
-	assert.Equal(t, 2025, parseYear("2025-08-09"))
-	assert.Equal(t, 0, parseYear("bad"))
-	assert.Equal(t, 0, parseYear("xx25-01-01"))
+	assert.Equal(t, "second", utils.FirstNonEmpty("", "second", "third"))
+	assert.Equal(t, "", utils.FirstNonEmpty("", ""))
+	assert.Equal(t, 2025, utils.ParseMediaYear("2025-08-09"))
+	assert.Equal(t, 0, utils.ParseMediaYear("bad"))
+	assert.Equal(t, 0, utils.ParseMediaYear("xx25-01-01"))
 }
 
 func TestBuildCandidates_CapAndMostRecentFirst(t *testing.T) {

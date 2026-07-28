@@ -1,8 +1,7 @@
 <script lang="ts">
   import type { Media } from "$lib/types/tmdb";
-  import { api } from "$lib/api";
+  import { CatalogPager } from "$lib/catalogPager.svelte";
   import TvMediaCard from "../components/TvMediaCard.svelte";
-  import { SvelteSet } from "svelte/reactivity";
   import { focusGroup } from "../focus/actions";
   import * as m from "$lib/paraglide/messages.js";
 
@@ -30,46 +29,7 @@
     onWatch?: (m: Media, season?: number, episode?: number) => void;
   } = $props();
 
-  // Safety backstop: stop loading once the grid reaches this size.
-  const MAX_CATALOG_ITEMS = 600;
-
-  let medias = $state<Media[]>([]);
-  let nextSkip = $state(0);
-  let hasMore = $state(false);
-  let loading = $state(false);
-
-  // Tracks seen media_type:id pairs so duplicate cards from addons that ignore
-  // the skip offset don't break the keyed {#each}.
-  const seen = new SvelteSet<string>();
-
-  // Bumped whenever the identity triple changes so stale in-flight pages can't
-  // append into a new catalog.
-  let generation = 0;
-
-  async function loadPage(skip: number): Promise<void> {
-    if (loading) return;
-    loading = true;
-    const gen = generation;
-    try {
-      const res = await api.catalogPage(addonId, catalogType, catalogId, skip, 40, addonUrl);
-      if (gen !== generation) return;
-      const fresh: Media[] = [];
-      for (const m of res.medias) {
-        const key = `${m.media_type}:${m.id}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          fresh.push(m);
-        }
-      }
-      medias = [...medias, ...fresh];
-      nextSkip = res.nextSkip;
-      hasMore = res.medias.length > 0 && medias.length < MAX_CATALOG_ITEMS;
-    } catch (e) {
-      console.error("TvCatalogGridPage: failed to load page", e);
-    } finally {
-      if (gen === generation) loading = false;
-    }
-  }
+  const pager = new CatalogPager();
 
   // Re-fires whenever the catalog identity triple changes.
   $effect(() => {
@@ -78,16 +38,12 @@
     const catId = catalogId;
     const url = addonUrl;
     if (!id) return;
-    void type;
-    void catId;
-    void url;
-    generation++;
-    medias = [];
-    nextSkip = 0;
-    hasMore = false;
-    loading = false;
-    seen.clear();
-    loadPage(0);
+    pager.reset({
+      addonId: id,
+      catalogType: type,
+      catalogId: catId,
+      addonUrl: url,
+    });
   });
 </script>
 
@@ -102,11 +58,13 @@
     class="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
   >
     <div class="pb-12">
-      {#if loading && medias.length === 0}
+      {#if pager.loading && pager.medias.length === 0}
         <!-- Skeleton grid while initial page loads -->
         <div class="grid grid-cols-5 gap-4">
           {#each { length: 15 } as _, i (i)}
-            <div class="aspect-2/3 w-full animate-pulse rounded-lg bg-muted"></div>
+            <div
+              class="aspect-2/3 w-full animate-pulse rounded-lg bg-muted"
+            ></div>
           {/each}
         </div>
       {:else}
@@ -123,8 +81,10 @@
           }}
           class="grid grid-cols-5 gap-4"
         >
-          {#each medias as media (`${media.media_type}:${media.id}`)}
-            <div style="content-visibility: auto; contain-intrinsic-size: auto 240px;">
+          {#each pager.medias as media (`${media.media_type}:${media.id}`)}
+            <div
+              style="content-visibility: auto; contain-intrinsic-size: auto 240px;"
+            >
               <TvMediaCard
                 {media}
                 groupId="catalog-grid"
@@ -134,15 +94,15 @@
           {/each}
         </div>
 
-        {#if hasMore}
+        {#if pager.hasMore}
           <div class="mt-8 flex justify-center">
             <button
               type="button"
               class="rounded-xl bg-secondary px-8 py-3 text-base font-medium disabled:opacity-50"
-              onclick={() => loadPage(nextSkip)}
-              disabled={loading}
+              onclick={() => pager.loadMore()}
+              disabled={pager.loading}
             >
-              {loading ? m.common_loading() : m.common_load_more()}
+              {pager.loading ? m.common_loading() : m.common_load_more()}
             </button>
           </div>
         {/if}

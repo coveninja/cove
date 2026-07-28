@@ -96,7 +96,7 @@ class WebViewActivity : ComponentActivity() {
     // unregistered in onDestroy (and on fallback to normal UI).
     private var installFailedReceiver: BroadcastReceiver? = null
 
-    // ── Audio-focus listener (mirrors PlayerActivity exactly) ─────────────────
+    // ── Audio-focus listener ──────────────────────────────────────────────────
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         mainHandler.post {
             when (focusChange) {

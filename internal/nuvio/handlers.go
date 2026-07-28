@@ -2,7 +2,6 @@ package nuvio
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/coveninja/cove/internal/utils"
@@ -20,16 +19,13 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/nuvio/repos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(m.GetRepos()); err != nil {
-				log.Println("nuvio repos list:", err)
-			}
+			utils.WriteJSON(w, m.GetRepos())
 
 		case http.MethodPost:
 			var body struct {
 				URL string `json:"url"`
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
 				http.Error(w, `body must be {"url":"..."}`, http.StatusBadRequest)
 				return
@@ -39,10 +35,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 				http.Error(w, "could not add repo: "+err.Error(), http.StatusBadRequest)
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(repo); err != nil {
-				log.Println("nuvio repos add:", err)
-			}
+			utils.WriteJSON(w, repo)
 
 		case http.MethodPatch:
 			id := r.URL.Query().Get("id")
@@ -53,7 +46,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			var body struct {
 				Enabled bool `json:"enabled"`
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid body", http.StatusBadRequest)
 				return
@@ -81,11 +74,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		}
 	}))
 
-	mux.HandleFunc("/api/nuvio/repos/refresh", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/nuvio/repos/refresh", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		if id == "" {
 			http.Error(w, "missing ?id=", http.StatusBadRequest)
@@ -96,13 +85,9 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 
-	mux.HandleFunc("/api/nuvio/scrapers", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/nuvio/scrapers", utils.CorsMiddleware(utils.MethodGuard(http.MethodPatch, func(w http.ResponseWriter, r *http.Request) {
 		repoID := r.URL.Query().Get("repoId")
 		scraperID := r.URL.Query().Get("scraperId")
 		if repoID == "" || scraperID == "" {
@@ -112,7 +97,7 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 		var body struct {
 			Enabled bool `json:"enabled"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -122,5 +107,5 @@ func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 }

@@ -1,18 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as m from "$lib/paraglide/messages.js";
-  import { SvelteMap, SvelteSet } from "svelte/reactivity";
+  import { toggleSearchType, withKnownFor } from "$lib/search";
+  import { SearchController } from "$lib/searchController.svelte";
   import { Search } from "lucide-svelte";
   import { Spinner } from "$lib/components/ui/spinner";
   import MobileMediaCard from "../components/MobileMediaCard.svelte";
   import PersonCard from "../../components/cards/PersonCard.svelte";
   import ProviderCard from "../../components/cards/ProviderCard.svelte";
-  import {
-    api,
-    type SearchResults,
-    type Person,
-    type Provider,
-  } from "$lib/api";
+  import { type Person, type Provider } from "$lib/api";
   import type { Media } from "$lib/types/tmdb";
   import { getContext } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -31,7 +27,6 @@
   const openMediaDetail = getContext<(m: Media) => void>("openMediaDetail");
 
   let query = $state("");
-  let loading = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
 
   onMount(() => {
@@ -42,17 +37,10 @@
 
   // ── Search state ─────────────────────────────────────────────────────────────
 
-  const empty = (): SearchResults => ({
-    movies: [],
-    tv: [],
-    people: [],
-    providers: [],
-    title_order: [],
-  });
-
-  let data = $state<SearchResults>(empty());
-  let keywords = $state<{ id: number; name: string }[]>([]);
-  let qualityMap = new SvelteMap<number, string>();
+  const search = new SearchController();
+  const data = $derived(search.data);
+  const keywords = $derived(search.keywords);
+  const loading = $derived(search.loading);
 
   // ── Type filter chips ─────────────────────────────────────────────────────────
 
@@ -63,35 +51,14 @@
   const showProvider = $derived(selectedTypes.includes("provider"));
 
   function toggleType(t: string): void {
-    if (selectedTypes.includes(t)) {
-      // Keep at least one type selected.
-      if (selectedTypes.length > 1) {
-        selectedTypes = selectedTypes.filter((x) => x !== t);
-      }
-    } else {
-      selectedTypes = [...selectedTypes, t];
-    }
+    selectedTypes = toggleSearchType(selectedTypes, t);
   }
 
   // ── Derived display lists ─────────────────────────────────────────────────────
 
   // Fold each matched person's known-for titles into the title sections.
-  function withKnownFor(list: Media[], type: "movie" | "tv"): Media[] {
-    const seen = new SvelteSet(list.map((m) => m.id));
-    const out = [...list];
-    for (const p of data.people) {
-      for (const m of p.known_for ?? []) {
-        if (m.media_type === type && !seen.has(m.id)) {
-          seen.add(m.id);
-          out.push(m);
-        }
-      }
-    }
-    return out;
-  }
-
-  let movies = $derived(withKnownFor(data.movies, "movie"));
-  let tv = $derived(withKnownFor(data.tv, "tv"));
+  let movies = $derived(withKnownFor(data.movies, "movie", data.people));
+  let tv = $derived(withKnownFor(data.tv, "tv", data.people));
   let topResults = $derived(
     getTopSearchResults(data.movies, data.tv, data.title_order ?? [], {
       includeMovies: showMovie,
@@ -110,73 +77,9 @@
       (showProvider && providers.length > 0),
   );
 
-  // ── Quality streaming ─────────────────────────────────────────────────────────
-
-  let qualityAbort: AbortController | null = null;
-
-  function streamQuality(ids: { id: number; type: "movie" | "tv" }[]): void {
-    qualityAbort?.abort();
-    if (ids.length === 0) return;
-    qualityAbort = new AbortController();
-    const typedIds = ids.map((m) => `${m.type}:${m.id}`);
-    api
-      .streamQualityBatch(
-        typedIds,
-        (id, quality) => {
-          const numeric = Number(id.split(":").pop());
-          if (!Number.isNaN(numeric)) qualityMap.set(numeric, quality);
-        },
-        qualityAbort.signal,
-      )
-      .catch(() => {});
-  }
-
   // ── Debounced search ──────────────────────────────────────────────────────────
 
-  let searchSeq = 0;
-
-  $effect(() => {
-    const q = query.trim();
-    const timeout = setTimeout(async () => {
-      const seq = ++searchSeq;
-      qualityAbort?.abort();
-      if (!q) {
-        data = empty();
-        keywords = [];
-        qualityMap = new SvelteMap();
-        return;
-      }
-      qualityMap = new SvelteMap();
-      loading = true;
-
-      const [res, kw] = await Promise.all([
-        api.searchMulti(q).catch(() => empty()),
-        api.getKeywords(q).catch(() => []),
-      ]);
-
-      if (seq !== searchSeq) return;
-
-      data = {
-        movies: res.movies ?? [],
-        tv: res.tv ?? [],
-        people: res.people ?? [],
-        providers: res.providers ?? [],
-        title_order: res.title_order ?? [],
-      };
-      keywords = kw ?? [];
-      loading = false;
-
-      streamQuality([
-        ...data.movies.map((m) => ({ id: m.id, type: "movie" as const })),
-        ...data.tv.map((m) => ({ id: m.id, type: "tv" as const })),
-      ]);
-    }, 400);
-
-    return () => {
-      clearTimeout(timeout);
-      qualityAbort?.abort();
-    };
-  });
+  $effect(() => search.schedule(query));
 
   // ── Results entrance stagger ──────────────────────────────────────────────────
 
@@ -290,7 +193,7 @@
             <h2
               class="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-            {m.search_top_results()}
+              {m.search_top_results()}
             </h2>
             <div class="grid grid-cols-3 gap-2" data-search-grid="top-results">
               {#each topResults as media (`${media.media_type}:${media.id}`)}

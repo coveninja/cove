@@ -1,14 +1,13 @@
 <script lang="ts">
-  import {
-    api,
-    type LibraryStats,
-    type DiscoverInsights,
-    type Taste,
-    type Person,
-    type ActivityStats,
-  } from "$lib/api";
+  import { type Person } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import {
+    activateAccountProfile,
+    deleteAccountProfile,
+    logoutAccount,
+    syncAccount,
+  } from "$lib/accountActions";
   import { focusable, focusGroup } from "../focus/actions";
   import AuthDialog from "../../components/AuthDialog.svelte";
   import ConfirmDialog from "../../components/ConfirmDialog.svelte";
@@ -24,6 +23,16 @@
     activityHourLabels,
     activityMonthLabels,
   } from "../../components/insights/utils";
+  import {
+    InsightsController,
+    displayInsightPerson as displayPerson,
+    insightConicGradient as conic,
+    insightGenreSlices as genreSlices,
+    insightMediaSlices as mvSlices,
+    insightStatusSlices as statusSlices,
+    insightWeights,
+    type InsightSlice as Slice,
+  } from "$lib/insights.svelte";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import {
     RefreshCw,
@@ -51,8 +60,7 @@
   async function sync(): Promise<void> {
     syncing = true;
     try {
-      await api.authSync();
-      libraryChanged.update((n) => n + 1);
+      await syncAccount();
     } catch (e) {
       console.error("sync:", e);
     } finally {
@@ -61,14 +69,13 @@
   }
 
   async function logout(): Promise<void> {
-    await api.authLogout();
-    await auth.logout();
+    await logoutAccount();
   }
 
   // ── Profile switching ────────────────────────────────────────────────────────
   async function switchProfile(id: string): Promise<void> {
     try {
-      await api.profileActivate(id);
+      await activateAccountProfile(id);
       window.location.reload();
     } catch (e) {
       console.error("switch profile:", e);
@@ -85,14 +92,7 @@
     deleting = true;
     deleteError = null;
     try {
-      await api.profileDelete(deleteTarget.id);
-      const res = await api.profilesList();
-      auth.setProfiles(
-        res.profiles,
-        res.profiles.find((p) => p.id === res.active_profile_id) ??
-          res.profiles[0],
-      );
-      libraryChanged.update((n) => n + 1);
+      await deleteAccountProfile(deleteTarget.id);
       deleteTarget = null;
     } catch (e) {
       deleteError = e instanceof Error ? e.message : String(e);
@@ -102,174 +102,25 @@
   }
 
   // ── Insights data ────────────────────────────────────────────────────────────
-  let stats = $state<LibraryStats | null>(null);
-  let insights = $state<DiscoverInsights | null>(null);
-  let activity = $state<ActivityStats | null>(null);
-  let loading = $state(true);
-  let loadError = $state<string | null>(null);
-
-  let initialLoadDone = false;
-  let fetchVer = 0;
+  const controller = new InsightsController();
+  const stats = $derived(controller.stats);
+  const insights = $derived(controller.insights);
+  const activity = $derived(controller.activity);
+  const loading = $derived(controller.loading);
+  const loadError = $derived(controller.loadError);
+  const peopleSlots = $derived(controller.peopleSlots);
 
   $effect(() => {
     if (!visible) return;
     void $libraryChanged;
 
-    const ver = ++fetchVer;
-
-    Promise.all([
-      api.libraryStats(),
-      api.discoverInsights(),
-      api.activityStats().catch(() => null as ActivityStats | null),
-    ])
-      .then(([s, i, a]) => {
-        if (ver !== fetchVer) return;
-        stats = s;
-        insights = i;
-        activity = a;
-        loadPeople(i.top_people);
-      })
-      .catch((e) => {
-        if (ver !== fetchVer) return;
-        loadError = e instanceof Error ? e.message : String(e);
-      })
-      .finally(() => {
-        if (!initialLoadDone) {
-          initialLoadDone = true;
-          loading = false;
-        }
-      });
+    void controller.load();
   });
 
   const hasProfile = $derived((insights?.signals_used ?? 0) > 0);
   const hasActivity = $derived(activity !== null && activity.total_seconds > 0);
 
-  // ── Top people ────────────────────────────────────────────────────────────────
-  type PeopleSlot = { id: number; name: string; person: Person | null };
-  let peopleSlots = $state<PeopleSlot[]>([]);
-
-  function loadPeople(tastes: Taste[]): void {
-    peopleSlots = tastes.map((t) => ({ id: t.id, name: t.name, person: null }));
-    for (const t of tastes) {
-      api
-        .getPerson(t.id)
-        .then((d) => {
-          const i = peopleSlots.findIndex((s) => s.id === t.id);
-          if (i === -1) return;
-          peopleSlots[i] = {
-            ...peopleSlots[i],
-            person: {
-              id: d.id,
-              name: d.name,
-              profile_path: d.profile_path,
-              known_for_department: d.known_for_department,
-              popularity: 0,
-              known_for: [],
-            },
-          };
-        })
-        .catch(() => {});
-    }
-  }
-
-  function displayPerson(slot: PeopleSlot): Person {
-    return (
-      slot.person ?? {
-        id: slot.id,
-        name: slot.name,
-        profile_path: "",
-        known_for_department: "",
-        popularity: 0,
-        known_for: [],
-      }
-    );
-  }
-
-  // ── Chart helpers (duplicated from InsightsPage — no shared module exists) ───
-  type Slice = { label: string; value: number; color: string; count?: number };
-
-  const palette = [
-    "#6366f1",
-    "#ec4899",
-    "#22c55e",
-    "#f59e0b",
-    "#06b6d4",
-    "#94a3b8",
-  ];
-
-  function conic(slices: Slice[]): string {
-    const total = slices.reduce((s, x) => s + x.value, 0) || 1;
-    let acc = 0;
-    const stops = slices.map((s) => {
-      const start = (acc / total) * 100;
-      acc += s.value;
-      const end = (acc / total) * 100;
-      return `${s.color} ${start}% ${end}%`;
-    });
-    return `conic-gradient(${stops.join(", ")})`;
-  }
-
-  function genreSlices(list: Taste[]): Slice[] {
-    const top = list.slice(0, 5).map((g, i) => ({
-      label: g.name,
-      value: Math.abs(g.score),
-      color: palette[i],
-    }));
-    const rest = list.slice(5);
-    if (rest.length > 0) {
-      top.push({
-        label: m.account_other(),
-        value: rest.reduce((a, g) => a + Math.abs(g.score), 0),
-        color: palette[5],
-      });
-    }
-    return top;
-  }
-
-  function mvSlices(s: LibraryStats): Slice[] {
-    return [
-      {
-        label: m.my_list_movies(),
-        value: s.movie_share,
-        color: palette[0],
-        count: s.by_type.movie ?? 0,
-      },
-      {
-        label: m.my_list_shows(),
-        value: s.tv_share,
-        color: palette[1],
-        count: s.by_type.tv ?? 0,
-      },
-    ];
-  }
-
-  const statusMeta = [
-    { key: "watching", label: m.my_list_watching() },
-    { key: "finished", label: m.my_list_finished() },
-    { key: "watch_later", label: m.my_list_watch_later() },
-    { key: "dropped", label: m.my_list_dropped() },
-  ];
-
-  function statusSlices(s: LibraryStats): Slice[] {
-    return statusMeta
-      .map((m, i) => ({
-        label: m.label,
-        value: s.by_status[m.key] ?? 0,
-        color: palette[i],
-        count: s.by_status[m.key] ?? 0,
-      }))
-      .filter((x) => x.value > 0);
-  }
-
-  const weights = [
-    { label: m.account_weight_finished(), value: "+1.5" },
-    { label: m.account_weight_watched_end(), value: "+1.0" },
-    { label: m.account_weight_watching(), value: "+0.5" },
-    { label: m.account_weight_watch_later(), value: "+0.5" },
-    { label: m.account_weight_rating(), value: "±1.5" },
-    { label: m.account_weight_dropped(), value: "−2.0" },
-    { label: m.account_weight_not_interested(), value: "−2.0" },
-  ];
+  const weights = insightWeights();
 
   // ── Activity chart data ───────────────────────────────────────────────────────
   const MONTH_SHORT = activityMonthLabels();
@@ -278,15 +129,23 @@
 
   const monthItems = $derived(
     activity
-      ? activity.by_month_this_year.map((v, i) => ({ label: MONTH_SHORT[i], value: v }))
+      ? activity.by_month_this_year.map((v, i) => ({
+          label: MONTH_SHORT[i],
+          value: v,
+        }))
       : [],
   );
   const monthSecondary = $derived(
-    activity && activity.last_year_seconds > 0 ? activity.by_month_last_year : undefined,
+    activity && activity.last_year_seconds > 0
+      ? activity.by_month_last_year
+      : undefined,
   );
   const dowItems = $derived(
     activity
-      ? activity.by_day_of_week.map((v, i) => ({ label: DOW_SHORT[i], value: v }))
+      ? activity.by_day_of_week.map((v, i) => ({
+          label: DOW_SHORT[i],
+          value: v,
+        }))
       : [],
   );
   const hourItems = $derived(
@@ -316,9 +175,10 @@
   data-tv-scroll-anchor on each major section tells focusEl() to scroll the
   whole section into view when the invisible anchor inside it gains focus.
 -->
-<div class="h-full overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden">
+<div
+  class="h-full overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden"
+>
   <div class="mx-auto max-w-5xl px-16 py-16 flex flex-col gap-10">
-
     <!-- ══════════════════════════════════════════════════════════════════════
          ACCOUNT SECTION
          Anchor is ungrouped so Down triggers navigateBetweenGroups → jumps
@@ -350,7 +210,10 @@
           {#if auth.session}
             <p class="text-base text-white/60 truncate">{auth.session.email}</p>
             <div
-              use:focusGroup={{ id: "tv-account-actions", policy: { type: "row" } }}
+              use:focusGroup={{
+                id: "tv-account-actions",
+                policy: { type: "row" },
+              }}
               class="flex gap-4"
             >
               <button
@@ -414,7 +277,10 @@
       <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-4">
         <h2 class="text-xl font-semibold">{m.account_profiles()}</h2>
         <div
-          use:focusGroup={{ id: "tv-account-profiles", policy: { type: "column" } }}
+          use:focusGroup={{
+            id: "tv-account-profiles",
+            policy: { type: "column" },
+          }}
           class="flex flex-col gap-1"
         >
           {#each auth.profiles as profile (profile.id)}
@@ -423,22 +289,29 @@
                 type="button"
                 use:focusable={{ groupId: "tv-account-profiles" }}
                 onclick={() => {
-                  if (auth.activeProfile?.id !== profile.id) switchProfile(profile.id);
+                  if (auth.activeProfile?.id !== profile.id)
+                    switchProfile(profile.id);
                 }}
                 class="flex min-w-0 flex-1 items-center gap-4 text-left rounded-xl px-3 py-2 focus:bg-white/10 focus:outline-none transition-colors"
               >
-                <span class="flex size-12 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg font-bold">
+                <span
+                  class="flex size-12 shrink-0 items-center justify-center rounded-full bg-white/15 text-lg font-bold"
+                >
                   {profile.name.charAt(0).toUpperCase()}
                 </span>
                 <span class="flex min-w-0 flex-col">
-                  <span class="truncate text-lg font-medium">{profile.name}</span>
+                  <span class="truncate text-lg font-medium"
+                    >{profile.name}</span
+                  >
                   <span class="flex items-center gap-2 text-sm text-white/50">
                     {#if auth.activeProfile?.id === profile.id}
                       <Check class="size-4 text-green-400" />
                       <span class="text-green-400">{m.account_active()}</span>
                     {/if}
                     {#if profile.is_primary}
-                      <span class="rounded border border-white/20 px-2 py-0.5 text-xs text-white/40">
+                      <span
+                        class="rounded border border-white/20 px-2 py-0.5 text-xs text-white/40"
+                      >
                         {m.account_primary()}
                       </span>
                     {/if}
@@ -476,19 +349,15 @@
       <section class="flex items-center justify-center py-24">
         <Spinner class="size-12" />
       </section>
-
     {:else if loadError}
       <section class="rounded-2xl border border-red-500/30 bg-red-500/10 p-6">
         <p class="text-base text-red-300">
           {m.account_load_error({ error: loadError })}
         </p>
       </section>
-
     {:else}
-
       <!-- ── Activity sections ────────────────────────────────────────────── -->
       {#if hasActivity && activity}
-
         <!-- ActivityHero, Streaks, Calendar — one scroll stop for the trio -->
         <section
           data-tv-scroll-anchor
@@ -523,7 +392,9 @@
                 <BarChart3 class="size-5 text-white/60" />
                 <h3 class="text-lg font-semibold">{m.account_hours_month()}</h3>
                 {#if monthSecondary}
-                  <span class="ml-auto text-sm text-white/40">{m.account_vs_last_year()}</span>
+                  <span class="ml-auto text-sm text-white/40"
+                    >{m.account_vs_last_year()}</span
+                  >
                 {/if}
               </div>
               <ActivityBars items={monthItems} secondary={monthSecondary} />
@@ -532,11 +403,15 @@
             <!-- DOW + hour side by side -->
             <div class="grid gap-6 md:grid-cols-2">
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">{m.account_hours_weekday()}</h3>
+                <h3 class="mb-4 text-lg font-semibold">
+                  {m.account_hours_weekday()}
+                </h3>
                 <ActivityBars items={dowItems} />
               </div>
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">{m.account_hours_day()}</h3>
+                <h3 class="mb-4 text-lg font-semibold">
+                  {m.account_hours_day()}
+                </h3>
                 <ActivityBars items={hourItems} compact={true} />
               </div>
             </div>
@@ -544,7 +419,9 @@
             <!-- Year over year -->
             {#if showYearChart}
               <div class="rounded-2xl bg-white/5 p-6">
-                <h3 class="mb-4 text-lg font-semibold">{m.account_year_over_year()}</h3>
+                <h3 class="mb-4 text-lg font-semibold">
+                  {m.account_year_over_year()}
+                </h3>
                 <ActivityBars items={yearItems} />
               </div>
             {/if}
@@ -596,22 +473,31 @@
 
             <!-- Movie vs TV + Watch activity donuts -->
             <div class="grid gap-6 md:grid-cols-2">
-              {#snippet donutCard(title: string, slices: Slice[], description?: string)}
+              {#snippet donutCard(
+                title: string,
+                slices: Slice[],
+                description?: string,
+              )}
                 <div class="rounded-2xl bg-white/5 p-6">
                   <h3 class="mb-4 text-lg font-semibold">{title}</h3>
                   {#if description}
                     <p class="mb-4 text-sm text-white/50">{description}</p>
                   {/if}
                   {#if slices.length === 0}
-                    <p class="text-sm text-white/40">{m.account_not_enough_signal()}</p>
+                    <p class="text-sm text-white/40">
+                      {m.account_not_enough_signal()}
+                    </p>
                   {:else}
-                    {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
+                    {@const total =
+                      slices.reduce((s, x) => s + x.value, 0) || 1}
                     <div class="flex items-center gap-6">
                       <div
                         class="relative size-32 shrink-0 rounded-full"
                         style="background: {conic(slices)};"
                       >
-                        <div class="absolute inset-[24%] rounded-full bg-[#0d0d0d]"></div>
+                        <div
+                          class="absolute inset-[24%] rounded-full bg-[#0d0d0d]"
+                        ></div>
                       </div>
                       <ul class="flex min-w-0 flex-1 flex-col gap-2 text-base">
                         {#each slices as s (s.label)}
@@ -622,7 +508,8 @@
                             ></span>
                             <span class="truncate">{s.label}</span>
                             <span class="ml-auto shrink-0 text-white/50">
-                              {Math.round((s.value / total) * 100)}%{s.count != null
+                              {Math.round((s.value / total) * 100)}%{s.count !=
+                              null
                                 ? ` · ${s.count}`
                                 : ""}
                             </span>
@@ -663,10 +550,14 @@
             <div class="mb-4 flex items-center gap-2">
               <Film class="size-5 text-white/60" />
               <h3 class="text-lg font-semibold">{m.account_titles_year()}</h3>
-              <span class="ml-1 text-sm text-white/40">{m.account_top_watch_time()}</span>
+              <span class="ml-1 text-sm text-white/40"
+                >{m.account_top_watch_time()}</span
+              >
             </div>
             <!-- Horizontal strip — not D-pad-navigable; scroll-stop anchor above handles scroll -->
-            <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-none [&::-webkit-scrollbar]:hidden">
+            <div
+              class="flex gap-4 overflow-x-auto pb-2 scrollbar-none [&::-webkit-scrollbar]:hidden"
+            >
               {#each titlesThisYear as t (t.tmdb_id + t.media_type)}
                 <div class="shrink-0" style="width: 90px">
                   <div
@@ -729,7 +620,9 @@
               <div class="rounded-2xl bg-white/5 p-6">
                 <h3 class="mb-4 text-lg font-semibold">{title}</h3>
                 {#if slices.length === 0}
-                  <p class="text-sm text-white/40">{m.account_not_enough_signal()}</p>
+                  <p class="text-sm text-white/40">
+                    {m.account_not_enough_signal()}
+                  </p>
                 {:else}
                   {@const total = slices.reduce((s, x) => s + x.value, 0) || 1}
                   <div class="flex items-center gap-6">
@@ -737,7 +630,9 @@
                       class="relative size-32 shrink-0 rounded-full"
                       style="background: {conic(slices)};"
                     >
-                      <div class="absolute inset-[24%] rounded-full bg-[#0d0d0d]"></div>
+                      <div
+                        class="absolute inset-[24%] rounded-full bg-[#0d0d0d]"
+                      ></div>
                     </div>
                     <ul class="flex min-w-0 flex-1 flex-col gap-2 text-base">
                       {#each slices as s (s.label)}
@@ -795,7 +690,9 @@
             <div class="rounded-2xl bg-white/5 p-6">
               <div class="mb-6 flex items-center gap-2">
                 <Users class="size-5 text-white/60" />
-                <h3 class="text-lg font-semibold">{m.account_people_taste()}</h3>
+                <h3 class="text-lg font-semibold">
+                  {m.account_people_taste()}
+                </h3>
               </div>
               <!--
                 grid policy: cols must match the CSS grid-template-columns count.
@@ -830,10 +727,14 @@
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
             aria-label={m.account_recommendations_how()}
           ></div>
-          <div class="rounded-2xl bg-white/5 p-6 flex flex-col gap-5 text-base text-white/60">
+          <div
+            class="rounded-2xl bg-white/5 p-6 flex flex-col gap-5 text-base text-white/60"
+          >
             <div class="flex items-center gap-2">
               <Info class="size-5" />
-              <h3 class="text-lg font-semibold text-white">{m.account_recommendations_how()}</h3>
+              <h3 class="text-lg font-semibold text-white">
+                {m.account_recommendations_how()}
+              </h3>
             </div>
             <p>
               {m.account_recommendations_intro({
@@ -856,16 +757,15 @@
 
       <!-- ── Empty state ────────────────────────────────────────────────────── -->
       {#if !hasActivity && !hasProfile}
-        <section
-          data-tv-scroll-anchor
-          class="relative rounded-2xl p-1"
-        >
+        <section data-tv-scroll-anchor class="relative rounded-2xl p-1">
           <div
             use:focusable
             class="absolute left-0 top-0 h-px w-px opacity-0 pointer-events-none"
             aria-label={m.account_nothing_analyze()}
           ></div>
-          <div class="flex flex-col items-center gap-4 rounded-2xl bg-white/5 px-10 py-20 text-center">
+          <div
+            class="flex flex-col items-center gap-4 rounded-2xl bg-white/5 px-10 py-20 text-center"
+          >
             <Sparkles class="size-10 text-white/30" />
             <p class="text-2xl font-semibold">{m.account_nothing_analyze()}</p>
             <p class="max-w-md text-base text-white/50">

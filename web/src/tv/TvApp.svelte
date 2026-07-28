@@ -27,7 +27,13 @@
   import { startAutoSync } from "$lib/sync";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
-  import { navigate, focusFirst, editableKeepsArrow } from "./focus/focusStore.svelte";
+  import {
+    navigate,
+    focusFirst,
+    editableKeepsArrow,
+    isEditable,
+  } from "./focus/focusStore.svelte";
+  import { createPlaybackChime } from "$lib/playbackChime";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -76,63 +82,12 @@
     playback.quickPlay(m, s, e),
   );
 
-  // ── Playback init ─────────────────────────────────────────────────────────────
-  playback.init({ playStartSound, openMediaDetail: selectMedia });
-
-  // ── AudioContext chime (same as MobileApp.svelte) ────────────────────────────
-  let audioCtx: AudioContext | null = null;
-
-  function getAudioCtx(): AudioContext {
-    if (!audioCtx) audioCtx = new AudioContext();
-    return audioCtx;
-  }
-
-  onMount(() => {
-    const unlock = () => {
-      getAudioCtx()
-        .resume()
-        .catch(() => {});
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
-    window.addEventListener("pointerdown", unlock);
-    window.addEventListener("keydown", unlock);
-    return () => {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
+  const playbackChime = createPlaybackChime();
+  playback.init({
+    playStartSound: playbackChime.play,
+    openMediaDetail: selectMedia,
   });
-
-  async function playStartSound(): Promise<void> {
-    try {
-      const ctx = getAudioCtx();
-      if (ctx.state === "suspended") await ctx.resume();
-
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.exponentialRampToValueAtTime(70, now + 0.15);
-
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.35, now + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.25);
-      osc.addEventListener("ended", () => {
-        osc.disconnect();
-        gain.disconnect();
-      });
-    } catch (e) {
-      console.error("playStartSound failed", e);
-    }
-  }
+  onMount(playbackChime.unlockOnInteraction);
 
   // 10-foot scale note: an earlier pass bumped the root font-size to 18px so
   // every rem-based Tailwind size grew 1.125× — user feedback was that the UI
@@ -197,25 +152,6 @@
     ArrowUp: "up",
     ArrowDown: "down",
   } as const;
-
-  // ── Editable guard (mirrors focusStore.svelte.ts — not exported from there) ──
-  const EDITABLE_TYPES = new Set([
-    "text",
-    "search",
-    "url",
-    "email",
-    "password",
-    "number",
-    "",
-  ]);
-
-  function isEditable(el: Element): boolean {
-    if (el instanceof HTMLTextAreaElement) return true;
-    if (el instanceof HTMLInputElement && EDITABLE_TYPES.has(el.type.toLowerCase()))
-      return true;
-    if ((el as HTMLElement).isContentEditable) return true;
-    return false;
-  }
 
   // ── Centralized keydown handler ───────────────────────────────────────────────
   // Arrow keys drive the spatial focus engine (from M2); Enter is left to native
@@ -386,7 +322,6 @@
   const activePlaybackEpisode = $derived(
     streamActiveForSelectedMedia ? playback.playerSession?.episode : undefined,
   );
-
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -399,7 +334,10 @@
     .tv-shell also carries the 10-foot base font-size and the D-pad focus ring
     via the scoped :global rules in <style>.
   -->
-  <div class="tv-shell flex h-screen overflow-hidden bg-[#0a0a0a] text-white" style="--tv-safe-inset: 32px;">
+  <div
+    class="tv-shell flex h-screen overflow-hidden bg-[#0a0a0a] text-white"
+    style="--tv-safe-inset: 32px;"
+  >
     <!-- Left rail: hidden while player or its loading overlay is up (mirrors
          BottomNav pattern in MobileApp). -->
     {#if !playback.playerSession && !playback.quickPlayPending}
@@ -423,7 +361,9 @@
       class="relative isolate min-h-0 flex-1 overflow-hidden"
       style="padding: var(--tv-safe-inset);"
       inert={showOnboarding ||
-        (!!selectedMedia && !playback.playerSession && !playback.quickPlayPending)}
+        (!!selectedMedia &&
+          !playback.playerSession &&
+          !playback.quickPlayPending)}
     >
       <!-- Pages: always mounted, shown/hidden via class:hidden so state and
            scroll positions survive tab switching.  invisible (not just hidden)
@@ -473,9 +413,13 @@
             catalogType={currentPage.type === "catalog"
               ? currentPage.catalogType
               : ""}
-            catalogId={currentPage.type === "catalog" ? currentPage.catalogId : ""}
+            catalogId={currentPage.type === "catalog"
+              ? currentPage.catalogId
+              : ""}
             name={currentPage.type === "catalog" ? currentPage.name : ""}
-            addonUrl={currentPage.type === "catalog" ? currentPage.addonUrl : undefined}
+            addonUrl={currentPage.type === "catalog"
+              ? currentPage.addonUrl
+              : undefined}
             onSelectMedia={selectMedia}
             onWatch={(m, s, e) => playback.quickPlay(m, s, e)}
           />
@@ -517,7 +461,16 @@
             }}
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
-              if (m) playback.startPlayback(m, stream, s, e, name, candidates ?? [], 0);
+              if (m)
+                playback.startPlayback(
+                  m,
+                  stream,
+                  s,
+                  e,
+                  name,
+                  candidates ?? [],
+                  0,
+                );
             }}
             onclose={() => playback.closePlayer()}
             onRegisterCloseSheets={(fn) => (closePlayerSheets = fn)}
@@ -543,7 +496,15 @@
           onplaystream={(stream, season, episode, episodeName, candidates) => {
             const m = selectedMedia;
             if (m)
-              playback.startPlayback(m, stream, season, episode, episodeName, candidates, 0);
+              playback.startPlayback(
+                m,
+                stream,
+                season,
+                episode,
+                episodeName,
+                candidates,
+                0,
+              );
           }}
           onsimilar={(m) => selectMedia(m)}
           onclose={closeDetailOverlay}

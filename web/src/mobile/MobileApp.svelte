@@ -32,6 +32,7 @@
   import { startAutoSync } from "$lib/sync";
   import { Player } from "$lib/player/player.svelte";
   import { isAndroid, minimizeApp } from "$lib/platform";
+  import { createPlaybackChime } from "$lib/playbackChime";
 
   // Wire api.ts to read the JWT directly from the auth store on every request.
   setTokenSource(() => auth.authToken);
@@ -64,63 +65,12 @@
     playback.quickPlay(m, s, e),
   );
 
-  // ── Playback init ─────────────────────────────────────────────────────────────
-  playback.init({ playStartSound, openMediaDetail: selectMedia });
-
-  // ── AudioContext chime (same as App.svelte) ──────────────────────────────────
-  let audioCtx: AudioContext | null = null;
-
-  function getAudioCtx(): AudioContext {
-    if (!audioCtx) audioCtx = new AudioContext();
-    return audioCtx;
-  }
-
-  onMount(() => {
-    const unlock = () => {
-      getAudioCtx()
-        .resume()
-        .catch(() => {});
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
-    window.addEventListener("pointerdown", unlock);
-    window.addEventListener("keydown", unlock);
-    return () => {
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
-    };
+  const playbackChime = createPlaybackChime();
+  playback.init({
+    playStartSound: playbackChime.play,
+    openMediaDetail: selectMedia,
   });
-
-  async function playStartSound(): Promise<void> {
-    try {
-      const ctx = getAudioCtx();
-      if (ctx.state === "suspended") await ctx.resume();
-
-      const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.exponentialRampToValueAtTime(70, now + 0.15);
-
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.35, now + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.25);
-      osc.addEventListener("ended", () => {
-        osc.disconnect();
-        gain.disconnect();
-      });
-    } catch (e) {
-      console.error("playStartSound failed", e);
-    }
-  }
+  onMount(playbackChime.unlockOnInteraction);
 
   // ── cove-playing class (reveal mpv surface) ───────────────────────────────
   $effect(() => {

@@ -8,7 +8,6 @@
 package library
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -36,10 +35,6 @@ const (
 	StatusFinished   Status = "finished"
 	StatusDropped    Status = "dropped"
 )
-
-func validMediaType(mediaType string) bool {
-	return mediaType == "movie" || mediaType == "tv"
-}
 
 func validStatus(status Status) bool {
 	switch status {
@@ -566,7 +561,7 @@ func (l *Library) RegenerateIDsNotIn(ownedEntryIDs, ownedProgressIDs map[string]
 			continue
 		}
 		oldID := e.ID
-		e.ID = newUUID()
+		e.ID = utils.NewUUID()
 		l.db.Entries[key] = e
 		remap[oldID] = e.ID
 	}
@@ -582,7 +577,7 @@ func (l *Library) RegenerateIDsNotIn(ownedEntryIDs, ownedProgressIDs map[string]
 			}
 			continue
 		}
-		p.ID = newUUID()
+		p.ID = utils.NewUUID()
 		l.db.Progress[key] = p
 	}
 	if err := l.writeNow(); err != nil {
@@ -636,7 +631,7 @@ func (l *Library) TasteSignals() []TasteSignal {
 			Completed:         !completed[key].IsZero(),
 			Dismissed:         dismissal != nil,
 			Title:             e.Title,
-			PosterPath:        rewritePosterURL(e.PosterPath),
+			PosterPath:        utils.RewriteTMDBImageURL(e.PosterPath),
 			LastInteractionAt: ts,
 		})
 	}
@@ -760,16 +755,13 @@ type Library struct {
 	onProgressSave func(ProgressSaveEvent)
 
 	// Debounced persistence (D3). markDirty() marshals the store (cheap — it's
-	// small) synchronously while the caller still holds l.mu, then schedules
-	// the actual disk write ~1s out via dirtyTimer if one isn't already
-	// pending — so a burst of mutations (e.g. rapid progress ticks) coalesces
-	// into a single AtomicWriteFile instead of one per mutation. Only the I/O
-	// is debounced; pendingData always reflects the latest marshaled state at
-	// the moment markDirty() was last called.
-	dirtyMu     sync.Mutex
-	dirtyTimer  *time.Timer
-	pendingPath string
-	pendingData []byte
+	// small) synchronously while the caller still holds l.mu, then stages the
+	// bytes in utils.DebouncedPersist, which fires the actual disk write ~1s
+	// out if a timer isn't already pending — so a burst of mutations (e.g.
+	// rapid progress ticks) coalesces into a single AtomicWriteFile instead of
+	// one per mutation. Only the I/O is debounced; persist always carries the
+	// latest-staged bytes at the moment markDirty() was last called.
+	persist utils.DebouncedPersist
 }
 
 // persistDebounce is how long markDirty waits before actually writing —
@@ -789,51 +781,14 @@ func (l *Library) markDirty() {
 		log.Println("library: marshal failed:", err)
 		return
 	}
-
-	l.dirtyMu.Lock()
-	defer l.dirtyMu.Unlock()
-	l.pendingData = raw
-	l.pendingPath = l.path
-	if l.dirtyTimer == nil {
-		l.dirtyTimer = time.AfterFunc(persistDebounce, l.flushPending)
-	}
-}
-
-// flushPending is dirtyTimer's callback — writes out whatever markDirty last
-// staged. Deliberately doesn't touch l.mu: it only ever reads pendingData/
-// pendingPath, both owned by dirtyMu.
-func (l *Library) flushPending() {
-	l.dirtyMu.Lock()
-	data, path := l.pendingData, l.pendingPath
-	l.pendingData, l.pendingPath, l.dirtyTimer = nil, "", nil
-	l.dirtyMu.Unlock()
-
-	if data == nil {
-		return
-	}
-	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
-		log.Println("library: debounced write failed:", err)
-	}
+	l.persist.MarkDirty(l.path, raw, persistDebounce)
 }
 
 // Flush forces any pending debounced write (D3) to happen immediately —
 // call on shutdown so the last mutation before exit isn't lost to the
 // persistDebounce window the process didn't live to see.
 func (l *Library) Flush() {
-	l.dirtyMu.Lock()
-	if l.dirtyTimer != nil {
-		l.dirtyTimer.Stop()
-	}
-	data, path := l.pendingData, l.pendingPath
-	l.pendingData, l.pendingPath, l.dirtyTimer = nil, "", nil
-	l.dirtyMu.Unlock()
-
-	if data == nil {
-		return
-	}
-	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
-		log.Println("library: flush failed:", err)
-	}
+	l.persist.Flush()
 }
 
 // writeNow synchronously marshals and writes the store to disk, bypassing
@@ -969,7 +924,7 @@ func (l *Library) MarkExternallyWatched(
 	entryCreated := !exists
 	if !exists {
 		entry = &LibraryEntry{
-			ID:         newUUID(),
+			ID:         utils.NewUUID(),
 			TmdbID:     tmdbID,
 			MediaType:  mediaType,
 			Title:      title,
@@ -998,7 +953,7 @@ func (l *Library) MarkExternallyWatched(
 	}
 	if !progExists {
 		prog = &WatchProgress{
-			ID:             newUUID(),
+			ID:             utils.NewUUID(),
 			LibraryEntryID: entry.ID,
 			TmdbID:         tmdbID,
 			MediaType:      mediaType,
@@ -1043,7 +998,7 @@ func (l *Library) AddWatchLater(
 
 	now := time.Now()
 	entry := &LibraryEntry{
-		ID:         newUUID(),
+		ID:         utils.NewUUID(),
 		TmdbID:     tmdbID,
 		MediaType:  mediaType,
 		Title:      title,
@@ -1076,25 +1031,17 @@ func progressKey(tmdbID int, mediaType string, season, episode *int) string {
 	return fmt.Sprintf("%d:%s", tmdbID, mediaType)
 }
 
-func newUUID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant bits
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
-}
-
 // ── SetupHandlers ─────────────────────────────────────────────────────────────
 
 func (l *Library) SetupHandlers(mux *http.ServeMux) {
 	// /api/library/progress must be registered before /api/library/ so Go's mux
 	// matches it as the more-specific fixed path.
-	mux.HandleFunc("/api/library/progress/bulk", utils.CorsMiddleware(l.handleProgressBulk))
+	mux.HandleFunc("/api/library/progress/bulk", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, l.handleProgressBulk)))
 	mux.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
 	mux.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
 	mux.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
 	mux.HandleFunc("/api/library/dismiss", utils.CorsMiddleware(l.handleDismiss))
-	mux.HandleFunc("/api/library/stats", utils.CorsMiddleware(l.handleStats))
+	mux.HandleFunc("/api/library/stats", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, l.handleStats)))
 }
 
 // ── Handler: /api/library ─────────────────────────────────────────────────────
@@ -1114,12 +1061,12 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 				// rewritePosterURL's result must never leak back into it (see
 				// its doc comment).
 				entryCopy := *e
-				entryCopy.PosterPath = rewritePosterURL(entryCopy.PosterPath)
+				entryCopy.PosterPath = utils.RewriteTMDBImageURL(entryCopy.PosterPath)
 				list = append(list, &entryCopy)
 			}
 		}
 		l.mu.RUnlock()
-		jsonOK(w, list)
+		utils.WriteJSON(w, list)
 
 	case http.MethodPost:
 		var body struct {
@@ -1133,12 +1080,12 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 			LastAiredSeason  *int    `json:"last_aired_season"`
 			LastAiredEpisode *int    `json:"last_aired_episode"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+		if body.TmdbID <= 0 || !utils.ValidMediaType(body.MediaType) {
 			http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
 			return
 		}
@@ -1155,7 +1102,7 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		entry, exists := l.db.Entries[key]
 		if !exists {
-			entry = &LibraryEntry{ID: newUUID(), AddedAt: now}
+			entry = &LibraryEntry{ID: utils.NewUUID(), AddedAt: now}
 			l.db.Entries[key] = entry
 			delete(l.db.Removed, key)
 		}
@@ -1190,8 +1137,8 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 		l.mu.Unlock()
 		l.tasteGen.Add(1) // entry upsert — taste-relevant
 
-		result.PosterPath = rewritePosterURL(result.PosterPath)
-		jsonOK(w, &result)
+		result.PosterPath = utils.RewriteTMDBImageURL(result.PosterPath)
+		utils.WriteJSON(w, &result)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1203,11 +1150,6 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 // TV episodes through TMDB, then sends them in one request so a whole-show
 // action cannot leave partially-updated local state.
 func (l *Library) handleProgressBulk(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var body struct {
 		TmdbID          int     `json:"tmdb_id"`
 		MediaType       string  `json:"media_type"`
@@ -1228,7 +1170,7 @@ func (l *Library) handleProgressBulk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+	if body.TmdbID <= 0 || !utils.ValidMediaType(body.MediaType) {
 		http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
 		return
 	}
@@ -1272,7 +1214,7 @@ func (l *Library) handleProgressBulk(w http.ResponseWriter, r *http.Request) {
 	entry := l.db.Entries[entryKeyValue]
 	if entry == nil && body.Completed {
 		entry = &LibraryEntry{
-			ID:        newUUID(),
+			ID:        utils.NewUUID(),
 			TmdbID:    body.TmdbID,
 			MediaType: body.MediaType,
 			AddedAt:   now,
@@ -1301,7 +1243,7 @@ func (l *Library) handleProgressBulk(w http.ResponseWriter, r *http.Request) {
 		progress := l.db.Progress[key]
 		if progress == nil {
 			progress = &WatchProgress{
-				ID:             newUUID(),
+				ID:             utils.NewUUID(),
 				LibraryEntryID: entry.ID,
 				TmdbID:         body.TmdbID,
 				MediaType:      body.MediaType,
@@ -1372,9 +1314,9 @@ func (l *Library) handleProgressBulk(w http.ResponseWriter, r *http.Request) {
 	l.tasteGen.Add(1)
 
 	if entryOut != nil {
-		entryOut.PosterPath = rewritePosterURL(entryOut.PosterPath)
+		entryOut.PosterPath = utils.RewriteTMDBImageURL(entryOut.PosterPath)
 	}
-	jsonOK(w, map[string]any{"entry": entryOut, "progress": progressOut})
+	utils.WriteJSON(w, map[string]any{"entry": entryOut, "progress": progressOut})
 }
 
 // ── Handler: /api/library/progress ────────────────────────────────────────────
@@ -1391,7 +1333,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mediaType := r.URL.Query().Get("media_type")
-		if !validMediaType(mediaType) {
+		if !utils.ValidMediaType(mediaType) {
 			http.Error(w, "media_type must be movie or tv", http.StatusBadRequest)
 			return
 		}
@@ -1426,7 +1368,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		}
 		l.mu.RUnlock()
 		// Return null JSON if not found (not a 404 — absence is normal)
-		jsonOK(w, pOut)
+		utils.WriteJSON(w, pOut)
 
 	case http.MethodPost:
 		var body struct {
@@ -1444,12 +1386,12 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			DurationSeconds  float64 `json:"duration_seconds"`
 			Completed        bool    `json:"completed"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+		if body.TmdbID <= 0 || !utils.ValidMediaType(body.MediaType) {
 			http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
 			return
 		}
@@ -1467,7 +1409,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		entryCreated := !exists
 		if !exists {
 			entry = &LibraryEntry{
-				ID:          newUUID(),
+				ID:          utils.NewUUID(),
 				TmdbID:      body.TmdbID,
 				MediaType:   body.MediaType,
 				Title:       body.Title,
@@ -1505,7 +1447,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 		prog, progExists := l.db.Progress[pKey]
 		if !progExists {
 			prog = &WatchProgress{
-				ID:             newUUID(),
+				ID:             utils.NewUUID(),
 				LibraryEntryID: entry.ID,
 				TmdbID:         body.TmdbID,
 				MediaType:      body.MediaType,
@@ -1563,7 +1505,7 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 			hook()
 		}
 
-		jsonOK(w, &result)
+		utils.WriteJSON(w, &result)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1593,7 +1535,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mediaType := parts[1]
-	if !validMediaType(mediaType) {
+	if !utils.ValidMediaType(mediaType) {
 		http.Error(w, "media_type must be movie or tv", http.StatusBadRequest)
 		return
 	}
@@ -1633,10 +1575,10 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var entryOut *LibraryEntry
 		if entry != nil {
 			c := *entry
-			c.PosterPath = rewritePosterURL(c.PosterPath)
+			c.PosterPath = utils.RewriteTMDBImageURL(c.PosterPath)
 			entryOut = &c
 		}
-		jsonOK(w, map[string]any{"entry": entryOut, "progress": progList, "dismissed": dismissed})
+		utils.WriteJSON(w, map[string]any{"entry": entryOut, "progress": progList, "dismissed": dismissed})
 
 	// ── DELETE /api/library/{id}/{type} ───────────────────────────────────────
 	case sub == "" && r.Method == http.MethodDelete:
@@ -1659,7 +1601,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Status Status `json:"status"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -1682,15 +1624,15 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		result := *entry
 		l.mu.Unlock()
 		l.tasteGen.Add(1) // status change — taste-relevant
-		result.PosterPath = rewritePosterURL(result.PosterPath)
-		jsonOK(w, &result)
+		result.PosterPath = utils.RewriteTMDBImageURL(result.PosterPath)
+		utils.WriteJSON(w, &result)
 
 	// ── PATCH /api/library/{id}/{type}/rating ─────────────────────────────────
 	case sub == "rating" && r.Method == http.MethodPatch:
 		var body struct {
 			Rating *float64 `json:"rating"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
@@ -1713,8 +1655,8 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		result := *entry
 		l.mu.Unlock()
 		l.tasteGen.Add(1) // rating change — taste-relevant
-		result.PosterPath = rewritePosterURL(result.PosterPath)
-		jsonOK(w, &result)
+		result.PosterPath = utils.RewriteTMDBImageURL(result.PosterPath)
+		utils.WriteJSON(w, &result)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1733,12 +1675,12 @@ func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
 			TmdbID    int    `json:"tmdb_id"`
 			MediaType string `json:"media_type"`
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		r.Body = http.MaxBytesReader(w, r.Body, utils.SmallBodyLimit)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if body.TmdbID <= 0 || !validMediaType(body.MediaType) {
+		if body.TmdbID <= 0 || !utils.ValidMediaType(body.MediaType) {
 			http.Error(w, "positive tmdb_id and media_type movie or tv required", http.StatusBadRequest)
 			return
 		}
@@ -1765,18 +1707,8 @@ func (l *Library) handleDismiss(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	jsonOK(w, l.Stats())
+func (l *Library) handleStats(w http.ResponseWriter, _ *http.Request) {
+	utils.WriteJSON(w, l.Stats())
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1794,16 +1726,3 @@ func (l *Library) handleStats(w http.ResponseWriter, r *http.Request) {
 // shared pointers under l.mu, and a synced-down URL must stay in its
 // original (TMDB-hosted) form so a future Supabase push doesn't propagate a
 // rewrite that only makes sense pointed at this machine's own backend.
-func rewritePosterURL(s string) string {
-	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
-		return "http://" + utils.LocalAddr() + "/api/img/" + rest
-	}
-	return s
-}
-
-func jsonOK(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Println("library json encode:", err)
-	}
-}

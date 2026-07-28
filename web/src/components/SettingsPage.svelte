@@ -1,7 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { settings } from "$lib/stores/settings";
-  import type { Settings } from "$lib/types/settings";
   import { Button } from "$lib/components/ui/button";
   import { Label } from "$lib/components/ui/label";
   import { Switch } from "$lib/components/ui/switch/index.js";
@@ -18,7 +16,6 @@
   import { api, type TraktStatus, type TraktDeviceCode } from "$lib/api";
   import { Textarea } from "$lib/components/ui/textarea/index.js";
   import { Player } from "$lib/player/player.svelte";
-  import type { AddonEntry } from "$lib/types/addons";
   import {
     KindProvider,
     KindTimestamps,
@@ -39,11 +36,13 @@
     Cog,
     X,
   } from "lucide-svelte";
-  import type {
-    Repo as NuvioRepo,
-    Scraper as NuvioScraper,
-  } from "$lib/types/nuvio";
   import * as m from "$lib/paraglide/messages.js";
+  import {
+    AUDIO_LANGUAGES,
+    LANGUAGES,
+    langLabel,
+    SettingsController,
+  } from "$lib/settingsController.svelte";
   import {
     LOCALES,
     languageDisplayName,
@@ -51,382 +50,19 @@
     type AppLocale,
   } from "$lib/i18n";
 
-  let draft = $state<Settings | null>(null);
-  let saved = $state(false);
-  let saveError = $state<string | null>(null);
-  let saveTimer: ReturnType<typeof setTimeout>;
-
-  // Auto-update toggle — native pref, lives outside the Go settings store so
-  // it is readable before the backend is up. Only rendered on Android / Android TV.
-  let autoUpdateEnabled = $state(true);
+  // The settings draft, addon management, Nuvio repos, the algorithm test, the
+  // speed test and the remote-access token reveal all live in
+  // $lib/settingsController.svelte.ts, shared with TvSettingsPage. What stays
+  // here is desktop-only: the Trakt device flow and the mpv.conf editor.
+  const ctl = new SettingsController();
 
   onMount(async () => {
-    await settings.load();
-    const unsub = settings.subscribe((v) => {
-      if (!draft) draft = { ...v };
-    });
-    unsub();
-    loadAddons();
-    loadNuvioRepos();
+    await ctl.init();
     loadTraktStatus();
     loadMpvConf();
-    // Read the native auto-update preference. The method is optional — absent
-    // on desktop where __coveApp is undefined.
-    const nativeVal = window.__coveApp?.getAutoUpdateEnabled?.();
-    if (typeof nativeVal === "boolean") autoUpdateEnabled = nativeVal;
   });
 
-  function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
-    if (!draft) return;
-    draft = { ...draft, [key]: value };
-  }
-
-  async function handleSave() {
-    if (!draft) return;
-    const previousLanguage = normalizeAppLocale(settings.getCurrent().uiLanguage) ?? "en";
-    const nextLanguage = normalizeAppLocale(draft.uiLanguage) ?? "en";
-    saveError = null;
-    const persisted = await settings.save(draft);
-    if (!persisted) {
-      saved = false;
-      saveError = m.language_save_error();
-      return;
-    }
-    if (nextLanguage !== previousLanguage) {
-      window.location.reload();
-      return;
-    }
-    saved = true;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => (saved = false), 2000);
-    // Pull server-generated fields back into the draft — enabling remote
-    // access makes the backend mint a token that only exists in the PUT
-    // response (masked as "***"); without this the draft keeps its stale ""
-    // and the token row never appears until a reload.
-    const unsub = settings.subscribe((v) => {
-      if (draft) {
-        draft = {
-          ...draft,
-          remoteAccessToken: v.remoteAccessToken,
-          updatedAt: v.updatedAt,
-        };
-      }
-    });
-    unsub();
-  }
-
-  function handleReset() {
-    draft = null;
-    settings.load().then(() => {
-      const unsub = settings.subscribe((v) => {
-        draft = { ...v };
-      });
-      unsub();
-    });
-  }
-
-  // ── Addon management ─────────────────────────────────────────────────────────
-  let addons = $state<AddonEntry[]>([]);
-  let addAddonUrl = $state("");
-  let addAddonError = $state<string | null>(null);
-  let addAddonLoading = $state(false);
-
-  async function loadAddons() {
-    try {
-      addons = await api.getAddons();
-    } catch {
-      addons = [];
-    }
-  }
-
-  const providerAddons = $derived(
-    addons.filter((a) => a.kind === KindProvider),
-  );
-
-  async function handleAddAddon() {
-    if (!addAddonUrl.trim()) return;
-    addAddonLoading = true;
-    addAddonError = null;
-    try {
-      const entry = await api.addAddon(addAddonUrl.trim());
-      addons = [...addons.filter((a) => a.id !== entry.id), entry];
-      addAddonUrl = "";
-    } catch (e) {
-      addAddonError = e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_addons() });
-    } finally {
-      addAddonLoading = false;
-    }
-  }
-
-  async function handleToggleAddon(addon: AddonEntry) {
-    await api.toggleAddon(addon.id, !addon.enabled, addon.url);
-    addons = addons.map((a) =>
-      a.id === addon.id && a.url === addon.url
-        ? { ...a, enabled: !a.enabled }
-        : a,
-    );
-  }
-
-  async function handleRemoveAddon(addon: AddonEntry) {
-    await api.removeAddon(addon.id, addon.url);
-    addons = addons.filter((a) => !(a.id === addon.id && a.url === addon.url));
-  }
-
-  async function handleToggleCatalog(
-    addon: AddonEntry,
-    key: string,
-    enabled: boolean,
-  ) {
-    try {
-      await api.toggleCatalog(addon.id, key, enabled, addon.url);
-      addons = addons.map((a) =>
-        (addon.url ? a.url === addon.url : a.id === addon.id)
-          ? {
-              ...a,
-              disabledCatalogs: {
-                ...(a.disabledCatalogs ?? {}),
-                [key]: !enabled,
-              },
-            }
-          : a,
-      );
-    } catch (e) {
-      console.error("handleToggleCatalog failed", e);
-    }
-  }
-
-  let refreshingAddonId = $state<string | null>(null);
-  let configureAddon = $state<AddonEntry | null>(null);
-
-  async function handleRefreshAddon(addon: AddonEntry) {
-    refreshingAddonId = addon.id;
-    try {
-      await api.refreshAddon(addon.id, addon.url);
-      await loadAddons();
-    } catch (e) {
-      console.error("handleRefreshAddon failed", e);
-    } finally {
-      refreshingAddonId = null;
-    }
-  }
-
-  // ── Nuvio plugin repos ───────────────────────────────────────────────────────
-  let nuvioRepos = $state<NuvioRepo[]>([]);
-  let addRepoUrl = $state("");
-  let addRepoError = $state<string | null>(null);
-  let addRepoLoading = $state(false);
-  let refreshingRepoId = $state<string | null>(null);
-  // Which (repoId, scraperId) pair is showing its "this runs third-party JS"
-  // confirmation instead of the plain switch — cleared on confirm or cancel.
-  let pendingConfirm = $state<{ repoId: string; scraperId: string } | null>(
-    null,
-  );
-
-  async function loadNuvioRepos() {
-    try {
-      nuvioRepos = await api.getNuvioRepos();
-    } catch {
-      nuvioRepos = [];
-    }
-  }
-
-  // Nuvio scraper streams carry AddonName = "Nuvio: <scraper name>" (see
-  // internal/nuvio/manager.go) — an entirely separate namespace from Stremio
-  // addon manifest names, so they need their own dropdown entries in that
-  // exact string form for the preferred-provider match (streamSelection.ts,
-  // StreamsList.svelte) to ever hit. Only enabled repos/scrapers are listed,
-  // same gating as what actually produces streams. Deduped in case the same
-  // scraper name appears in more than one enabled repo.
-  const nuvioProviderOptions = $derived(
-    Array.from(
-      new Set(
-        nuvioRepos
-          .filter((r) => r.enabled)
-          .flatMap((r) =>
-            r.scrapers.filter((s) => s.enabled).map((s) => `Nuvio: ${s.name}`),
-          ),
-      ),
-    ),
-  );
-
-  async function handleAddRepo() {
-    if (!addRepoUrl.trim()) return;
-    addRepoLoading = true;
-    addRepoError = null;
-    try {
-      const repo = await api.addNuvioRepo(addRepoUrl.trim());
-      nuvioRepos = [...nuvioRepos.filter((r) => r.id !== repo.id), repo];
-      addRepoUrl = "";
-    } catch (e) {
-      addRepoError =
-        e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_plugins() });
-    } finally {
-      addRepoLoading = false;
-    }
-  }
-
-  async function handleToggleRepo(repo: NuvioRepo) {
-    await api.setNuvioRepoEnabled(repo.id, !repo.enabled);
-    nuvioRepos = nuvioRepos.map((r) =>
-      r.id === repo.id ? { ...r, enabled: !r.enabled } : r,
-    );
-  }
-
-  async function handleRemoveRepo(repo: NuvioRepo) {
-    await api.removeNuvioRepo(repo.id);
-    nuvioRepos = nuvioRepos.filter((r) => r.id !== repo.id);
-  }
-
-  async function handleRefreshRepo(repo: NuvioRepo) {
-    refreshingRepoId = repo.id;
-    try {
-      await api.refreshNuvioRepo(repo.id);
-      nuvioRepos = nuvioRepos.map((r) =>
-        r.id === repo.id ? { ...r, fetchedAt: new Date().toISOString() } : r,
-      );
-      await loadNuvioRepos();
-    } finally {
-      refreshingRepoId = null;
-    }
-  }
-
-  function requestEnableScraper(repo: NuvioRepo, scraper: NuvioScraper) {
-    if (scraper.enabled) {
-      handleSetScraperEnabled(repo, scraper, false);
-      return;
-    }
-    pendingConfirm = { repoId: repo.id, scraperId: scraper.id };
-  }
-
-  async function handleSetScraperEnabled(
-    repo: NuvioRepo,
-    scraper: NuvioScraper,
-    enabled: boolean,
-  ) {
-    pendingConfirm = null;
-    await api.setNuvioScraperEnabled(repo.id, scraper.id, enabled);
-    nuvioRepos = nuvioRepos.map((r) =>
-      r.id === repo.id
-        ? {
-            ...r,
-            scrapers: r.scrapers.map((s) =>
-              s.id === scraper.id ? { ...s, enabled } : s,
-            ),
-          }
-        : r,
-    );
-  }
-
-  // ── Discovery algorithm ───────────────────────────────────────────────────────
-  let testingAlgorithm = $state(false);
-  let algorithmTestResult = $state<{ ok: boolean; error?: string } | null>(
-    null,
-  );
-
-  async function handleTestAlgorithm() {
-    if (!draft?.customAlgorithmUrl.trim()) return;
-    testingAlgorithm = true;
-    algorithmTestResult = null;
-    try {
-      algorithmTestResult = await api.testDiscoveryAlgorithm(
-        draft.customAlgorithmUrl.trim(),
-      );
-    } catch (e) {
-      algorithmTestResult = {
-        ok: false,
-        error: e instanceof Error ? e.message : m.common_error(),
-      };
-    } finally {
-      testingAlgorithm = false;
-    }
-  }
-
-  const LANGUAGES = [
-    { value: "en" },
-    { value: "es" },
-    { value: "fr" },
-    { value: "de" },
-    { value: "pt" },
-    { value: "it" },
-    { value: "ja" },
-    { value: "ko" },
-    { value: "zh" },
-    { value: "ar" },
-    { value: "ru" },
-  ];
-
-  // Audio-only: "original" plays whatever track matches the title's TMDB
-  // original_language, instead of a fixed language — see Player.svelte's
-  // audio auto-select effect. Subtitles have no equivalent concept (TMDB
-  // doesn't publish an "original subtitle language").
-  const AUDIO_LANGUAGES = [
-    { value: "original" },
-    ...LANGUAGES,
-  ];
-
-  function langLabel(value: string) {
-    if (value === "original") return m.common_original();
-    return languageDisplayName(value);
-  }
-
-  let testingSpeed = $state(false);
-  let speedTestError = $state<string | null>(null);
-
-  // ── Remote access token reveal ────────────────────────────────────────────────
-  // The backend returns "***" for the token when set; we only fetch the real
-  // value when the user explicitly clicks Show or Copy.
-  let revealedToken = $state<string | null>(null);
-  let tokenVisible = $state(false);
-  let revealingToken = $state(false);
-  let tokenCopied = $state(false);
-  let tokenCopyTimer: ReturnType<typeof setTimeout>;
-
-  async function handleRevealToken(): Promise<void> {
-    if (revealedToken !== null) {
-      tokenVisible = !tokenVisible;
-      return;
-    }
-    revealingToken = true;
-    try {
-      revealedToken = await api.revealRemoteAccessToken();
-      tokenVisible = true;
-    } catch (e) {
-      console.error("revealRemoteAccessToken:", e);
-    } finally {
-      revealingToken = false;
-    }
-  }
-
-  async function handleCopyToken(): Promise<void> {
-    let token = revealedToken;
-    if (!token) {
-      revealingToken = true;
-      try {
-        token = await api.revealRemoteAccessToken();
-        revealedToken = token;
-        tokenVisible = true;
-      } catch (e) {
-        console.error("revealRemoteAccessToken:", e);
-        return;
-      } finally {
-        revealingToken = false;
-      }
-    }
-    await navigator.clipboard.writeText(token);
-    tokenCopied = true;
-    clearTimeout(tokenCopyTimer);
-    tokenCopyTimer = setTimeout(() => (tokenCopied = false), 2000);
-  }
-
-  // Clear the revealed token whenever settings are reloaded (e.g. the "***"
-  // sentinel from a fresh getSettings() should not clobber a local reveal).
-  $effect(() => {
-    if (draft?.remoteAccessToken === "") {
-      // Token was cleared server-side (regenerated or disabled); forget local reveal.
-      revealedToken = null;
-      tokenVisible = false;
-    }
-  });
+  $effect(() => ctl.clearRevealOnTokenReset());
 
   // ── Trakt.tv ─────────────────────────────────────────────────────────────────
   // undefined = still loading, null = not configured (503), object = loaded.
@@ -558,26 +194,6 @@
 
   onDestroy(() => clearTraktPoll());
 
-  async function runSpeedTest() {
-    if (!draft) return;
-    testingSpeed = true;
-    speedTestError = null;
-    try {
-      const start = performance.now();
-      const res = await fetch(api.speedtestUrl(), {
-        cache: "no-store",
-      });
-      const blob = await res.blob();
-      const seconds = (performance.now() - start) / 1000;
-      const mbps = (blob.size * 8) / 1_000_000 / seconds;
-      patch("measuredBandwidthMbps", Math.round(mbps * 10) / 10);
-    } catch {
-      speedTestError = "Speed test failed — check your connection.";
-    } finally {
-      testingSpeed = false;
-    }
-  }
-
   // ── Advanced / mpv.conf ──────────────────────────────────────────────────────
   // Draft and saved state for the device-global mpv.conf file.
   let mpvConfDraft = $state("");
@@ -626,15 +242,15 @@
     <div class="flex items-center justify-between">
       <h1 class="text-2xl font-semibold tracking-tight">{m.settings_title()}</h1>
       <div class="flex gap-2">
-        <Button variant="outline" onclick={handleReset}>{m.common_reset()}</Button>
-        <Button onclick={handleSave}>{saved ? `${m.common_saved()} ✓` : m.common_save()}</Button>
+        <Button variant="outline" onclick={ctl.handleReset}>{m.common_reset()}</Button>
+        <Button onclick={ctl.handleSave}>{ctl.saved ? `${m.common_saved()} ✓` : m.common_save()}</Button>
       </div>
     </div>
-    {#if saveError}
-      <p role="alert" class="text-sm text-red-500">{saveError}</p>
+    {#if ctl.saveError}
+      <p role="alert" class="text-sm text-red-500">{ctl.saveError}</p>
     {/if}
 
-    {#if draft}
+    {#if ctl.draft}
       <Tabs.Root value="playback">
         <!-- Scroll wrapper: the triggers can't shrink (nowrap), so on narrow
              windows the list overflows sideways instead of spilling past its
@@ -665,8 +281,8 @@
             </div>
             <Switch
               id="open-muted"
-              checked={draft.openOnMute}
-              onCheckedChange={(v) => patch("openOnMute", v)}
+              checked={ctl.draft.openOnMute}
+              onCheckedChange={(v) => ctl.patch("openOnMute", v)}
             />
           </div>
           <Separator />
@@ -679,17 +295,17 @@
             <div class="flex items-center gap-3">
               <Slider
                 type="multiple"
-                value={[draft.defaultVolume * 100]}
+                value={[ctl.draft.defaultVolume * 100]}
                 min={0}
                 max={100}
                 step={1}
                 class="w-32"
-                onValueChange={([v]) => patch("defaultVolume", v / 100)}
+                onValueChange={([v]) => ctl.patch("defaultVolume", v / 100)}
               />
               <span
                 class="w-9 text-right text-sm text-muted-foreground tabular-nums"
               >
-                {Math.round(draft.defaultVolume * 100)}%
+                {Math.round(ctl.draft.defaultVolume * 100)}%
               </span>
             </div>
           </div>
@@ -706,8 +322,8 @@
             </div>
             <Switch
               id="autoplay"
-              checked={draft.autoPlay}
-              onCheckedChange={(v) => patch("autoPlay", v)}
+              checked={ctl.draft.autoPlay}
+              onCheckedChange={(v) => ctl.patch("autoPlay", v)}
             />
           </div>
           <Separator />
@@ -723,8 +339,8 @@
             </div>
             <Switch
               id="remember-pos"
-              checked={draft.rememberPosition}
-              onCheckedChange={(v) => patch("rememberPosition", v)}
+              checked={ctl.draft.rememberPosition}
+              onCheckedChange={(v) => ctl.patch("rememberPosition", v)}
             />
           </div>
           <Separator />
@@ -741,8 +357,8 @@
                 >
                 <Switch
                   id="skip-intro"
-                  checked={draft.autoSkipIntro}
-                  onCheckedChange={(v) => patch("autoSkipIntro", v)}
+                  checked={ctl.draft.autoSkipIntro}
+                  onCheckedChange={(v) => ctl.patch("autoSkipIntro", v)}
                 />
               </div>
               <div class="flex items-center justify-between">
@@ -751,8 +367,8 @@
                 >
                 <Switch
                   id="skip-recap"
-                  checked={draft.autoSkipRecap}
-                  onCheckedChange={(v) => patch("autoSkipRecap", v)}
+                  checked={ctl.draft.autoSkipRecap}
+                  onCheckedChange={(v) => ctl.patch("autoSkipRecap", v)}
                 />
               </div>
               <div class="flex items-center justify-between">
@@ -761,8 +377,8 @@
                 >
                 <Switch
                   id="skip-credits"
-                  checked={draft.autoSkipCredits}
-                  onCheckedChange={(v) => patch("autoSkipCredits", v)}
+                  checked={ctl.draft.autoSkipCredits}
+                  onCheckedChange={(v) => ctl.patch("autoSkipCredits", v)}
                 />
               </div>
               <div class="flex items-center justify-between">
@@ -771,8 +387,8 @@
                 >
                 <Switch
                   id="skip-preview"
-                  checked={draft.autoSkipPreview}
-                  onCheckedChange={(v) => patch("autoSkipPreview", v)}
+                  checked={ctl.draft.autoSkipPreview}
+                  onCheckedChange={(v) => ctl.patch("autoSkipPreview", v)}
                 />
               </div>
             </div>
@@ -792,8 +408,8 @@
             </div>
             <Switch
               id="auto-select-stream"
-              checked={draft.autoSelectStream}
-              onCheckedChange={(v) => patch("autoSelectStream", v)}
+              checked={ctl.draft.autoSelectStream}
+              onCheckedChange={(v) => ctl.patch("autoSelectStream", v)}
             />
           </div>
           <Separator />
@@ -809,8 +425,8 @@
             </div>
             <Switch
               id="prefetch-streams"
-              checked={draft.prefetchStreams}
-              onCheckedChange={(v) => patch("prefetchStreams", v)}
+              checked={ctl.draft.prefetchStreams}
+              onCheckedChange={(v) => ctl.patch("prefetchStreams", v)}
             />
           </div>
           <Separator />
@@ -826,8 +442,8 @@
             </div>
             <Switch
               id="prefetch-next-episode"
-              checked={draft.prefetchNextEpisode}
-              onCheckedChange={(v) => patch("prefetchNextEpisode", v)}
+              checked={ctl.draft.prefetchNextEpisode}
+              onCheckedChange={(v) => ctl.patch("prefetchNextEpisode", v)}
             />
           </div>
           <Separator />
@@ -843,8 +459,8 @@
             </div>
             <Switch
               id="allow-uploading"
-              checked={draft.allowUploading}
-              onCheckedChange={(v) => patch("allowUploading", v)}
+              checked={ctl.draft.allowUploading}
+              onCheckedChange={(v) => ctl.patch("allowUploading", v)}
             />
           </div>
           <Separator />
@@ -860,8 +476,8 @@
             </div>
             <Switch
               id="probe-streams"
-              checked={draft.probeStreams}
-              onCheckedChange={(v) => patch("probeStreams", v)}
+              checked={ctl.draft.probeStreams}
+              onCheckedChange={(v) => ctl.patch("probeStreams", v)}
             />
           </div>
           <Separator />
@@ -877,8 +493,8 @@
             </div>
             <Switch
               id="allow-lan-sources"
-              checked={draft.allowLanStreamSources}
-              onCheckedChange={(v) => patch("allowLanStreamSources", v)}
+              checked={ctl.draft.allowLanStreamSources}
+              onCheckedChange={(v) => ctl.patch("allowLanStreamSources", v)}
             />
           </div>
           <Separator />
@@ -896,17 +512,17 @@
               </div>
               <Switch
                 id="remote-access"
-                checked={draft.remoteAccessEnabled}
-                onCheckedChange={(v) => patch("remoteAccessEnabled", v)}
+                checked={ctl.draft.remoteAccessEnabled}
+                onCheckedChange={(v) => ctl.patch("remoteAccessEnabled", v)}
               />
             </div>
 
-            {#if draft.remoteAccessEnabled}
+            {#if ctl.draft.remoteAccessEnabled}
               <div class="rounded-lg border border-border p-3 space-y-2">
                 <Label class="text-xs font-medium text-muted-foreground"
                   >{m.settings_access_token()}</Label
                 >
-                {#if draft.remoteAccessToken === ""}
+                {#if ctl.draft.remoteAccessToken === ""}
                   <p class="text-xs text-muted-foreground">
                     {m.settings_no_token()}
                   </p>
@@ -915,21 +531,21 @@
                     <code
                       class="flex-1 truncate rounded bg-muted px-2 py-1 text-xs font-mono"
                     >
-                      {tokenVisible && revealedToken
-                        ? revealedToken
+                      {ctl.tokenVisible && ctl.revealedToken
+                        ? ctl.revealedToken
                         : "•".repeat(32)}
                     </code>
                     <Button
                       variant="outline"
                       size="icon"
                       class="shrink-0"
-                      onclick={handleRevealToken}
-                      disabled={revealingToken}
-                      title={tokenVisible
+                      onclick={ctl.handleRevealToken}
+                      disabled={ctl.revealingToken}
+                      title={ctl.tokenVisible
                         ? m.settings_hide_token()
                         : m.settings_show_token()}
                     >
-                      {#if tokenVisible}
+                      {#if ctl.tokenVisible}
                         <EyeOff class="size-4" />
                       {:else}
                         <Eye class="size-4" />
@@ -939,11 +555,11 @@
                       variant="outline"
                       size="icon"
                       class="shrink-0"
-                      onclick={handleCopyToken}
-                      disabled={revealingToken}
+                      onclick={ctl.handleCopyToken}
+                      disabled={ctl.revealingToken}
                       title={m.settings_copy_token()}
                     >
-                      {#if tokenCopied}
+                      {#if ctl.tokenCopied}
                         <CheckIcon class="size-4 text-green-500" />
                       {:else}
                         <Copy class="size-4" />
@@ -961,14 +577,14 @@
               <Label class="text-sm font-medium">{m.settings_selection_strategy()}</Label>
               <p class="text-xs text-muted-foreground">
                 {STREAM_SELECTION_MODES.find(
-                  (m) => m.value === draft.streamSelectionMode,
+                  (m) => m.value === ctl.draft.streamSelectionMode,
                 )?.description ?? ""}
               </p>
             </div>
-            <Select.Root type="single" bind:value={draft.streamSelectionMode}>
+            <Select.Root type="single" bind:value={ctl.draft.streamSelectionMode}>
               <Select.Trigger class="w-56 shrink-0">
                 {STREAM_SELECTION_MODES.find(
-                  (m) => m.value === draft.streamSelectionMode,
+                  (m) => m.value === ctl.draft.streamSelectionMode,
                 )?.label ?? m.common_choose()}
               </Select.Trigger>
               <Select.Content>
@@ -984,15 +600,15 @@
             <div class="pr-4">
               <Label class="text-sm font-medium">{m.settings_source_preference()}</Label>
               <p class="text-xs text-muted-foreground">
-                {draft.sourcePreference
+                {ctl.draft.sourcePreference
                   ? m.settings_source_boost_description()
                   : m.settings_source_neutral_description()}
               </p>
             </div>
-            <Select.Root type="single" bind:value={draft.sourcePreference}>
+            <Select.Root type="single" bind:value={ctl.draft.sourcePreference}>
               <Select.Trigger class="w-56 shrink-0">
                 {SOURCE_PREFERENCES.find(
-                  (p) => p.value === draft.sourcePreference,
+                  (p) => p.value === ctl.draft.sourcePreference,
                 )?.label ?? m.common_no_preference()}
               </Select.Trigger>
               <Select.Content>
@@ -1008,7 +624,7 @@
             <div class="pr-4">
               <Label class="text-sm font-medium">{m.settings_preferred_provider()}</Label>
               <p class="text-xs text-muted-foreground">
-                {#if providerAddons.length === 0 && nuvioProviderOptions.length === 0}
+                {#if ctl.providerAddons.length === 0 && ctl.nuvioProviderOptions.length === 0}
                   {m.settings_provider_missing()}
                 {:else}
                   {m.settings_provider_description()}
@@ -1017,21 +633,21 @@
             </div>
             <Select.Root
               type="single"
-              bind:value={draft.defaultProvider}
-              disabled={providerAddons.length === 0 &&
-                nuvioProviderOptions.length === 0}
+              bind:value={ctl.draft.defaultProvider}
+              disabled={ctl.providerAddons.length === 0 &&
+                ctl.nuvioProviderOptions.length === 0}
             >
               <Select.Trigger class="w-56 shrink-0">
-                {draft.defaultProvider || m.common_no_preference()}
+                {ctl.draft.defaultProvider || m.common_no_preference()}
               </Select.Trigger>
               <Select.Content>
                 <Select.Item value="">{m.common_no_preference()}</Select.Item>
-                {#each providerAddons as a (a.url || a.id)}
+                {#each ctl.providerAddons as a (a.url || a.id)}
                   <Select.Item value={a.manifest.name}
                     >{a.manifest.name}</Select.Item
                   >
                 {/each}
-                {#each nuvioProviderOptions as name (name)}
+                {#each ctl.nuvioProviderOptions as name (name)}
                   <Select.Item value={name}>{name}</Select.Item>
                 {/each}
               </Select.Content>
@@ -1042,10 +658,10 @@
           <div class="flex items-center justify-between py-3">
             <div class="pr-4">
               <Label class="text-sm font-medium">{m.settings_connection_speed()}</Label>
-              {#if draft.measuredBandwidthMbps > 0}
+              {#if ctl.draft.measuredBandwidthMbps > 0}
                 <p class="text-xs text-muted-foreground">
                   {m.settings_speed_measured({
-                    speed: draft.measuredBandwidthMbps,
+                    speed: ctl.draft.measuredBandwidthMbps,
                   })}
                 </p>
               {:else}
@@ -1053,18 +669,18 @@
                   {m.settings_speed_unmeasured()}
                 </p>
               {/if}
-              {#if speedTestError}
-                <p class="text-xs text-red-500">{speedTestError}</p>
+              {#if ctl.speedTestError}
+                <p class="text-xs text-red-500">{ctl.speedTestError}</p>
               {/if}
             </div>
             <Button
               variant="outline"
               size="sm"
               class="shrink-0"
-              onclick={runSpeedTest}
-              disabled={testingSpeed}
+              onclick={ctl.runSpeedTest}
+              disabled={ctl.testingSpeed}
             >
-              {testingSpeed
+              {ctl.testingSpeed
                 ? m.settings_speed_testing()
                 : m.settings_speed_test()}
             </Button>
@@ -1084,8 +700,8 @@
             </div>
             <Switch
               id="subs-enabled"
-              checked={draft.subtitlesEnabled}
-              onCheckedChange={(v) => patch("subtitlesEnabled", v)}
+              checked={ctl.draft.subtitlesEnabled}
+              onCheckedChange={(v) => ctl.patch("subtitlesEnabled", v)}
             />
           </div>
           <Separator />
@@ -1099,9 +715,9 @@
                 {m.settings_subtitle_language_description()}
               </p>
             </div>
-            <Select.Root type="single" bind:value={draft.defaultSubtitleLang}>
+            <Select.Root type="single" bind:value={ctl.draft.defaultSubtitleLang}>
               <Select.Trigger class="w-36"
-                >{langLabel(draft.defaultSubtitleLang)}</Select.Trigger
+                >{langLabel(ctl.draft.defaultSubtitleLang)}</Select.Trigger
               >
               <Select.Content>
                 {#each LANGUAGES as l}
@@ -1122,17 +738,17 @@
             <div class="flex items-center gap-3">
               <Slider
                 type="multiple"
-                value={[draft.subtitleSize]}
+                value={[ctl.draft.subtitleSize]}
                 min={50}
                 max={200}
                 step={10}
                 class="w-32"
-                onValueChange={([v]) => patch("subtitleSize", v)}
+                onValueChange={([v]) => ctl.patch("subtitleSize", v)}
               />
               <span
                 class="w-9 text-right text-sm text-muted-foreground tabular-nums"
               >
-                {Math.round(draft.subtitleSize)}%
+                {Math.round(ctl.draft.subtitleSize)}%
               </span>
             </div>
           </div>
@@ -1148,17 +764,17 @@
             <div class="flex items-center gap-3">
               <Slider
                 type="multiple"
-                value={[draft.subtitlePosition]}
+                value={[ctl.draft.subtitlePosition]}
                 min={2}
                 max={90}
                 step={1}
                 class="w-32"
-                onValueChange={([v]) => patch("subtitlePosition", v)}
+                onValueChange={([v]) => ctl.patch("subtitlePosition", v)}
               />
               <span
                 class="w-9 text-right text-sm text-muted-foreground tabular-nums"
               >
-                {Math.round(draft.subtitlePosition)}%
+                {Math.round(ctl.draft.subtitlePosition)}%
               </span>
             </div>
           </div>
@@ -1175,8 +791,8 @@
             </div>
             <Switch
               id="subs-background"
-              checked={draft.subtitleBackground}
-              onCheckedChange={(v) => patch("subtitleBackground", v)}
+              checked={ctl.draft.subtitleBackground}
+              onCheckedChange={(v) => ctl.patch("subtitleBackground", v)}
             />
           </div>
           <Separator />
@@ -1189,9 +805,9 @@
                 {m.settings_audio_language_description()}
               </p>
             </div>
-            <Select.Root type="single" bind:value={draft.defaultAudioLang}>
+            <Select.Root type="single" bind:value={ctl.draft.defaultAudioLang}>
               <Select.Trigger class="w-36"
-                >{langLabel(draft.defaultAudioLang)}</Select.Trigger
+                >{langLabel(ctl.draft.defaultAudioLang)}</Select.Trigger
               >
               <Select.Content>
                 {#each AUDIO_LANGUAGES as l}
@@ -1211,11 +827,11 @@
             </div>
             <Select.Root
               type="single"
-              value={normalizeAppLocale(draft.uiLanguage) ?? "en"}
-              onValueChange={(value) => patch("uiLanguage", value as AppLocale)}
+              value={normalizeAppLocale(ctl.draft.uiLanguage) ?? "en"}
+              onValueChange={(value) => ctl.patch("uiLanguage", value as AppLocale)}
             >
               <Select.Trigger class="w-44 shrink-0">
-                {LOCALES.find((locale) => locale.appLocale === (normalizeAppLocale(draft.uiLanguage) ?? "en"))?.nativeName}
+                {LOCALES.find((locale) => locale.appLocale === (normalizeAppLocale(ctl.draft.uiLanguage) ?? "en"))?.nativeName}
               </Select.Trigger>
               <Select.Content>
                 {#each LOCALES as locale (locale.appLocale)}
@@ -1237,8 +853,8 @@
             </div>
             <Switch
               id="stream-details"
-              checked={draft.showStreamDetails}
-              onCheckedChange={(v) => patch("showStreamDetails", v)}
+              checked={ctl.draft.showStreamDetails}
+              onCheckedChange={(v) => ctl.patch("showStreamDetails", v)}
             />
           </div>
           <div class="flex items-center justify-between py-3">
@@ -1252,8 +868,8 @@
             </div>
             <Switch
               id="stream-details"
-              checked={draft.hideSpoilers}
-              onCheckedChange={(v) => patch("hideSpoilers", v)}
+              checked={ctl.draft.hideSpoilers}
+              onCheckedChange={(v) => ctl.patch("hideSpoilers", v)}
             />
           </div>
 
@@ -1264,14 +880,14 @@
               <Label class="text-sm font-medium">{m.settings_discovery_algorithm()}</Label>
               <p class="text-xs text-muted-foreground">
                 {DISCOVERY_ALGORITHMS.find(
-                  (a) => a.value === draft.discoveryAlgorithm,
+                  (a) => a.value === ctl.draft.discoveryAlgorithm,
                 )?.description ?? ""}
               </p>
             </div>
-            <Select.Root type="single" bind:value={draft.discoveryAlgorithm}>
+            <Select.Root type="single" bind:value={ctl.draft.discoveryAlgorithm}>
               <Select.Trigger class="w-56 shrink-0">
                 {DISCOVERY_ALGORITHMS.find(
-                  (a) => a.value === draft.discoveryAlgorithm,
+                  (a) => a.value === ctl.draft.discoveryAlgorithm,
                 )?.label ?? m.common_choose()}
               </Select.Trigger>
               <Select.Content>
@@ -1282,7 +898,7 @@
             </Select.Root>
           </div>
 
-          {#if draft.discoveryAlgorithm === "custom"}
+          {#if ctl.draft.discoveryAlgorithm === "custom"}
             <div class="rounded-lg border border-border p-4">
               <Label class="mb-2 block text-sm font-medium"
                 >{m.settings_custom_algorithm_url()}</Label
@@ -1294,28 +910,28 @@
                 <Input
                   type="url"
                   placeholder="https://..."
-                  bind:value={draft.customAlgorithmUrl}
+                  bind:value={ctl.draft.customAlgorithmUrl}
                   class="flex-1"
                 />
                 <Button
                   variant="outline"
-                  onclick={handleTestAlgorithm}
-                  disabled={testingAlgorithm ||
-                    !draft.customAlgorithmUrl.trim()}
+                  onclick={ctl.handleTestAlgorithm}
+                  disabled={ctl.testingAlgorithm ||
+                    !ctl.draft.customAlgorithmUrl.trim()}
                   size="sm"
                 >
-                  {testingAlgorithm ? m.common_testing() : m.common_test_connection()}
+                  {ctl.testingAlgorithm ? m.common_testing() : m.common_test_connection()}
                 </Button>
               </div>
-              {#if algorithmTestResult}
+              {#if ctl.algorithmTestResult}
                 <p
-                  class="mt-2 text-xs {algorithmTestResult.ok
+                  class="mt-2 text-xs {ctl.algorithmTestResult.ok
                     ? 'text-green-500'
                     : 'text-red-500'}"
                 >
-                  {algorithmTestResult.ok
+                  {ctl.algorithmTestResult.ok
                     ? m.common_connected_success()
-                    : m.common_failed_message({ error: algorithmTestResult.error })}
+                    : m.common_failed_message({ error: ctl.algorithmTestResult.error })}
                 </p>
               {/if}
             </div>
@@ -1334,9 +950,9 @@
               </div>
               <Switch
                 id="auto-update"
-                checked={autoUpdateEnabled}
+                checked={ctl.autoUpdateEnabled}
                 onCheckedChange={(v) => {
-                  autoUpdateEnabled = v;
+                  ctl.autoUpdateEnabled = v;
                   window.__coveApp?.setAutoUpdateEnabled?.(v);
                 }}
               />
@@ -1377,27 +993,27 @@
               <Input
                 type="url"
                 placeholder="https://..."
-                bind:value={addAddonUrl}
+                bind:value={ctl.addAddonUrl}
                 class="flex-1"
-                onkeydown={(e) => e.key === "Enter" && handleAddAddon()}
+                onkeydown={(e) => e.key === "Enter" && ctl.handleAddAddon()}
               />
               <Button
-                onclick={handleAddAddon}
-                disabled={addAddonLoading || !addAddonUrl.trim()}
+                onclick={ctl.handleAddAddon}
+                disabled={ctl.addAddonLoading || !ctl.addAddonUrl.trim()}
                 size="sm"
               >
                 <Plus class="mr-1 size-4" />
-                {addAddonLoading ? m.common_adding() : m.common_add()}
+                {ctl.addAddonLoading ? m.common_adding() : m.common_add()}
               </Button>
             </div>
-            {#if addAddonError}
-              <p class="mt-2 text-xs text-red-500">{addAddonError}</p>
+            {#if ctl.addAddonError}
+              <p class="mt-2 text-xs text-red-500">{ctl.addAddonError}</p>
             {/if}
           </div>
 
           <!-- Addon list -->
           <div class="space-y-2">
-            {#each addons as addon (addon.url || addon.id)}
+            {#each ctl.addons as addon (addon.url || addon.id)}
               <div class="rounded-lg border border-border bg-secondary/30 p-3">
                 <div class="flex items-center gap-3">
                   <div class="min-w-0 flex-1">
@@ -1440,7 +1056,7 @@
                   <!-- Toggle -->
                   <Switch
                     checked={addon.enabled}
-                    onCheckedChange={() => handleToggleAddon(addon)}
+                    onCheckedChange={() => ctl.handleToggleAddon(addon)}
                     class="shrink-0"
                   />
 
@@ -1451,7 +1067,7 @@
                         variant="ghost"
                         size="icon"
                         class="shrink-0 text-muted-foreground"
-                        onclick={() => (configureAddon = addon)}
+                        onclick={() => (ctl.configureAddon = addon)}
                         title={m.common_configure()}
                       >
                         <Cog class="size-4" />
@@ -1461,19 +1077,19 @@
                       variant="ghost"
                       size="icon"
                       class="shrink-0 text-muted-foreground"
-                      onclick={() => handleRefreshAddon(addon)}
-                      disabled={refreshingAddonId === addon.id}
+                      onclick={() => ctl.handleRefreshAddon(addon)}
+                      disabled={ctl.refreshingAddonId === addon.id}
                       title={m.common_refresh()}
                     >
                       <RefreshCw
-                        class={`size-4 ${refreshingAddonId === addon.id ? "animate-spin" : ""}`}
+                        class={`size-4 ${ctl.refreshingAddonId === addon.id ? "animate-spin" : ""}`}
                       />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       class="shrink-0 text-muted-foreground hover:text-destructive"
-                      onclick={() => handleRemoveAddon(addon)}
+                      onclick={() => ctl.handleRemoveAddon(addon)}
                       title={m.common_remove()}
                     >
                       <Trash2 class="size-4" />
@@ -1481,7 +1097,7 @@
                   {/if}
                 </div>
 
-                <!-- Per-catalog toggles (only for addons that declare catalogs) -->
+                <!-- Per-catalog toggles (only for ctl.addons that declare catalogs) -->
                 {#if addon.manifest.catalogs?.length}
                   <div class="mt-2 space-y-1 border-t border-border pt-2">
                     {#each addon.manifest.catalogs as cat (`${cat.type}/${cat.id}`)}
@@ -1497,7 +1113,7 @@
                           checked={!addon.disabledCatalogs?.[key]}
                           disabled={!addon.enabled}
                           onCheckedChange={(v) =>
-                            handleToggleCatalog(addon, key, v)}
+                            ctl.handleToggleCatalog(addon, key, v)}
                           class="shrink-0"
                         />
                       </div>
@@ -1534,27 +1150,27 @@
               <Input
                 type="url"
                 placeholder="https://github.com/owner/repo"
-                bind:value={addRepoUrl}
+                bind:value={ctl.addRepoUrl}
                 class="flex-1"
-                onkeydown={(e) => e.key === "Enter" && handleAddRepo()}
+                onkeydown={(e) => e.key === "Enter" && ctl.handleAddRepo()}
               />
               <Button
-                onclick={handleAddRepo}
-                disabled={addRepoLoading || !addRepoUrl.trim()}
+                onclick={ctl.handleAddRepo}
+                disabled={ctl.addRepoLoading || !ctl.addRepoUrl.trim()}
                 size="sm"
               >
                 <Plus class="mr-1 size-4" />
-                {addRepoLoading ? m.common_adding() : m.common_add()}
+                {ctl.addRepoLoading ? m.common_adding() : m.common_add()}
               </Button>
             </div>
-            {#if addRepoError}
-              <p class="mt-2 text-xs text-red-500">{addRepoError}</p>
+            {#if ctl.addRepoError}
+              <p class="mt-2 text-xs text-red-500">{ctl.addRepoError}</p>
             {/if}
           </div>
 
           <!-- Repo list -->
           <div class="space-y-3">
-            {#each nuvioRepos as repo (repo.id)}
+            {#each ctl.nuvioRepos as repo (repo.id)}
               <div class="rounded-lg border border-border bg-secondary/30 p-3">
                 <div class="flex items-center gap-3">
                   <div class="min-w-0 flex-1">
@@ -1583,18 +1199,18 @@
                     variant="ghost"
                     size="icon"
                     class="shrink-0 text-muted-foreground"
-                    onclick={() => handleRefreshRepo(repo)}
-                    disabled={refreshingRepoId === repo.id}
+                    onclick={() => ctl.handleRefreshRepo(repo)}
+                    disabled={ctl.refreshingRepoId === repo.id}
                     title={m.settings_refresh_manifest()}
                   >
                     <RefreshCw
-                      class={`size-4 ${refreshingRepoId === repo.id ? "animate-spin" : ""}`}
+                      class={`size-4 ${ctl.refreshingRepoId === repo.id ? "animate-spin" : ""}`}
                     />
                   </Button>
 
                   <Switch
                     checked={repo.enabled}
-                    onCheckedChange={() => handleToggleRepo(repo)}
+                    onCheckedChange={() => ctl.handleToggleRepo(repo)}
                     class="shrink-0"
                     title={m.settings_enable_repository()}
                   />
@@ -1603,7 +1219,7 @@
                     variant="ghost"
                     size="icon"
                     class="shrink-0 text-muted-foreground hover:text-destructive"
-                    onclick={() => handleRemoveRepo(repo)}
+                    onclick={() => ctl.handleRemoveRepo(repo)}
                     title={m.common_remove()}
                   >
                     <Trash2 class="size-4" />
@@ -1626,7 +1242,7 @@
                         {/if}
                       </div>
 
-                      {#if pendingConfirm?.repoId === repo.id && pendingConfirm?.scraperId === scraper.id}
+                      {#if ctl.pendingConfirm?.repoId === repo.id && ctl.pendingConfirm?.scraperId === scraper.id}
                         <div class="flex shrink-0 items-center gap-2">
                           <span class="text-xs text-amber-400"
                             >{m.settings_run_third_party({
@@ -1636,13 +1252,13 @@
                           <Button
                             size="sm"
                             variant="outline"
-                            onclick={() => (pendingConfirm = null)}
+                            onclick={() => (ctl.pendingConfirm = null)}
                             >{m.common_cancel()}</Button
                           >
                           <Button
                             size="sm"
                             onclick={() =>
-                              handleSetScraperEnabled(repo, scraper, true)}
+                              ctl.handleSetScraperEnabled(repo, scraper, true)}
                             >{m.common_enable()}</Button
                           >
                         </div>
@@ -1650,7 +1266,7 @@
                         <Switch
                           checked={scraper.enabled}
                           onCheckedChange={() =>
-                            requestEnableScraper(repo, scraper)}
+                            ctl.requestEnableScraper(repo, scraper)}
                           class="shrink-0"
                         />
                       {/if}
@@ -1701,8 +1317,8 @@
                 </div>
                 <Switch
                   id="trakt-scrobble"
-                  checked={draft.traktScrobbleEnabled}
-                  onCheckedChange={(v) => patch("traktScrobbleEnabled", v)}
+                  checked={ctl.draft.traktScrobbleEnabled}
+                  onCheckedChange={(v) => ctl.patch("traktScrobbleEnabled", v)}
                 />
               </div>
 
@@ -1717,12 +1333,12 @@
                 </div>
                 <Switch
                   id="trakt-sync"
-                  checked={draft.traktSyncEnabled}
-                  onCheckedChange={(v) => patch("traktSyncEnabled", v)}
+                  checked={ctl.draft.traktSyncEnabled}
+                  onCheckedChange={(v) => ctl.patch("traktSyncEnabled", v)}
                 />
               </div>
 
-              {#if draft.traktSyncEnabled}
+              {#if ctl.draft.traktSyncEnabled}
                 <Button
                   variant="outline"
                   size="sm"
@@ -1876,16 +1492,16 @@
   </div>
 </ScrollArea>
 
-{#if configureAddon}
+{#if ctl.configureAddon}
   <!-- Configure addon overlay -->
   <div
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
     role="presentation"
     onclick={(e) => {
-      if (e.target === e.currentTarget) configureAddon = null;
+      if (e.target === e.currentTarget) ctl.configureAddon = null;
     }}
     onkeydown={(e) => {
-      if (e.key === "Escape") configureAddon = null;
+      if (e.key === "Escape") ctl.configureAddon = null;
     }}
   >
     <div
@@ -1897,12 +1513,12 @@
         class="flex shrink-0 items-center justify-between border-b border-border px-4 py-3"
       >
         <span class="truncate text-sm font-medium">
-          {configureAddon.manifest.name || configureAddon.url}
+          {ctl.configureAddon.manifest.name || ctl.configureAddon.url}
         </span>
         <button
           type="button"
           class="ml-3 shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
-          onclick={() => (configureAddon = null)}
+          onclick={() => (ctl.configureAddon = null)}
           aria-label={m.common_close()}
         >
           <X class="size-4" />
@@ -1917,7 +1533,7 @@
       <!-- iframe -->
       <div class="min-h-0 flex-1 px-4 pb-2">
         <iframe
-          src={`${configureAddon.url}/configure`}
+          src={`${ctl.configureAddon.url}/configure`}
           class="h-full w-full rounded border border-border"
           title={m.settings_addon_configuration()}
         ></iframe>
@@ -1926,7 +1542,7 @@
       <!-- Fallback link -->
       <div class="shrink-0 px-4 pb-3 text-xs text-muted-foreground">
         <a
-          href={`${configureAddon.url}/configure`}
+          href={`${ctl.configureAddon.url}/configure`}
           target="_blank"
           rel="noopener noreferrer"
           class="text-primary underline">{m.common_open_browser()}</a

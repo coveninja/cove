@@ -1,4 +1,4 @@
-import { api } from "$lib/api";
+import { api, type LibraryStatus } from "$lib/api";
 import { hasAired } from "$lib/nextEpisode";
 import { libraryChanged } from "$lib/stores/library";
 import type { LibraryEntry } from "$lib/types/library";
@@ -32,6 +32,46 @@ function mutationFinished(): void {
   libraryChanged.update((generation) => generation + 1);
   // Best effort for signed-in profiles; guests receive a harmless 401.
   api.authSync().catch(() => {});
+}
+
+export interface LibraryStatusMetadata {
+  lastAiredSeason?: number | null;
+  lastAiredEpisode?: number | null;
+}
+
+/**
+ * Toggle a title's shelf status, creating, updating, or removing its library
+ * entry as needed. All status pickers use this path so their stored metadata
+ * and library-change notification cannot drift apart.
+ */
+export async function setMediaLibraryStatus(
+  media: Media,
+  entry: LibraryEntry | null,
+  status: LibraryStatus,
+  metadata: LibraryStatusMetadata = {},
+): Promise<LibraryEntry | null> {
+  let next: LibraryEntry | null;
+  if (entry?.status === status) {
+    await api.libraryRemove(media.id, media.media_type);
+    next = null;
+  } else if (entry) {
+    next = await api.librarySetStatus(media.id, media.media_type, status);
+  } else {
+    next = await api.libraryUpsert({
+      tmdb_id: media.id,
+      media_type: media.media_type,
+      title: mediaTitle(media),
+      poster_path: media.poster_path ?? "",
+      vote_average: media.vote_average ?? 0,
+      last_air_date:
+        (media as Media & { last_air_date?: string }).last_air_date ?? "",
+      last_aired_season: metadata.lastAiredSeason ?? null,
+      last_aired_episode: metadata.lastAiredEpisode ?? null,
+      status,
+    });
+  }
+  libraryChanged.update((generation) => generation + 1);
+  return next;
 }
 
 export function mediaUtilityItems(

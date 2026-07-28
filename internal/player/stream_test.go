@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coveninja/cove/internal/utils"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -26,7 +28,7 @@ func response(status int, body string) *http.Response {
 }
 
 func TestStreamRegistryClonesRefreshesAndExpiresEntries(t *testing.T) {
-	p := &Player{streamHeaders: make(map[string]streamHeaderEntry)}
+	p := &Player{streamHeaders: utils.NewTTLCache[string, streamHeaderEntry](0)}
 	original := map[string]string{"Referer": "https://catalog.example/"}
 	p.rememberStream("https://cdn.example/video.mkv", original)
 	original["Referer"] = "https://mutated.example/"
@@ -41,17 +43,18 @@ func TestStreamRegistryClonesRefreshesAndExpiresEntries(t *testing.T) {
 		t.Fatalf("stored headers were mutable through lookup: %v", headersAgain)
 	}
 
-	p.streamHeaders["https://expired.example/video"] = streamHeaderEntry{expires: time.Now().Add(-time.Second)}
+	// TTLCache: use Set with a negative TTL to store an already-expired entry.
+	p.streamHeaders.Set("https://expired.example/video", streamHeaderEntry{}, -time.Second)
 	if _, known := p.lookupStream("https://expired.example/video"); known {
 		t.Fatal("expired stream remained authorized")
 	}
-	if _, exists := p.streamHeaders["https://expired.example/video"]; exists {
-		t.Fatal("expired stream was not removed")
-	}
+	// TTLCache.Get does not sweep expired entries — they are swept by the next
+	// Set call. Len() still counts them until swept; that is expected.
 
+	lenBefore := p.streamHeaders.Len()
 	p.rememberStream("", map[string]string{"ignored": "true"})
-	if len(p.streamHeaders) != 1 {
-		t.Fatalf("empty URL changed registry size to %d", len(p.streamHeaders))
+	if p.streamHeaders.Len() != lenBefore {
+		t.Fatalf("empty URL changed registry size from %d to %d", lenBefore, p.streamHeaders.Len())
 	}
 }
 

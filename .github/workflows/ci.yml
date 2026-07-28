@@ -46,10 +46,7 @@ jobs:
             tags: supabase
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/setup-go
       - name: Verify formatting
         shell: bash
         run: |
@@ -99,10 +96,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/setup-go
       - run: go test -count=1 -race -tags supabase ./...
 
   go-build:
@@ -119,10 +113,7 @@ jobs:
             output: cove.exe
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/setup-go
       - name: Build tagged binary
         env:
           CGO_ENABLED: "0"
@@ -141,10 +132,7 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.COVE_PRIVATE_TOKEN }}
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/setup-go
       - name: Verify checked-in Supabase copy
         run: bash scripts/check-private-sync.sh
       - name: Inject private implementations
@@ -166,12 +154,7 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
+      - uses: ./.github/actions/setup-web
       - name: Generate localization coverage
         run: npm run i18n:coverage
       - name: Verify generated localization coverage
@@ -225,22 +208,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/setup-go
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
-        working-directory: web
+      - uses: ./.github/actions/setup-web
       - name: Install Android NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
@@ -298,8 +272,5 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/setup-go
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

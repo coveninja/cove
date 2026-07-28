@@ -36,6 +36,11 @@ type Client struct {
 	client *http.Client
 	locale LocaleSource
 
+	// addonMgr is set once by SetupHandlers and used by the handler methods
+	// in tmdb_handlers.go. Storing it on Client avoids closure captures while
+	// still giving every handler method access to the addon manager.
+	addonMgr *addons.Manager
+
 	// IMDB-id cache. Keyed "movie:<tmdbID>" / "tv:<tmdbID>" — a movie and a TV
 	// show can share a numeric TMDB id, so the type prefix disambiguates them.
 	// No TTL: IMDB ids are immutable once assigned, so a cache hit never goes
@@ -51,8 +56,8 @@ type Client struct {
 	// (15m) since a title's max available quality changes slowly; empty
 	// results get a shorter TTL (5m) so a title with no streams yet doesn't
 	// stay "no badge" for as long once an indexer catches up.
-	qualityCacheMu sync.Mutex
-	qualityCache   map[string]qualityCacheEntry
+	// Unbounded: relies entirely on the per-entry TTL sweep.
+	qualityCache *utils.TTLCache[string, string]
 
 	// GetDetails cache (D2). Keyed "<locale>:movie:<id>"/"<locale>:tv:<id>",
 	// TTL 24h — a
@@ -62,25 +67,22 @@ type Client struct {
 	// (now taste-scoped, see library.Library.tasteGen) generation counter,
 	// invalidating the profile cache and re-fetching Details for the whole
 	// library on the next recommendation request.
-	detailsCacheMu sync.Mutex
-	detailsCache   map[string]detailsCacheEntry
-	detailsSF      singleflight.Group
+	// Capped at detailsCacheCap to bound memory on large libraries.
+	detailsCache *utils.TTLCache[string, *Details]
+	detailsSF    singleflight.Group
 
 	// GetEpisodesCached cache. Keyed
 	// "<locale>:<tmdbID>:<seasonNumber>", TTL 6h — season episode lists change
-	// only when TMDB gets updated metadata. Mirrors the detailsCache field layout
-	// exactly (mutex + map + singleflight.Group).
-	episodesCacheMu sync.Mutex
-	episodesCache   map[string]episodesCacheEntry
-	episodesSF      singleflight.Group
+	// only when TMDB gets updated metadata.
+	// Capped at episodesCacheCap to bound memory.
+	episodesCache *utils.TTLCache[string, []TVEpisode]
+	episodesSF    singleflight.Group
 
 	// Catalog page cache for /api/catalog. Keyed
 	// locale+"|"+addonURL+"|"+type+"|"+id+"|"+skip+"|"+limit,
 	// TTL catalogCacheTTL.
-	// Expired entries are swept on insert (same inline-expiry style as
-	// qualityCache / addons.Manager.streamCache).
-	catalogCacheMu sync.Mutex
-	catalogCache   map[string]catalogPageEntry
+	// Unbounded: relies entirely on the per-entry TTL sweep.
+	catalogCache *utils.TTLCache[string, catalogPageEntry]
 }
 
 // LocaleSource returns the active profile's UI language. Values are normalized
@@ -326,37 +328,19 @@ func matchingLocalizedItem(target any, candidates []any, index int) any {
 	return nil
 }
 
-type detailsCacheEntry struct {
-	details *Details
-	expires time.Time
-}
-
 const (
 	detailsCacheTTL = 24 * time.Hour
-	// detailsCacheCap bounds the cache so a very large library (or a long
-	// process lifetime touching many titles via discovery) can't grow it
-	// unbounded — dropping the whole map on overflow, same tradeoff as
-	// Client.imdbCache.
+	// detailsCacheCap is passed to utils.NewTTLCache to bound memory on large
+	// libraries — overflow drops the whole map rather than tracking LRU.
 	detailsCacheCap = 2000
 )
 
-type episodesCacheEntry struct {
-	episodes []TVEpisode
-	expires  time.Time
-}
-
 const (
 	episodesCacheTTL = 6 * time.Hour
-	// episodesCacheCap bounds the episodes cache to 500 entries — a very large
-	// library fanout won't grow it unbounded. Overflow drops the whole map,
-	// same tradeoff as detailsCache.
+	// episodesCacheCap is passed to utils.NewTTLCache to bound the episodes
+	// cache. Overflow drops the whole map, same tradeoff as detailsCache.
 	episodesCacheCap = 500
 )
-
-type qualityCacheEntry struct {
-	quality string
-	expires time.Time
-}
 
 const (
 	qualityCacheTTLHit   = 15 * time.Minute
@@ -365,45 +349,32 @@ const (
 
 // catalogPageEntry caches one resolved page of catalog results so repeated
 // visits to the same catalog row don't re-hit the addon + TMDB on every render.
+// The TTL is managed by utils.TTLCache; this struct carries only the payload.
 type catalogPageEntry struct {
 	medias   []Media
 	nextSkip int
-	expires  time.Time
 }
 
 const catalogCacheTTL = 5 * time.Minute
 
+// qualityCacheGet returns the cached quality string for key.
+// Thin wrapper over TTLCache.Get; kept for test compatibility.
 func (c *Client) qualityCacheGet(key string) (string, bool) {
-	c.qualityCacheMu.Lock()
-	defer c.qualityCacheMu.Unlock()
-	e, ok := c.qualityCache[key]
-	if !ok || time.Now().After(e.expires) {
-		return "", false
-	}
-	return e.quality, true
+	return c.qualityCache.Get(key)
 }
 
-// qualityCacheSet stores a result and sweeps expired entries while it's
-// already holding the lock — same pattern as Player.rememberStream
-// (internal/player/player.go) and addons.Manager's streamCacheSet, avoiding a
-// separate background goroutine.
+// qualityCacheSet stores a quality string with the given TTL.
+// Thin wrapper over TTLCache.Set; kept for test compatibility.
 func (c *Client) qualityCacheSet(key, quality string, ttl time.Duration) {
-	c.qualityCacheMu.Lock()
-	defer c.qualityCacheMu.Unlock()
-	now := time.Now()
-	for k, v := range c.qualityCache {
-		if now.After(v.expires) {
-			delete(c.qualityCache, k)
-		}
-	}
-	c.qualityCache[key] = qualityCacheEntry{quality: quality, expires: now.Add(ttl)}
+	c.qualityCache.Set(key, quality, ttl)
 }
 
+// catalogCacheGet returns cloned medias and nextSkip for key if present and unexpired.
+// The clone-on-get protects the cached slice from caller mutations, preserving
+// the same defensive-copy semantics as the original hand-rolled implementation.
 func (c *Client) catalogCacheGet(key string) ([]Media, int, bool) {
-	c.catalogCacheMu.Lock()
-	defer c.catalogCacheMu.Unlock()
-	e, ok := c.catalogCache[key]
-	if !ok || time.Now().After(e.expires) {
+	e, ok := c.catalogCache.Get(key)
+	if !ok {
 		return nil, 0, false
 	}
 	return cloneMedias(e.medias), e.nextSkip, true
@@ -422,20 +393,11 @@ func cloneMedias(medias []Media) []Media {
 	return cp
 }
 
-// catalogCacheSet stores a resolved page and sweeps expired entries while
-// already holding the lock — same inline-expiry style as qualityCacheSet.
+// catalogCacheSet stores a resolved page under key.
+// The input slice is deep-cloned before storage so caller mutations after Set
+// don't affect the cached entry — same as the original hand-rolled behaviour.
 func (c *Client) catalogCacheSet(key string, medias []Media, nextSkip int) {
-	c.catalogCacheMu.Lock()
-	defer c.catalogCacheMu.Unlock()
-	now := time.Now()
-	for k, v := range c.catalogCache {
-		if now.After(v.expires) {
-			delete(c.catalogCache, k)
-		}
-	}
-	c.catalogCache[key] = catalogPageEntry{
-		medias: cloneMedias(medias), nextSkip: nextSkip, expires: now.Add(catalogCacheTTL),
-	}
+	c.catalogCache.Set(key, catalogPageEntry{medias: cloneMedias(medias), nextSkip: nextSkip}, catalogCacheTTL)
 }
 
 // New returns a TMDB client. The 15s timeout matters because http.DefaultClient
@@ -446,10 +408,10 @@ func New(apiKey string, options ...Option) *Client {
 		apiKey:        apiKey,
 		locale:        func() string { return "en" },
 		imdbCache:     make(map[string]string),
-		qualityCache:  make(map[string]qualityCacheEntry),
-		detailsCache:  make(map[string]detailsCacheEntry),
-		catalogCache:  make(map[string]catalogPageEntry),
-		episodesCache: make(map[string]episodesCacheEntry),
+		qualityCache:  utils.NewTTLCache[string, string](0),
+		detailsCache:  utils.NewTTLCache[string, *Details](detailsCacheCap),
+		catalogCache:  utils.NewTTLCache[string, catalogPageEntry](0),
+		episodesCache: utils.NewTTLCache[string, []TVEpisode](episodesCacheCap),
 	}
 	for _, option := range options {
 		option(c)
@@ -766,12 +728,7 @@ func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /search/keyword", res.StatusCode)
 	}
@@ -1211,11 +1168,7 @@ func (c *Client) GetIMDBId(tmdbID int) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer func(Body io.ReadCloser) {
-			if err := Body.Close(); err != nil {
-				log.Println(err)
-			}
-		}(res.Body)
+		defer res.Body.Close()
 
 		if res.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("tmdb: HTTP %d", res.StatusCode)
@@ -1240,11 +1193,7 @@ func (c *Client) GetTVIMDBId(tmdbID int) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer func(Body io.ReadCloser) {
-			if err := Body.Close(); err != nil {
-				log.Println(err)
-			}
-		}(res.Body)
+		defer res.Body.Close()
 
 		if res.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("tmdb: HTTP %d", res.StatusCode)
@@ -1258,6 +1207,18 @@ func (c *Client) GetTVIMDBId(tmdbID int) (string, error) {
 	})
 }
 
+// GetIMDBIdForMediaType dispatches to GetTVIMDBId or GetIMDBId based on the
+// media type string. Handlers and other callers that branch on mediaType at
+// the IMDB-id fetch site use this to collapse the if/else.
+// Call sites in internal/player, internal/prefetch, and internal/server are
+// unaffected — they call GetIMDBId or GetTVIMDBId directly.
+func (c *Client) GetIMDBIdForMediaType(tmdbID int, mediaType string) (string, error) {
+	if mediaType == "tv" {
+		return c.GetTVIMDBId(tmdbID)
+	}
+	return c.GetIMDBId(tmdbID)
+}
+
 // GetSeasons returns the season list for a TV show (skipping specials season 0).
 func (c *Client) GetSeasons(tmdbID int) ([]TVSeason, error) {
 	url := fmt.Sprintf("%s/tv/%d?api_key=%s", baseURL, tmdbID, c.apiKey)
@@ -1265,12 +1226,7 @@ func (c *Client) GetSeasons(tmdbID int) ([]TVSeason, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /tv/%d", res.StatusCode, tmdbID)
 	}
@@ -1302,12 +1258,7 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /tv/%d/season/%d", res.StatusCode, tmdbID, seasonNumber)
 	}
@@ -1333,34 +1284,16 @@ func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) 
 func (c *Client) GetEpisodesCached(tmdbID, seasonNumber int) ([]TVEpisode, error) {
 	key := fmt.Sprintf("%s:%d:%d", c.Locale(), tmdbID, seasonNumber)
 
-	c.episodesCacheMu.Lock()
-	if entry, ok := c.episodesCache[key]; ok && time.Now().Before(entry.expires) {
-		c.episodesCacheMu.Unlock()
-		return entry.episodes, nil
+	if eps, ok := c.episodesCache.Get(key); ok {
+		return eps, nil
 	}
-	c.episodesCacheMu.Unlock()
 
 	v, err, _ := c.episodesSF.Do(key, func() (interface{}, error) {
 		eps, err := c.GetEpisodes(tmdbID, seasonNumber)
 		if err != nil {
 			return nil, err
 		}
-		c.episodesCacheMu.Lock()
-		// Sweep expired entries while already holding the lock — same inline-expiry
-		// style as GetDetails / qualityCacheSet, avoiding a separate goroutine.
-		now := time.Now()
-		for k, v := range c.episodesCache {
-			if now.After(v.expires) {
-				delete(c.episodesCache, k)
-			}
-		}
-		if len(c.episodesCache) > episodesCacheCap {
-			// Simplest possible cap: drop the whole map rather than tracking
-			// per-entry recency, same tradeoff as detailsCache / imdbCache.
-			c.episodesCache = make(map[string]episodesCacheEntry)
-		}
-		c.episodesCache[key] = episodesCacheEntry{episodes: eps, expires: now.Add(episodesCacheTTL)}
-		c.episodesCacheMu.Unlock()
+		c.episodesCache.Set(key, eps, episodesCacheTTL)
 		return eps, nil
 	})
 	if err != nil {
@@ -1453,36 +1386,16 @@ func (m *Media) DisplayDate() string {
 func (c *Client) GetDetails(tmdbID int, mediaType string) (*Details, error) {
 	key := fmt.Sprintf("%s:%s:%d", c.Locale(), mediaType, tmdbID)
 
-	c.detailsCacheMu.Lock()
-	if entry, ok := c.detailsCache[key]; ok && time.Now().Before(entry.expires) {
-		c.detailsCacheMu.Unlock()
-		return entry.details, nil
+	if d, ok := c.detailsCache.Get(key); ok {
+		return d, nil
 	}
-	c.detailsCacheMu.Unlock()
 
 	v, err, _ := c.detailsSF.Do(key, func() (interface{}, error) {
 		d, err := c.fetchDetails(tmdbID, mediaType)
 		if err != nil {
 			return nil, err
 		}
-		c.detailsCacheMu.Lock()
-		// Sweep expired entries while already holding the lock — same inline-expiry
-		// style as qualityCacheSet, avoiding a separate background goroutine. The
-		// 24h TTL means entries can linger a long time without this sweep; now they
-		// are collected whenever a new entry is written.
-		now := time.Now()
-		for k, v := range c.detailsCache {
-			if now.After(v.expires) {
-				delete(c.detailsCache, k)
-			}
-		}
-		if len(c.detailsCache) > detailsCacheCap {
-			// Simplest possible cap: drop the whole map rather than tracking
-			// per-entry recency, same tradeoff as Client.imdbCache.
-			c.detailsCache = make(map[string]detailsCacheEntry)
-		}
-		c.detailsCache[key] = detailsCacheEntry{details: d, expires: now.Add(detailsCacheTTL)}
-		c.detailsCacheMu.Unlock()
+		c.detailsCache.Set(key, d, detailsCacheTTL)
 		return d, nil
 	})
 	if err != nil {
@@ -1498,12 +1411,7 @@ func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /%s/%d", res.StatusCode, mediaType, tmdbID)
 	}
@@ -1542,12 +1450,7 @@ func (c *Client) GetMediaByID(tmdbID int, mediaType string) (*Media, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API request failed with status code: %d", res.StatusCode)
@@ -1614,12 +1517,7 @@ func (c *Client) GetSimilar(tmdbID int, mediaType string) ([]Media, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /%s/%d/recommendations", res.StatusCode, mediaType, tmdbID)
 	}
@@ -1653,12 +1551,7 @@ func (c *Client) GetLogos(tmdbID int, mediaType string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /%s/%d/images", res.StatusCode, mediaType, tmdbID)
 	}
@@ -1771,11 +1664,7 @@ func (c *Client) Discover(p DiscoverParams) (*DiscoverResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("discover: TMDB returned %d", res.StatusCode)
@@ -1808,11 +1697,7 @@ func (c *Client) GenreList(mediaType string) ([]Keyword, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /genre/%s/list", res.StatusCode, mediaType)
 	}
@@ -1833,12 +1718,7 @@ func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /search/keyword", res.StatusCode)
 	}
@@ -1867,11 +1747,7 @@ func (c *Client) FindByIMDBId(ctx context.Context, imdbID, tmdbType string) (*Me
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		if err := Body.Close(); err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tmdb: HTTP %d for /find/%s", res.StatusCode, imdbID)
@@ -1971,611 +1847,34 @@ func parseTMDBID(raw string) (int, bool) {
 	return id, err == nil && id > 0
 }
 
-func validMediaType(mediaType string) bool {
-	return mediaType == "movie" || mediaType == "tv"
-}
-
+// SetupHandlers registers all TMDB-related HTTP routes on mux. addonMgr is
+// stored on the Client so the handler methods in tmdb_handlers.go can reach
+// it without closure captures.
+//
+// Composition order: CorsMiddleware must wrap MethodGuard so OPTIONS
+// preflights are answered 204 before MethodGuard can reply 405.
 func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
-	getOnly := func(next http.HandlerFunc) http.HandlerFunc {
-		return utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				w.Header().Set("Allow", http.MethodGet)
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			next(w, r)
-		})
+	c.addonMgr = addonMgr
+	get := func(next http.HandlerFunc) http.HandlerFunc {
+		return utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, next))
 	}
 
-	mux.HandleFunc("/api/keywords", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("q")
-		if query == "" {
-			http.Error(w, "missing query", http.StatusBadRequest)
-			return
-		}
-		keywords, err := c.SuggestKeywords(query)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(keywords); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/search", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("q")
-		if query == "" {
-			http.Error(w, "missing query", http.StatusBadRequest)
-			return
-		}
-
-		regular, err := c.Search(query)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		byKeyword, _ := c.SearchByKeywords(query)
-
-		seen := make(map[string]bool)
-		merged := make([]Media, 0, len(regular)+len(byKeyword))
-		for _, m := range regular {
-			key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
-			seen[key] = true
-			merged = append(merged, m)
-		}
-		for _, m := range byKeyword {
-			key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
-			if !seen[key] {
-				seen[key] = true
-				merged = append(merged, m)
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(merged); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	// GET /api/search/multi?q=<query> — sectioned results (titles split into
-	// movies/tv, plus people and providers).
-	mux.HandleFunc("/api/search/multi", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("q")
-		if query == "" {
-			http.Error(w, "missing query", http.StatusBadRequest)
-			return
-		}
-
-		results, err := c.MultiSearch(query)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(results); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	// GET /api/person?id=<personID> — bio + filmography for the person overlay.
-	mux.HandleFunc("/api/person", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		person, err := c.GetPerson(id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(person); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	// GET /api/provider?id=<providerID>&limit=<n> — popular titles on a provider
-	// (US region). Blends movies and TV.
-	mux.HandleFunc("/api/provider", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		limit := 40
-		if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
-			limit = l
-		}
-		titles, err := c.ProviderTitles(id, limit)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(titles); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/images", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		tmdbIDStr := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-
-		if tmdbIDStr == "" || mediaType == "" {
-			http.Error(w, "missing required parameters", http.StatusBadRequest)
-			return
-		}
-
-		if !validMediaType(mediaType) {
-			http.Error(w, "invalid media type", http.StatusBadRequest)
-			return
-		}
-
-		id, ok := parseTMDBID(tmdbIDStr)
-		if !ok {
-			http.Error(w, "invalid id format", http.StatusBadRequest)
-			return
-		}
-
-		images, err := c.GetImages(id, mediaType)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		err = json.NewEncoder(w).Encode(images)
-		if err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/videos", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		tmdbIDStr := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-
-		if tmdbIDStr == "" || mediaType == "" {
-			http.Error(w, "missing required parameters", http.StatusBadRequest)
-			return
-		}
-
-		if !validMediaType(mediaType) {
-			http.Error(w, "invalid media type", http.StatusBadRequest)
-			return
-		}
-
-		id, ok := parseTMDBID(tmdbIDStr)
-		if !ok {
-			http.Error(w, "invalid id format", http.StatusBadRequest)
-			return
-		}
-
-		videos, err := c.GetVideos(id, mediaType)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		err = json.NewEncoder(w).Encode(videos)
-		if err != nil {
-			log.Println(err)
-		}
-	}))
-
-	// GET /api/media?id=<tmdbID>&type=<movie|tv>
-	// Returns a single, fully-populated Media object by ID — for callers that
-	// only have a bare tmdb_id (e.g. from a LibraryEntry) and need the real
-	// TMDB object rather than reconstructing a partial one client-side.
-	mux.HandleFunc("/api/media", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		tmdbIDStr := r.URL.Query().Get("id")
-		mediaType := r.URL.Query().Get("type")
-
-		if tmdbIDStr == "" || mediaType == "" {
-			http.Error(w, "missing required parameters", http.StatusBadRequest)
-			return
-		}
-		if !validMediaType(mediaType) {
-			http.Error(w, "invalid media type", http.StatusBadRequest)
-			return
-		}
-
-		id, ok := parseTMDBID(tmdbIDStr)
-		if !ok {
-			http.Error(w, "invalid id format", http.StatusBadRequest)
-			return
-		}
-
-		media, err := c.GetMediaByID(id, mediaType)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(media); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/details", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		mediaType := r.URL.Query().Get("type")
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		if !validMediaType(mediaType) {
-			http.Error(w, "invalid media type", http.StatusBadRequest)
-			return
-		}
-		details, err := c.GetDetails(id, mediaType)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		err = json.NewEncoder(w).Encode(details)
-		if err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/similar", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		mediaType := r.URL.Query().Get("type")
-		if !validMediaType(mediaType) {
-			http.Error(w, "invalid media type", http.StatusBadRequest)
-			return
-		}
-		results, err := c.GetSimilar(id, mediaType)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(results)
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}))
-
-	mux.HandleFunc("/api/logos", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		mediaType := r.URL.Query().Get("type")
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		if !validMediaType(mediaType) {
-			http.Error(w, "invalid media type", http.StatusBadRequest)
-			return
-		}
-		logos, err := c.GetLogos(id, mediaType)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		err = json.NewEncoder(w).Encode(logos)
-		if err != nil {
-			log.Println(err)
-		}
-	}))
-
-	mux.HandleFunc("/api/imdb", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		imdbID, err := c.GetIMDBId(id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		err = json.NewEncoder(w).Encode(map[string]string{"imdb_id": imdbID})
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}))
-
-	// GET /api/tv/seasons?id=<tmdbID>
-	// Returns the list of seasons for a TV show.
-	mux.HandleFunc("/api/tv/seasons", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		seasons, err := c.GetSeasons(id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(seasons); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	// GET /api/tv/episodes?id=<tmdbID>&season=<seasonNumber>
-	// Returns the episodes for a given season of a TV show.
-	mux.HandleFunc("/api/tv/episodes", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		seasonStr := r.URL.Query().Get("season")
-		id, ok := parseTMDBID(r.URL.Query().Get("id"))
-		if !ok {
-			http.Error(w, "invalid id", http.StatusBadRequest)
-			return
-		}
-		season, err := strconv.Atoi(seasonStr)
-		if err != nil || season < 1 {
-			http.Error(w, "invalid season", http.StatusBadRequest)
-			return
-		}
-		episodes, err := c.GetEpisodes(id, season)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(episodes); err != nil {
-			log.Println(err)
-		}
-	}))
-
-	// Nuvio scrapers are intentionally excluded from this endpoint: unlike
-	// internal/player's single-title /api/streams, this fans out across
-	// every title in a discovery grid, and running goja + third-party network
-	// scrapers per grid tile would be far too slow/heavy for a quality badge.
-	// Don't "fix" this into consistency with /api/streams later.
-	mux.HandleFunc("/api/quality/batch", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		idsParam := r.URL.Query().Get("ids")
-		if idsParam == "" {
-			http.Error(w, "missing ids", http.StatusBadRequest)
-			return
-		}
-
-		idStrs := strings.Split(idsParam, ",")
-		sem := make(chan struct{}, 5)
-
-		type entry struct {
-			ID      string `json:"id"`
-			Quality string `json:"quality"`
-		}
-
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Header().Set("X-Accel-Buffering", "no")
-		flusher, canFlush := w.(http.Flusher)
-
-		ctx := r.Context()
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		enc := json.NewEncoder(w)
-
-		// write emits one NDJSON line. Guarded on ctx so a client that already
-		// disconnected doesn't get written to (and so wg.Wait() below isn't
-		// the only thing standing between a dead connection and this handler
-		// winding down).
-		write := func(id, quality string) {
-			if ctx.Err() != nil {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if err := enc.Encode(entry{ID: id, Quality: quality}); err != nil {
-				log.Println(err)
-				return
-			}
-			if canFlush {
-				flusher.Flush()
-			}
-		}
-
-		for _, s := range idStrs {
-			typedID, mediaType, tmdbID, ok := parseQualityID(s)
-			if !ok {
-				continue
-			}
-
-			// Cached hit — emit immediately, no worker/IMDB-lookup/addon
-			// fan-out needed at all.
-			if q, hit := c.qualityCacheGet(typedID); hit {
-				if q != "" {
-					write(typedID, q)
-				}
-				continue
-			}
-
-			wg.Add(1)
-			go func(typedID, mediaType string, tmdbID int) {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					return
-				}
-				if ctx.Err() != nil {
-					return
-				}
-
-				var imdbID string
-				var err error
-				if mediaType == "tv" {
-					imdbID, err = c.GetTVIMDBId(tmdbID)
-				} else {
-					imdbID, err = c.GetIMDBId(tmdbID)
-				}
-				if err != nil || imdbID == "" {
-					return
-				}
-
-				stremioID := imdbID
-				if mediaType == "tv" {
-					// The badge is per-title, not per-episode: probe S1E1 as a
-					// representative sample of what's available for the show
-					// rather than fanning out across every episode.
-					stremioID = imdbID + ":1:1"
-				}
-
-				streams, err := addonMgr.GetAllStreams(ctx, mediaType, stremioID)
-				if err != nil {
-					return
-				}
-				q := addons.GetMaxQuality(streams)
-				ttl := qualityCacheTTLHit
-				if q == "" {
-					ttl = qualityCacheTTLEmpty
-				}
-				c.qualityCacheSet(typedID, q, ttl)
-				if q == "" {
-					return
-				}
-				write(typedID, q)
-			}(typedID, mediaType, tmdbID)
-		}
-
-		wg.Wait()
-	}))
-
-	// GET /api/catalog?addonId=&catalogType=&catalogId=&skip=<n>&limit=<n>
-	// Returns {medias:[], nextSkip:n} — one page of a Stremio addon catalog,
-	// resolved through TMDB. Unresolvable metas are silently dropped; page
-	// results are cached 5 minutes per (addonURL, type, id, skip, limit) key.
-	mux.HandleFunc("/api/catalog", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		addonID := r.URL.Query().Get("addonId")
-		catalogType := r.URL.Query().Get("catalogType")
-		catalogID := r.URL.Query().Get("catalogId")
-		if addonID == "" || catalogType == "" || catalogID == "" {
-			http.Error(w, "missing addonId, catalogType, or catalogId", http.StatusBadRequest)
-			return
-		}
-
-		skip := 0
-		if s := r.URL.Query().Get("skip"); s != "" {
-			if n, err := strconv.Atoi(s); err == nil && n >= 0 {
-				skip = n
-			}
-		}
-
-		const defaultLimit = 20
-		const maxLimit = 100
-		limit := defaultLimit
-		if l := r.URL.Query().Get("limit"); l != "" {
-			if n, err := strconv.Atoi(l); err == nil && n > 0 {
-				limit = n
-			}
-			// n <= 0 stays at default
-		}
-		if limit > maxLimit {
-			limit = maxLimit
-		}
-
-		// When the caller supplies ?addonUrl=, validate it against the
-		// configured registry (SSRF guard) and use it directly. This is
-		// required when two addons share a manifest ID but have different
-		// config URLs — FindAddonURL would always return the first match.
-		var addonURL string
-		if rawURL := r.URL.Query().Get("addonUrl"); rawURL != "" {
-			if !addonMgr.HasAddonURL(rawURL) {
-				http.Error(w, "addon not found", http.StatusNotFound)
-				return
-			}
-			addonURL = rawURL
-		} else {
-			var ok bool
-			addonURL, ok = addonMgr.FindAddonURL(addonID)
-			if !ok {
-				http.Error(w, "addon not found", http.StatusNotFound)
-				return
-			}
-		}
-
-		cacheKey := c.Locale() + "|" + addonURL + "|" + catalogType + "|" + catalogID + "|" + strconv.Itoa(skip) + "|" + strconv.Itoa(limit)
-		if medias, nextSkip, ok := c.catalogCacheGet(cacheKey); ok {
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(struct {
-				Medias   []Media `json:"medias"`
-				NextSkip int     `json:"nextSkip"`
-			}{Medias: medias, NextSkip: nextSkip}); err != nil {
-				log.Println("catalog cache encode:", err)
-			}
-			return
-		}
-
-		rawMetas, err := addonMgr.FetchCatalog(r.Context(), addonURL, catalogType, catalogID, skip)
-		if err != nil {
-			http.Error(w, "addon fetch failed: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-
-		// nextSkip advances by raw item count (before resolution) so
-		// unresolvable metas don't cause the pagination cursor to undercount.
-		consumed := len(rawMetas)
-		if consumed > limit {
-			consumed = limit
-			rawMetas = rawMetas[:limit]
-		}
-		nextSkip := skip + consumed
-
-		// Resolve metas concurrently, order-preserving, bounded semaphore so we
-		// don't open hundreds of TMDB connections for a large limit.
-		const resolveSem = 6
-		results := make([]*Media, len(rawMetas))
-		sem := make(chan struct{}, resolveSem)
-		var wg sync.WaitGroup
-		ctx := r.Context()
-
-		for i, meta := range rawMetas {
-			wg.Add(1)
-			go func(i int, meta addons.StremioMeta) {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					return
-				}
-				results[i] = c.ResolveMeta(ctx, meta)
-			}(i, meta)
-		}
-		wg.Wait()
-
-		// Compact nils — unresolvable metas are silently dropped.
-		medias := make([]Media, 0, len(results))
-		for _, m := range results {
-			if m != nil {
-				medias = append(medias, *m)
-			}
-		}
-
-		// Don't cache when the client disconnected mid-resolution — the early
-		// ctx-done returns above would bake a partially-resolved page in for
-		// the full TTL.
-		if ctx.Err() == nil {
-			c.catalogCacheSet(cacheKey, medias, nextSkip)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(struct {
-			Medias   []Media `json:"medias"`
-			NextSkip int     `json:"nextSkip"`
-		}{Medias: medias, NextSkip: nextSkip}); err != nil {
-			log.Println("catalog encode:", err)
-		}
-	}))
+	mux.HandleFunc("/api/keywords", get(c.handleKeywords))
+	mux.HandleFunc("/api/search", get(c.handleSearch))
+	mux.HandleFunc("/api/search/multi", get(c.handleSearchMulti))
+	mux.HandleFunc("/api/person", get(c.handlePerson))
+	mux.HandleFunc("/api/provider", get(c.handleProvider))
+	mux.HandleFunc("/api/images", get(c.handleImages))
+	mux.HandleFunc("/api/videos", get(c.handleVideos))
+	mux.HandleFunc("/api/media", get(c.handleMedia))
+	mux.HandleFunc("/api/details", get(c.handleDetails))
+	mux.HandleFunc("/api/similar", get(c.handleSimilar))
+	mux.HandleFunc("/api/logos", get(c.handleLogos))
+	mux.HandleFunc("/api/imdb", get(c.handleIMDB))
+	mux.HandleFunc("/api/tv/seasons", get(c.handleTVSeasons))
+	mux.HandleFunc("/api/tv/episodes", get(c.handleTVEpisodes))
+	mux.HandleFunc("/api/quality/batch", get(c.handleQualityBatch))
+	mux.HandleFunc("/api/catalog", get(c.handleCatalog))
 }
 
 // parseQualityID parses one comma-separated token from /api/quality/batch's

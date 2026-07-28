@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/coveninja/cove/internal/addons"
@@ -26,6 +25,7 @@ import (
 	"github.com/coveninja/cove/internal/nuvio"
 	"github.com/coveninja/cove/internal/settings"
 	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 )
 
 const (
@@ -115,32 +115,13 @@ func (w *Worker) Notify() {
 // loop, so cycles never overlap — candidates are processed sequentially by
 // design (see candidateSpacing).
 func (w *Worker) Run(ctx context.Context) {
-	startup := time.NewTimer(startupDelay)
-	defer startup.Stop()
-
-	ticker := time.NewTicker(tickerInterval)
-	defer ticker.Stop()
-
-	debounce := time.NewTimer(time.Hour)
-	defer debounce.Stop()
-	if !debounce.Stop() {
-		<-debounce.C
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-startup.C:
-			w.runCycle(ctx)
-		case <-ticker.C:
-			w.runCycle(ctx)
-		case <-w.notify:
-			debounce.Reset(debounceDelay)
-		case <-debounce.C:
-			w.runCycle(ctx)
-		}
-	}
+	utils.RunScheduled(ctx, utils.Schedule{
+		StartupDelay: startupDelay,
+		Interval:     tickerInterval,
+		Debounce:     debounceDelay,
+	}, w.notify, func() {
+		w.runCycle(ctx)
+	})
 }
 
 func (w *Worker) runCycle(ctx context.Context) {
@@ -370,35 +351,11 @@ func (w *Worker) prefetchOne(ctx context.Context, c candidate) {
 		var title string
 		var year int
 		if media, mErr := w.tmdb.GetMediaByID(c.tmdbID, c.mediaType); mErr == nil && media != nil {
-			title = firstNonEmpty(media.Title, media.Name)
-			year = parseYear(firstNonEmpty(media.Released, media.FirstAir))
+			title = utils.FirstNonEmpty(media.Title, media.Name)
+			year = utils.ParseMediaYear(utils.FirstNonEmpty(media.Released, media.FirstAir))
 		}
 		w.nuvioMgr.GetStreams(cctx, c.mediaType, c.tmdbID, imdbID, title, year, c.season, c.episode)
 	}
 
 	log.Printf("prefetch: warmed %s", stremioID)
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// parseYear extracts the year from a TMDB-style "YYYY-MM-DD" date string.
-// Mirrors internal/player's helper of the same name — small enough that a
-// shared internal/tmdbutil package would be more ceremony than the
-// duplication it'd save.
-func parseYear(date string) int {
-	if len(date) < 4 {
-		return 0
-	}
-	year, err := strconv.Atoi(date[:4])
-	if err != nil {
-		return 0
-	}
-	return year
 }

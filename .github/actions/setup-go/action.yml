@@ -1,0 +1,17 @@
+name: Set up Go
+description: >
+  Configures the Go toolchain using the version pinned in go.mod. The caller
+  must check out the repository before invoking this local action.
+
+inputs:
+  cache:
+    description: Enable Go module cache in actions/setup-go.
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: go.mod
+        cache: ${{ inputs.cache }}

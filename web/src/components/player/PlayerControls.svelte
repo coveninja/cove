@@ -24,6 +24,7 @@
   import SubtitleMenu from "./SubtitleMenu.svelte";
   import MenuItem from "./MenuItem.svelte";
   import * as m from "$lib/paraglide/messages.js";
+  import { formatPlaybackTime as fmt } from "$lib/player/format";
 
   let {
     externalSubtitles,
@@ -81,17 +82,9 @@
   let scrubPreview = $state<number | null>(null);
   const displayPos = $derived(scrubPreview ?? Player.position);
 
-  function fmt(t: number): string {
-    if (!isFinite(t) || t < 0) t = 0;
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    const mm = h ? String(m).padStart(2, "0") : String(m);
-    return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
-  }
-
   function formatBytes(bytes: number): string {
-    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (bytes >= 1024 * 1024 * 1024)
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${bytes} B`;
@@ -112,7 +105,8 @@
     <dd>
       <kbd
         class="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-      >{keys}</kbd>
+        >{keys}</kbd
+      >
     </dd>
   </div>
 {/snippet}
@@ -193,7 +187,9 @@
     </div>
 
     <span class="ml-2 text-xs tabular-nums text-white/80">
-      {fmt(displayPos)}<span class="mx-1 text-white/40">/</span>{fmt(Player.duration)}
+      {fmt(displayPos)}<span class="mx-1 text-white/40">/</span>{fmt(
+        Player.duration,
+      )}
     </span>
 
     <div class="flex-1"></div>
@@ -203,7 +199,10 @@
       <Tooltip.Root>
         <Tooltip.Trigger>
           {#snippet child({ props })}
-            <span {...props} class="mr-1 cursor-default text-xs tabular-nums text-white/60">
+            <span
+              {...props}
+              class="mr-1 cursor-default text-xs tabular-nums text-white/60"
+            >
               ↓ {torrent.progress.toFixed(0)}%
             </span>
           {/snippet}
@@ -212,7 +211,10 @@
           <div class="space-y-1.5 text-xs">
             <div class="flex items-center gap-2">
               <div class="h-1 w-24 overflow-hidden rounded-full bg-white/20">
-                <div class="h-full rounded-full bg-white/70" style="width: {torrent.progress.toFixed(1)}%"></div>
+                <div
+                  class="h-full rounded-full bg-white/70"
+                  style="width: {torrent.progress.toFixed(1)}%"
+                ></div>
               </div>
               <span class="tabular-nums">{torrent.progress.toFixed(1)}%</span>
             </div>
@@ -225,10 +227,19 @@
               })}
             </div>
             {#if torrent.totalBytes > 0}
-              <div>{m.player_size()}: {formatBytes(torrent.downloadedBytes)} / {formatBytes(torrent.totalBytes)}</div>
+              <div>
+                {m.player_size()}: {formatBytes(torrent.downloadedBytes)} / {formatBytes(
+                  torrent.totalBytes,
+                )}
+              </div>
             {/if}
             {#if torrent.speedBps > 0 && torrent.totalBytes > 0}
-              <div>{m.player_eta()}: {formatEta(torrent.totalBytes - torrent.downloadedBytes, torrent.speedBps)}</div>
+              <div>
+                {m.player_eta()}: {formatEta(
+                  torrent.totalBytes - torrent.downloadedBytes,
+                  torrent.speedBps,
+                )}
+              </div>
             {/if}
           </div>
         </Tooltip.Content>
@@ -317,7 +328,9 @@
             onclick={cycleAspect}
           >
             <Ratio class="size-4" />
-            <span class="max-w-28 truncate text-xs">{ASPECT_LABELS[Player.aspectMode]}</span>
+            <span class="max-w-28 truncate text-xs"
+              >{ASPECT_LABELS[Player.aspectMode]}</span
+            >
           </Button>
         {/snippet}
       </Tooltip.Trigger>

@@ -7,7 +7,6 @@
 package profiles
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -87,7 +86,7 @@ func cloneDiskStore(in diskStore) diskStore {
 // startup explicitly.
 func normalizeDiskStore(d *diskStore) (bool, error) {
 	if len(d.Profiles) == 0 {
-		primary := Profile{ID: newUUID(), Name: "Primary", IsPrimary: true}
+		primary := Profile{ID: utils.NewUUID(), Name: "Primary", IsPrimary: true}
 		d.Profiles = []Profile{primary}
 		d.ActiveProfileID = primary.ID
 		return true, nil
@@ -154,7 +153,7 @@ func New(onChange func(profileID string)) (*Store, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		// First run: create primary profile and migrate legacy flat files.
-		primary := Profile{ID: newUUID(), Name: "Primary", IsPrimary: true}
+		primary := Profile{ID: utils.NewUUID(), Name: "Primary", IsPrimary: true}
 		s.disk = diskStore{
 			Profiles:        []Profile{primary},
 			ActiveProfileID: primary.ID,
@@ -380,7 +379,7 @@ func (s *Store) Create(name string) (Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	before := cloneDiskStore(s.disk)
-	p := Profile{ID: newUUID(), Name: name}
+	p := Profile{ID: utils.NewUUID(), Name: name}
 	s.disk.Profiles = append(s.disk.Profiles, p)
 	if err := s.write(); err != nil {
 		s.disk = before
@@ -679,11 +678,6 @@ func (s *Store) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/profiles/", utils.CorsMiddleware(s.handleByID))
 }
 
-func jsonOK(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -693,7 +687,7 @@ func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
 			"active_profile_id": s.disk.ActiveProfileID,
 		}
 		s.mu.RUnlock()
-		jsonOK(w, resp)
+		utils.WriteJSON(w, resp)
 
 	case http.MethodPost:
 		r.Body = http.MaxBytesReader(w, r.Body, maxProfileRequestBytes)
@@ -709,7 +703,7 @@ func (s *Store) handleList(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, p)
+		utils.WriteJSON(w, p)
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -747,7 +741,7 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, s.ActiveProfile())
+		utils.WriteJSON(w, s.ActiveProfile())
 		return
 	}
 
@@ -770,7 +764,7 @@ func (s *Store) handleByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonOK(w, map[string]string{"id": id, "name": name})
+		utils.WriteJSON(w, map[string]string{"id": id, "name": name})
 
 	case http.MethodDelete:
 		p, ok := s.Get(id)
@@ -808,14 +802,4 @@ func bearerFromRequest(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimPrefix(h, "Bearer ")
-}
-
-// newUUID generates a random UUIDv4.
-func newUUID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }

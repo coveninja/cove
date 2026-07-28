@@ -156,11 +156,11 @@ func TestActivityHandlerReturnsStatsAndEnforcesMethod(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 }
 
-func TestFlushPendingAndFlushPersistLatestSnapshot(t *testing.T) {
+func TestFlushPersistsLatestSnapshot(t *testing.T) {
 	store := newTestStore(t)
 	at := time.Now()
 	store.OnProgressSave(progressEvent("1:movie", 10, at))
-	store.flushPending()
+	store.Flush()
 
 	readDisk := func() diskStore {
 		t.Helper()

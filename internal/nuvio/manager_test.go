@@ -450,7 +450,7 @@ func TestManifestShapesAndManagerPredicates(t *testing.T) {
 		{Enabled: true, Scrapers: []Scraper{{Enabled: true}}},
 	}
 	assert.False(t, m.HasEnabledScrapers())
-	assert.Equal(t, "", firstNonEmpty("", ""))
+	assert.Equal(t, "", utils.FirstNonEmpty("", ""))
 }
 
 func intPtr(value int) *int { return &value }

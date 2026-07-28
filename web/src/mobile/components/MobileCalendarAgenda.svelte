@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { api } from "$lib/api";
   import type { Media } from "$lib/types/tmdb";
   import type { CalendarItem } from "$lib/types/calendar";
   import { libraryChanged } from "$lib/stores/library";
@@ -14,13 +13,11 @@
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
   import * as m from "$lib/paraglide/messages.js";
   import {
-    groupByDay,
-    calendarSummary,
-    summaryLabel,
-    nextUp,
-    shortDateLabel,
-  } from "$lib/calendar";
-  import { mediaFromEntry } from "$lib/mediaFromEntry";
+    CalendarAgendaController,
+    chipSublabel,
+    dayOfMonth,
+    toMedia,
+  } from "$lib/calendarAgenda.svelte";
   import { getContext } from "svelte";
   import { slide } from "svelte/transition";
 
@@ -28,119 +25,37 @@
 
   const openDetail = getContext<((m: Media) => void) | undefined>("openMediaDetail");
 
-  // ── State ─────────────────────────────────────────────────────────────────────
-
-  let items = $state<CalendarItem[]>([]);
-  let loading = $state(true);
-  let expanded = $state(false);
-  let showAllDays = $state(false);
-  let collapsedGroups = $state<Record<string, boolean>>({});
-
-  // ── Data ──────────────────────────────────────────────────────────────────────
-
-  async function load(): Promise<void> {
-    loading = true;
-    try {
-      items = await api.libraryCalendar();
-    } catch {
-      items = [];
-    } finally {
-      loading = false;
-    }
-  }
+  // Fetching, day grouping and the "show more" window live in
+  // $lib/calendarAgenda.svelte.ts, shared with the desktop and TV strips.
+  const ctl = new CalendarAgendaController({ chipLimit: 10 });
 
   $effect(() => {
     $libraryChanged;
-    load();
+    ctl.load();
   });
-
-  // ── Derived ──────────────────────────────────────────────────────────────────
-
-  const days = $derived(groupByDay(items));
-  const summary = $derived(calendarSummary(items));
-  const label = $derived(summaryLabel(summary));
-  const chips = $derived(nextUp(items, 10));
-  const isEmpty = $derived(!loading && items.length === 0);
-
-  const MAX_DAYS_INITIAL = 7;
-
-  const visibleDays = $derived.by(() => {
-    const availDays = days.filter((d) => d.key === "available");
-    const dateDays = days.filter((d) => d.key !== "available");
-    if (showAllDays || dateDays.length <= MAX_DAYS_INITIAL) {
-      return [...availDays, ...dateDays];
-    }
-    return [...availDays, ...dateDays.slice(0, MAX_DAYS_INITIAL)];
-  });
-
-  const hiddenDayCount = $derived.by(() => {
-    const dateDays = days.filter((d) => d.key !== "available");
-    return Math.max(0, dateDays.length - MAX_DAYS_INITIAL);
-  });
-
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-
-  function toggleGroup(key: string): void {
-    collapsedGroups[key] = !collapsedGroups[key];
-  }
-
-  function toMedia(item: CalendarItem): Media {
-    if (item.media_type === "tv") {
-      return mediaFromEntry({
-        id: item.tmdb_id,
-        media_type: "tv",
-        name: item.title,
-        poster_path: item.poster_path,
-      });
-    }
-    return mediaFromEntry({
-      id: item.tmdb_id,
-      media_type: "movie",
-      title: item.title,
-      poster_path: item.poster_path,
-    });
-  }
 
   function openItem(item: CalendarItem): void {
     openDetail?.(toMedia(item));
-  }
-
-  function chipSublabel(item: CalendarItem): string {
-    if (item.kind === "available") {
-      if (
-        item.media_type === "tv" &&
-        item.season_number != null &&
-        item.episode_number != null
-      ) {
-        return `S${item.season_number}E${item.episode_number}`;
-      }
-      return "Watch";
-    }
-    return shortDateLabel(item.date);
-  }
-
-  function dayOfMonth(dateKey: string): number {
-    return new Date(dateKey + "T00:00:00").getDate();
   }
 </script>
 
 <div class="mb-4">
   <!-- ── Header ──────────────────────────────────────────────────────────────── -->
-  {#if isEmpty}
+  {#if ctl.isEmpty}
     <!-- No expand toggle when empty -->
-    <div class="flex items-center gap-2 p-6">
+    <div class="flex ctl.items-center gap-2 p-6">
       <CalendarDays class="size-4 text-muted-foreground" />
       <h2 class="text-base font-semibold">{m.calendar_calendar()}</h2>
     </div>
   {:else}
     <button
-      onclick={() => (expanded = !expanded)}
-      aria-expanded={expanded}
-      class="flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left transition-colors active:bg-secondary/70"
+      onclick={() => (ctl.expanded = !ctl.expanded)}
+      aria-expanded={ctl.expanded}
+      class="flex w-full ctl.items-center gap-2 rounded-lg px-1 py-0.5 text-left transition-colors active:bg-secondary/70"
     >
       <CalendarDays class="size-4 shrink-0 text-muted-foreground" />
       <h2 class="flex-1 text-base font-semibold">{m.calendar_calendar()}</h2>
-      {#if expanded}
+      {#if ctl.expanded}
         <ChevronUp class="size-4 shrink-0 text-muted-foreground" />
       {:else}
         <ChevronDown class="size-4 shrink-0 text-muted-foreground" />
@@ -150,7 +65,7 @@
 
   <!-- ── Body ────────────────────────────────────────────────────────────────── -->
 
-  {#if loading}
+  {#if ctl.loading}
     <!-- Skeleton matching collapsed height -->
     <div class="mt-2 space-y-2">
       <Skeleton class="h-3.5 w-40 rounded" />
@@ -165,18 +80,18 @@
       </div>
     </div>
 
-  {:else if isEmpty}
+  {:else if ctl.isEmpty}
     <!-- Empty state compact -->
-    <div class="mt-1 flex items-center gap-2 py-2 text-muted-foreground">
+    <div class="mt-1 flex ctl.items-center gap-2 py-2 text-muted-foreground">
       <CalendarOff class="size-4 shrink-0 opacity-40" />
       <p class="text-xs">{m.calendar_empty()}</p>
     </div>
 
   {:else}
     <!-- Summary line (always visible) -->
-    <p class="mt-0.5 px-1 text-xs text-muted-foreground">{label}</p>
+    <p class="mt-0.5 px-1 text-xs text-muted-foreground">{ctl.label}</p>
 
-    {#if !expanded}
+    {#if !ctl.expanded}
       <!-- ── Collapsed: next-up chip strip ───────────────────────────────────── -->
       <!--
         Touch-native horizontal scroll: native inertia, hidden scrollbar per
@@ -185,7 +100,7 @@
       <div
         class="mt-2 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [-webkit-overflow-scrolling:touch] [&::-webkit-scrollbar]:hidden"
       >
-        {#each chips as item (`${item.tmdb_id}-${item.kind}-${item.season_number ?? ""}-${item.episode_number ?? ""}`)}
+        {#each ctl.chips as item (`${item.tmdb_id}-${item.kind}-${item.season_number ?? ""}-${item.episode_number ?? ""}`)}
           <button
             onclick={() => openItem(item)}
             class="flex w-36 shrink-0 flex-col overflow-hidden rounded-lg bg-secondary/40 text-left active:bg-secondary"
@@ -207,7 +122,7 @@
                 />
               {:else}
                 <div
-                  class="flex aspect-video w-full items-center justify-center bg-secondary"
+                  class="flex aspect-video w-full ctl.items-center justify-center bg-secondary"
                 >
                   {#if item.media_type === "tv"}
                     <Tv class="size-5 text-muted-foreground/40" />
@@ -248,21 +163,21 @@
             aria-hidden="true"
           ></div>
 
-          {#each visibleDays as day, i (day.key)}
-            <div class="flex gap-2 {i < visibleDays.length - 1 ? 'mb-4' : ''}">
+          {#each ctl.visibleDays as day, i (day.key)}
+            <div class="flex gap-2 {i < ctl.visibleDays.length - 1 ? 'mb-4' : ''}">
               <!-- Date rail: ~w-8, narrower than desktop -->
               <div
                 class="relative z-10 flex w-8 shrink-0 justify-center pt-0.5"
               >
                 {#if day.key === "available"}
                   <div
-                    class="flex h-7 w-7 items-center justify-center rounded-full bg-accent"
+                    class="flex h-7 w-7 ctl.items-center justify-center rounded-full bg-accent"
                   >
                     <CalendarDays class="size-3.5 text-accent-foreground" />
                   </div>
                 {:else}
                   <div
-                    class="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background"
+                    class="flex h-7 w-7 ctl.items-center justify-center rounded-full border border-border bg-background"
                   >
                     <span class="text-[11px] font-semibold tabular-nums">
                       {dayOfMonth(day.key)}
@@ -274,27 +189,27 @@
               <!-- Day content -->
               <div class="min-w-0 flex-1">
                 <button
-                  onclick={() => toggleGroup(day.key)}
-                  aria-expanded={!collapsedGroups[day.key]}
-                  class="mb-1 flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors active:bg-secondary/60"
+                  onclick={() => ctl.toggleGroup(day.key)}
+                  aria-expanded={!ctl.collapsedGroups[day.key]}
+                  class="mb-1 flex w-full ctl.items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors active:bg-secondary/60"
                 >
                   <span class="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     {day.label}
                   </span>
                   <span class="text-[11px] tabular-nums text-muted-foreground/60">{day.items.length}</span>
-                  {#if collapsedGroups[day.key]}
+                  {#if ctl.collapsedGroups[day.key]}
                     <ChevronDown class="size-3 shrink-0 text-muted-foreground/60" />
                   {:else}
                     <ChevronUp class="size-3 shrink-0 text-muted-foreground/60" />
                   {/if}
                 </button>
 
-                {#if !collapsedGroups[day.key]}
+                {#if !ctl.collapsedGroups[day.key]}
                 <div class="space-y-0.5 pb-3" transition:slide={{ duration: 150 }}>
                   {#each day.items as item (`${item.tmdb_id}-${item.kind}-${item.season_number ?? ""}-${item.episode_number ?? ""}`)}
                     <button
                       onclick={() => openItem(item)}
-                      class="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors active:bg-secondary/80"
+                      class="flex w-full ctl.items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors active:bg-secondary/80"
                     >
                       <!-- Still / poster: ~h-14 w-24 (smaller than desktop h-16 w-28) -->
                       <span
@@ -314,7 +229,7 @@
                           />
                         {:else}
                           <div
-                            class="flex h-full w-full items-center justify-center bg-secondary"
+                            class="flex h-full w-full ctl.items-center justify-center bg-secondary"
                           >
                             {#if item.media_type === "tv"}
                               <Tv class="size-3.5 text-muted-foreground/40" />
@@ -364,14 +279,14 @@
           {/each}
         </div>
 
-        <!-- Show N more days -->
-        {#if !showAllDays && hiddenDayCount > 0}
+        <!-- Show N more ctl.days -->
+        {#if !ctl.showAllDays && ctl.hiddenDayCount > 0}
           <button
-            onclick={() => (showAllDays = true)}
-            class="mt-1 flex w-full items-center justify-center gap-1 rounded-lg py-1.5 text-xs text-muted-foreground transition-colors active:bg-secondary"
+            onclick={() => (ctl.showAllDays = true)}
+            class="mt-1 flex w-full ctl.items-center justify-center gap-1 rounded-lg py-1.5 text-xs text-muted-foreground transition-colors active:bg-secondary"
           >
             <ChevronDown class="size-3.5" />
-            {m.common_show_more_days({ count: hiddenDayCount })}
+            {m.common_show_more_days({ count: ctl.hiddenDayCount })}
           </button>
         {/if}
       </div>

@@ -674,26 +674,17 @@ func validateDestinationPath(destDir, target string) error {
 
 // SetupHandlers registers /api/update/check and /api/update/apply on mux.
 func SetupHandlers(mux *http.ServeMux, currentVersion string) {
-	mux.HandleFunc("/api/update/check", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/update/check", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
 		result, err := check(currentVersion)
 		if err != nil {
 			log.Println("[updater] check error:", err)
 			http.Error(w, "update check failed", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
-	}))
+		utils.WriteJSON(w, result)
+	})))
 
-	mux.HandleFunc("/api/update/apply", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	mux.HandleFunc("/api/update/apply", utils.CorsMiddleware(utils.MethodGuard(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		// applyUpdate blocks for the duration of the download + extraction,
 		// then spawns a goroutine to exit with RestartExitCode.
 		if err := applyUpdate(); err != nil {
@@ -702,5 +693,5 @@ func SetupHandlers(mux *http.ServeMux, currentVersion string) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 }

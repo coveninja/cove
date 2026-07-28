@@ -1,18 +1,19 @@
 <script lang="ts">
   import type { Media } from "$lib/types/tmdb";
-  import type { SearchResults } from "$lib/api";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as ToggleGroup from "$lib/components/ui/toggle-group/index.js";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import MediaCard from "./MediaCard.svelte";
   import PersonCard from "./cards/PersonCard.svelte";
   import ProviderCard from "./cards/ProviderCard.svelte";
-  import { SvelteMap, SvelteSet } from "svelte/reactivity";
+  import { SvelteMap } from "svelte/reactivity";
   import { api } from "$lib/api";
   import { Button } from "$lib/components/ui/button";
   import { animate, splitText, stagger } from "animejs";
   import { onMount, tick } from "svelte";
   import * as m from "$lib/paraglide/messages.js";
+  import { qualityTargets, withKnownFor } from "$lib/search";
+  import { SearchController } from "$lib/searchController.svelte";
   import { getTopSearchResults } from "$lib/searchTopResults";
 
   let {
@@ -26,16 +27,9 @@
   } = $props();
 
   // ── Search state ────────────────────────────────────────────────────────────
-  const empty = (): SearchResults => ({
-    movies: [],
-    tv: [],
-    people: [],
-    providers: [],
-    title_order: [],
-  });
-
-  let data = $state<SearchResults>(empty());
-  let keywords: { id: number; name: string }[] = $state([]);
+  const search = new SearchController();
+  const data = $derived(search.data);
+  const keywords = $derived(search.keywords);
   // svelte-ignore non_reactive_update
   let qualityMap = new SvelteMap<number, string>();
 
@@ -51,7 +45,8 @@
   // string (not a strict union) so it can bind cleanly to shadcn Select.
   let sortKey = $state<string>("relevance");
   const sortLabel = $derived(
-    sortOptions.find((o) => o.value === sortKey)?.label ?? m.search_sort_relevance(),
+    sortOptions.find((o) => o.value === sortKey)?.label ??
+      m.search_sort_relevance(),
   );
 
   const typeOptions = [
@@ -105,20 +100,6 @@
   // ── Derived display lists ───────────────────────────────────────────────────
   // Fold each matched person's known-for titles into the title sections, so a
   // search for "Jackie Chan" also surfaces his films under Movies/TV.
-  function withKnownFor(list: Media[], type: "movie" | "tv"): Media[] {
-    const seen = new SvelteSet(list.map((m) => m.id));
-    const out = [...list];
-    for (const p of data.people) {
-      for (const m of p.known_for ?? []) {
-        if (m.media_type === type && !seen.has(m.id)) {
-          seen.add(m.id);
-          out.push(m);
-        }
-      }
-    }
-    return out;
-  }
-
   function compareMedia(a: Media, b: Media): number {
     switch (sortKey) {
       case "rating":
@@ -144,8 +125,10 @@
       .map(({ m }) => m);
   }
 
-  let movies = $derived(sortMedia(withKnownFor(data.movies, "movie")));
-  let tv = $derived(sortMedia(withKnownFor(data.tv, "tv")));
+  let movies = $derived(
+    sortMedia(withKnownFor(data.movies, "movie", data.people)),
+  );
+  let tv = $derived(sortMedia(withKnownFor(data.tv, "tv", data.people)));
   let topResults = $derived(
     getTopSearchResults(data.movies, data.tv, data.title_order ?? [], {
       includeMovies: showMovie,
@@ -217,52 +200,23 @@
   // *fetches* — once a timer fires, its awaited request keeps running even
   // if a newer keystroke starts another one. Without this, a slower older
   // response can land after and overwrite a faster newer one.
-  let searchSeq = 0;
-
   $effect(() => {
-    const q = query.trim();
-    const timeout = setTimeout(async () => {
-      const seq = ++searchSeq;
-      // A new search invalidates whatever quality-badge NDJSON stream the
-      // previous one kicked off — abort it now rather than waiting for this
-      // search's own streamQuality() call, so a slow prior response can't
-      // keep writing into qualityMap after the user has moved on.
-      qualityAbort?.abort();
-      if (!q) {
-        data = empty();
-        keywords = [];
+    qualityAbort?.abort();
+    const cancel = search.schedule(query, {
+      beforeLoad: async (currentQuery) => {
         qualityMap = new SvelteMap();
-        return;
-      }
-      // Drop stale quality badges before each new search so entries from a
-      // previous query don't bleed into the incoming results.
-      qualityMap = new SvelteMap();
-      await animateText(query);
-      loading = true;
-      const [res, kw] = await Promise.all([
-        api.searchMulti(q).catch(() => empty()),
-        api.getKeywords(q).catch(() => []),
-      ]);
-      // Superseded by a newer search while this one was in flight — discard.
-      if (seq !== searchSeq) return;
-      // Guard against null sections (e.g. an empty array serialized as null).
-      data = {
-        movies: res.movies ?? [],
-        tv: res.tv ?? [],
-        people: res.people ?? [],
-        providers: res.providers ?? [],
-        title_order: res.title_order ?? [],
-      };
-      keywords = kw ?? [];
-      loading = false;
-
-      streamQuality([
-        ...data.movies.map((m) => ({ id: m.id, type: "movie" as const })),
-        ...data.tv.map((m) => ({ id: m.id, type: "tv" as const })),
-      ]);
-    }, 400);
+        await animateText(currentQuery);
+      },
+      afterLoad: (results) => streamQuality(qualityTargets(results)),
+      onClear: () => {
+        qualityMap = new SvelteMap();
+      },
+      onLoading: (value) => {
+        loading = value;
+      },
+    });
     return () => {
-      clearTimeout(timeout);
+      cancel();
       qualityAbort?.abort();
     };
   });
@@ -297,7 +251,8 @@
         </ToggleGroup.Root>
 
         <div class="ml-auto flex items-center gap-2">
-          <span class="text-xs text-muted-foreground">{m.search_sort_by()}</span>
+          <span class="text-xs text-muted-foreground">{m.search_sort_by()}</span
+          >
           <Select.Root type="single" bind:value={sortKey}>
             <Select.Trigger size="sm" class="w-45 text-xs">
               {sortLabel}

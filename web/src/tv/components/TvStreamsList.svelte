@@ -1,48 +1,36 @@
 <script lang="ts">
   // TV-friendly fork of web/src/components/StreamsList.svelte.
   //
-  // DATA LAYER: verbatim copy of StreamsList's script block (stream fetching,
-  // ranking/dedup, auto-pick, quality-filter, sort, season/episode fetching,
-  // progress, WatchOptions, fetch-sequencing guards). Only the UI layer
-  // differs — Select dropdowns → cycle buttons, ScrollArea → native overflow,
-  // shadcn Button/Skeleton → plain elements, EpisodeCard → TvEpisodeCard.
+  // DATA LAYER: shared verbatim via $lib/streamsList.svelte.ts — this file used
+  // to carry a copy of StreamsList's whole script block. Only the UI layer
+  // differs now: Select dropdowns → cycle buttons, ScrollArea → native
+  // overflow, shadcn Button/Skeleton → plain elements, EpisodeCard →
+  // TvEpisodeCard.
   //
   // PROP CONTRACT: identical to StreamsList so TvDetailOverlay's call site
   // needs only an import swap (no prop changes).
 
-  import { epKey, epProgress, getMaxQuality, inferQuality, progressPct } from "$lib/utils";
-  import type { Stream, WatchOption } from "$lib/types/addons";
   import { Check, ChevronLeft, Play } from "lucide-svelte";
   import { Spinner } from "$lib/components/ui/spinner";
-  import { SvelteMap, SvelteSet } from "svelte/reactivity";
-  import { api, formatPosition } from "$lib/api";
-  import type { WatchProgress } from "$lib/types/library";
-  import { settings } from "$lib/stores/settings";
   import * as m from "$lib/paraglide/messages.js";
+
+  import { api, formatPosition } from "$lib/api";
+  import { epProgress, progressPct } from "$lib/utils";
+  import { settings } from "$lib/stores/settings";
+  import { codecLabel, langLabel } from "$lib/streamMeta";
   import {
-    compareStreamsBy,
-    formatAutoPickReason,
     formatStreamSummary,
-    getSeeders,
-    getSizeBytes,
-    isCodecHardDisabled,
     isTorrentStream,
-    rankStreams,
-    rankStreamsWithProbe,
     STREAM_SORT_MODES,
-    type StreamSelectionMode,
-    type StreamSortMode,
   } from "$lib/streamSelection";
-  import { codecLabel, langLabel, parseStreamMeta, type ParsedStreamMeta } from "$lib/streamMeta";
-  import type { TVEpisode } from "$lib/types/tmdb";
+  import {
+    StreamsListController,
+    watchTypeLabel,
+  } from "$lib/streamsList.svelte";
   import { focusGroup, focusable } from "../focus/actions";
   import TvEpisodeCard from "./TvEpisodeCard.svelte";
 
   // ── Identical prop contract to StreamsList ────────────────────────────────
-
-  let loadingStreams = $state(false);
-  let sortMode = $state<StreamSortMode>("seeders");
-  let qualityFilter = $state("all");
 
   let {
     media,
@@ -54,357 +42,32 @@
     autoJumpToActive = true,
   } = $props();
 
-  // ── TV types ──────────────────────────────────────────────────────────────
-
-  type TVSeason = {
-    season_number: number;
-    episode_count: number;
-    name: string;
-    poster_path: string;
-  };
-
-  // ── State ─────────────────────────────────────────────────────────────────
-
-  const isTV = $derived(media.media_type === "tv");
-
-  let seasons = $state<TVSeason[]>([]);
-  let episodes = $state<TVEpisode[]>([]);
-  let selectedSeason = $state<number | null>(null);
-  let selectedEpisode = $state<TVEpisode | null>(null);
-  let loadingSeasons = $state(false);
-  let loadingEpisodes = $state(false);
-
-  let streams = $state<Stream[]>([]);
-  let watchOptions = $state<WatchOption[]>([]);
-
-  function watchTypeLabel(type: string): string {
-    if (type === "rent") return m.streams_watch_rent();
-    if (type === "buy") return m.streams_watch_buy();
-    if (type === "free") return m.streams_watch_free();
-    if (type === "ads") return m.streams_watch_ads();
-    return type;
-  }
-
-  let pollInterval: ReturnType<typeof setInterval> | null = null;
-  let pollAttempts = 0;
-  const MAX_POLL_ATTEMPTS = 10;
-
-  // ── Fetch sequencing (B3) ─────────────────────────────────────────────────
-
-  let fetchSeq = 0;
-  let abortCtrl: AbortController | null = null;
-  let autoPickTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // ── Auto stream selection ─────────────────────────────────────────────────
-
-  let autoPicking = $state(false);
-  let autoPickCancelled = $state(false);
-  let showAlternatives = $state(false);
-
-  const alreadyPlayingThisSelection = $derived(
-    streamActive &&
-      (!isTV ||
-        (selectedSeason === activeSeason &&
-          selectedEpisode?.episode_number === activeEpisode)),
-  );
-
-  $effect(() => {
-    if (alreadyPlayingThisSelection && autoPicking) {
-      autoPicking = false;
-    }
+  // Props and $settings cross the module boundary as getters, never snapshots,
+  // so the controller's deriveds keep tracking them.
+  const ctl = new StreamsListController({
+    getMedia: () => media,
+    getStreamActive: () => streamActive,
+    getActiveSeason: () => activeSeason,
+    getActiveEpisode: () => activeEpisode,
+    getAutoJumpToActive: () => autoJumpToActive,
+    getSettings: () => $settings,
+    setMaxQuality: (q) => (maxQuality = q),
+    // Forwarded rather than passed by reference so a parent swapping the
+    // handler is picked up, same reason the props above are getters.
+    onPlayStream: (...args) => onPlayStream(...args),
   });
 
-  // ── Watch progress ────────────────────────────────────────────────────────
-
-  // TV: keyed by "season:episode"
-  let progressMap = new SvelteMap<string, WatchProgress>();
-  // Movie: single record
-  let movieProgress = $state<WatchProgress | null>(null);
-
-  $effect(() => {
-    if (!isTV) return;
-    api
-      .libraryGet(media.id, "tv")
-      .then((result) => {
-        progressMap.clear();
-        for (const p of result?.progress ?? []) {
-          if (p.season != null && p.episode != null) {
-            progressMap.set(epKey(p.season, p.episode), p);
-          }
-        }
-      })
-      .catch(console.error);
-  });
-
-  $effect(() => {
-    if (isTV) return;
-    api
-      .progressGet(media.id, "movie")
-      .then((p) => {
-        movieProgress = p;
-      })
-      .catch(console.error);
-  });
-
-  $effect(() => {
-    api
-      .getWatchOptions(media.id, media.media_type)
-      .then((opts) => (watchOptions = opts))
-      .catch(() => (watchOptions = []));
-  });
-
-  // ── Data fetching ─────────────────────────────────────────────────────────
-
-  $effect(() => {
-    if (!isTV) return;
-    loadingSeasons = true;
-    api
-      .tvSeasons<TVSeason>(media.id)
-      .then((data) => {
-        seasons = data ?? [];
-        if (seasons.length > 0 && selectedSeason === null) {
-          selectedSeason =
-            activeSeason != null && seasons.some((s) => s.season_number === activeSeason)
-              ? activeSeason
-              : seasons[0].season_number;
-        }
-      })
-      .finally(() => (loadingSeasons = false));
-  });
-
-  $effect(() => {
-    if (!isTV || selectedSeason === null) return;
-    loadingEpisodes = true;
-    episodes = [];
-    selectedEpisode = null;
-    streams = [];
-    api
-      .tvEpisodes(media.id, selectedSeason!)
-      .then((data) => {
-        episodes = data ?? [];
-        if (autoJumpToActive && selectedSeason === activeSeason && activeEpisode != null) {
-          const match = episodes.find((e) => e.episode_number === activeEpisode);
-          if (match) selectedEpisode = match;
-        }
-      })
-      .finally(() => (loadingEpisodes = false));
-  });
-
-  $effect(() => {
-    if (isTV && (!selectedEpisode || selectedSeason === null)) return () => {};
-
-    clearPoll();
-    if (autoPickTimer != null) {
-      clearTimeout(autoPickTimer);
-      autoPickTimer = null;
-    }
-    abortCtrl?.abort();
-    const seq = ++fetchSeq;
-    const ctrl = new AbortController();
-    abortCtrl = ctrl;
-
-    loadingStreams = true;
-    streams = [];
-    pollAttempts = 0;
-    autoPickCancelled = false;
-    autoPicking = false;
-    showAlternatives = false;
-    fetchStreams(seq, ctrl.signal).then(() => {
-      if (seq !== fetchSeq || ctrl.signal.aborted) return;
-      loadingStreams = false;
-      if (streams.length === 0)
-        pollInterval = setInterval(() => pollFetchStreams(seq, ctrl.signal), 2000);
-    });
-
-    return () => {
-      clearPoll();
-      ctrl.abort();
-      if (autoPickTimer != null) {
-        clearTimeout(autoPickTimer);
-        autoPickTimer = null;
-      }
-    };
-  });
-
-  // ── Stream helpers ────────────────────────────────────────────────────────
-
-  const availableQualities = $derived.by(() => {
-    const qs = [
-      ...new Set(streams.map((s) => inferQuality(s)).filter(Boolean)),
-    ];
-    qs.sort(
-      (a, b) =>
-        ["4k dv", "4k hdr", "4k", "1080p", "720p", "480p", "ts", "cam"].indexOf(a!) -
-        ["4k dv", "4k hdr", "4k", "1080p", "720p", "480p", "ts", "cam"].indexOf(b!),
-    );
-    return ["all", ...qs];
-  });
-
-  interface ParsedStream {
-    stream: Stream;
-    key: string;
-    seeders: number;
-    sizeBytes: number;
-    quality: string | null;
-    /** Codec/language details parsed from the release name — drives the
-     * showStreamDetails badges. */
-    meta: ParsedStreamMeta;
-    /** Device probe says this codec can't be hardware-decoded — row renders
-     * greyed/unselectable with a "Play anyway" override. */
-    isHardDisabled: boolean;
-  }
-
-  const parsedStreams = $derived.by(() => {
-    const seen = new SvelteSet<string>();
-    const result: ParsedStream[] = [];
-    for (const s of streams) {
-      const key = s.url || s.infoHash || s.title;
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      result.push({
-        stream: s,
-        key,
-        seeders: getSeeders(s),
-        sizeBytes: getSizeBytes(s),
-        quality: inferQuality(s),
-        meta: parseStreamMeta(s),
-        isHardDisabled: isCodecHardDisabled(s),
-      });
-    }
-    return result;
-  });
-
-  // Preferred audio language with "original" resolved to the title's TMDB
-  // original language — shared by the auto-select ranking and language sort.
-  const effectiveAudioLang = $derived(
-    $settings?.defaultAudioLang === "original"
-      ? (media.original_language ?? "")
-      : ($settings?.defaultAudioLang ?? ""),
-  );
-
-  const filteredStreams = $derived.by(() => {
-    const filtered = parsedStreams.filter(
-      (s) => qualityFilter === "all" || s.quality === qualityFilter,
-    );
-    const preferred = $settings?.defaultProvider;
-    const compare = compareStreamsBy(sortMode, effectiveAudioLang || undefined);
-    return filtered.toSorted((a, b) => {
-      if (preferred) {
-        const aPref = a.stream.addonName === preferred ? 1 : 0;
-        const bPref = b.stream.addonName === preferred ? 1 : 0;
-        if (aPref !== bPref) return bPref - aPref;
-      }
-      return compare(a, b);
-    });
-  });
-
-  function clearPoll(): void {
-    if (pollInterval) {
-      clearInterval(pollInterval);
-      pollInterval = null;
-    }
-  }
-
-  function pollFetchStreams(seq: number, signal: AbortSignal): void {
-    if (seq !== fetchSeq) return;
-    pollAttempts++;
-    if (pollAttempts > MAX_POLL_ATTEMPTS) {
-      clearPoll();
-      return;
-    }
-    fetchStreams(seq, signal);
-  }
-
-  async function fetchStreams(seq: number, signal: AbortSignal): Promise<void> {
-    let res: Stream[];
-    try {
-      res = await api.getStreams(
-        media.id,
-        isTV
-          ? {
-              type: "tv",
-              season: selectedSeason!,
-              episode: selectedEpisode!.episode_number,
-            }
-          : {},
-        signal,
-      );
-    } catch (e) {
-      if ((e as { name?: string } | null)?.name === "AbortError") return;
-      throw e;
-    }
-
-    if (seq !== fetchSeq) return;
-
-    streams = res;
-    maxQuality = getMaxQuality(streams);
-    if (streams.length > 0) clearPoll();
-
-    if (
-      $settings?.autoSelectStream &&
-      !autoPickCancelled &&
-      !autoPicking &&
-      !alreadyPlayingThisSelection &&
-      streams.length > 0
-    ) {
-      const selectionMode = ($settings.streamSelectionMode as StreamSelectionMode) ?? "balanced";
-      const rankOpts = {
-        measuredBandwidthMbps: $settings.measuredBandwidthMbps,
-        preferredProvider: $settings.defaultProvider,
-        sourcePreference: $settings.sourcePreference,
-        defaultAudioLang: effectiveAudioLang || undefined,
-      };
-      // Synchronous initial ranking — drives the log line and the fallback
-      // used when the probe doesn't land before the 500ms window closes.
-      const initialRanking = rankStreams(streams, selectionMode, rankOpts);
-      const best = initialRanking[0] ?? null;
-      if (best) {
-        const mode = $settings.streamSelectionMode ?? "balanced";
-        console.log(
-          `[stream-select] auto (${mode}): "${best.name}" — ${formatAutoPickReason(best)}`,
-          best,
-        );
-        autoPicking = true;
-        // Background probe: re-rank with dead links demoted and probed
-        // Content-Lengths filling unknown sizes. Fills probedRanking before
-        // the 500ms timer fires if the backend responds in time.
-        let probedRanking: Stream[] | null = null;
-        rankStreamsWithProbe(streams, selectionMode, { ...rankOpts, probeEnabled: $settings.probeStreams ?? true }, signal)
-          .then((ranked) => {
-            if (seq === fetchSeq && !autoPickCancelled) probedRanking = ranked;
-          })
-          .catch(() => {});
-        autoPickTimer = setTimeout(() => {
-          autoPickTimer = null;
-          if (seq === fetchSeq && !autoPickCancelled) {
-            const ranking = probedRanking ?? initialRanking;
-            onPlayStream(
-              ranking[0],
-              selectedSeason ?? undefined,
-              selectedEpisode?.episode_number,
-              selectedEpisode?.name,
-              ranking.slice(0, 5),
-            );
-          }
-        }, 500);
-      }
-    }
-  }
-
-  // ── TV-specific: cycle helpers for quality filter and sort mode ───────────
-  // Replaces the two Select.Root dropdowns from the desktop version with simple
-  // cycle buttons (Enter advances through the options — same pattern as
-  // TvMyListPage's sort button).
-
-  function cycleQuality(): void {
-    const idx = availableQualities.indexOf(qualityFilter);
-    qualityFilter = availableQualities[(idx + 1) % availableQualities.length];
-  }
-
-  function cycleSort(): void {
-    const idx = STREAM_SORT_MODES.findIndex((m) => m.value === sortMode);
-    sortMode = STREAM_SORT_MODES[(idx + 1) % STREAM_SORT_MODES.length].value;
-  }
+  // One $effect per controller lifecycle method, in the order the inline
+  // effects used to run. ctl.resetOnMediaChange() is deliberately NOT wired:
+  // TvDetailOverlay tears this list down between titles, so TV never had the
+  // desktop sidebar's mid-mount media swap (see the method's doc comment).
+  $effect(() => ctl.clearAutoPickingWhenPlaying());
+  $effect(() => ctl.loadProgress());
+  $effect(() => ctl.loadMovieProgress());
+  $effect(() => ctl.loadWatchOptions());
+  $effect(() => ctl.loadSeasons());
+  $effect(() => ctl.loadEpisodes());
+  $effect(() => ctl.loadStreams());
 </script>
 
 <!--
@@ -425,10 +88,10 @@
   class="flex h-full w-full flex-col overflow-hidden rounded-2xl border border-border bg-background/60 backdrop-blur-xl"
 >
   <!-- ── TV: episode browser (season chips + episode list) ─────────────────── -->
-  {#if isTV && !selectedEpisode}
+  {#if ctl.isTV && !ctl.selectedEpisode}
     <!-- Season chip strip -->
     <div class="flex-none border-b border-border">
-      {#if loadingSeasons}
+      {#if ctl.loadingSeasons}
         <div class="p-4">
           <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading_seasons()}</span>
         </div>
@@ -442,14 +105,14 @@
           use:focusGroup={{ id: "streams-seasons", policy: { type: "row" }, rememberFocus: true }}
           class="flex gap-2 overflow-x-hidden p-3"
         >
-          {#each seasons as s (s.season_number)}
+          {#each ctl.seasons as s (s.season_number)}
             <button
               type="button"
               use:focusable={{ groupId: "streams-seasons" }}
-              onclick={() => (selectedSeason = s.season_number)}
+              onclick={() => (ctl.selectedSeason = s.season_number)}
               class="shrink-0 rounded-xl px-4 py-2.5 text-sm font-medium transition-colors
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background
-                {selectedSeason === s.season_number
+                {ctl.selectedSeason === s.season_number
                   ? 'bg-accent text-accent-foreground'
                   : 'bg-secondary text-muted-foreground hover:text-foreground'}"
             >
@@ -465,19 +128,19 @@
       use:focusGroup={{ id: "streams-episodes", policy: { type: "column" } }}
       class="min-h-0 flex-1 overflow-y-auto overflow-x-hidden scrollbar-none [&::-webkit-scrollbar]:hidden"
     >
-      {#if loadingEpisodes}
+      {#if ctl.loadingEpisodes}
         <div class="flex items-center justify-center py-16">
           <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading_episodes()}</span>
         </div>
       {:else}
         <div class="flex flex-col divide-y divide-border px-2 py-2">
-          {#each episodes as ep (ep.episode_number)}
+          {#each ctl.episodes as ep (ep.episode_number)}
             <TvEpisodeCard
               {media}
               {ep}
-              {selectedSeason}
-              bind:selectedEpisode
-              {progressMap}
+              selectedSeason={ctl.selectedSeason}
+              bind:selectedEpisode={ctl.selectedEpisode}
+              progressMap={ctl.progressMap}
               {activeSeason}
               {activeEpisode}
               groupId="streams-episodes"
@@ -491,14 +154,11 @@
   {:else}
     <!-- Header: back button for TV shows, title for movies -->
     <div class="flex-none space-y-3 border-b border-border p-5">
-      {#if isTV && selectedEpisode}
+      {#if ctl.isTV && ctl.selectedEpisode}
         <!-- Native button — reached geometrically from streams-filters via Up -->
         <button
           type="button"
-          onclick={() => {
-            selectedEpisode = null;
-            streams = [];
-          }}
+          onclick={() => ctl.clearSelectedEpisode()}
           class="flex items-center gap-2 rounded-xl border border-border bg-secondary/60 px-4 py-2.5 text-base font-medium transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <ChevronLeft class="size-5" />
@@ -507,10 +167,10 @@
 
         <!-- Selected episode summary (display only — not focusable) -->
         <div class="flex items-start gap-4 rounded-xl border border-border bg-secondary/40 p-3">
-          {#if selectedEpisode.still_path}
+          {#if ctl.selectedEpisode.still_path}
             <img
-              src={selectedEpisode.still_path}
-              alt={selectedEpisode.name}
+              src={ctl.selectedEpisode.still_path}
+              alt={ctl.selectedEpisode.name}
               class="aspect-video w-28 shrink-0 rounded-lg object-cover"
             />
           {:else}
@@ -518,13 +178,13 @@
           {/if}
           <div class="min-w-0 flex-1">
             <p class="text-sm text-muted-foreground">
-              {m.common_season_short({ season: selectedSeason })} · {m.common_episode_short(
-                { episode: selectedEpisode.episode_number },
+              {m.common_season_short({ season: ctl.selectedSeason })} · {m.common_episode_short(
+                { episode: ctl.selectedEpisode.episode_number },
               )}
             </p>
-            <p class="text-base font-semibold leading-snug">{selectedEpisode.name}</p>
-            {#if selectedSeason != null}
-              {@const prog = epProgress(selectedSeason, selectedEpisode.episode_number, progressMap)}
+            <p class="text-base font-semibold leading-snug">{ctl.selectedEpisode.name}</p>
+            {#if ctl.selectedSeason != null}
+              {@const prog = epProgress(ctl.selectedSeason, ctl.selectedEpisode.episode_number, ctl.progressMap)}
               {#if prog}
                 {@const pct = progressPct(prog)}
                 {#if prog.completed}
@@ -554,22 +214,22 @@
       {:else}
         <!-- Movie: "Available Streams" header with progress -->
         <h3 class="text-xl font-semibold">{m.streams_available()}</h3>
-        {#if movieProgress}
-          {#if movieProgress.completed}
+        {#if ctl.movieProgress}
+          {#if ctl.movieProgress.completed}
             <p class="flex items-center gap-1.5 text-sm text-green-500">
               <Check class="size-4" /> {m.media_watched()}
             </p>
-          {:else if progressPct(movieProgress) > 1}
+          {:else if progressPct(ctl.movieProgress) > 1}
             <div class="space-y-1">
               <div class="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                 <div
                   class="h-full rounded-full bg-accent transition-all"
-                  style="width: {progressPct(movieProgress)}%"
+                  style="width: {progressPct(ctl.movieProgress)}%"
                 ></div>
               </div>
               <p class="text-sm text-muted-foreground">
-                {formatPosition(movieProgress.position_seconds)} / {formatPosition(
-                  movieProgress.duration_seconds,
+                {formatPosition(ctl.movieProgress.position_seconds)} / {formatPosition(
+                  ctl.movieProgress.duration_seconds,
                 )}
               </p>
             </div>
@@ -578,7 +238,7 @@
       {/if}
 
       <!-- Quality + sort cycle buttons (hidden when already playing + not showing alternatives) -->
-      {#if !alreadyPlayingThisSelection || showAlternatives}
+      {#if !ctl.alreadyPlayingThisSelection || ctl.showAlternatives}
         <!--
           Two cycle buttons side by side — same Enter-to-advance pattern as
           TvMyListPage's sort button. Row policy handles Left/Right between them;
@@ -592,19 +252,19 @@
           <button
             type="button"
             use:focusable={{ groupId: "streams-filters" }}
-            onclick={cycleQuality}
+            onclick={() => ctl.cycleQuality()}
             class="flex-1 rounded-xl bg-secondary px-4 py-3 text-base font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
-            {m.streams_sort_quality()}: {qualityFilter.toUpperCase()}
+            {m.streams_sort_quality()}: {ctl.qualityFilter.toUpperCase()}
           </button>
           <button
             type="button"
             use:focusable={{ groupId: "streams-filters" }}
-            onclick={cycleSort}
+            onclick={() => ctl.cycleSort()}
             class="flex-1 rounded-xl bg-secondary px-4 py-3 text-base font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-background"
           >
             {m.my_list_sort()}: {STREAM_SORT_MODES.find(
-              (m) => m.value === sortMode,
+              (m) => m.value === ctl.sortMode,
             )?.label}
           </button>
         </div>
@@ -617,13 +277,13 @@
     >
       <div class="p-4">
         <!-- Where to Watch (JustWatch) — display-only on TV; can't launch external apps -->
-        {#if watchOptions.length > 0}
+        {#if ctl.watchOptions.length > 0}
           <div class="mb-5">
             <p class="mb-2 text-sm font-medium uppercase tracking-wide text-muted-foreground">
               {m.streams_where_watch()}
             </p>
             <div class="flex flex-wrap gap-2">
-              {#each watchOptions as opt (opt.providerId + opt.type)}
+              {#each ctl.watchOptions as opt (opt.providerId + opt.type)}
                 <span
                   class="flex items-center gap-1.5 rounded-lg border border-border bg-secondary/40 px-3 py-1.5 text-sm"
                   title="{opt.providerName} ({watchTypeLabel(opt.type)})"
@@ -648,10 +308,10 @@
         {/if}
 
         <!-- Already playing banner -->
-        {#if alreadyPlayingThisSelection}
+        {#if ctl.alreadyPlayingThisSelection}
           <div
             class="flex items-center justify-between gap-2 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-base text-accent"
-            class:mb-4={showAlternatives}
+            class:mb-4={ctl.showAlternatives}
           >
             <span class="flex items-center gap-2">
               <Play class="size-5 fill-current" />
@@ -660,18 +320,18 @@
             <!-- Native button — reached geometrically within tv-detail free group -->
             <button
               type="button"
-              onclick={() => (showAlternatives = !showAlternatives)}
+              onclick={() => (ctl.showAlternatives = !ctl.showAlternatives)}
               class="rounded-lg bg-accent/20 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              {showAlternatives
+              {ctl.showAlternatives
                 ? m.streams_hide_alternatives()
                 : m.streams_see_alternatives()}
             </button>
           </div>
         {/if}
 
-        {#if !alreadyPlayingThisSelection || showAlternatives}
-          {#if autoPicking && !autoPickCancelled && !alreadyPlayingThisSelection}
+        {#if !ctl.alreadyPlayingThisSelection || ctl.showAlternatives}
+          {#if ctl.autoPicking && !ctl.autoPickCancelled && !ctl.alreadyPlayingThisSelection}
             <!-- Auto-picking state -->
             <div class="flex flex-col items-center justify-center gap-4 py-16">
               <Spinner class="size-10" />
@@ -679,23 +339,20 @@
               <!-- Focusable cancel button — reached geometrically -->
               <button
                 type="button"
-                onclick={() => {
-                  autoPickCancelled = true;
-                  autoPicking = false;
-                }}
+                onclick={() => ctl.cancelAutoPick()}
                 class="rounded-xl border border-border bg-secondary px-5 py-2.5 text-base font-medium transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
               >
                 {m.streams_choose_manually()}
               </button>
             </div>
 
-          {:else if loadingStreams}
+          {:else if ctl.loadingStreams}
             <div class="flex flex-col items-center justify-center gap-3 py-16">
               <Spinner class="size-10" />
               <span class="animate-pulse text-base text-muted-foreground">{m.streams_loading()}</span>
             </div>
 
-          {:else if streams.length === 0}
+          {:else if ctl.streams.length === 0}
             <div class="flex flex-col items-center justify-center gap-3 py-16">
               <Spinner class="size-10" />
               <span class="animate-pulse text-base text-muted-foreground">
@@ -703,7 +360,7 @@
               </span>
             </div>
 
-          {:else if filteredStreams.length === 0}
+          {:else if ctl.filteredStreams.length === 0}
             <div class="flex items-center justify-center py-16">
               <span class="text-base text-muted-foreground">{m.streams_no_filter()}</span>
             </div>
@@ -719,7 +376,7 @@
               use:focusGroup={{ id: "streams-results", policy: { type: "column" } }}
               class="flex flex-col gap-3"
             >
-              {#each filteredStreams as item (item.key)}
+              {#each ctl.filteredStreams as item (item.key)}
                 {@const stream = item.stream}
                 {#if item.isHardDisabled}
                   <!-- Codec the device provably can't hardware-decode: the
@@ -775,9 +432,9 @@
                           );
                           onPlayStream(
                             stream,
-                            selectedSeason ?? undefined,
-                            selectedEpisode?.episode_number,
-                            selectedEpisode?.name,
+                            ctl.selectedSeason ?? undefined,
+                            ctl.selectedEpisode?.episode_number,
+                            ctl.selectedEpisode?.name,
                           );
                         }}
                       >
@@ -796,9 +453,9 @@
                     );
                     onPlayStream(
                       stream,
-                      selectedSeason ?? undefined,
-                      selectedEpisode?.episode_number,
-                      selectedEpisode?.name,
+                      ctl.selectedSeason ?? undefined,
+                      ctl.selectedEpisode?.episode_number,
+                      ctl.selectedEpisode?.name,
                     );
                   }}
                 >

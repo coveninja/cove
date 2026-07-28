@@ -414,7 +414,7 @@ func (m *Manager) getStreamsUncached(
 			for _, sc := range scraped {
 				allStreams = append(allStreams, addons.Stream{
 					Name:      sc.Name,
-					Title:     firstNonEmpty(sc.Title, sc.Quality, sc.Name),
+					Title:     utils.FirstNonEmpty(sc.Title, sc.Quality, sc.Name),
 					URL:       sc.URL,
 					AddonName: "Nuvio: " + s.Name,
 					Headers:   sc.Headers,
@@ -452,13 +452,4 @@ func (m *Manager) getStreamsUncached(
 		m.streamCacheSetIfCurrent(key, result, cacheGeneration)
 	}
 	return result
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

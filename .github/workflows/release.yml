@@ -49,10 +49,9 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.COVE_PRIVATE_TOKEN }}
-
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache: 'false'
 
       - name: Test public implementation
         run: go test -count=1 ./...
@@ -75,10 +74,9 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.COVE_PRIVATE_TOKEN }}
-
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache: 'false'
 
       - name: Inject private implementations
         shell: bash
@@ -103,15 +101,7 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+      - uses: ./.github/actions/setup-web
 
       - name: Unit tests
         run: npm test
@@ -172,14 +162,13 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.COVE_PRIVATE_TOKEN }}
-
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache: 'false'
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -368,14 +357,13 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.COVE_PRIVATE_TOKEN }}
-
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache: 'false'
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -616,15 +604,7 @@ jobs:
 
       # `make android-aar` embeds web/dist into the AAR (-tags embedweb), so
       # the frontend must be installable and buildable here too.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install web dependencies
-        run: npm ci
-        working-directory: web
+      - uses: ./.github/actions/setup-web
 
       # `make android-aar` composes -tags supabase,discover automatically once
       # the private implementations above are present, mirroring desktop builds.

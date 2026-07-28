@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
+  import { statusLabel, type LibraryStatus, STATUS_COLORS } from "$lib/api";
   import type { LibraryEntry } from "$lib/types/library";
   import type { Media } from "$lib/types/tmdb";
   import {
@@ -11,11 +11,11 @@
     Trash2,
   } from "lucide-svelte";
   import { animate } from "animejs";
-  import { libraryChanged } from "$lib/stores/library";
   import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import {
     mediaUtilityItems,
     performMediaUtilityAction,
+    setMediaLibraryStatus,
     type MediaUtilityAction,
   } from "$lib/mediaActions";
   import * as m from "$lib/paraglide/messages.js";
@@ -38,12 +38,16 @@
     onpopoverchange?: (open: boolean) => void;
   }>();
 
-  const title = $derived(media.media_type === "tv" ? media.name : media.title);
   let working = $state<MediaUtilityAction | null>(null);
   const utilityItems = $derived(
     mediaUtilityItems(media, { entry: libraryEntry, dismissed, hasProgress }),
   );
-  const statuses: LibraryStatus[] = ["watch_later", "watching", "finished", "dropped"];
+  const statuses: LibraryStatus[] = [
+    "watch_later",
+    "watching",
+    "finished",
+    "dropped",
+  ];
 
   function animateBookmarkIn(el: HTMLElement): void {
     animate(el, {
@@ -56,30 +60,10 @@
 
   async function handleStatus(status: LibraryStatus): Promise<void> {
     try {
-      if (libraryEntry?.status === status) {
-        await api.libraryRemove(media.id, media.media_type);
-        libraryEntry = null;
-      } else if (libraryEntry) {
-        libraryEntry = await api.librarySetStatus(
-          media.id,
-          media.media_type,
-          status,
-        );
-      } else {
-        libraryEntry = await api.libraryUpsert({
-          tmdb_id: media.id,
-          media_type: media.media_type,
-          title,
-          poster_path: media.poster_path ?? "",
-          vote_average: media.vote_average ?? 0,
-          last_air_date: media.last_air_date ?? "",
-          last_aired_season: lastAiredSeason,
-          last_aired_episode: lastAiredEpisode,
-          status,
-        });
-      }
-
-      libraryChanged.update((n) => n + 1);
+      libraryEntry = await setMediaLibraryStatus(media, libraryEntry, status, {
+        lastAiredSeason,
+        lastAiredEpisode,
+      });
       onpopoverchange?.(false);
     } catch (e) {
       console.error("library status:", e);
@@ -150,11 +134,17 @@
           <span class="size-4 shrink-0">
             {#if isActive}
               <span use:animateBookmarkIn>
-                <BookmarkIcon class="size-4 {STATUS_COLORS[value as LibraryStatus].text}" />
+                <BookmarkIcon
+                  class="size-4 {STATUS_COLORS[value as LibraryStatus].text}"
+                />
               </span>
             {/if}
           </span>
-          <span class="size-2 shrink-0 rounded-full {STATUS_COLORS[value as LibraryStatus].dot}"></span>
+          <span
+            class="size-2 shrink-0 rounded-full {STATUS_COLORS[
+              value as LibraryStatus
+            ].dot}"
+          ></span>
           {statusLabel(value)}
         </span>
       </ContextMenu.Item>

@@ -1,24 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { settings } from "$lib/stores/settings";
-  import type { Settings } from "$lib/types/settings";
   import { isAndroid, isAndroidTV, isDesktopTvMode, setTvMode } from "$lib/platform";
   import { STREAM_SELECTION_MODES, SOURCE_PREFERENCES } from "$lib/streamSelection";
   import { DISCOVERY_ALGORITHMS } from "$lib/discoveryAlgorithms";
-  import { api } from "$lib/api";
-  import type { AddonEntry } from "$lib/types/addons";
   import {
     KindProvider,
     KindTimestamps,
     SourceOfficial,
   } from "$lib/types/addons";
-  import type {
-    Repo as NuvioRepo,
-    Scraper as NuvioScraper,
-  } from "$lib/types/nuvio";
   import { focusGroup, focusable } from "../focus/actions";
   import { TriangleAlert, RefreshCw, Trash2, Cog, X } from "lucide-svelte";
   import * as m from "$lib/paraglide/messages.js";
+  import {
+    AUDIO_LANGUAGES,
+    LANGUAGES,
+    SettingsController,
+  } from "$lib/settingsController.svelte";
   import {
     LOCALES,
     languageDisplayName,
@@ -46,325 +43,17 @@
     { id: "plugins", label: m.settings_plugins() },
   ];
 
-  // ── Settings draft ────────────────────────────────────────────────────────────
-  let draft = $state<Settings | null>(null);
-  let saved = $state(false);
-  let saveError = $state<string | null>(null);
-  let saveTimer: ReturnType<typeof setTimeout>;
+  // The settings draft, addon management, Nuvio repos, the algorithm test, the
+  // speed test and the remote-access token reveal all live in
+  // $lib/settingsController.svelte.ts, shared with SettingsPage. What stays
+  // here is TV-only: the section navigation above and the switch styling
+  // below.
+  const ctl = new SettingsController();
 
-  // Auto-update toggle — native pref, lives outside the Go settings store.
-  // Only rendered on Android / Android TV.
-  let autoUpdateEnabled = $state(true);
+  onMount(() => void ctl.init());
 
-  onMount(async () => {
-    await settings.load();
-    const unsub = settings.subscribe((v) => {
-      if (!draft) draft = { ...v };
-    });
-    unsub();
-    loadAddons();
-    loadNuvioRepos();
-    const nativeVal = window.__coveApp?.getAutoUpdateEnabled?.();
-    if (typeof nativeVal === "boolean") autoUpdateEnabled = nativeVal;
-  });
+  $effect(() => ctl.clearRevealOnTokenReset());
 
-  function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
-    if (!draft) return;
-    draft = { ...draft, [key]: value };
-  }
-
-  async function handleSave() {
-    if (!draft) return;
-    const previousLanguage = normalizeAppLocale(settings.getCurrent().uiLanguage) ?? "en";
-    const nextLanguage = normalizeAppLocale(draft.uiLanguage) ?? "en";
-    saveError = null;
-    const persisted = await settings.save(draft);
-    if (!persisted) {
-      saved = false;
-      saveError = m.language_save_error();
-      return;
-    }
-    if (nextLanguage !== previousLanguage) {
-      window.location.reload();
-      return;
-    }
-    saved = true;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => (saved = false), 2000);
-    const unsub = settings.subscribe((v) => {
-      if (draft) {
-        draft = {
-          ...draft,
-          remoteAccessToken: v.remoteAccessToken,
-          updatedAt: v.updatedAt,
-        };
-      }
-    });
-    unsub();
-  }
-
-  function handleReset() {
-    draft = null;
-    settings.load().then(() => {
-      const unsub = settings.subscribe((v) => {
-        draft = { ...v };
-      });
-      unsub();
-    });
-  }
-
-  // ── Addon management ──────────────────────────────────────────────────────────
-  let addons = $state<AddonEntry[]>([]);
-  let addAddonUrl = $state("");
-  let addAddonError = $state<string | null>(null);
-  let addAddonLoading = $state(false);
-
-  async function loadAddons() {
-    try {
-      addons = await api.getAddons();
-    } catch {
-      addons = [];
-    }
-  }
-
-  const providerAddons = $derived(addons.filter((a) => a.kind === KindProvider));
-
-  async function handleAddAddon() {
-    if (!addAddonUrl.trim()) return;
-    addAddonLoading = true;
-    addAddonError = null;
-    try {
-      const entry = await api.addAddon(addAddonUrl.trim());
-      addons = [...addons.filter((a) => a.id !== entry.id), entry];
-      addAddonUrl = "";
-    } catch (e) {
-      addAddonError = e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_addons() });
-    } finally {
-      addAddonLoading = false;
-    }
-  }
-
-  async function handleToggleAddon(addon: AddonEntry) {
-    await api.toggleAddon(addon.id, !addon.enabled, addon.url);
-    addons = addons.map((a) =>
-      a.id === addon.id && a.url === addon.url
-        ? { ...a, enabled: !a.enabled }
-        : a,
-    );
-  }
-
-  async function handleRemoveAddon(addon: AddonEntry) {
-    await api.removeAddon(addon.id, addon.url);
-    addons = addons.filter(
-      (a) => !(a.id === addon.id && a.url === addon.url),
-    );
-  }
-
-  async function handleToggleCatalog(
-    addon: AddonEntry,
-    key: string,
-    enabled: boolean,
-  ) {
-    try {
-      await api.toggleCatalog(addon.id, key, enabled, addon.url);
-      addons = addons.map((a) =>
-        (addon.url ? a.url === addon.url : a.id === addon.id)
-          ? {
-              ...a,
-              disabledCatalogs: {
-                ...(a.disabledCatalogs ?? {}),
-                [key]: !enabled,
-              },
-            }
-          : a,
-      );
-    } catch (e) {
-      console.error("handleToggleCatalog failed", e);
-    }
-  }
-
-  let refreshingAddonId = $state<string | null>(null);
-  let configureAddon = $state<AddonEntry | null>(null);
-
-  async function handleRefreshAddon(addon: AddonEntry) {
-    refreshingAddonId = addon.id;
-    try {
-      await api.refreshAddon(addon.id, addon.url);
-      await loadAddons();
-    } catch (e) {
-      console.error("handleRefreshAddon failed", e);
-    } finally {
-      refreshingAddonId = null;
-    }
-  }
-
-  // ── Nuvio plugin repos ────────────────────────────────────────────────────────
-  let nuvioRepos = $state<NuvioRepo[]>([]);
-  let addRepoUrl = $state("");
-  let addRepoError = $state<string | null>(null);
-  let addRepoLoading = $state(false);
-  let refreshingRepoId = $state<string | null>(null);
-  let pendingConfirm = $state<{ repoId: string; scraperId: string } | null>(
-    null,
-  );
-
-  async function loadNuvioRepos() {
-    try {
-      nuvioRepos = await api.getNuvioRepos();
-    } catch {
-      nuvioRepos = [];
-    }
-  }
-
-  const nuvioProviderOptions = $derived(
-    Array.from(
-      new Set(
-        nuvioRepos
-          .filter((r) => r.enabled)
-          .flatMap((r) =>
-            r.scrapers
-              .filter((s) => s.enabled)
-              .map((s) => `Nuvio: ${s.name}`),
-          ),
-      ),
-    ),
-  );
-
-  async function handleAddRepo() {
-    if (!addRepoUrl.trim()) return;
-    addRepoLoading = true;
-    addRepoError = null;
-    try {
-      const repo = await api.addNuvioRepo(addRepoUrl.trim());
-      nuvioRepos = [...nuvioRepos.filter((r) => r.id !== repo.id), repo];
-      addRepoUrl = "";
-    } catch (e) {
-      addRepoError =
-        e instanceof Error ? e.message : m.common_failed_message({ error: m.settings_plugins() });
-    } finally {
-      addRepoLoading = false;
-    }
-  }
-
-  async function handleToggleRepo(repo: NuvioRepo) {
-    await api.setNuvioRepoEnabled(repo.id, !repo.enabled);
-    nuvioRepos = nuvioRepos.map((r) =>
-      r.id === repo.id ? { ...r, enabled: !r.enabled } : r,
-    );
-  }
-
-  async function handleRemoveRepo(repo: NuvioRepo) {
-    await api.removeNuvioRepo(repo.id);
-    nuvioRepos = nuvioRepos.filter((r) => r.id !== repo.id);
-  }
-
-  async function handleRefreshRepo(repo: NuvioRepo) {
-    refreshingRepoId = repo.id;
-    try {
-      await api.refreshNuvioRepo(repo.id);
-      nuvioRepos = nuvioRepos.map((r) =>
-        r.id === repo.id ? { ...r, fetchedAt: new Date().toISOString() } : r,
-      );
-      await loadNuvioRepos();
-    } finally {
-      refreshingRepoId = null;
-    }
-  }
-
-  function requestEnableScraper(repo: NuvioRepo, scraper: NuvioScraper) {
-    if (scraper.enabled) {
-      handleSetScraperEnabled(repo, scraper, false);
-      return;
-    }
-    pendingConfirm = { repoId: repo.id, scraperId: scraper.id };
-  }
-
-  async function handleSetScraperEnabled(
-    repo: NuvioRepo,
-    scraper: NuvioScraper,
-    enabled: boolean,
-  ) {
-    pendingConfirm = null;
-    await api.setNuvioScraperEnabled(repo.id, scraper.id, enabled);
-    nuvioRepos = nuvioRepos.map((r) =>
-      r.id === repo.id
-        ? {
-            ...r,
-            scrapers: r.scrapers.map((s) =>
-              s.id === scraper.id ? { ...s, enabled } : s,
-            ),
-          }
-        : r,
-    );
-  }
-
-  // ── Discovery algorithm ───────────────────────────────────────────────────────
-  let testingAlgorithm = $state(false);
-  let algorithmTestResult = $state<{ ok: boolean; error?: string } | null>(
-    null,
-  );
-
-  async function handleTestAlgorithm() {
-    if (!draft?.customAlgorithmUrl.trim()) return;
-    testingAlgorithm = true;
-    algorithmTestResult = null;
-    try {
-      algorithmTestResult = await api.testDiscoveryAlgorithm(
-        draft.customAlgorithmUrl.trim(),
-      );
-    } catch (e) {
-      algorithmTestResult = {
-        ok: false,
-        error: e instanceof Error ? e.message : m.common_error(),
-      };
-    } finally {
-      testingAlgorithm = false;
-    }
-  }
-
-  const LANGUAGES = [
-    { value: "en" },
-    { value: "es" },
-    { value: "fr" },
-    { value: "de" },
-    { value: "pt" },
-    { value: "it" },
-    { value: "ja" },
-    { value: "ko" },
-    { value: "zh" },
-    { value: "ar" },
-    { value: "ru" },
-  ];
-
-  const AUDIO_LANGUAGES = [
-    { value: "original" },
-    ...LANGUAGES,
-  ];
-
-  // ── Speed test ────────────────────────────────────────────────────────────────
-  let testingSpeed = $state(false);
-  let speedTestError = $state<string | null>(null);
-
-  async function runSpeedTest() {
-    if (!draft) return;
-    testingSpeed = true;
-    speedTestError = null;
-    try {
-      const start = performance.now();
-      const res = await fetch(api.speedtestUrl(), { cache: "no-store" });
-      const blob = await res.blob();
-      const seconds = (performance.now() - start) / 1000;
-      const mbps = (blob.size * 8) / 1_000_000 / seconds;
-      patch("measuredBandwidthMbps", Math.round(mbps * 10) / 10);
-    } catch {
-      speedTestError = "Speed test failed — check your connection.";
-    } finally {
-      testingSpeed = false;
-    }
-  }
-
-  // ── Toggle button class helpers ───────────────────────────────────────────────
-  // Avoids {@const} which Svelte 5 only allows inside control-flow blocks.
   function trackBg(on: boolean) {
     return on ? "bg-accent" : "bg-white/20";
   }
@@ -372,56 +61,6 @@
     return on ? "translate-x-8" : "translate-x-1";
   }
 
-  // ── Remote access token ───────────────────────────────────────────────────────
-  let revealedToken = $state<string | null>(null);
-  let tokenVisible = $state(false);
-  let revealingToken = $state(false);
-  let tokenCopied = $state(false);
-  let tokenCopyTimer: ReturnType<typeof setTimeout>;
-
-  async function handleRevealToken(): Promise<void> {
-    if (revealedToken !== null) {
-      tokenVisible = !tokenVisible;
-      return;
-    }
-    revealingToken = true;
-    try {
-      revealedToken = await api.revealRemoteAccessToken();
-      tokenVisible = true;
-    } catch (e) {
-      console.error("revealRemoteAccessToken:", e);
-    } finally {
-      revealingToken = false;
-    }
-  }
-
-  async function handleCopyToken(): Promise<void> {
-    let token = revealedToken;
-    if (!token) {
-      revealingToken = true;
-      try {
-        token = await api.revealRemoteAccessToken();
-        revealedToken = token;
-        tokenVisible = true;
-      } catch (e) {
-        console.error("revealRemoteAccessToken:", e);
-        return;
-      } finally {
-        revealingToken = false;
-      }
-    }
-    await navigator.clipboard.writeText(token);
-    tokenCopied = true;
-    clearTimeout(tokenCopyTimer);
-    tokenCopyTimer = setTimeout(() => (tokenCopied = false), 2000);
-  }
-
-  $effect(() => {
-    if (draft?.remoteAccessToken === "") {
-      revealedToken = null;
-      tokenVisible = false;
-    }
-  });
 </script>
 
 <!--
@@ -465,12 +104,12 @@
       <h1 class="text-2xl font-bold">
         {SECTIONS.find((s) => s.id === activeSection)?.label}
       </h1>
-      {#if draft}
+      {#if ctl.draft}
         <div class="flex items-center gap-3">
           <button
             type="button"
             use:focusable={{ groupId: "settings-save" }}
-            onclick={handleReset}
+            onclick={ctl.handleReset}
             class="rounded-xl bg-secondary px-6 py-3 text-base font-medium text-muted-foreground
                    transition-colors hover:text-foreground
                    focus:outline-none focus:ring-2 focus:ring-accent"
@@ -480,12 +119,12 @@
           <button
             type="button"
             use:focusable={{ groupId: "settings-save" }}
-            onclick={handleSave}
+            onclick={ctl.handleSave}
             class="rounded-xl bg-accent px-6 py-3 text-base font-semibold text-accent-foreground
                    transition-colors hover:bg-accent/90
                    focus:outline-none focus:ring-2 focus:ring-accent"
           >
-            {saved ? `${m.common_saved()} ✓` : m.common_save()}
+            {ctl.saved ? `${m.common_saved()} ✓` : m.common_save()}
           </button>
         </div>
       {/if}
@@ -496,10 +135,10 @@
       class="flex-1 min-h-0 overflow-y-auto scrollbar-none [&::-webkit-scrollbar]:hidden px-8 pb-16"
       use:focusGroup={{ id: "settings-content", policy: { type: "column" }, rememberFocus: false }}
     >
-      {#if saveError}
-        <p role="alert" class="pt-4 text-sm text-red-400">{saveError}</p>
+      {#if ctl.saveError}
+        <p role="alert" class="pt-4 text-sm text-red-400">{ctl.saveError}</p>
       {/if}
-      {#if draft}
+      {#if ctl.draft}
 
         <!-- ══ Playback ══ -->
         <div class:hidden={activeSection !== "playback"} class="pt-4">
@@ -513,14 +152,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.openOnMute}
+              aria-checked={ctl.draft.openOnMute}
               aria-label={m.settings_toggle_setting({ setting: m.settings_open_muted() })}
-              onclick={() => patch("openOnMute", !draft.openOnMute)}
+              onclick={() => ctl.patch("openOnMute", !ctl.draft.openOnMute)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.openOnMute)}"
+                     {trackBg(ctl.draft.openOnMute)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.openOnMute)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.openOnMute)}"></span>
             </button>
           </div>
 
@@ -533,18 +172,18 @@
             <div class="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                onclick={() => patch("defaultVolume", Math.max(0, draft!.defaultVolume - 0.05))}
+                onclick={() => ctl.patch("defaultVolume", Math.max(0, ctl.draft!.defaultVolume - 0.05))}
                 aria-label={m.settings_decrease_volume()}
                 class="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-xl font-bold
                        transition-colors hover:bg-secondary/70
                        focus:outline-none focus:ring-2 focus:ring-accent"
               >−</button>
               <span class="w-14 text-center text-lg font-medium tabular-nums">
-                {Math.round(draft.defaultVolume * 100)}%
+                {Math.round(ctl.draft.defaultVolume * 100)}%
               </span>
               <button
                 type="button"
-                onclick={() => patch("defaultVolume", Math.min(1, draft!.defaultVolume + 0.05))}
+                onclick={() => ctl.patch("defaultVolume", Math.min(1, ctl.draft!.defaultVolume + 0.05))}
                 aria-label={m.settings_increase_volume()}
                 class="flex h-12 w-12 items-center justify-center rounded-xl bg-secondary text-xl font-bold
                        transition-colors hover:bg-secondary/70
@@ -562,14 +201,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.autoPlay}
+              aria-checked={ctl.draft.autoPlay}
               aria-label={m.settings_toggle_setting({ setting: m.settings_autoplay() })}
-              onclick={() => patch("autoPlay", !draft.autoPlay)}
+              onclick={() => ctl.patch("autoPlay", !ctl.draft.autoPlay)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.autoPlay)}"
+                     {trackBg(ctl.draft.autoPlay)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.autoPlay)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.autoPlay)}"></span>
             </button>
           </div>
 
@@ -582,14 +221,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.rememberPosition}
+              aria-checked={ctl.draft.rememberPosition}
               aria-label={m.settings_toggle_setting({ setting: m.settings_remember_position() })}
-              onclick={() => patch("rememberPosition", !draft.rememberPosition)}
+              onclick={() => ctl.patch("rememberPosition", !ctl.draft.rememberPosition)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.rememberPosition)}"
+                     {trackBg(ctl.draft.rememberPosition)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.rememberPosition)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.rememberPosition)}"></span>
             </button>
           </div>
 
@@ -607,14 +246,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.autoSkipIntro}
+              aria-checked={ctl.draft.autoSkipIntro}
               aria-label={m.settings_toggle_setting({ setting: m.settings_skip_intro() })}
-              onclick={() => patch("autoSkipIntro", !draft.autoSkipIntro)}
+              onclick={() => ctl.patch("autoSkipIntro", !ctl.draft.autoSkipIntro)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.autoSkipIntro)}"
+                     {trackBg(ctl.draft.autoSkipIntro)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.autoSkipIntro)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.autoSkipIntro)}"></span>
             </button>
           </div>
 
@@ -624,14 +263,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.autoSkipRecap}
+              aria-checked={ctl.draft.autoSkipRecap}
               aria-label={m.settings_toggle_setting({ setting: m.settings_skip_recap() })}
-              onclick={() => patch("autoSkipRecap", !draft.autoSkipRecap)}
+              onclick={() => ctl.patch("autoSkipRecap", !ctl.draft.autoSkipRecap)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.autoSkipRecap)}"
+                     {trackBg(ctl.draft.autoSkipRecap)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.autoSkipRecap)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.autoSkipRecap)}"></span>
             </button>
           </div>
 
@@ -641,14 +280,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.autoSkipCredits}
+              aria-checked={ctl.draft.autoSkipCredits}
               aria-label={m.settings_toggle_setting({ setting: m.settings_skip_credits() })}
-              onclick={() => patch("autoSkipCredits", !draft.autoSkipCredits)}
+              onclick={() => ctl.patch("autoSkipCredits", !ctl.draft.autoSkipCredits)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.autoSkipCredits)}"
+                     {trackBg(ctl.draft.autoSkipCredits)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.autoSkipCredits)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.autoSkipCredits)}"></span>
             </button>
           </div>
 
@@ -658,14 +297,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.autoSkipPreview}
+              aria-checked={ctl.draft.autoSkipPreview}
               aria-label={m.settings_toggle_setting({ setting: m.settings_skip_preview() })}
-              onclick={() => patch("autoSkipPreview", !draft.autoSkipPreview)}
+              onclick={() => ctl.patch("autoSkipPreview", !ctl.draft.autoSkipPreview)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.autoSkipPreview)}"
+                     {trackBg(ctl.draft.autoSkipPreview)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.autoSkipPreview)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.autoSkipPreview)}"></span>
             </button>
           </div>
 
@@ -683,14 +322,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.autoSelectStream}
+              aria-checked={ctl.draft.autoSelectStream}
               aria-label={m.settings_toggle_setting({ setting: m.settings_auto_select() })}
-              onclick={() => patch("autoSelectStream", !draft.autoSelectStream)}
+              onclick={() => ctl.patch("autoSelectStream", !ctl.draft.autoSelectStream)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.autoSelectStream)}"
+                     {trackBg(ctl.draft.autoSelectStream)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.autoSelectStream)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.autoSelectStream)}"></span>
             </button>
           </div>
 
@@ -703,14 +342,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.prefetchStreams}
+              aria-checked={ctl.draft.prefetchStreams}
               aria-label={m.settings_toggle_setting({ setting: m.settings_prefetch() })}
-              onclick={() => patch("prefetchStreams", !draft.prefetchStreams)}
+              onclick={() => ctl.patch("prefetchStreams", !ctl.draft.prefetchStreams)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.prefetchStreams)}"
+                     {trackBg(ctl.draft.prefetchStreams)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.prefetchStreams)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.prefetchStreams)}"></span>
             </button>
           </div>
 
@@ -723,14 +362,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.prefetchNextEpisode}
+              aria-checked={ctl.draft.prefetchNextEpisode}
               aria-label={m.settings_toggle_setting({ setting: m.settings_predownload() })}
-              onclick={() => patch("prefetchNextEpisode", !draft.prefetchNextEpisode)}
+              onclick={() => ctl.patch("prefetchNextEpisode", !ctl.draft.prefetchNextEpisode)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.prefetchNextEpisode)}"
+                     {trackBg(ctl.draft.prefetchNextEpisode)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.prefetchNextEpisode)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.prefetchNextEpisode)}"></span>
             </button>
           </div>
 
@@ -743,14 +382,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.allowUploading}
+              aria-checked={ctl.draft.allowUploading}
               aria-label={m.settings_toggle_setting({ setting: m.settings_upload() })}
-              onclick={() => patch("allowUploading", !draft.allowUploading)}
+              onclick={() => ctl.patch("allowUploading", !ctl.draft.allowUploading)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.allowUploading)}"
+                     {trackBg(ctl.draft.allowUploading)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.allowUploading)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.allowUploading)}"></span>
             </button>
           </div>
 
@@ -763,14 +402,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.probeStreams}
+              aria-checked={ctl.draft.probeStreams}
               aria-label={m.settings_toggle_setting({ setting: m.settings_probe() })}
-              onclick={() => patch("probeStreams", !draft.probeStreams)}
+              onclick={() => ctl.patch("probeStreams", !ctl.draft.probeStreams)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.probeStreams)}"
+                     {trackBg(ctl.draft.probeStreams)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.probeStreams)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.probeStreams)}"></span>
             </button>
           </div>
 
@@ -783,14 +422,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.allowLanStreamSources}
+              aria-checked={ctl.draft.allowLanStreamSources}
               aria-label={m.settings_toggle_setting({ setting: m.settings_allow_lan() })}
-              onclick={() => patch("allowLanStreamSources", !draft.allowLanStreamSources)}
+              onclick={() => ctl.patch("allowLanStreamSources", !ctl.draft.allowLanStreamSources)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.allowLanStreamSources)}"
+                     {trackBg(ctl.draft.allowLanStreamSources)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.allowLanStreamSources)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.allowLanStreamSources)}"></span>
             </button>
           </div>
 
@@ -804,50 +443,50 @@
                             <button
                 type="button"
                 role="switch"
-                aria-checked={draft.remoteAccessEnabled}
+                aria-checked={ctl.draft.remoteAccessEnabled}
                 aria-label={m.settings_toggle_setting({ setting: m.settings_remote_access() })}
-                onclick={() => patch("remoteAccessEnabled", !draft.remoteAccessEnabled)}
+                onclick={() => ctl.patch("remoteAccessEnabled", !ctl.draft.remoteAccessEnabled)}
                 class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                        focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                       {trackBg(draft.remoteAccessEnabled)}"
+                       {trackBg(ctl.draft.remoteAccessEnabled)}"
               >
-                <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.remoteAccessEnabled)}"></span>
+                <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.remoteAccessEnabled)}"></span>
               </button>
             </div>
 
-            {#if draft.remoteAccessEnabled}
+            {#if ctl.draft.remoteAccessEnabled}
               <div class="mt-3 rounded-xl bg-secondary/50 p-4">
                 <p class="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">{m.settings_access_token()}</p>
-                {#if draft.remoteAccessToken === ""}
+                {#if ctl.draft.remoteAccessToken === ""}
                   <p class="text-sm text-muted-foreground">{m.settings_no_token()}</p>
                 {:else}
                   <code class="block truncate rounded-lg bg-black/30 px-3 py-2 text-sm font-mono text-foreground/80">
-                    {tokenVisible && revealedToken ? revealedToken : "•".repeat(32)}
+                    {ctl.tokenVisible && ctl.revealedToken ? ctl.revealedToken : "•".repeat(32)}
                   </code>
                   <div class="mt-3 flex gap-2">
                     <button
                       type="button"
-                      onclick={handleRevealToken}
-                      disabled={revealingToken}
+                      onclick={ctl.handleRevealToken}
+                      disabled={ctl.revealingToken}
                       class="rounded-xl bg-secondary px-5 py-2.5 text-sm font-medium text-muted-foreground
                              transition-colors hover:text-foreground disabled:opacity-50
                              focus:outline-none focus:ring-2 focus:ring-accent"
                     >
-                      {revealingToken
+                      {ctl.revealingToken
                         ? m.common_loading()
-                        : tokenVisible
+                        : ctl.tokenVisible
                           ? m.settings_hide_token()
                           : m.settings_show_token()}
                     </button>
                     <button
                       type="button"
-                      onclick={handleCopyToken}
-                      disabled={revealingToken}
+                      onclick={ctl.handleCopyToken}
+                      disabled={ctl.revealingToken}
                       class="rounded-xl bg-secondary px-5 py-2.5 text-sm font-medium text-muted-foreground
                              transition-colors hover:text-foreground disabled:opacity-50
                              focus:outline-none focus:ring-2 focus:ring-accent"
                     >
-                      {tokenCopied ? m.common_copied() : m.common_copy()}
+                      {ctl.tokenCopied ? m.common_copied() : m.common_copy()}
                     </button>
                   </div>
                 {/if}
@@ -860,16 +499,16 @@
             <div class="min-w-0 flex-1">
               <p class="text-lg font-medium">{m.settings_selection_strategy()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                {STREAM_SELECTION_MODES.find((m) => m.value === draft.streamSelectionMode)?.description ?? ""}
+                {STREAM_SELECTION_MODES.find((m) => m.value === ctl.draft.streamSelectionMode)?.description ?? ""}
               </p>
             </div>
             <select
-              onchange={(e) => patch("streamSelectionMode", (e.currentTarget as HTMLSelectElement).value)}
+              onchange={(e) => ctl.patch("streamSelectionMode", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each STREAM_SELECTION_MODES as m (m.value)}
-                <option value={m.value} selected={m.value === (draft.streamSelectionMode ?? "balanced")}>{m.label}</option>
+                <option value={m.value} selected={m.value === (ctl.draft.streamSelectionMode ?? "balanced")}>{m.label}</option>
               {/each}
             </select>
           </div>
@@ -879,18 +518,18 @@
             <div class="min-w-0 flex-1">
               <p class="text-lg font-medium">{m.settings_source_preference()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                {draft.sourcePreference
+                {ctl.draft.sourcePreference
                   ? m.settings_source_boost_description()
                   : m.settings_source_neutral_description()}
               </p>
             </div>
             <select
-              onchange={(e) => patch("sourcePreference", (e.currentTarget as HTMLSelectElement).value)}
+              onchange={(e) => ctl.patch("sourcePreference", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each SOURCE_PREFERENCES as p (p.value)}
-                <option value={p.value} selected={p.value === draft.sourcePreference}>{p.label}</option>
+                <option value={p.value} selected={p.value === ctl.draft.sourcePreference}>{p.label}</option>
               {/each}
             </select>
           </div>
@@ -900,7 +539,7 @@
             <div class="min-w-0 flex-1">
               <p class="text-lg font-medium">{m.settings_preferred_provider()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                {#if providerAddons.length === 0 && nuvioProviderOptions.length === 0}
+                {#if ctl.providerAddons.length === 0 && ctl.nuvioProviderOptions.length === 0}
                   {m.settings_provider_missing()}
                 {:else}
                   {m.settings_provider_description()}
@@ -908,18 +547,18 @@
               </p>
             </div>
             <select
-              disabled={providerAddons.length === 0 && nuvioProviderOptions.length === 0}
-              onchange={(e) => patch("defaultProvider", (e.currentTarget as HTMLSelectElement).value)}
+              disabled={ctl.providerAddons.length === 0 && ctl.nuvioProviderOptions.length === 0}
+              onchange={(e) => ctl.patch("defaultProvider", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      disabled:opacity-40
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
-              <option value="" selected={!draft.defaultProvider}>{m.common_no_preference()}</option>
-              {#each providerAddons as a (a.url || a.id)}
-                <option value={a.manifest.name} selected={a.manifest.name === draft.defaultProvider}>{a.manifest.name}</option>
+              <option value="" selected={!ctl.draft.defaultProvider}>{m.common_no_preference()}</option>
+              {#each ctl.providerAddons as a (a.url || a.id)}
+                <option value={a.manifest.name} selected={a.manifest.name === ctl.draft.defaultProvider}>{a.manifest.name}</option>
               {/each}
-              {#each nuvioProviderOptions as name (name)}
-                <option value={name} selected={name === draft.defaultProvider}>{name}</option>
+              {#each ctl.nuvioProviderOptions as name (name)}
+                <option value={name} selected={name === ctl.draft.defaultProvider}>{name}</option>
               {/each}
             </select>
           </div>
@@ -928,28 +567,28 @@
           <div class="flex min-h-[76px] items-center justify-between gap-8 py-5">
             <div class="min-w-0 flex-1">
               <p class="text-lg font-medium">{m.settings_connection_speed()}</p>
-              {#if draft.measuredBandwidthMbps > 0}
+              {#if ctl.draft.measuredBandwidthMbps > 0}
                 <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                  {m.settings_speed_measured({ speed: draft.measuredBandwidthMbps })}
+                  {m.settings_speed_measured({ speed: ctl.draft.measuredBandwidthMbps })}
                 </p>
               {:else}
                 <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
                   {m.settings_speed_unmeasured()}
                 </p>
               {/if}
-              {#if speedTestError}
-                <p class="mt-1 text-sm text-red-400">{speedTestError}</p>
+              {#if ctl.speedTestError}
+                <p class="mt-1 text-sm text-red-400">{ctl.speedTestError}</p>
               {/if}
             </div>
             <button
               type="button"
-              onclick={runSpeedTest}
-              disabled={testingSpeed}
+              onclick={ctl.runSpeedTest}
+              disabled={ctl.testingSpeed}
               class="shrink-0 rounded-xl bg-secondary px-5 py-3 text-base font-medium text-muted-foreground
                      transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
-              {testingSpeed ? m.settings_speed_testing() : m.settings_speed_test()}
+              {ctl.testingSpeed ? m.settings_speed_testing() : m.settings_speed_test()}
             </button>
           </div>
 
@@ -967,14 +606,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.subtitlesEnabled}
+              aria-checked={ctl.draft.subtitlesEnabled}
               aria-label={m.settings_toggle_setting({ setting: m.settings_subtitles_default() })}
-              onclick={() => patch("subtitlesEnabled", !draft.subtitlesEnabled)}
+              onclick={() => ctl.patch("subtitlesEnabled", !ctl.draft.subtitlesEnabled)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.subtitlesEnabled)}"
+                     {trackBg(ctl.draft.subtitlesEnabled)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.subtitlesEnabled)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.subtitlesEnabled)}"></span>
             </button>
           </div>
 
@@ -985,12 +624,12 @@
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_subtitle_language_description()}</p>
             </div>
             <select
-              onchange={(e) => patch("defaultSubtitleLang", (e.currentTarget as HTMLSelectElement).value)}
+              onchange={(e) => ctl.patch("defaultSubtitleLang", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each LANGUAGES as l (l.value)}
-                <option value={l.value} selected={l.value === draft.defaultSubtitleLang}>{languageDisplayName(l.value)}</option>
+                <option value={l.value} selected={l.value === ctl.draft.defaultSubtitleLang}>{languageDisplayName(l.value)}</option>
               {/each}
             </select>
           </div>
@@ -1002,12 +641,12 @@
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">{m.settings_audio_language_description()}</p>
             </div>
             <select
-              onchange={(e) => patch("defaultAudioLang", (e.currentTarget as HTMLSelectElement).value)}
+              onchange={(e) => ctl.patch("defaultAudioLang", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each AUDIO_LANGUAGES as l (l.value)}
-                <option value={l.value} selected={l.value === draft.defaultAudioLang}>{l.value === "original" ? m.common_original() : languageDisplayName(l.value)}</option>
+                <option value={l.value} selected={l.value === ctl.draft.defaultAudioLang}>{l.value === "original" ? m.common_original() : languageDisplayName(l.value)}</option>
               {/each}
             </select>
           </div>
@@ -1023,14 +662,14 @@
             </div>
             <select
               aria-label={m.language_label()}
-              onchange={(event) => patch("uiLanguage", (event.currentTarget as HTMLSelectElement).value as AppLocale)}
+              onchange={(event) => ctl.patch("uiLanguage", (event.currentTarget as HTMLSelectElement).value as AppLocale)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each LOCALES as locale (locale.appLocale)}
                 <option
                   value={locale.appLocale}
-                  selected={locale.appLocale === (normalizeAppLocale(draft.uiLanguage) ?? "en")}
+                  selected={locale.appLocale === (normalizeAppLocale(ctl.draft.uiLanguage) ?? "en")}
                 >{locale.nativeName}</option>
               {/each}
             </select>
@@ -1045,14 +684,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.showStreamDetails}
+              aria-checked={ctl.draft.showStreamDetails}
               aria-label={m.settings_stream_details()}
-              onclick={() => patch("showStreamDetails", !draft.showStreamDetails)}
+              onclick={() => ctl.patch("showStreamDetails", !ctl.draft.showStreamDetails)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.showStreamDetails)}"
+                     {trackBg(ctl.draft.showStreamDetails)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.showStreamDetails)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.showStreamDetails)}"></span>
             </button>
           </div>
 
@@ -1065,14 +704,14 @@
                         <button
               type="button"
               role="switch"
-              aria-checked={draft.hideSpoilers}
+              aria-checked={ctl.draft.hideSpoilers}
               aria-label={m.settings_hide_spoilers()}
-              onclick={() => patch("hideSpoilers", !draft.hideSpoilers)}
+              onclick={() => ctl.patch("hideSpoilers", !ctl.draft.hideSpoilers)}
               class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                      focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                     {trackBg(draft.hideSpoilers)}"
+                     {trackBg(ctl.draft.hideSpoilers)}"
             >
-              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(draft.hideSpoilers)}"></span>
+              <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.draft.hideSpoilers)}"></span>
             </button>
           </div>
 
@@ -1081,22 +720,22 @@
             <div class="min-w-0 flex-1">
               <p class="text-lg font-medium">{m.settings_discovery_algorithm()}</p>
               <p class="mt-0.5 text-sm leading-snug text-muted-foreground">
-                {DISCOVERY_ALGORITHMS.find((a) => a.value === draft.discoveryAlgorithm)?.description ?? ""}
+                {DISCOVERY_ALGORITHMS.find((a) => a.value === ctl.draft.discoveryAlgorithm)?.description ?? ""}
               </p>
             </div>
             <select
-              onchange={(e) => patch("discoveryAlgorithm", (e.currentTarget as HTMLSelectElement).value)}
+              onchange={(e) => ctl.patch("discoveryAlgorithm", (e.currentTarget as HTMLSelectElement).value)}
               class="shrink-0 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                      focus:outline-none focus:ring-2 focus:ring-accent"
             >
               {#each DISCOVERY_ALGORITHMS as a (a.value)}
-                <option value={a.value} selected={a.value === draft.discoveryAlgorithm}>{a.label}</option>
+                <option value={a.value} selected={a.value === ctl.draft.discoveryAlgorithm}>{a.label}</option>
               {/each}
             </select>
           </div>
 
           <!-- Custom algorithm URL (only when custom is selected) -->
-          {#if draft.discoveryAlgorithm === "custom"}
+          {#if ctl.draft.discoveryAlgorithm === "custom"}
             <div class="border-b border-border/40 py-5">
               <p class="mb-1 text-lg font-medium">{m.settings_custom_algorithm_url()}</p>
               <p class="mb-3 text-sm leading-snug text-muted-foreground">
@@ -1106,27 +745,27 @@
                 <input
                   type="url"
                   placeholder="https://..."
-                  bind:value={draft.customAlgorithmUrl}
+                  bind:value={ctl.draft.customAlgorithmUrl}
                   class="min-w-0 flex-1 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                          placeholder:text-muted-foreground
                          focus:outline-none focus:ring-2 focus:ring-accent"
                 />
                 <button
                   type="button"
-                  onclick={handleTestAlgorithm}
-                  disabled={testingAlgorithm || !draft.customAlgorithmUrl.trim()}
+                  onclick={ctl.handleTestAlgorithm}
+                  disabled={ctl.testingAlgorithm || !ctl.draft.customAlgorithmUrl.trim()}
                   class="shrink-0 rounded-xl bg-secondary px-5 py-3 text-base font-medium text-muted-foreground
                          transition-colors hover:text-foreground disabled:opacity-50
                          focus:outline-none focus:ring-2 focus:ring-accent"
                 >
-                  {testingAlgorithm ? m.common_testing() : m.common_test_connection()}
+                  {ctl.testingAlgorithm ? m.common_testing() : m.common_test_connection()}
                 </button>
               </div>
-              {#if algorithmTestResult}
-                <p class="mt-2 text-sm {algorithmTestResult.ok ? 'text-green-400' : 'text-red-400'}">
-                  {algorithmTestResult.ok
+              {#if ctl.algorithmTestResult}
+                <p class="mt-2 text-sm {ctl.algorithmTestResult.ok ? 'text-green-400' : 'text-red-400'}">
+                  {ctl.algorithmTestResult.ok
                     ? m.common_connected_success()
-                    : m.common_failed_message({ error: algorithmTestResult.error })}
+                    : m.common_failed_message({ error: ctl.algorithmTestResult.error })}
                 </p>
               {/if}
             </div>
@@ -1143,17 +782,17 @@
                 type="button"
                 role="switch"
                 aria-label={m.settings_auto_update()}
-                aria-checked={autoUpdateEnabled}
+                aria-checked={ctl.autoUpdateEnabled}
                 onclick={() => {
-                  const newVal = !autoUpdateEnabled;
-                  autoUpdateEnabled = newVal;
+                  const newVal = !ctl.autoUpdateEnabled;
+                  ctl.autoUpdateEnabled = newVal;
                   window.__coveApp?.setAutoUpdateEnabled?.(newVal);
                 }}
                 class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                        focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
-                       {trackBg(autoUpdateEnabled)}"
+                       {trackBg(ctl.autoUpdateEnabled)}"
               >
-                <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(autoUpdateEnabled)}"></span>
+                <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(ctl.autoUpdateEnabled)}"></span>
               </button>
             </div>
           {/if}
@@ -1191,31 +830,31 @@
               <input
                 type="url"
                 placeholder="https://..."
-                bind:value={addAddonUrl}
-                onkeydown={(e) => e.key === "Enter" && handleAddAddon()}
+                bind:value={ctl.addAddonUrl}
+                onkeydown={(e) => e.key === "Enter" && ctl.handleAddAddon()}
                 class="min-w-0 flex-1 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                        placeholder:text-muted-foreground
                        focus:outline-none focus:ring-2 focus:ring-accent"
               />
               <button
                 type="button"
-                onclick={handleAddAddon}
-                disabled={addAddonLoading || !addAddonUrl.trim()}
+                onclick={ctl.handleAddAddon}
+                disabled={ctl.addAddonLoading || !ctl.addAddonUrl.trim()}
                 class="shrink-0 rounded-xl bg-accent px-5 py-3 text-base font-semibold text-accent-foreground
                        transition-colors hover:bg-accent/90 disabled:opacity-50
                        focus:outline-none focus:ring-2 focus:ring-accent"
               >
-                {addAddonLoading ? m.common_adding() : m.common_add()}
+                {ctl.addAddonLoading ? m.common_adding() : m.common_add()}
               </button>
             </div>
-            {#if addAddonError}
-              <p class="mt-2 text-sm text-red-400">{addAddonError}</p>
+            {#if ctl.addAddonError}
+              <p class="mt-2 text-sm text-red-400">{ctl.addAddonError}</p>
             {/if}
           </div>
 
           <!-- Addon list -->
           <div class="space-y-3">
-            {#each addons as addon (addon.url || addon.id)}
+            {#each ctl.addons as addon (addon.url || addon.id)}
               <div class="rounded-2xl border border-border/50 bg-secondary/20 p-4">
                 <!-- Addon header row: name + badges + toggle + remove -->
                 <div class="flex items-center gap-4">
@@ -1255,7 +894,7 @@
                     role="switch"
                     aria-label={m.settings_toggle_addon()}
                     aria-checked={addon.enabled}
-                    onclick={() => handleToggleAddon(addon)}
+                    onclick={() => ctl.handleToggleAddon(addon)}
                     class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                            focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
                            {trackBg(addon.enabled)}"
@@ -1263,12 +902,12 @@
                     <span class="pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow transition-transform {thumb(addon.enabled)}"></span>
                   </button>
 
-                  <!-- Configure / Refresh / Remove (Stremio addons only) -->
+                  <!-- Configure / Refresh / Remove (Stremio ctl.addons only) -->
                   {#if addon.source !== SourceOfficial}
                     {#if addon.manifest.behaviorHints?.configurable}
                       <button
                         type="button"
-                        onclick={() => (configureAddon = addon)}
+                        onclick={() => (ctl.configureAddon = addon)}
                         title={m.common_configure()}
                         class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                                transition-colors hover:text-foreground
@@ -1279,22 +918,22 @@
                     {/if}
                     <button
                       type="button"
-                      onclick={() => handleRefreshAddon(addon)}
-                      disabled={refreshingAddonId === addon.id}
+                      onclick={() => ctl.handleRefreshAddon(addon)}
+                      disabled={ctl.refreshingAddonId === addon.id}
                       title={m.common_refresh()}
                       class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                              transition-colors hover:text-foreground disabled:opacity-50
                              focus:outline-none focus:ring-2 focus:ring-accent"
                     >
                       <RefreshCw
-                        class="size-5 {refreshingAddonId === addon.id
+                        class="size-5 {ctl.refreshingAddonId === addon.id
                           ? 'animate-spin'
                           : ''}"
                       />
                     </button>
                     <button
                       type="button"
-                      onclick={() => handleRemoveAddon(addon)}
+                      onclick={() => ctl.handleRemoveAddon(addon)}
                       title={m.settings_remove_addon()}
                       class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                              transition-colors hover:bg-destructive/10 hover:text-destructive
@@ -1322,7 +961,7 @@
                           aria-label={m.settings_toggle_catalog()}
                           aria-checked={catOn}
                           disabled={!addon.enabled}
-                          onclick={() => handleToggleCatalog(addon, key, !catOn)}
+                          onclick={() => ctl.handleToggleCatalog(addon, key, !catOn)}
                           class="relative inline-flex h-8 w-14 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                                  disabled:cursor-not-allowed disabled:opacity-40
                                  focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
@@ -1342,7 +981,7 @@
             {/each}
           </div>
 
-        </div><!-- /addons -->
+        </div><!-- /ctl.addons -->
 
         <!-- ══ Plugins (Nuvio) ══ -->
         <div class:hidden={activeSection !== "plugins"} class="space-y-6 pt-4">
@@ -1363,31 +1002,31 @@
               <input
                 type="url"
                 placeholder="https://github.com/owner/repo"
-                bind:value={addRepoUrl}
-                onkeydown={(e) => e.key === "Enter" && handleAddRepo()}
+                bind:value={ctl.addRepoUrl}
+                onkeydown={(e) => e.key === "Enter" && ctl.handleAddRepo()}
                 class="min-w-0 flex-1 rounded-xl bg-secondary px-4 py-3 text-base text-foreground
                        placeholder:text-muted-foreground
                        focus:outline-none focus:ring-2 focus:ring-accent"
               />
               <button
                 type="button"
-                onclick={handleAddRepo}
-                disabled={addRepoLoading || !addRepoUrl.trim()}
+                onclick={ctl.handleAddRepo}
+                disabled={ctl.addRepoLoading || !ctl.addRepoUrl.trim()}
                 class="shrink-0 rounded-xl bg-accent px-5 py-3 text-base font-semibold text-accent-foreground
                        transition-colors hover:bg-accent/90 disabled:opacity-50
                        focus:outline-none focus:ring-2 focus:ring-accent"
               >
-                {addRepoLoading ? m.common_adding() : m.common_add()}
+                {ctl.addRepoLoading ? m.common_adding() : m.common_add()}
               </button>
             </div>
-            {#if addRepoError}
-              <p class="mt-2 text-sm text-red-400">{addRepoError}</p>
+            {#if ctl.addRepoError}
+              <p class="mt-2 text-sm text-red-400">{ctl.addRepoError}</p>
             {/if}
           </div>
 
           <!-- Repo list -->
           <div class="space-y-4">
-            {#each nuvioRepos as repo (repo.id)}
+            {#each ctl.nuvioRepos as repo (repo.id)}
               <div class="rounded-2xl border border-border/50 bg-secondary/20 p-4">
                 <!-- Repo header row -->
                 <div class="flex items-center gap-3">
@@ -1412,14 +1051,14 @@
                   <!-- Refresh button -->
                   <button
                     type="button"
-                    onclick={() => handleRefreshRepo(repo)}
-                    disabled={refreshingRepoId === repo.id}
+                    onclick={() => ctl.handleRefreshRepo(repo)}
+                    disabled={ctl.refreshingRepoId === repo.id}
                     title={m.settings_refresh_manifest()}
                     class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                            transition-colors hover:text-foreground disabled:opacity-50
                            focus:outline-none focus:ring-2 focus:ring-accent"
                   >
-                    <RefreshCw class="size-5 {refreshingRepoId === repo.id ? 'animate-spin' : ''}" />
+                    <RefreshCw class="size-5 {ctl.refreshingRepoId === repo.id ? 'animate-spin' : ''}" />
                   </button>
 
                   <!-- Repo enable toggle -->
@@ -1428,7 +1067,7 @@
                     role="switch"
                     aria-label={m.settings_enable_repository()}
                     aria-checked={repo.enabled}
-                    onclick={() => handleToggleRepo(repo)}
+                    onclick={() => ctl.handleToggleRepo(repo)}
                     class="relative inline-flex h-9 w-16 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                            focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
                            {trackBg(repo.enabled)}"
@@ -1439,7 +1078,7 @@
                   <!-- Remove repo button -->
                   <button
                     type="button"
-                    onclick={() => handleRemoveRepo(repo)}
+                    onclick={() => ctl.handleRemoveRepo(repo)}
                     title={m.settings_remove_repository_confirm()}
                     class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground
                            transition-colors hover:bg-destructive/10 hover:text-destructive
@@ -1463,7 +1102,7 @@
                         {/if}
                       </div>
 
-                      {#if pendingConfirm?.repoId === repo.id && pendingConfirm?.scraperId === scraper.id}
+                      {#if ctl.pendingConfirm?.repoId === repo.id && ctl.pendingConfirm?.scraperId === scraper.id}
                         <!-- Third-party JS confirmation -->
                         <div class="flex shrink-0 items-center gap-2">
                           <span class="text-xs text-amber-400">
@@ -1473,7 +1112,7 @@
                           </span>
                           <button
                             type="button"
-                            onclick={() => (pendingConfirm = null)}
+                            onclick={() => (ctl.pendingConfirm = null)}
                             class="rounded-xl bg-secondary px-4 py-2 text-sm font-medium text-muted-foreground
                                    transition-colors hover:text-foreground
                                    focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1482,7 +1121,7 @@
                           </button>
                           <button
                             type="button"
-                            onclick={() => handleSetScraperEnabled(repo, scraper, true)}
+                            onclick={() => ctl.handleSetScraperEnabled(repo, scraper, true)}
                             class="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground
                                    transition-colors hover:bg-accent/90
                                    focus:outline-none focus:ring-2 focus:ring-accent"
@@ -1498,7 +1137,7 @@
                           role="switch"
                           aria-label={m.settings_toggle_scraper()}
                           aria-checked={scraperOn}
-                          onclick={() => requestEnableScraper(repo, scraper)}
+                          onclick={() => ctl.requestEnableScraper(repo, scraper)}
                           class="relative inline-flex h-8 w-14 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200
                                  focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
                                  {scraperOn ? 'bg-accent' : 'bg-white/20'}"
@@ -1530,16 +1169,16 @@
   </div><!-- /right panel -->
 </div>
 
-{#if configureAddon}
+{#if ctl.configureAddon}
   <!-- Configure addon overlay (TV) -->
   <div
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
     role="presentation"
     onclick={(e) => {
-      if (e.target === e.currentTarget) configureAddon = null;
+      if (e.target === e.currentTarget) ctl.configureAddon = null;
     }}
     onkeydown={(e) => {
-      if (e.key === "Escape") configureAddon = null;
+      if (e.key === "Escape") ctl.configureAddon = null;
     }}
   >
     <div
@@ -1551,12 +1190,12 @@
         class="flex shrink-0 items-center justify-between border-b border-border px-5 py-4"
       >
         <span class="truncate text-base font-semibold">
-          {configureAddon.manifest.name || configureAddon.url}
+          {ctl.configureAddon.manifest.name || ctl.configureAddon.url}
         </span>
         <button
           type="button"
           class="ml-3 shrink-0 rounded-xl p-2 text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-          onclick={() => (configureAddon = null)}
+          onclick={() => (ctl.configureAddon = null)}
           aria-label={m.common_close()}
         >
           <X class="size-5" />
@@ -1571,7 +1210,7 @@
       <!-- iframe -->
       <div class="min-h-0 flex-1 px-5 pb-3">
         <iframe
-          src={`${configureAddon.url}/configure`}
+          src={`${ctl.configureAddon.url}/configure`}
           class="h-full w-full rounded-xl border border-border"
           title={m.settings_addon_configuration()}
         ></iframe>
@@ -1580,7 +1219,7 @@
       <!-- Fallback link -->
       <div class="shrink-0 px-5 pb-4 text-sm text-muted-foreground">
         <a
-          href={`${configureAddon.url}/configure`}
+          href={`${ctl.configureAddon.url}/configure`}
           target="_blank"
           rel="noopener noreferrer"
           class="text-primary underline">{m.common_open_browser()}</a

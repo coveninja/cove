@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
     authSync: vi.fn(),
     getDetails: vi.fn(),
     libraryRemove: vi.fn(),
+    librarySetStatus: vi.fn(),
+    libraryUpsert: vi.fn(),
     notInterested: vi.fn(),
     progressBulkSave: vi.fn(),
     tvEpisodes: vi.fn(),
@@ -23,6 +25,7 @@ import {
   markMediaWatched,
   mediaUtilityItems,
   performMediaUtilityAction,
+  setMediaLibraryStatus,
 } from "$lib/mediaActions";
 import type { LibraryEntry } from "$lib/types/library";
 import type { Media } from "$lib/types/tmdb";
@@ -221,5 +224,46 @@ describe("whole-title media actions", () => {
     expect(withEntry[0].id).toBe("mark-unwatched");
     expect(withEntry.at(-1)?.id).toBe("remove-from-library");
     expect(withEntry[1].label).toBe("Undo not interested");
+  });
+
+  it("creates, updates, and toggles off library status through one mutation", async () => {
+    const movie = media("movie");
+    const created = { id: "created", status: "watch_later" } as LibraryEntry;
+    const updated = { id: "created", status: "watching" } as LibraryEntry;
+    mocks.api.libraryUpsert.mockResolvedValue(created);
+    mocks.api.librarySetStatus.mockResolvedValue(updated);
+
+    await expect(
+      setMediaLibraryStatus(movie, null, "watch_later", {
+        lastAiredSeason: 4,
+        lastAiredEpisode: 8,
+      }),
+    ).resolves.toBe(created);
+    expect(mocks.api.libraryUpsert).toHaveBeenCalledWith({
+      tmdb_id: 10,
+      media_type: "movie",
+      title: "Film",
+      poster_path: "/poster.jpg",
+      vote_average: 8,
+      last_air_date: "",
+      last_aired_season: 4,
+      last_aired_episode: 8,
+      status: "watch_later",
+    });
+
+    await expect(
+      setMediaLibraryStatus(movie, created, "watching"),
+    ).resolves.toBe(updated);
+    expect(mocks.api.librarySetStatus).toHaveBeenCalledWith(
+      10,
+      "movie",
+      "watching",
+    );
+
+    await expect(
+      setMediaLibraryStatus(movie, updated, "watching"),
+    ).resolves.toBeNull();
+    expect(mocks.api.libraryRemove).toHaveBeenCalledWith(10, "movie");
+    expect(mocks.libraryUpdate).toHaveBeenCalledTimes(3);
   });
 });

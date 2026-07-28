@@ -16,6 +16,11 @@
 /coverage-*.out
 /CLAUDE.md
 
+# Editor / AI-tooling scratch
+/.idea/
+/.agents/
+/.codex/
+
 # Proprietary — sourced from the _private/cove-discover submodule via `make inject-private`
 /internal/discover/discover.go
 /internal/discover/discover_test.go

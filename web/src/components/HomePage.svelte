@@ -3,14 +3,11 @@
   import SmallRecommendations from "./SmallRecommendations.svelte";
   import ContinueWatching from "./ContinueWatching.svelte";
   import type { Media } from "$lib/types/tmdb";
-  import { api, type DiscoverInsights, type LibraryStats } from "$lib/api";
-  import type { CatalogRef } from "$lib/types/addons";
+  import { HomeFeedController } from "$lib/homeFeed.svelte";
   import type { Page } from "$lib/types/types";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { onMount } from "svelte";
-  import * as m from "$lib/paraglide/messages.js";
   import { tick } from "svelte";
-  import { SvelteMap } from "svelte/reactivity";
 
   // Same contract as MyListPage: parent hands down how to open a title and
   // (optionally) how to start watching it. We forward both into every row.
@@ -26,102 +23,15 @@
     onChangePage?: (p: Page) => void;
   } = $props();
 
-  // Rows aren't hardcoded. Beyond the blended "Based on your tastes" feed, the
-  // page builds one row per top genre / theme the user actually engages with
-  // (from /discover/insights), so it reshapes itself per profile.
-  type Row = { key: string; header: string; medias: Media[]; loading: boolean };
-  type RowSpec = { key: string; header: string; load: () => Promise<Media[]> };
+  const feed = new HomeFeedController();
 
-  let rows = $state<Row[]>([]);
-  let catalogRows = $state<Row[]>([]);
+  let areVideosPaused = $state(false);
 
-  // Sidecar map from row key → CatalogRef so the template can wire up onSeeAll
-  // for catalog rows without duplicating the ref data into the Row shape.
-  const catalogRefMap = new SvelteMap<string, CatalogRef>();
-
-  const PER_BUCKET = 2; // rows drawn from each source: movie genres / tv genres / keywords
-  const ROW_LIMIT = 20; // titles fetched per row
-
-  const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-
-  function patchRow(key: string, patch: Partial<Row>): void {
-    const i = rows.findIndex((r) => r.key === key);
-    if (i !== -1) rows[i] = { ...rows[i], ...patch };
-  }
-
-  // Append a skeleton row immediately, then fill it when its fetch resolves.
-  // Each row loads independently, so a slow genre never blocks the others, and
-  // an empty result just hides itself (SmallRecommendations handles that).
-  function startRow(spec: RowSpec): void {
-    rows = [...rows, { key: spec.key, header: spec.header, medias: [], loading: true }];
-    spec
-      .load()
-      .then((d) => patchRow(spec.key, { medias: d }))
-      .catch(() => patchRow(spec.key, { medias: [] }))
-      .finally(() => patchRow(spec.key, { loading: false }));
-  }
-
-  function patchCatalogRow(key: string, patch: Partial<Row>): void {
-    const i = catalogRows.findIndex((r) => r.key === key);
-    if (i !== -1) catalogRows[i] = { ...catalogRows[i], ...patch };
-  }
-
-  function startCatalogRow(spec: RowSpec): void {
-    catalogRows = [...catalogRows, { key: spec.key, header: spec.header, medias: [], loading: true }];
-    spec
-      .load()
-      .then((d) => patchCatalogRow(spec.key, { medias: d }))
-      .catch(() => patchCatalogRow(spec.key, { medias: [] }))
-      .finally(() => patchCatalogRow(spec.key, { loading: false }));
-  }
-
-  // Turn the taste profile into row specs. Genre IDs are namespaced per media
-  // type on TMDB, so movie/tv genres drive separate rows; keywords are shared
-  // across types, so we aim them at whichever type the user watches more.
-  function tasteSpecs(
-    insights: DiscoverInsights,
-    primaryType: "movie" | "tv",
-  ): RowSpec[] {
-    const mg = insights.top_movie_genres.slice(0, PER_BUCKET);
-    const tg = insights.top_tv_genres.slice(0, PER_BUCKET);
-    const kw = insights.top_keywords.slice(0, PER_BUCKET);
-
-    const specs: RowSpec[] = [];
-    // Interleave so it's not all movies, then all shows, then all themes.
-    for (let i = 0; i < Math.max(mg.length, tg.length, kw.length); i++) {
-      const movieGenre = mg[i];
-      if (movieGenre)
-        specs.push({
-          key: `mg-${movieGenre.id}`,
-          header: m.explore_genre_movies({ genre: movieGenre.name }),
-          load: () =>
-            api.discoverByGenre("movie", movieGenre.id, { limit: ROW_LIMIT }),
-        });
-
-      const tvGenre = tg[i];
-      if (tvGenre)
-        specs.push({
-          key: `tg-${tvGenre.id}`,
-          header: m.explore_genre_shows({ genre: tvGenre.name }),
-          load: () =>
-            api.discoverByGenre("tv", tvGenre.id, { limit: ROW_LIMIT }),
-        });
-
-      const keyword = kw[i];
-      if (keyword)
-        specs.push({
-          key: `kw-${keyword.id}`,
-          header: cap(keyword.name),
-          load: () =>
-            api.discoverByKeyword(primaryType, keyword.id, { limit: ROW_LIMIT }),
-        });
-    }
-    return specs;
-  }
-
-  let areVideosPaused = $state(false)
-
-  async function handleOnWatch(m: Media, season?: number, episode?: number): Promise<void> {
+  async function handleOnWatch(
+    m: Media,
+    season?: number,
+    episode?: number,
+  ): Promise<void> {
     areVideosPaused = true;
     await tick();
     onWatch(m, season, episode);
@@ -133,67 +43,42 @@
     onSelectMedia(m);
   }
 
-  onMount(() => {
-    // Blended personalized row first — always present, even for a brand-new
-    // library (the backend falls back to popular titles when signal is thin).
-    startRow({
-      key: "tastes",
-      header: m.home_based_on_tastes(),
-      load: () => api.discover("all", { limit: ROW_LIMIT }),
-    });
-
-    // Then the profile-driven rows. One insights call yields every genre/keyword
-    // we need; stats just tells us which type to aim theme rows at.
-    Promise.all([
-      api.discoverInsights().catch(() => null),
-      api.libraryStats().catch(() => null),
-    ]).then(
-      ([insights, stats]: [DiscoverInsights | null, LibraryStats | null]) => {
-        if (!insights || insights.signals_used === 0) return; // not enough signal yet
-        const primaryType =
-          stats && stats.tv_share > stats.movie_share ? "tv" : "movie";
-        for (const spec of tasteSpecs(insights, primaryType)) startRow(spec);
-      },
-    );
-
-    // Catalog rows: ungated by signals_used — new users with no taste profile
-    // still get their addon catalogs. Runs in parallel with the taste flow above.
-    api.getCatalogs().catch(() => [] as CatalogRef[]).then((refs) => {
-      for (const ref of refs) {
-        const key = `catalog-${ref.addonId}-${ref.catalogType}/${ref.catalogId}`;
-        catalogRefMap.set(key, ref);
-        startCatalogRow({
-          key,
-          header: ref.name,
-          load: () =>
-            api.catalogPage(ref.addonId, ref.catalogType, ref.catalogId, 0, 20, ref.addonUrl).then((r) => r.medias),
-        });
-      }
-    });
-  });
+  onMount(() => void feed.load());
 </script>
 
 <ScrollArea class="mb-24 h-full w-full">
   <div class="flex w-full flex-col justify-start gap-2 pb-8">
     <LargeRecommendationsCard bind:isPaused={areVideosPaused} {visible} />
 
-    <ContinueWatching onWatch={handleOnWatch} onSelectMedia={handleSelectMedia} navEnabled={true}/>
+    <ContinueWatching
+      onWatch={handleOnWatch}
+      onSelectMedia={handleSelectMedia}
+      navEnabled={true}
+    />
 
-    {#each catalogRows as row (row.key)}
-      {@const ref = catalogRefMap.get(row.key)}
+    {#each feed.catalogRows as row (row.key)}
+      {@const ref = feed.catalogRefs.get(row.key)}
       <SmallRecommendations
-              header={row.header}
-              medias={row.medias}
-              loading={row.loading}
-              onSelect={handleSelectMedia}
-              onWatch={handleOnWatch}
-              onSeeAll={ref
-          ? () => onChangePage?.({ type: "catalog", addonId: ref.addonId, catalogType: ref.catalogType, catalogId: ref.catalogId, name: ref.name, addonUrl: ref.addonUrl })
+        header={row.header}
+        medias={row.medias}
+        loading={row.loading}
+        onSelect={handleSelectMedia}
+        onWatch={handleOnWatch}
+        onSeeAll={ref
+          ? () =>
+              onChangePage?.({
+                type: "catalog",
+                addonId: ref.addonId,
+                catalogType: ref.catalogType,
+                catalogId: ref.catalogId,
+                name: ref.name,
+                addonUrl: ref.addonUrl,
+              })
           : undefined}
       />
     {/each}
-    
-    {#each rows as row (row.key)}
+
+    {#each feed.rows as row (row.key)}
       <SmallRecommendations
         header={row.header}
         medias={row.medias}

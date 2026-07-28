@@ -141,15 +141,10 @@ func dirSize(dir string) int64 {
 
 // SetupHandlers registers GET /api/img/{size}/{file} on mux.
 func (c *Cache) SetupHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/api/img/", utils.CorsMiddleware(c.handle))
+	mux.HandleFunc("/api/img/", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, c.handle)))
 }
 
 func (c *Cache) handle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/img/")
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) != 2 {

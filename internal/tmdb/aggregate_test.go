@@ -59,14 +59,8 @@ func TestCatalogCache_DeepCopiesNestedMediaFields(t *testing.T) {
 
 func TestCatalogCache_ExpiredEntryIsMiss(t *testing.T) {
 	c := New("key")
-	// Plant an already-expired entry directly so we don't have to wait for TTL.
-	c.catalogCacheMu.Lock()
-	c.catalogCache["stale"] = catalogPageEntry{
-		medias:   []Media{{ID: 9}},
-		nextSkip: 5,
-		expires:  time.Now().Add(-time.Second),
-	}
-	c.catalogCacheMu.Unlock()
+	// Plant an already-expired entry via Set with a negative TTL.
+	c.catalogCache.Set("stale", catalogPageEntry{medias: []Media{{ID: 9}}, nextSkip: 5}, -time.Second)
 
 	_, _, ok := c.catalogCacheGet("stale")
 	assert.False(t, ok, "expired entry should be a miss")
@@ -75,16 +69,13 @@ func TestCatalogCache_ExpiredEntryIsMiss(t *testing.T) {
 func TestCatalogCache_SetSweepsExpiredEntries(t *testing.T) {
 	c := New("key")
 	// Plant an expired entry that the next catalogCacheSet call should sweep.
-	c.catalogCacheMu.Lock()
-	c.catalogCache["old"] = catalogPageEntry{expires: time.Now().Add(-time.Second)}
-	c.catalogCacheMu.Unlock()
+	c.catalogCache.Set("old", catalogPageEntry{}, -time.Second)
 
 	c.catalogCacheSet("new", []Media{{ID: 1}}, 0)
 
-	c.catalogCacheMu.Lock()
-	_, stillThere := c.catalogCache["old"]
-	c.catalogCacheMu.Unlock()
-	assert.False(t, stillThere, "catalogCacheSet should sweep expired entries inline")
+	// TTLCache.Set sweeps expired entries before storing the new entry,
+	// so "old" should be gone. Verify via Len (1 = only "new" remains).
+	assert.Equal(t, 1, c.catalogCache.Len(), "catalogCacheSet should sweep expired entries inline")
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────

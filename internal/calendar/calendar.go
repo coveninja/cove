@@ -9,11 +9,9 @@
 package calendar
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -65,14 +63,10 @@ func New(lib *library.Library, tmdbClient *tmdb.Client) *Server {
 
 // SetupHandlers registers /api/library/calendar on mux.
 func (s *Server) SetupHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/api/library/calendar", utils.CorsMiddleware(s.handleCalendar))
+	mux.HandleFunc("/api/library/calendar", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, s.handleCalendar)))
 }
 
 func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	// today = midnight local; cutoffFuture = today + 90 days.
 	now := time.Now()
@@ -170,21 +164,7 @@ func (s *Server) handleCalendar(w http.ResponseWriter, r *http.Request) {
 		return all[i].Title < all[j].Title
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(all); err != nil {
-		log.Println("calendar: json encode:", err)
-	}
-}
-
-// rewritePosterURL rewrites legacy TMDB-hosted poster URLs to route through
-// the local image-cache proxy — mirrors the unexported rewritePosterURL in
-// internal/library/library.go so CalendarItem.PosterPath has the same shape as
-// every other library response.
-func rewritePosterURL(s string) string {
-	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
-		return "http://" + utils.LocalAddr() + "/api/img/" + rest
-	}
-	return s
+	utils.WriteJSON(w, all)
 }
 
 // localizedPresentation prefers the active-locale metadata returned by TMDB.
@@ -197,9 +177,9 @@ func localizedPresentation(
 	if title == "" {
 		title = e.Title
 	}
-	poster = rewritePosterURL(details.PosterPath)
+	poster = utils.RewriteTMDBImageURL(details.PosterPath)
 	if poster == "" {
-		poster = rewritePosterURL(e.PosterPath)
+		poster = utils.RewriteTMDBImageURL(e.PosterPath)
 	}
 	return title, poster
 }

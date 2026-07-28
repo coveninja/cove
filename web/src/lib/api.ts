@@ -204,13 +204,6 @@ function isHashSrc(src: string): boolean {
 
 export type LibraryStatus = "watch_later" | "watching" | "finished" | "dropped";
 
-export const STATUS_LABELS: Record<LibraryStatus, string> = {
-  watch_later: "Watch Later",
-  watching: "Watching",
-  finished: "Finished",
-  dropped: "Dropped",
-};
-
 export function statusLabel(status: LibraryStatus): string {
   switch (status) {
     case "watch_later":

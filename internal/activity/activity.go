@@ -98,12 +98,10 @@ type Store struct {
 	// empty strings rather than crashing.
 	lib LibraryLookup
 
-	// Debounced persistence (mirrors library's D3 pattern exactly):
-	// markDirty() marshals + schedules; flushPending() writes; Flush() forces.
-	dirtyMu     sync.Mutex
-	dirtyTimer  *time.Timer
-	pendingPath string
-	pendingData []byte
+	// Debounced persistence (the D3 pattern, shared with internal/library):
+	// markDirty() marshals + stages; persist fires the write ~1s later;
+	// Flush() forces it out early.
+	persist utils.DebouncedPersist
 }
 
 // persistDebounce matches the library's debounce window: long enough to
@@ -542,22 +540,12 @@ func (s *Store) computeStats(lib LibraryLookup) Stats {
 		}
 		if e, ok := entryByKey[item.key]; ok {
 			ts.Title = e.Title
-			ts.PosterPath = rewritePosterURL(e.PosterPath)
+			ts.PosterPath = utils.RewriteTMDBImageURL(e.PosterPath)
 		}
 		stats.TitlesWatchedThisYear = append(stats.TitlesWatchedThisYear, ts)
 	}
 
 	return stats
-}
-
-// rewritePosterURL rewrites a TMDB-hosted poster URL to route through the
-// local image-cache proxy — same logic as library's unexported helper,
-// duplicated here to avoid a cross-package dependency on an unexported symbol.
-func rewritePosterURL(s string) string {
-	if rest, ok := strings.CutPrefix(s, "https://image.tmdb.org/t/p/"); ok {
-		return "http://127.0.0.1:6969/api/img/" + rest
-	}
-	return s
 }
 
 // longestStreak returns the longest run of consecutive calendar days in a
@@ -635,50 +623,14 @@ func (s *Store) markDirty() {
 		log.Println("activity: marshal failed:", err)
 		return
 	}
-	s.dirtyMu.Lock()
-	defer s.dirtyMu.Unlock()
-	s.pendingData = raw
-	s.pendingPath = s.path
-	if s.dirtyTimer == nil {
-		s.dirtyTimer = time.AfterFunc(persistDebounce, s.flushPending)
-	}
-}
-
-// flushPending is dirtyTimer's callback — writes out whatever markDirty last
-// staged. Does not touch s.mu: it only reads pendingData/pendingPath, both
-// owned by dirtyMu.
-func (s *Store) flushPending() {
-	s.dirtyMu.Lock()
-	data, path := s.pendingData, s.pendingPath
-	s.pendingData, s.pendingPath, s.dirtyTimer = nil, "", nil
-	s.dirtyMu.Unlock()
-
-	if data == nil {
-		return
-	}
-	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
-		log.Println("activity: debounced write failed:", err)
-	}
+	s.persist.MarkDirty(s.path, raw, persistDebounce)
 }
 
 // Flush forces any pending debounced write to happen immediately — call on
 // shutdown so the last credited seconds before exit aren't lost to the
 // persistDebounce window the process didn't live to see.
 func (s *Store) Flush() {
-	s.dirtyMu.Lock()
-	if s.dirtyTimer != nil {
-		s.dirtyTimer.Stop()
-	}
-	data, path := s.pendingData, s.pendingPath
-	s.pendingData, s.pendingPath, s.dirtyTimer = nil, "", nil
-	s.dirtyMu.Unlock()
-
-	if data == nil {
-		return
-	}
-	if err := utils.AtomicWriteFile(path, data, 0o644); err != nil {
-		log.Println("activity: flush failed:", err)
-	}
+	s.persist.Flush()
 }
 
 // writeNow synchronously marshals and writes the store to disk, bypassing the
@@ -700,14 +652,10 @@ func (s *Store) writeNow() error {
 // SetupHandlers registers GET /api/library/activity on mux, wrapped in the
 // same CORS middleware every other library handler uses.
 func (s *Store) SetupHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("/api/library/activity", utils.CorsMiddleware(s.handleActivity))
+	mux.HandleFunc("/api/library/activity", utils.CorsMiddleware(utils.MethodGuard(http.MethodGet, s.handleActivity)))
 }
 
 func (s *Store) handleActivity(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// Hold the read lock across computeStats (which reads s.db directly) and
 	// the lib.AllEntries() call inside it. The library never acquires s.mu, so
 	// the lock order s.mu → lib.mu has no reverse and is deadlock-free.
@@ -716,8 +664,5 @@ func (s *Store) handleActivity(w http.ResponseWriter, r *http.Request) {
 	stats := s.computeStats(lib)
 	s.mu.RUnlock()
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(stats); err != nil {
-		log.Println("activity: json encode:", err)
-	}
+	utils.WriteJSON(w, stats)
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/tmdb"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,8 +68,10 @@ func (f *fakePlayerNuvio) GetStreams(_ context.Context, mediaType string, tmdbID
 
 func handlerPlayer(metadata playerTMDB, providers playerAddons, plugins playerNuvio) (*Player, *http.ServeMux) {
 	p := &Player{
-		tmdbClient: metadata, addonMgr: providers, nuvioMgr: plugins,
-		streamHeaders:  make(map[string]streamHeaderEntry),
+		tmdbClient:     metadata,
+		addonMgr:       providers,
+		nuvioMgr:       plugins,
+		streamHeaders:  utils.NewTTLCache[string, streamHeaderEntry](0),
 		activeTorrents: make(map[string]*torrentState),
 	}
 	mux := http.NewServeMux()
@@ -227,7 +230,7 @@ func TestPlayerSmallHelpers(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = positiveInt("4x")
 	assert.False(t, ok)
-	assert.Equal(t, "second", firstNonEmpty("", "second", "third"))
-	assert.Equal(t, 2026, parseYear("2026-07-22"))
-	assert.Equal(t, 0, parseYear("bad"))
+	assert.Equal(t, "second", utils.FirstNonEmpty("", "second", "third"))
+	assert.Equal(t, 2026, utils.ParseMediaYear("2026-07-22"))
+	assert.Equal(t, 0, utils.ParseMediaYear("bad"))
 }

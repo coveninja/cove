@@ -17,12 +17,13 @@
   import { ASPECT_LABELS } from "$lib/player/aspectRatio";
   import { focusable, focusGroup } from "../../focus/actions";
   import TvSeekBar from "./TvSeekBar.svelte";
-  import type { ChapterBar } from "./TvSeekBar.svelte";
+  import type { ChapterBar } from "$lib/player/chapters";
+  import type { SubSel } from "$lib/player/subtitles";
   import * as m from "$lib/paraglide/messages.js";
+  import { formatPlaybackTime as fmt } from "$lib/player/format";
 
   // ── Types ─────────────────────────────────────────────────────────────────────
 
-  type SubSel = { kind: "off" } | { kind: "embedded"; id: number } | { kind: "external"; id: string };
   type SubItem = { kind: string; id: string | number; label: string };
 
   // ── Props ─────────────────────────────────────────────────────────────────────
@@ -78,7 +79,11 @@
     title: string;
     episodeLabel: string;
     controlsActive: boolean;
-    activeSegment?: { type: string; label: string; seg: TimestampSegment } | null;
+    activeSegment?: {
+      type: string;
+      label: string;
+      seg: TimestampSegment;
+    } | null;
     skipBtnEl?: HTMLButtonElement | null;
     onSkipSegment: () => void;
     chapterBars: ChapterBar[] | null;
@@ -114,19 +119,12 @@
 
   function langName(code: string): string {
     try {
-      return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
+      return (
+        new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code
+      );
     } catch {
       return code;
     }
-  }
-
-  function fmt(t: number): string {
-    if (!isFinite(t) || t < 0) t = 0;
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const s = Math.floor(t % 60);
-    const mm = h ? String(m).padStart(2, "0") : String(m);
-    return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
   }
 </script>
 
@@ -144,7 +142,9 @@
   >
     <!-- Title + episode label -->
     <div class="flex min-w-0 flex-1 flex-col">
-      <p class="max-w-full truncate text-lg font-semibold text-white drop-shadow">
+      <p
+        class="max-w-full truncate text-lg font-semibold text-white drop-shadow"
+      >
         {title}
       </p>
       {#if episodeLabel}
@@ -241,13 +241,17 @@
         <button
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-          onclick={() => { audioPanelOpen = true; }}
+          onclick={() => {
+            audioPanelOpen = true;
+          }}
           aria-label={m.player_audio_tracks()}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
           <Headphones class="size-5 shrink-0" />
           <span class="max-w-24 truncate text-sm">
-            {selectedAudio?.title || langName(selectedAudio?.lang ?? "") || m.player_audio()}
+            {selectedAudio?.title ||
+              langName(selectedAudio?.lang ?? "") ||
+              m.player_audio()}
           </span>
         </button>
       {/if}
@@ -257,7 +261,9 @@
         <button
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-          onclick={() => { subsPanelOpen = true; }}
+          onclick={() => {
+            subsPanelOpen = true;
+          }}
           aria-label={m.player_subtitles()}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
@@ -265,7 +271,8 @@
           <span class="max-w-24 truncate text-sm">
             {subSelection.kind === "off"
               ? m.player_subtitles()
-              : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? m.player_subtitles())}
+              : (subtitleItems.find((i) => i.id === selectedSubId)?.label ??
+                m.player_subtitles())}
           </span>
         </button>
       {/if}
@@ -274,12 +281,18 @@
       <button
         type="button"
         class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-        onclick={() => { speedPanelOpen = true; }}
+        onclick={() => {
+          speedPanelOpen = true;
+        }}
         aria-label={m.player_speed()}
         use:focusable={{ groupId: "tv-player-controls" }}
       >
         <Gauge class="size-5 shrink-0" />
-        <span class="text-sm">{Player.playbackSpeed === 1 ? "1×" : `${Player.playbackSpeed}×`}</span>
+        <span class="text-sm"
+          >{Player.playbackSpeed === 1
+            ? "1×"
+            : `${Player.playbackSpeed}×`}</span
+        >
       </button>
 
       <!-- Aspect ratio cycle -->
@@ -299,7 +312,9 @@
         <button
           type="button"
           class="flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-white hover:bg-white/15 focus:bg-white/15"
-          onclick={() => { episodesPanelOpen = true; }}
+          onclick={() => {
+            episodesPanelOpen = true;
+          }}
           aria-label={m.player_episodes()}
           use:focusable={{ groupId: "tv-player-controls" }}
         >
