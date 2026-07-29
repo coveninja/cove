@@ -131,6 +131,7 @@ export class PlayerCore {
   #everCanPlay = false;
   #advanced = false; // guards advance() from firing twice for one src
   #resolvingNextEp = false; // per-src guard so nextAiredEpisode fires once
+  #retryPosition: number | null = null;
 
   constructor(opts: PlayerCoreOptions) {
     this.#opts = opts;
@@ -151,6 +152,7 @@ export class PlayerCore {
     return (
       !!this.#opts.getSrc() &&
       !this.switching &&
+      !Player.interrupted &&
       Player.ready &&
       Player.duration > 0
     );
@@ -361,6 +363,7 @@ export class PlayerCore {
     this.#advanced = false;
     this.countdownSecs = null;
     this.#resolvingNextEp = false;
+    this.#retryPosition = null;
     this.#addedExternal.clear();
     this.#autoSkippedSegments.clear();
     this.subSelection = { kind: "off" };
@@ -491,6 +494,43 @@ export class PlayerCore {
     if (this.torrent.stalled && !this.canPlay) {
       this.triggerPlaybackFailed();
     }
+  }
+
+  /**
+   * A terminal mpv signal before playback starts is the existing dead-stream
+   * case and may automatically fall back to another candidate. Once playback
+   * has started, keep the current session open instead: the loading screen
+   * offers an explicit retry or stream switch, and completion/autoplay remain
+   * disabled because Player.ended is false.
+   */
+  failOnPlaybackInterruption(): void {
+    if (Player.interrupted && !this.#everCanPlay) {
+      this.triggerPlaybackFailed();
+    }
+  }
+
+  /** Reload the same source after a mid-stream failure and resume at the last
+   * reported position once mpv has loaded it again. */
+  retryPlayback(): void {
+    if (!Player.interrupted || !this.#opts.getSrc()) return;
+    const resumeAt = Player.position;
+    this.startPlayback();
+    this.#retryPosition = resumeAt;
+  }
+
+  /** Called from a component effect after clearSwitchingWhenReady(). */
+  resumeRetriedPlayback(): void {
+    if (this.#retryPosition === null || !this.canPlay) return;
+    const resumeAt = this.#retryPosition;
+    this.#retryPosition = null;
+    Player.seek(resumeAt);
+  }
+
+  /** User-requested fallback after a stream that had already been playing
+   * fails. This intentionally bypasses the startup watchdog's everCanPlay
+   * guard because it is an explicit action, not an automatic transition. */
+  tryAnotherStream(): void {
+    this.#opts.onPlaybackFailed?.();
   }
 
   // ── Watch progress ───────────────────────────────────────────────────────

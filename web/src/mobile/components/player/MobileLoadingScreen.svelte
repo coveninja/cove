@@ -11,18 +11,24 @@
     logoUrl,
     loadingMessage,
     takingAWhile,
+    failed = false,
     cancelVisible = false,
     onclose,
     onCancel,
+    onRetry = undefined,
+    onTryAnother = undefined,
   }: {
     media?: Media;
     title: string;
     logoUrl: string | null;
     loadingMessage: string;
     takingAWhile: boolean;
+    failed?: boolean;
     cancelVisible?: boolean;
     onclose?: () => void;
     onCancel: () => void;
+    onRetry?: () => void;
+    onTryAnother?: () => void;
   } = $props();
 </script>
 
@@ -59,23 +65,49 @@
   {:else if title}
     <span class="relative z-10 px-8 text-center text-2xl font-bold text-white">{title}</span>
   {/if}
-  <Spinner class="relative z-10 mt-6 size-12 text-white" />
-  <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>
-  {#if takingAWhile}
-    <p
-      class="relative z-10 mt-2 text-xs text-white/40"
-      transition:fade={{ duration: 150 }}
-    >
-      {m.player_taking_while()}
+  {#if failed}
+    <p class="relative z-10 mt-6 text-sm font-medium text-red-300" role="alert">
+      {m.player_error()}
     </p>
-  {/if}
-  {#if cancelVisible || takingAWhile}
-    <button
-      type="button"
-      class="relative z-10 mt-4 rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"
-      onclick={() => onCancel()}
-    >
-      {m.common_cancel()}
-    </button>
+    <div class="relative z-10 mt-4 flex gap-3">
+      {#if onRetry}
+        <button
+          type="button"
+          class="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black"
+          onclick={() => onRetry?.()}
+        >
+          {m.common_retry()}
+        </button>
+      {/if}
+      {#if onTryAnother}
+        <button
+          type="button"
+          class="rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"
+          onclick={() => onTryAnother?.()}
+        >
+          {m.player_try_another()}
+        </button>
+      {/if}
+    </div>
+  {:else}
+    <Spinner class="relative z-10 mt-6 size-12 text-white" />
+    <p class="relative z-10 mt-4 text-sm text-white/50">{loadingMessage}</p>
+    {#if takingAWhile}
+      <p
+        class="relative z-10 mt-2 text-xs text-white/40"
+        transition:fade={{ duration: 150 }}
+      >
+        {m.player_taking_while()}
+      </p>
+    {/if}
+    {#if cancelVisible || takingAWhile}
+      <button
+        type="button"
+        class="relative z-10 mt-4 rounded-lg border border-white/30 bg-white/10 px-4 py-2 text-sm text-white"
+        onclick={() => onCancel()}
+      >
+        {m.common_cancel()}
+      </button>
+    {/if}
   {/if}
 </div>

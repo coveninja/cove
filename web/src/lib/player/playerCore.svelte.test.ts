@@ -62,6 +62,7 @@ function readyPlayer(duration = 1000): void {
   Player.position = 0;
   Player.paused = false;
   Player.ended = false;
+  Player.interrupted = false;
   Player.audioTracks = [];
   Player.subtitleTracks = [];
 }
@@ -162,6 +163,13 @@ describe("canPlay", () => {
   it("is false before mpv reports a duration", () => {
     const h = harness();
     Player.duration = 0;
+    expect(h.core.canPlay).toBe(false);
+    h.destroyRoot();
+  });
+
+  it("is false after mpv reports an interrupted stream", () => {
+    const h = harness();
+    Player.interrupted = true;
     expect(h.core.canPlay).toBe(false);
     h.destroyRoot();
   });
@@ -390,6 +398,65 @@ describe("playback-start watchdog", () => {
     h.core.torrent.stalled = true;
     h.core.failOnStalledTorrent();
     expect(h.onPlaybackFailed).not.toHaveBeenCalled();
+    h.destroyRoot();
+  });
+
+  it("falls back automatically when mpv terminates before playback starts", () => {
+    const h = harness();
+    Player.duration = 0;
+    Player.interrupted = true;
+    h.core.failOnPlaybackInterruption();
+    expect(h.onPlaybackFailed).toHaveBeenCalledTimes(1);
+    h.destroyRoot();
+  });
+
+  it("keeps a mid-playback interruption open for explicit recovery", () => {
+    const h = harness();
+    h.core.markPlaybackStarted();
+    Player.interrupted = true;
+    h.core.failOnPlaybackInterruption();
+    expect(h.onPlaybackFailed).not.toHaveBeenCalled();
+    h.destroyRoot();
+  });
+
+  it("lets the user explicitly switch streams after playback had started", () => {
+    const h = harness();
+    h.core.markPlaybackStarted();
+    Player.interrupted = true;
+    h.core.tryAnotherStream();
+    expect(h.onPlaybackFailed).toHaveBeenCalledTimes(1);
+    h.destroyRoot();
+  });
+});
+
+describe("interrupted playback retry", () => {
+  it("reloads the same source and resumes at the last reported position", () => {
+    const h = harness({ season: 2, episode: 5, fileIdx: 3 });
+    Player.position = 420;
+    Player.interrupted = true;
+    const play = vi.spyOn(Player, "play");
+    const seek = vi.spyOn(Player, "seek");
+
+    h.core.retryPlayback();
+
+    expect(play).toHaveBeenCalledWith("http://backend/play?s=http://stream/1.mkv");
+    expect(Player.interrupted).toBe(false);
+    expect(Player.position).toBe(0);
+
+    Player.duration = 1000;
+    h.core.clearSwitchingWhenReady();
+    h.core.resumeRetriedPlayback();
+    h.core.resumeRetriedPlayback();
+    expect(seek).toHaveBeenCalledOnce();
+    expect(seek).toHaveBeenCalledWith(420);
+    h.destroyRoot();
+  });
+
+  it("does nothing unless the current stream is interrupted", () => {
+    const h = harness();
+    const play = vi.spyOn(Player, "play");
+    h.core.retryPlayback();
+    expect(play).not.toHaveBeenCalled();
     h.destroyRoot();
   });
 });
@@ -1095,6 +1162,24 @@ describe("advanceOnEnded", () => {
     h.core.dismissUpNext();
     Player.ended = true;
     h.core.advanceOnEnded();
+    expect(h.onPlayNext).not.toHaveBeenCalled();
+    h.destroyRoot();
+  });
+
+  it("does not complete or advance an interrupted mid-episode stream", () => {
+    const h = harness({ settings: { autoPlay: true } });
+    h.core.nextEp = { season: 1, episode: { episode_number: 2 } as TVEpisode };
+    h.core.markPlaybackStarted();
+    Player.position = 400;
+    Player.duration = 1000;
+    Player.ended = false;
+    Player.interrupted = true;
+
+    h.core.saveProgressOnEnded();
+    h.core.advanceOnEnded();
+
+    expect(mocks.progressSave).not.toHaveBeenCalled();
+    expect(h.onEnded).not.toHaveBeenCalled();
     expect(h.onPlayNext).not.toHaveBeenCalled();
     h.destroyRoot();
   });

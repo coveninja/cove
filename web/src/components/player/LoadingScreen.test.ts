@@ -210,4 +210,94 @@ describe("player loading screens", () => {
       target.remove();
     }
   });
+
+  it("offers retry and manual fallback after a mobile playback interruption", async () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    const onRetry = vi.fn();
+    const onTryAnother = vi.fn();
+    const screen = mount(MobileLoadingScreen, {
+      target,
+      props: {
+        title: "Interrupted episode",
+        logoUrl: null,
+        loadingMessage: "Buffering…",
+        takingAWhile: false,
+        failed: true,
+        onCancel: vi.fn(),
+        onRetry,
+        onTryAnother,
+      },
+    });
+
+    try {
+      expect(target.textContent).toContain("Playback failed");
+      expect(target.textContent).not.toContain("Buffering");
+      findButton(target, "Try again").click();
+      findButton(target, "Try another stream").click();
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(onTryAnother).toHaveBeenCalledOnce();
+    } finally {
+      await unmount(screen, { outro: false });
+      target.remove();
+    }
+  });
+
+  it("focuses retry instead of auto-advancing on a TV playback interruption", async () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    const screen = mount(TvLoadingScreen, {
+      target,
+      props: {
+        title: "Interrupted episode",
+        logoUrl: null,
+        loadingMessage: "Buffering…",
+        takingAWhile: false,
+        failed: true,
+        onCancel: vi.fn(),
+        onRetry: vi.fn(),
+        onTryAnother: vi.fn(),
+      },
+    });
+
+    try {
+      await tick();
+      await tick();
+      expect(document.activeElement).toBe(findButton(target, "Try again"));
+      expect(target.textContent).toContain("Playback failed");
+    } finally {
+      await unmount(screen, { outro: false });
+      target.remove();
+    }
+  });
+
+  it("offers recovery actions after a desktop playback interruption", async () => {
+    const target = document.createElement("div");
+    document.body.append(target);
+    const onRetry = vi.fn();
+    const onTryAnother = vi.fn();
+    const screen = mount(LoadingScreen, {
+      target,
+      props: {
+        title: "Interrupted episode",
+        logoUrl: null,
+        loadingMessage: "Buffering…",
+        takingAWhile: false,
+        failed: true,
+        onCancel: vi.fn(),
+        onRetry,
+        onTryAnother,
+      },
+    });
+
+    try {
+      findButton(target, "Try again").click();
+      findButton(target, "Try another stream").click();
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(onTryAnother).toHaveBeenCalledOnce();
+    } finally {
+      await unmount(screen, { outro: false });
+      target.remove();
+    }
+  });
 });

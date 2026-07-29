@@ -77,8 +77,10 @@ class MpvBridge(
 
     /**
      * Set in stop() and cleared in play() + MPV_EVENT_FILE_LOADED.
-     * Guards endReached so a programmatic stop() never fires the signal
-     * (only genuine EOF does).
+     * Guards endReached so a programmatic stop() never fires the signal.
+     * mpv can also report eof-reached for an incomplete network stream, so the
+     * web player validates the last position against duration before treating
+     * this terminal signal as a completed file.
      */
     private var stoppedByUser = false
 
@@ -266,8 +268,9 @@ window.__coveApp={minimizeApp:function(){CoveApp.minimizeApp();},getAutoUpdateEn
                     listener.onPausedChanged(value)
                 }
                 "eof-reached" -> {
-                    // Only genuine EOF — guard with stoppedByUser so programmatic
-                    // stop() (which also triggers eof-reached) doesn't fire endReached.
+                    // stop() also triggers eof-reached; never forward that. The
+                    // web player separately distinguishes a natural end from a
+                    // broken/incomplete stream using position and duration.
                     if (value && !stoppedByUser) {
                         emitNoArgs("endReached")
                     }

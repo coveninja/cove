@@ -34,6 +34,29 @@ export const ASPECT_MODES: readonly AspectMode[] = [
   "zoom",
 ];
 
+/**
+ * mpv documents that an EOF can also be reported for an incomplete file or a
+ * broken network connection. Treat it as a completed file only when the last
+ * reported playback position is actually at the end.
+ *
+ * The small, bounded tolerance absorbs container-duration and final time-pos
+ * rounding without letting a mid-stream disconnect mark an episode watched.
+ */
+export function playbackReachedNaturalEnd(
+  position: number,
+  duration: number,
+): boolean {
+  if (
+    !Number.isFinite(position) ||
+    !Number.isFinite(duration) ||
+    position < 0 ||
+    duration <= 0
+  )
+    return false;
+  const tolerance = Math.max(2, Math.min(30, duration * 0.01));
+  return duration - position <= tolerance;
+}
+
 // The injected globals have no shipped types; describe just what we touch.
 interface QtSignal<A extends unknown[]> {
   connect(cb: (...args: A) => void): void;
@@ -95,6 +118,10 @@ export class MpvPlayer {
   paused = $state(true);
   volume = $state(100); // 0–100
   ended = $state(false);
+  /** mpv terminated before the reported duration, usually because the stream
+   * or network failed. Kept distinct from ended so autoplay and completion
+   * saving never run for an interrupted file. */
+  interrupted = $state(false);
   isFullscreen = $state(false);
   playbackSpeed = $state(1);
   aspectMode = $state<AspectMode>("fit");
@@ -165,8 +192,17 @@ export class MpvPlayer {
       mpv.volumeChanged.connect((v) => (this.volume = v));
       mpv.fileLoaded.connect(() => {
         this.ended = false;
+        this.interrupted = false;
       });
-      mpv.endReached.connect(() => (this.ended = true));
+      mpv.endReached.connect(() => {
+        if (playbackReachedNaturalEnd(this.position, this.duration)) {
+          this.ended = true;
+          this.interrupted = false;
+        } else {
+          this.ended = false;
+          this.interrupted = true;
+        }
+      });
       mpv.tracksChanged.connect((tracks) => this.#applyTracks(tracks));
 
       this.ready = true;
@@ -193,6 +229,7 @@ export class MpvPlayer {
 
   play(url: string): void {
     this.ended = false;
+    this.interrupted = false;
     this.position = 0;
     // duration must reset too: this is a singleton, and mpv only pushes a
     // durationChanged once the NEW file's duration is known — leaving the old
@@ -295,6 +332,8 @@ export class MpvPlayer {
   }
 
   stop(): void {
+    this.ended = false;
+    this.interrupted = false;
     this.position = 0;
     this.duration = 0;
     this.#mpv?.stop();

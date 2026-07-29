@@ -130,9 +130,11 @@
   $effect(() => core.startPlayback());
   $effect(() => core.resolveOriginalLang());
   $effect(() => core.clearSwitchingWhenReady());
+  $effect(() => core.resumeRetriedPlayback());
   onDestroy(() => core.destroy());
   $effect(() => core.armWatchdog());
   $effect(() => core.markPlaybackStarted());
+  $effect(() => core.failOnPlaybackInterruption());
   $effect(() => core.failOnStalledTorrent());
   $effect(() => core.loadProgress());
   $effect(() => core.resumeProgress());
@@ -566,10 +568,13 @@
       logoUrl={core.logoUrl}
       loadingMessage={core.loadingMessage}
       takingAWhile={core.takingAWhile}
+      failed={Player.interrupted}
       cancelVisible={core.streamDiscoveryPending}
       onCancel={core.streamDiscoveryPending
         ? (onCancelPending ?? core.triggerPlaybackFailed)
         : core.triggerPlaybackFailed}
+      onRetry={core.retryPlayback}
+      onTryAnother={onPlaybackFailed ? core.tryAnotherStream : undefined}
       onClose={core.streamDiscoveryPending ? onCancelPending : _onclose}
     />
   {/if}

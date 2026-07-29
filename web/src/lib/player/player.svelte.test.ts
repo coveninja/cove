@@ -6,6 +6,7 @@ vi.mock("$lib/platform", () => ({ isDesktopTvMode }));
 import {
   ASPECT_MODES,
   MpvPlayer,
+  playbackReachedNaturalEnd,
   type MpvTrack,
 } from "$lib/player/player.svelte";
 
@@ -108,21 +109,23 @@ describe("MpvPlayer", () => {
     expect(bridge.requestState).toHaveBeenCalledTimes(1);
     await expect(player.whenReady).resolves.toBeUndefined();
 
-    bridge.positionChanged.emit(12);
+    bridge.positionChanged.emit(99);
     bridge.durationChanged.emit(100);
     bridge.pausedChanged.emit(false);
     bridge.volumeChanged.emit(72);
     bridge.endReached.emit();
     expect(player).toMatchObject({
-      position: 12,
+      position: 99,
       duration: 100,
       paused: false,
       volume: 72,
       ended: true,
+      interrupted: false,
     });
 
     bridge.fileLoaded.emit();
     expect(player.ended).toBe(false);
+    expect(player.interrupted).toBe(false);
 
     const video: MpvTrack = {
       id: 1,
@@ -148,6 +151,21 @@ describe("MpvPlayer", () => {
     bridge.tracksChanged.emit([video, audio, subtitle]);
     expect(player.audioTracks).toEqual([audio]);
     expect(player.subtitleTracks).toEqual([subtitle]);
+  });
+
+  it("keeps an early terminal signal distinct from a natural end", () => {
+    const bridge = makeBridge();
+    const { player } = connectWith(bridge);
+
+    bridge.durationChanged.emit(1000);
+    bridge.positionChanged.emit(400);
+    bridge.endReached.emit();
+
+    expect(player.ended).toBe(false);
+    expect(player.interrupted).toBe(true);
+
+    bridge.fileLoaded.emit();
+    expect(player.interrupted).toBe(false);
   });
 
   it("reports an invalid or missing mpv bridge without becoming ready", () => {
@@ -188,6 +206,7 @@ describe("MpvPlayer", () => {
     player.position = 95;
     player.duration = 100;
     player.ended = true;
+    player.interrupted = true;
     player.playbackSpeed = 2;
 
     player.play("https://stream.test/new");
@@ -196,6 +215,7 @@ describe("MpvPlayer", () => {
       position: 0,
       duration: 0,
       ended: false,
+      interrupted: false,
       playbackSpeed: 1,
     });
     expect(bridge.setMpvProperty).toHaveBeenCalledWith("speed", "1");
@@ -343,5 +363,18 @@ describe("MpvPlayer", () => {
     player.togglePause();
     expect(player.paused).toBe(false);
     expect(bridge.resume).toHaveBeenCalledOnce();
+  });
+});
+
+describe("playbackReachedNaturalEnd", () => {
+  it("accepts normal end-of-file position rounding", () => {
+    expect(playbackReachedNaturalEnd(99, 100)).toBe(true);
+    expect(playbackReachedNaturalEnd(3571, 3600)).toBe(true);
+  });
+
+  it("rejects incomplete files and invalid duration data", () => {
+    expect(playbackReachedNaturalEnd(400, 1000)).toBe(false);
+    expect(playbackReachedNaturalEnd(0, 0)).toBe(false);
+    expect(playbackReachedNaturalEnd(Number.NaN, 1000)).toBe(false);
   });
 });
