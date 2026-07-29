@@ -330,6 +330,32 @@ func (c *Config) PushSettings(userJWT, profileID string, st *settings.Store) err
 	}})
 }
 
+// AccountOnboardingDone reports whether any profile settings row owned by the
+// signed-in account has completed onboarding. Completion is account-wide for
+// first-run purposes: profile reconciliation can adopt a different remote
+// profile on a fresh device, but that must not make an established user repeat
+// the application-level onboarding flow.
+func (c *Config) AccountOnboardingDone(userJWT string) (bool, error) {
+	rows, err := c.Select(userJWT, "profile_settings", "select=data&order=updated_at.desc")
+	if err != nil {
+		return false, fmt.Errorf("pull account onboarding state: %w", err)
+	}
+	for _, raw := range rows {
+		var row struct {
+			Data struct {
+				OnboardingDone bool `json:"onboardingDone"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &row); err != nil {
+			return false, fmt.Errorf("decode account onboarding state: %w", err)
+		}
+		if row.Data.OnboardingDone {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // PushAddons uploads current addon configuration for the profile.
 // The row's updated_at reflects mgr.UpdatedAt() (the last local mutation time)
 // so the remote timestamp stays stable when content hasn't changed — avoiding
@@ -469,7 +495,11 @@ func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 	}
 
 	// Settings
-	settingsRows, err := c.Select(userJWT, "profile_settings", "profile_id=eq."+url.QueryEscape(profileID))
+	settingsRows, err := c.Select(
+		userJWT,
+		"profile_settings",
+		"profile_id=eq."+url.QueryEscape(profileID)+"&order=updated_at.desc&limit=1",
+	)
 	if err != nil {
 		return nil, fmt.Errorf("pull profile_settings: %w", err)
 	}

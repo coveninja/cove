@@ -464,6 +464,27 @@ func TestSyncPullsThenQueuesSuccessfulPush(t *testing.T) {
 	assert.Contains(t, methods, "POST profiles")
 }
 
+func TestResolveAccountOnboardingDoneAcrossProfiles(t *testing.T) {
+	server := newHandlerTestServer(t, &Config{
+		URL:     "https://project.invalid",
+		AnonKey: "anon",
+	})
+
+	withHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		require.Equal(t, "/rest/v1/profile_settings", r.URL.Path)
+		assert.Empty(t, r.URL.Query().Get("profile_id"))
+		assert.Equal(t, "data", r.URL.Query().Get("select"))
+		assert.Equal(t, "updated_at.desc", r.URL.Query().Get("order"))
+		return response(http.StatusOK, `[
+			{"data":{"onboardingDone":false}},
+			{"data":{"onboardingDone":true}}
+		]`), nil
+	})
+
+	assert.True(t, server.resolveAccountOnboardingDone("jwt"))
+	assert.True(t, server.st.Get().OnboardingDone)
+}
+
 func TestCleanupDeletedProfileSkipsUnlinkedProfiles(t *testing.T) {
 	server := newHandlerTestServer(t, nil)
 	uid := "user-1"

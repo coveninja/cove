@@ -24,7 +24,7 @@
   import { cubicOut } from "svelte/easing";
   import { api, setTokenSource } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
-  import { startAutoSync } from "$lib/sync";
+  import { startAutoSync, syncAtStartup } from "$lib/sync";
   import { Player } from "$lib/player/player.svelte";
   import { minimizeApp } from "$lib/platform";
   import {
@@ -237,7 +237,7 @@
     navigate(dir);
   }
 
-  // ── Bootstrap: settings + auth, then reveal app ───────────────────────────────
+  // ── Bootstrap: auth + account pull, then reveal app ───────────────────────────
   let syncErrorToast = $state<string | null>(null);
   let syncErrorTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -251,23 +251,23 @@
     setMode("dark");
 
     let stopAutoSync: (() => void) | null = null;
-    Promise.all([settings.load(), auth.init().catch(console.error)]).then(
-      async () => {
-        splashVisible = false;
-        if (!$settings.onboardingDone) {
-          showOnboarding = true;
-        }
-        stopAutoSync = startAutoSync(showSyncError);
-        // Focus the first navigable element after the shell is ready so the
-        // remote's D-pad is immediately active.
-        // Skip when onboarding is shown — TvOnboardingPage manages its own
-        // initial focus and focusFirst() here would steal it to the side-nav.
-        if (!showOnboarding) {
-          await tick();
-          focusFirst();
-        }
-      },
-    );
+    void (async () => {
+      await auth.init().catch(console.error);
+      await syncAtStartup(showSyncError);
+      splashVisible = false;
+      if (!$settings.onboardingDone) {
+        showOnboarding = true;
+      }
+      stopAutoSync = startAutoSync(showSyncError, { initialSync: false });
+      // Focus the first navigable element after the shell is ready so the
+      // remote's D-pad is immediately active.
+      // Skip when onboarding is shown — TvOnboardingPage manages its own
+      // initial focus and focusFirst() here would steal it to the side-nav.
+      if (!showOnboarding) {
+        await tick();
+        focusFirst();
+      }
+    })();
 
     // Suppress AbortErrors from the media player (vidstack / maverick).
     const isAbort = (v: unknown): boolean => {

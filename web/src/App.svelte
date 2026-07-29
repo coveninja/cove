@@ -28,7 +28,7 @@
   import OnboardingPage from "./components/OnboardingPage.svelte";
   import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
-  import { startAutoSync } from "$lib/sync";
+  import { startAutoSync, syncAtStartup } from "$lib/sync";
   import { createPlaybackChime } from "$lib/playbackChime";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
@@ -112,20 +112,20 @@
       : null,
   );
 
-  // Load settings once on startup so all components have values immediately.
+  // Restore and refresh auth, pull the account, then decide whether onboarding
+  // is needed from the merged settings.
   onMount(() => {
     setMode("dark");
     let stopAutoSync: (() => void) | null = null;
-    // Wait for both settings and auth to resolve before revealing the app.
-    Promise.all([settings.load(), auth.init().catch(console.error)]).then(
-      () => {
-        splashVisible = false;
-        if (!$settings.onboardingDone) {
-          showOnboarding = true;
-        }
-        stopAutoSync = startAutoSync(showSyncError);
-      },
-    );
+    void (async () => {
+      await auth.init().catch(console.error);
+      await syncAtStartup(showSyncError);
+      splashVisible = false;
+      if (!$settings.onboardingDone) {
+        showOnboarding = true;
+      }
+      stopAutoSync = startAutoSync(showSyncError, { initialSync: false });
+    })();
 
     // Non-blocking background update check. Failures are silently swallowed
     // since the user may be offline or on a dev build (which skips the check

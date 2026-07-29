@@ -57,11 +57,49 @@ export class AuthStore {
       this.session = { accessToken: saved.accessToken, email: saved.email };
       this.#lastSavedToken = saved.accessToken;
 
-      // Hand to Supabase JS for background token refresh management.
+      // Hand to Supabase JS for token refresh management. Await this before
+      // init() resolves so startup sync cannot race an expired persisted
+      // access token. setSession() returns the refreshed session when it had
+      // to rotate the token, so apply and persist that result directly before
+      // registering the ongoing auth-state listener below.
       if (supabase) {
-        supabase.auth
-          .setSession({ access_token: saved.accessToken, refresh_token: saved.refreshToken })
-          .catch((e) => console.error("[auth] init: supabase.auth.setSession failed:", e));
+        try {
+          const result = await supabase.auth.setSession({
+            access_token: saved.accessToken,
+            refresh_token: saved.refreshToken,
+          });
+          if (result.error) {
+            console.error(
+              "[auth] init: supabase.auth.setSession failed:",
+              result.error,
+            );
+          }
+          const refreshed = result.data?.session;
+          if (refreshed) {
+            const email = refreshed.user.email ?? saved.email;
+            this.#token = refreshed.access_token;
+            this.session = {
+              accessToken: refreshed.access_token,
+              email,
+            };
+            if (
+              refreshed.access_token !== saved.accessToken ||
+              refreshed.refresh_token !== saved.refreshToken
+            ) {
+              api.clearInflight();
+              await api
+                .clientSessionSave({
+                  accessToken: refreshed.access_token,
+                  refreshToken: refreshed.refresh_token,
+                  email,
+                })
+                .catch(console.error);
+            }
+            this.#lastSavedToken = refreshed.access_token;
+          }
+        } catch (e) {
+          console.error("[auth] init: supabase.auth.setSession failed:", e);
+        }
       }
     } catch {
       console.log("[auth] init: no persisted session");

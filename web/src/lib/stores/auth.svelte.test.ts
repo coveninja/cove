@@ -160,6 +160,34 @@ describe("AuthStore", () => {
     );
   });
 
+  it("applies and persists a refreshed session before init resolves", async () => {
+    const store = new AuthStore();
+    supabaseMock.auth.setSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: "refreshed-access",
+          refresh_token: "refreshed-refresh",
+          user: { email: "refreshed@example.test" },
+        },
+      },
+      error: null,
+    });
+
+    await store.init();
+
+    expect(store.authToken).toBe("refreshed-access");
+    expect(store.session).toEqual({
+      accessToken: "refreshed-access",
+      email: "refreshed@example.test",
+    });
+    expect(apiMock.clientSessionSave).toHaveBeenCalledWith({
+      accessToken: "refreshed-access",
+      refreshToken: "refreshed-refresh",
+      email: "refreshed@example.test",
+    });
+    expect(supabaseMock.auth.onAuthStateChange).toHaveBeenCalledOnce();
+  });
+
   it("persists genuine token refreshes but skips the restore echo", async () => {
     const store = new AuthStore();
     await store.init();

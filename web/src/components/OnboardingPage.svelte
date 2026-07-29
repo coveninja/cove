@@ -409,5 +409,9 @@
 </div>
 
 {#if ctl.authOpen}
-  <AuthDialog onclose={() => (ctl.authOpen = false)} />
+  <AuthDialog
+    onclose={() => (ctl.authOpen = false)}
+    onauthdone={(onboardingDone) =>
+      ctl.finishAuthentication(onboardingDone)}
+  />
 {/if}

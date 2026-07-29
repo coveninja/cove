@@ -1055,6 +1055,7 @@ export const api = {
     refresh_token: string;
     profiles: Profile[];
     active: Profile;
+    onboarding_done?: boolean;
   }> =>
     request(`/auth/login`, {
       method: "POST",
@@ -1077,6 +1078,7 @@ export const api = {
     refresh_token: string;
     profiles: Profile[];
     active: Profile;
+    onboarding_done?: boolean;
   }> =>
     request(`/auth/verify-otp`, {
       method: "POST",

@@ -12,9 +12,11 @@
   import * as m from "$lib/paraglide/messages.js";
   import { AuthController, type AuthView } from "$lib/authController.svelte";
 
-  let { ondone }: { ondone: () => void } = $props();
+  let { ondone }: { ondone: (onboardingDone: boolean) => void } = $props();
 
-  const controller = new AuthController({ onDone: () => ondone() });
+  const controller = new AuthController({
+    onDone: (onboardingDone) => ondone(onboardingDone),
+  });
   const view = $derived(controller.view);
   const loading = $derived(controller.loading);
   const error = $derived(controller.error);

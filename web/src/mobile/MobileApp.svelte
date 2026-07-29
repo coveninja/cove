@@ -29,7 +29,7 @@
   import { cubicOut } from "svelte/easing";
   import { api, setTokenSource } from "$lib/api";
   import { auth } from "$lib/stores/auth.svelte";
-  import { startAutoSync } from "$lib/sync";
+  import { startAutoSync, syncAtStartup } from "$lib/sync";
   import { Player } from "$lib/player/player.svelte";
   import { isAndroid, minimizeApp } from "$lib/platform";
   import { createPlaybackChime } from "$lib/playbackChime";
@@ -178,7 +178,7 @@
     minimizeApp();
   }
 
-  // ── Bootstrap: settings + auth, then reveal app ───────────────────────────────
+  // ── Bootstrap: auth + account pull, then reveal app ───────────────────────────
   // Displayed when a push sync error is detected; auto-clears after 5 s.
   let syncErrorToast = $state<string | null>(null);
   let syncErrorTimer: ReturnType<typeof setTimeout> | undefined;
@@ -192,15 +192,15 @@
     setMode("dark");
 
     let stopAutoSync: (() => void) | null = null;
-    Promise.all([settings.load(), auth.init().catch(console.error)]).then(
-      () => {
-        splashVisible = false;
-        if (!$settings.onboardingDone) {
-          showOnboarding = true;
-        }
-        stopAutoSync = startAutoSync(showSyncError);
-      },
-    );
+    void (async () => {
+      await auth.init().catch(console.error);
+      await syncAtStartup(showSyncError);
+      splashVisible = false;
+      if (!$settings.onboardingDone) {
+        showOnboarding = true;
+      }
+      stopAutoSync = startAutoSync(showSyncError, { initialSync: false });
+    })();
 
     // Suppress AbortErrors from the media player (vidstack / maverick).
     const isAbort = (v: unknown): boolean => {

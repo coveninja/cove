@@ -342,13 +342,23 @@ func (s *Store) applyTokenPolicy(incoming Settings) Settings {
 // could silently open a LAN listener or permit LAN proxy targets on another
 // device. Per-device runtime configuration must not roam across devices.
 //
-// OnboardingDone is a monotonic flag: once true it must never be reset. There is
-// no redo-onboarding feature, so a fresh-device pull must not clobber a flag that
-// was set on another device.
+// OnboardingDone is a monotonic flag: once true it must never be reset. Its
+// false-to-true transition is applied even when the rest of the incoming record
+// is stale. This matters during onboarding, where choosing a language creates a
+// newer local settings timestamp immediately before sign-in pulls an older
+// completed-onboarding record from another device.
 func (s *Store) MergeFrom(incoming Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !incoming.UpdatedAt.After(s.cached.UpdatedAt) {
+		if incoming.OnboardingDone && !s.cached.OnboardingDone {
+			previous := s.cached
+			s.cached.OnboardingDone = true
+			if err := s.write(); err != nil {
+				s.cached = previous
+				return fmt.Errorf("settings merge persist: %w", err)
+			}
+		}
 		return nil
 	}
 	// Always preserve device-local remote-access config (see comment above).

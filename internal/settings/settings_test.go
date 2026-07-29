@@ -89,6 +89,29 @@ func TestMergeFrom_RejectsStale(t *testing.T) {
 	assert.True(t, st.Get().OnboardingDone, "stale incoming merge must not revert a newer local write")
 }
 
+func TestMergeFrom_AcceptsCompletionFromStaleSettings(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	st, err := New("test")
+	require.NoError(t, err)
+
+	local := st.Get()
+	local.UILanguage = "tr"
+	local.OnboardingDone = false
+	local.UpdatedAt = time.Now()
+	require.NoError(t, st.MergeFrom(local))
+
+	stale := local
+	stale.UILanguage = "en"
+	stale.OnboardingDone = true
+	stale.UpdatedAt = local.UpdatedAt.Add(-time.Hour)
+	require.NoError(t, st.MergeFrom(stale))
+
+	got := st.Get()
+	assert.True(t, got.OnboardingDone)
+	assert.Equal(t, "tr", got.UILanguage, "stale settings must not replace newer local choices")
+	assert.Equal(t, local.UpdatedAt, got.UpdatedAt)
+}
+
 // TestMergeFrom_AcceptsNewer confirms genuine cross-device sync still works:
 // an incoming value newer than the cached one is accepted.
 func TestMergeFrom_AcceptsNewer(t *testing.T) {

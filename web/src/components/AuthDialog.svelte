@@ -12,10 +12,19 @@
   import { AuthController, type AuthView } from "$lib/authController.svelte";
   import * as m from "$lib/paraglide/messages.js";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let {
+    onclose,
+    onauthdone,
+  }: {
+    onclose: () => void;
+    onauthdone?: (onboardingDone: boolean) => void;
+  } = $props();
 
   const controller = new AuthController({
-    onDone: () => onclose(),
+    onDone: (onboardingDone) => {
+      onauthdone?.(onboardingDone);
+      onclose();
+    },
     showRegistrationSuccess: true,
   });
   const view = $derived(controller.view);

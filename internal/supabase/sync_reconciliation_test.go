@@ -416,6 +416,8 @@ func TestPullAllDecodesEveryDataset(t *testing.T) {
 				"tmdb_id":8,"media_type":"movie","removed_at":"`+updatedAt+`"
 			}]`), nil
 		case "profile_settings":
+			assert.Equal(t, "updated_at.desc", r.URL.Query().Get("order"))
+			assert.Equal(t, "1", r.URL.Query().Get("limit"))
 			return response(http.StatusOK, `[{"data":{
 				"hideSpoilers":true,"updatedAt":"`+updatedAt+`"
 			}}]`), nil

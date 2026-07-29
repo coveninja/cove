@@ -14,7 +14,7 @@ export type AuthView =
   | "success";
 
 interface AuthControllerOptions {
-  onDone: () => void;
+  onDone: (onboardingDone: boolean) => void;
   showRegistrationSuccess?: boolean;
 }
 
@@ -32,7 +32,7 @@ export class AuthController {
   pendingPassword = $state("");
   pendingProfileName = $state("");
 
-  #onDone: () => void;
+  #onDone: (onboardingDone: boolean) => void;
   #showRegistrationSuccess: boolean;
 
   constructor(options: AuthControllerOptions) {
@@ -71,7 +71,7 @@ export class AuthController {
         response.active,
         response.refresh_token,
       );
-      await this.#finish();
+      await this.#finish(response.onboarding_done);
     } catch (error) {
       this.#setError(error);
     } finally {
@@ -110,7 +110,7 @@ export class AuthController {
         response.active,
         response.refresh_token,
       );
-      await this.#finish();
+      await this.#finish(response.onboarding_done);
     } catch (error) {
       this.#setError(error);
       this.otpCode = "";
@@ -165,7 +165,7 @@ export class AuthController {
       await settings.load();
       libraryChanged.update((generation) => generation + 1);
       if (this.#showRegistrationSuccess) this.view = "success";
-      else this.#onDone();
+      else this.#onDone(false);
     } catch (error) {
       this.#setError(error);
       this.otpCode = "";
@@ -198,10 +198,10 @@ export class AuthController {
     return false;
   }
 
-  async #finish(): Promise<void> {
+  async #finish(onboardingDone = false): Promise<void> {
     await settings.load();
     libraryChanged.update((generation) => generation + 1);
-    this.#onDone();
+    this.#onDone(onboardingDone);
   }
 
   #setError(error: unknown): void {

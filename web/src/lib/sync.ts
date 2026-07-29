@@ -3,12 +3,69 @@ import { auth } from "$lib/stores/auth.svelte";
 import { libraryChanged } from "$lib/stores/library";
 import { settings } from "$lib/stores/settings";
 
+interface AutoSyncOptions {
+  initialSync?: boolean;
+}
+
+function reportPushError(
+  pushError: string | undefined,
+  onPushError: (msg: string) => void,
+): void {
+  if (!pushError) return;
+  console.warn("Sync push error:", pushError);
+  onPushError("Sync issue: some data failed to upload");
+}
+
+/**
+ * Complete the signed-in startup pull before a shell reveals its content or
+ * decides whether onboarding is needed. auth.init() must finish first so this
+ * request uses the refreshed access token.
+ *
+ * Sync remains best-effort for offline startup, but settings and (for a
+ * signed-in session) profiles are reloaded afterward so any successful remote
+ * reconciliation is visible before the splash screen is dismissed.
+ */
+export async function syncAtStartup(
+  onPushError: (msg: string) => void,
+): Promise<void> {
+  const signedIn = !auth.isGuest;
+  if (signedIn) {
+    try {
+      const response = await api.authSync();
+      libraryChanged.update((generation) => generation + 1);
+      reportPushError(response.push_error, onPushError);
+    } catch {
+      // Preserve the existing offline-start behavior: local data remains
+      // usable even if the account pull cannot be reached.
+    }
+  }
+
+  await Promise.all([
+    settings.load(),
+    signedIn
+      ? api
+          .profilesList()
+          .then((response) => {
+            const active =
+              response.profiles.find(
+                (profile) => profile.id === response.active_profile_id,
+              ) ?? response.profiles[0];
+            if (active) auth.setProfiles(response.profiles, active);
+          })
+          .catch(() => {})
+      : Promise.resolve(),
+  ]);
+}
+
 // Interval-based polling is the actual fix for cross-device sync: focus events
 // alone leave an open-but-unfocused desktop stale indefinitely while the user
 // watches on another device. The interval fires every 60 s while the window is
 // visible; focus and visibilitychange listeners handle resume events on
 // mobile/TV (Android onResume → window focus; tab switch → visibilitychange).
-export function startAutoSync(onPushError: (msg: string) => void): () => void {
+export function startAutoSync(
+  onPushError: (msg: string) => void,
+  options: AutoSyncOptions = {},
+): () => void {
   let lastSyncMs = 0;
   let lastGen: number | null = null;
   let lastShownPushErr = "";
@@ -63,8 +120,9 @@ export function startAutoSync(onPushError: (msg: string) => void): () => void {
   window.addEventListener("focus", onFocus);
   document.addEventListener("visibilitychange", onVisibility);
 
-  // Initial pull immediately after session restore, without waiting for an event.
-  syncNow();
+  // Most callers still get an initial pull. App shells opt out after awaiting
+  // syncAtStartup(), avoiding an immediate duplicate request.
+  if (options.initialSync ?? true) syncNow();
 
   return () => {
     clearInterval(intervalId);

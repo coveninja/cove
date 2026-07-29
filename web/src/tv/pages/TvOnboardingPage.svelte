@@ -268,33 +268,35 @@
           {msg.onboarding_language_prompt()}
         </p>
       {/key}
-      <div class="grid grid-cols-2 gap-5 p-4">
-        {#each LOCALES as locale}
-          <button
-            type="button"
-            onclick={() => ctl.selectUiLanguage(locale.appLocale)}
-            aria-pressed={ctl.selectedUiLanguage === locale.appLocale}
-            class="flex min-h-28 items-center justify-between rounded-xl border px-8 py-6 text-left transition-colors
-              {ctl.selectedUiLanguage === locale.appLocale
-              ? 'border-accent bg-accent/10'
-              : 'border-border hover:border-accent/60 hover:bg-muted/30'}"
-          >
-            <span class="text-2xl font-semibold">{locale.nativeName}</span>
-            {#if ctl.selectedUiLanguage === locale.appLocale}
-              <span
-                class="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground"
-              >
-                <Check class="size-6" />
-              </span>
-            {/if}
-          </button>
-        {/each}
+      <div class="min-h-0 flex-1 overflow-y-auto overflow-x-clip pr-3">
+        <div class="grid grid-cols-2 gap-5 p-4">
+          {#each LOCALES as locale}
+            <button
+              type="button"
+              onclick={() => ctl.selectUiLanguage(locale.appLocale)}
+              aria-pressed={ctl.selectedUiLanguage === locale.appLocale}
+              class="flex min-h-28 items-center justify-between rounded-xl border px-8 py-6 text-left transition-colors
+                {ctl.selectedUiLanguage === locale.appLocale
+                ? 'border-accent bg-accent/10'
+                : 'border-border hover:border-accent/60 hover:bg-muted/30'}"
+            >
+              <span class="text-2xl font-semibold">{locale.nativeName}</span>
+              {#if ctl.selectedUiLanguage === locale.appLocale}
+                <span
+                  class="flex size-10 items-center justify-center rounded-full bg-accent text-accent-foreground"
+                >
+                  <Check class="size-6" />
+                </span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+        {#if ctl.languageSaveError}
+          <p class="px-4 pb-4 pt-1 text-base text-destructive">
+            {msg.language_save_error()}
+          </p>
+        {/if}
       </div>
-      {#if ctl.languageSaveError}
-        <p class="mt-5 text-base text-destructive">
-          {msg.language_save_error()}
-        </p>
-      {/if}
     {:else if ctl.stepIndex === 2}
       <!-- Account -->
       <h2 class="mb-6 text-2xl font-semibold">{ctl.stepTitle}</h2>
@@ -304,7 +306,8 @@
           <div bind:this={authWrap} class="flex justify-center">
             <TvAuthPanel
               bind:this={authPanel}
-              ondone={() => (ctl.authOpen = false)}
+              ondone={(onboardingDone) =>
+                ctl.finishAuthentication(onboardingDone)}
             />
           </div>
         {:else}

@@ -83,6 +83,24 @@ describe("AuthController", () => {
     expect(onDone).toHaveBeenCalledOnce();
   });
 
+  it("forwards completed onboarding after email-code verification", async () => {
+    mocks.api.authVerifyOTP.mockResolvedValue({
+      access_token: "access",
+      refresh_token: "refresh",
+      profiles: [{ id: "profile" }],
+      active: { id: "profile" },
+      onboarding_done: true,
+    });
+    const onDone = vi.fn();
+    const controller = make(onDone);
+    controller.otpEmail = "user@example.com";
+    controller.otpCode = "12345678";
+
+    await controller.verifyOTP();
+
+    expect(onDone).toHaveBeenCalledWith(true);
+  });
+
   it("does not advance registration until the request succeeds", async () => {
     mocks.api.authRegister.mockRejectedValue(new Error("already registered"));
     const controller = make();

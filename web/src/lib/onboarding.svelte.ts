@@ -19,6 +19,7 @@ import {
   type AppLocale,
 } from "$lib/i18n";
 import * as msg from "$lib/paraglide/messages.js";
+import { auth } from "$lib/stores/auth.svelte";
 import { settings } from "$lib/stores/settings";
 import type { LibraryEntry } from "$lib/types/library";
 import type { Media } from "$lib/types/tmdb";
@@ -151,6 +152,11 @@ export class OnboardingController {
     this.selectedUiLanguage = locale;
     this.languageSaveError = false;
     activateLocale(locale);
+  }
+
+  finishAuthentication(onboardingDone: boolean): void {
+    this.authOpen = false;
+    if (onboardingDone) this.#opts.onClose();
   }
 
   // ── Genre step ───────────────────────────────────────────────────────────
@@ -297,6 +303,11 @@ export class OnboardingController {
         uiLanguage: this.selectedUiLanguage,
       });
       if (!saved) return;
+      if (!auth.isGuest) {
+        await api.authSync().catch((error) => {
+          console.error("Failed to sync onboarding completion:", error);
+        });
+      }
       if (this.selectedUiLanguage !== this.initialUiLanguage) {
         window.location.reload();
       } else {

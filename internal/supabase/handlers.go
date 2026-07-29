@@ -347,11 +347,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	onboardingDone := s.resolveAccountOnboardingDone(accessToken)
 	jsonOK(w, map[string]any{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"profiles":      s.profileStore.All(),
-		"active":        s.profileStore.ActiveProfile(),
+		"access_token":    accessToken,
+		"refresh_token":   refreshToken,
+		"profiles":        s.profileStore.All(),
+		"active":          s.profileStore.ActiveProfile(),
+		"onboarding_done": onboardingDone,
 	})
 }
 
@@ -413,12 +415,38 @@ func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	onboardingDone := s.resolveAccountOnboardingDone(accessToken)
 	jsonOK(w, map[string]any{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"profiles":      s.profileStore.All(),
-		"active":        s.profileStore.ActiveProfile(),
+		"access_token":    accessToken,
+		"refresh_token":   refreshToken,
+		"profiles":        s.profileStore.All(),
+		"active":          s.profileStore.ActiveProfile(),
+		"onboarding_done": onboardingDone,
 	})
+}
+
+// resolveAccountOnboardingDone extends the active profile's merged setting with
+// any completed profile owned by the same account. Fresh-device reconciliation
+// can adopt a different profile ID, but onboarding is an application-level
+// first-run flow and must not restart for an established account.
+func (s *Server) resolveAccountOnboardingDone(userJWT string) bool {
+	current := s.st.Get()
+	if current.OnboardingDone {
+		return true
+	}
+	done, err := s.cfg.AccountOnboardingDone(userJWT)
+	if err != nil {
+		log.Println("supabase: resolve account onboarding state:", err)
+		return false
+	}
+	if !done {
+		return false
+	}
+	current.OnboardingDone = true
+	if err := s.st.Set(current); err != nil {
+		log.Println("supabase: persist account onboarding state:", err)
+	}
+	return true
 }
 
 // POST /api/auth/logout — clear the SupabaseUID link from the active profile.
