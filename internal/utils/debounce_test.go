@@ -28,11 +28,14 @@ func TestDebouncedPersist_CoalescesManyWrites(t *testing.T) {
 	_, err := os.Stat(path)
 	assert.True(t, os.IsNotExist(err), "no write should happen before the deadline")
 
-	// Wait for the timer to fire.
-	time.Sleep(2 * testDebounce)
-
-	got, err := os.ReadFile(path)
-	require.NoError(t, err)
+	// Wait for the timer callback to finish rather than assuming the runner
+	// scheduled and completed it within a fixed multiple of the deadline.
+	var got []byte
+	require.Eventually(t, func() bool {
+		var err error
+		got, err = os.ReadFile(path)
+		return err == nil
+	}, 2*time.Second, 5*time.Millisecond)
 	assert.Equal(t, `"third"`, string(got))
 }
 
@@ -98,25 +101,22 @@ func TestDebouncedPersist_FlushCancelsTimer(t *testing.T) {
 }
 
 func TestDebouncedPersist_SecondMarkDirtyDoesNotResetTimer(t *testing.T) {
-	// If the timer were reset on each MarkDirty call, a stream of calls spaced
-	// just under the deadline would defer the write indefinitely. Verify that
-	// the write happens at roughly the first MarkDirty's deadline regardless of
-	// a second call that arrives just before firing.
+	// Give the second call a dramatically different delay. If it reset the
+	// existing timer, the write would be deferred for an hour; retaining the
+	// original timer writes the latest payload promptly. This checks behavior
+	// without relying on a narrow scheduling window around the first deadline.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "store.json")
 	var d DebouncedPersist
 
-	start := time.Now()
 	d.MarkDirty(path, []byte(`"v1"`), testDebounce)
-	time.Sleep(testDebounce / 2) // second call arrives midway
-	d.MarkDirty(path, []byte(`"v2"`), testDebounce)
+	d.MarkDirty(path, []byte(`"v2"`), time.Hour)
 
-	// Wait just a bit past the first deadline; if the timer was reset by the
-	// second MarkDirty the file wouldn't be there yet.
-	time.Sleep(testDebounce)
-
-	elapsed := time.Since(start)
-	got, err := os.ReadFile(path)
-	require.NoError(t, err, "file must exist within ~1× the deadline (elapsed: %v)", elapsed)
+	var got []byte
+	require.Eventually(t, func() bool {
+		var err error
+		got, err = os.ReadFile(path)
+		return err == nil
+	}, 2*time.Second, 5*time.Millisecond, "the original timer should still fire")
 	assert.Equal(t, `"v2"`, string(got), "latest payload must be written")
 }
