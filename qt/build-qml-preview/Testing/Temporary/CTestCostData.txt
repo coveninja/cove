@@ -1,0 +1,2 @@
+cove-shell-native-qml 1 0.115687
+---
