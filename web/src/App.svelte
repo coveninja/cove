@@ -46,6 +46,7 @@
   // floats over whatever page is underneath, Netflix-style. Cards request it
   // via the "openMediaDetail" context provided below.
   let selectedMedia: Media | null = $state(null);
+  let openSelectedMediaStreams = $state(false);
 
   // Person / provider detail overlays, opened from search result cards. Same
   // floating-overlay model as selectedMedia.
@@ -229,7 +230,8 @@
     }
   }
 
-  function selectMedia(media: Media): void {
+  function selectMedia(media: Media, showStreams = false): void {
+    openSelectedMediaStreams = showStreams;
     selectedMedia = media;
   }
 
@@ -314,6 +316,7 @@
         streamActive={streamActiveForSelectedMedia}
         activeSeason={activePlaybackSeason}
         activeEpisode={activePlaybackEpisode}
+        openStreamsInitially={openSelectedMediaStreams}
       />
     {/key}
   {/if}
@@ -458,6 +461,8 @@
             season={playback.playerSession?.season}
             episode={playback.playerSession?.episode}
             fileIdx={playback.playerSession?.stream.fileIdx}
+            automaticStartupRecovery={playback.playerSession
+              ?.automaticStartupRecovery ?? false}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;
@@ -466,15 +471,7 @@
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
               if (m)
-                playback.startPlayback(
-                  m,
-                  stream,
-                  s,
-                  e,
-                  name,
-                  candidates ?? [],
-                  0,
-                );
+                playback.startPlayback(m, stream, s, e, name, candidates, 0);
             }}
             onclose={() => playback.closePlayer()}
           />

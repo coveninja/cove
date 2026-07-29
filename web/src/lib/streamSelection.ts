@@ -12,11 +12,7 @@ import { api } from "$lib/api";
 import * as msg from "$lib/paraglide/messages.js";
 
 export type StreamSelectionMode =
-  | "balanced"
-  | "seeders"
-  | "quality"
-  | "smallest"
-  | "bandwidth";
+  "balanced" | "seeders" | "quality" | "smallest" | "bandwidth";
 
 export const STREAM_SELECTION_MODES: {
   value: StreamSelectionMode;
@@ -73,12 +69,7 @@ export function qualityRank(q: string | null): number {
 // already-parsed rows, not scored rankings.
 
 export type StreamSortMode =
-  | "seeders"
-  | "largest"
-  | "smallest"
-  | "quality"
-  | "language"
-  | "cached";
+  "seeders" | "largest" | "smallest" | "quality" | "language" | "cached";
 
 export const STREAM_SORT_MODES: { value: StreamSortMode; label: string }[] = [
   { value: "seeders", label: msg.streams_sort_seeders() },
@@ -308,7 +299,8 @@ export function isCodecHardDisabled(s: Stream): boolean {
   if (meta.is10bit && caps.hevcMain10 === false) return true;
   if (meta.codec === "av1" && caps.av1 === false) return true;
   if (meta.codec === "vp9" && caps.vp9 === false) return true;
-  if (meta.codec === "h265" && !meta.is10bit && caps.hevc === false) return true;
+  if (meta.codec === "h265" && !meta.is10bit && caps.hevc === false)
+    return true;
   return false;
 }
 
@@ -323,7 +315,8 @@ function scoreCandidates(
   const caps = codecCaps();
   return streams.map((s) => {
     const isTorrent = isTorrentStream(s);
-    const isPreferred = !!preferredProvider && s.addonName === preferredProvider;
+    const isPreferred =
+      !!preferredProvider && s.addonName === preferredProvider;
     const matchesSource =
       (sourcePreference === "torrent" && isTorrent) ||
       (sourcePreference === "direct" && !isTorrent);
@@ -332,7 +325,11 @@ function scoreCandidates(
     // only covers non-torrent direct-URL candidates).
     const baseSizeBytes = getSizeBytes(s);
     const sizeBytes =
-      baseSizeBytes > 0 ? baseSizeBytes : (s.url ? (probedSizes?.get(s.url) ?? 0) : 0);
+      baseSizeBytes > 0
+        ? baseSizeBytes
+        : s.url
+          ? (probedSizes?.get(s.url) ?? 0)
+          : 0;
     const meta = parseStreamMeta(s);
     // Language preference is a soft nudge in both directions: only a release
     // that explicitly tags other languages *without* a multi/preferred tag is
@@ -477,17 +474,17 @@ function dedupeByInfoHash(streams: Stream[]): Stream[] {
 
 /**
  * Ranks every stream in `streams` best-first according to the given
- * strategy, returning the full ordered pool (never null/empty unless the
- * input is). Candidates a mode's filters would normally exclude entirely
+ * strategy, returning the full compatible pool. Candidates a mode's filters
+ * would normally exclude entirely
  * (zero-seeder torrents, out-of-budget, sub-480p) aren't dropped — they're
  * appended at the tail in their own sorted order as last-resort fallbacks,
  * so a caller doing candidate-list fallback (B2's watchdog/auto-advance)
  * always has somewhere further to go. Deduped by url || infoHash.
  *
  * Streams the device provably cannot hardware-decode (isCodecHardDisabled)
- * never rank: they're excluded from every mode's pool and appended at the
- * absolute tail — unless *every* candidate is hard-disabled, in which case
- * disabling is waived (trying is better than offering nothing).
+ * never rank. They remain visible in the manual stream list behind its
+ * explicit "Play anyway" action, but automatic playback must never choose
+ * one — including when every discovered candidate is unsupported.
  */
 export function rankStreams(
   streams: Stream[],
@@ -504,26 +501,8 @@ export function rankStreams(
     opts.probedSizes,
     opts.defaultAudioLang,
   );
-  const disabled = scored.filter((c) => c.isHardDisabled);
-  const eligible =
-    disabled.length === 0 || disabled.length === scored.length
-      ? scored
-      : scored.filter((c) => !c.isHardDisabled);
-
-  const ranked = rankScored(eligible, mode, opts);
-  if (eligible.length === scored.length) return ranked;
-
-  // Hard-disabled tail, sorted by boost/seeders — only reachable by the
-  // watchdog when fewer than five eligible candidates exist.
-  const rankedKeys = new Set(ranked.map(streamIdentity));
-  const tail = rankByBoosted(
-    disabled,
-    () => 0,
-    (a, b) => b.seeders - a.seeders,
-  )
-    .map((c) => c.stream)
-    .filter((s) => !rankedKeys.has(streamIdentity(s)));
-  return [...ranked, ...tail];
+  const eligible = scored.filter((c) => !c.isHardDisabled);
+  return rankScored(eligible, mode, opts);
 }
 
 /** The per-mode ranking core, operating on pre-scored (and pre-filtered)
@@ -688,7 +667,7 @@ export function formatAutoPickReason(stream: Stream): string {
 
 /**
  * Picks the single best stream from a list according to the given strategy.
- * Returns null only if the input list is empty.
+ * Returns null if the input is empty or every candidate is hard-disabled.
  */
 export function pickBestStream(
   streams: Stream[],

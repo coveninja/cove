@@ -400,7 +400,7 @@ describe("automatic stream ranking", () => {
     ).toEqual([live, dead]);
   });
 
-  it("hard-disables unsupported codecs unless every choice is unsupported", () => {
+  it("removes unsupported codecs from automatic ranking", () => {
     window.__coveCaps = {
       hevcMain10: true,
       av1: false,
@@ -422,8 +422,8 @@ describe("automatic stream ranking", () => {
 
     expect(isCodecHardDisabled(av1)).toBe(true);
     expect(isCodecHardDisabled(h264)).toBe(false);
-    expect(rankStreams([av1, h264], "quality")).toEqual([h264, av1]);
-    expect(rankStreams([anotherAV1, av1], "quality")[0]).toBe(av1);
+    expect(rankStreams([av1, h264], "quality")).toEqual([h264]);
+    expect(rankStreams([anotherAV1, av1], "quality")).toEqual([]);
   });
 
   it("covers each explicit hardware-codec rejection independently", () => {

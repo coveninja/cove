@@ -104,6 +104,7 @@ describe("PlaybackStore", () => {
       episode: 4,
       episodeName: "Episode",
       subtitles: [],
+      automaticStartupRecovery: false,
     });
     expect(apiMock.getSubtitles).toHaveBeenLastCalledWith({
       id: 2,
@@ -191,9 +192,29 @@ describe("PlaybackStore", () => {
     expect(store.playerSession).toMatchObject({
       media: { id: 603 },
       stream: input[1],
+      automaticStartupRecovery: true,
       candidates: [input[1], input[0]],
       attempt: 0,
     });
+  });
+
+  it("opens the manual source chooser when no compatible stream can rank", async () => {
+    const store = new PlaybackStore();
+    const openMediaDetail = vi.fn();
+    const item = media(604);
+    const unsupported = stream("unsupported");
+    store.init({
+      playStartSound: vi.fn().mockResolvedValue(undefined),
+      openMediaDetail,
+    });
+    apiMock.getStreams.mockResolvedValue([unsupported]);
+    rankStreamsWithProbe.mockResolvedValue([]);
+
+    await store.quickPlay(item);
+
+    expect(store.quickPlayPending).toBeNull();
+    expect(store.playerSession).toBeNull();
+    expect(openMediaDetail).toHaveBeenCalledWith(item, true);
   });
 
   it("retries empty stream searches and accepts the eighth attempt", async () => {
@@ -306,17 +327,14 @@ describe("PlaybackStore", () => {
     });
   });
 
-  it("shows no-stream feedback when ranking produces no candidates", async () => {
-    vi.useFakeTimers();
+  it("clears quick-play loading when ranking produces no candidates", async () => {
     const store = new PlaybackStore();
     apiMock.getStreams.mockResolvedValue([stream("candidate")]);
     rankStreamsWithProbe.mockResolvedValue([]);
 
     await store.quickPlay(media(52));
-    expect(store.quickPlayPending?.message).toBe("No stream found");
-
-    await vi.advanceTimersByTimeAsync(2_500);
     expect(store.quickPlayPending).toBeNull();
+    expect(store.playerSession).toBeNull();
   });
 
   it("reports stream lookup errors without retrying a failed request", async () => {
@@ -385,6 +403,7 @@ describe("PlaybackStore", () => {
     store.handlePlaybackFailed();
     expect(store.playerSession).toMatchObject({
       stream: next,
+      automaticStartupRecovery: true,
       candidates: [last],
       attempt: 1,
     });

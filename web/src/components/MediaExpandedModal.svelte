@@ -31,6 +31,7 @@
     streamActive = false,
     activeSeason = undefined,
     activeEpisode = undefined,
+    openStreamsInitially = false,
     onwatch,
     onplaystream,
     onclose,
@@ -40,6 +41,7 @@
     streamActive?: boolean;
     activeSeason?: number;
     activeEpisode?: number;
+    openStreamsInitially?: boolean;
     onwatch: (season?: number, episode?: number) => void;
     onplaystream?: (
       stream: Stream,
@@ -57,8 +59,8 @@
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
   const year = $derived(
     (media.media_type === "tv"
-        ? media.first_air_date
-        : media.release_date
+      ? media.first_air_date
+      : media.release_date
     )?.slice(0, 4),
   );
 
@@ -81,7 +83,6 @@
   // live `media` prop (e.g. after a library status change) can't make the
   // overview text silently vanish.
   let detailsOverview = $state<string | null>(null);
-
 
   $effect(() => {
     detailsLoading = true;
@@ -110,8 +111,8 @@
         ageRating = formatRating(details);
         keywords =
           (type === "movie"
-              ? details.keywords?.keywords
-              : details.keywords?.results
+            ? details.keywords?.keywords
+            : details.keywords?.results
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
@@ -130,7 +131,9 @@
         console.error("MediaExpandedModal details fetch failed", err);
         detailsLoading = false;
       });
-    return () => { stale = true; };
+    return () => {
+      stale = true;
+    };
   });
 
   const overviewParagraphs = $derived(
@@ -154,6 +157,10 @@
   // ── Stream browser (the merged-in StreamsList) ─────────────────────────────
   let showStreams = $state(false);
   let streamMaxQuality = $state<string | null>(null);
+
+  $effect(() => {
+    if (openStreamsInitially) showStreams = true;
+  });
 
   const streamsToggleLabel = $derived(
     media.media_type === "tv" ? m.media_episodes() : m.streams_choose_source(),
@@ -188,21 +195,29 @@
         } else {
           tvProgressList = result.progress;
           resolveTvWatchAction(media.id, result.progress)
-            .then((action) => { if (!stale) tvWatchAction = action; })
-            .catch((err) => { if (!stale) console.error(err); });
+            .then((action) => {
+              if (!stale) tvWatchAction = action;
+            })
+            .catch((err) => {
+              if (!stale) console.error(err);
+            });
         }
       })
-      .catch((err) => { if (!stale) console.error(err); });
-    return () => { stale = true; };
+      .catch((err) => {
+        if (!stale) console.error(err);
+      });
+    return () => {
+      stale = true;
+    };
   });
 
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
-        100,
-        (movieProgress.position_seconds / movieProgress.duration_seconds) *
-        100,
-      )
+          100,
+          (movieProgress.position_seconds / movieProgress.duration_seconds) *
+            100,
+        )
       : 0,
   );
   const episodesWatched = $derived(
@@ -215,9 +230,9 @@
   );
   const hasIncompleteMovieProgress = $derived(
     media.media_type === "movie" &&
-    movieProgress !== null &&
-    !movieProgress.completed &&
-    movieProgressPct > 1,
+      movieProgress !== null &&
+      !movieProgress.completed &&
+      movieProgressPct > 1,
   );
   const watchButtonLabel = $derived.by(() => {
     if (media.media_type === "tv") {
@@ -383,7 +398,7 @@
           <div class="flex flex-wrap items-center gap-2 text-sm">
             {#if ageRating}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-              >{ageRating}</span
+                >{ageRating}</span
               >
             {/if}
             {#if originCountry.length}
@@ -393,7 +408,7 @@
             {/if}
             {#if runtime}
               <span class="rounded border border-border px-1.5 py-0.5 text-xs"
-              >{runtime}</span
+                >{runtime}</span
               >
             {/if}
             {#if media.media_type === "tv" && numberOfSeasons !== null}
@@ -445,8 +460,8 @@
               </div>
               <span class="shrink-0 text-xs text-muted-foreground tabular-nums">
                 {formatPosition(movieProgress.position_seconds)} / {formatPosition(
-                movieProgress.duration_seconds,
-              )}
+                  movieProgress.duration_seconds,
+                )}
               </span>
             </div>
           {/if}
@@ -458,8 +473,8 @@
               <span class="text-xs text-muted-foreground">
                 {m.media_episodes_watched({ count: episodesWatched })}
                 {#if numberOfEpisodes}· {Math.round(
-                  (episodesWatched / numberOfEpisodes) * 100,
-                )}%{/if}
+                    (episodesWatched / numberOfEpisodes) * 100,
+                  )}%{/if}
               </span>
             </div>
           {/if}
@@ -490,9 +505,9 @@
               {#if keywords.length}
                 <div class="text-sm">
                   <span class="text-muted-foreground"
-                  >{media.media_type === "tv"
-                    ? m.media_show_is()
-                    : m.media_film_is()}
+                    >{media.media_type === "tv"
+                      ? m.media_show_is()
+                      : m.media_film_is()}
                   </span>
                   {keywords.join(", ")}
                 </div>
@@ -502,25 +517,25 @@
 
           <div class="flex flex-1 grow py-4 gap-3">
             <Button
-                    class="h-11 flex-35 rounded-md border-b border-accent bg-accent px-6 text-base font-semibold text-accent-foreground hover:bg-accent-foreground hover:text-accent"
-                    variant="default"
-                    onclick={watchNow}
+              class="h-11 flex-35 rounded-md border-b border-accent bg-accent px-6 text-base font-semibold text-accent-foreground hover:bg-accent-foreground hover:text-accent"
+              variant="default"
+              onclick={watchNow}
             >
               <Play class="size-4 fill-current" />
               {watchButtonLabel}
             </Button>
 
             <Button
-                    class="h-11 flex-65 rounded-md"
-                    variant="outline"
-                    onclick={() => (showStreams = !showStreams)}
+              class="h-11 flex-65 rounded-md"
+              variant="outline"
+              onclick={() => (showStreams = !showStreams)}
             >
               <ListVideo class="size-4" />
               {streamsToggleLabel}
               <ChevronDown
-                      class="size-4 transition-transform duration-200 {showStreams
-                ? 'rotate-180'
-                : ''}"
+                class="size-4 transition-transform duration-200 {showStreams
+                  ? 'rotate-180'
+                  : ''}"
               />
             </Button>
           </div>
@@ -547,7 +562,9 @@
           {#if similar.length}
             <div class="space-y-3">
               <Separator />
-              <h3 class="text-base font-semibold">{m.media_more_like_this()}</h3>
+              <h3 class="text-base font-semibold">
+                {m.media_more_like_this()}
+              </h3>
               <div class="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-6">
                 {#each similar as item (item.id)}
                   <div

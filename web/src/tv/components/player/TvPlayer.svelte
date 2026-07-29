@@ -35,6 +35,7 @@
     season = undefined,
     episode = undefined,
     fileIdx = undefined,
+    automaticStartupRecovery = true,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream: _onPlayStream = undefined,
@@ -52,6 +53,7 @@
      * fileIdx). When present, the backend skips regex matching and plays this
      * exact file — more reliable than pattern matching for Torrentio packs. */
     fileIdx?: number;
+    automaticStartupRecovery?: boolean;
     onPlaybackFailed?: () => void;
     onPlayNext?: (season: number, episode: number) => void;
     onPlayStream?: (
@@ -79,6 +81,7 @@
     getPendingMessage: () => pendingMessage,
     getSettings: () => $settings,
     getTitle: () => title,
+    getAutomaticStartupRecovery: () => automaticStartupRecovery,
     onPlaybackFailed: () => onPlaybackFailed?.(),
     onPlayNext: (s, e) => onPlayNext?.(s, e),
     hasPlayNext: () => !!onPlayNext,
@@ -118,7 +121,12 @@
 
   $effect(() => {
     onRegisterCloseSheets?.(() => {
-      if (audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen) {
+      if (
+        audioPanelOpen ||
+        subsPanelOpen ||
+        speedPanelOpen ||
+        episodesPanelOpen
+      ) {
         audioPanelOpen = false;
         subsPanelOpen = false;
         speedPanelOpen = false;
@@ -146,7 +154,8 @@
       return;
     prefetchedNext = true;
     const m = media;
-    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const mode =
+      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
@@ -199,11 +208,16 @@
   });
 
   const title = $derived(
-    media ? (media.media_type === "tv" ? (media.name ?? "") : (media.title ?? "")) : "",
+    media
+      ? media.media_type === "tv"
+        ? (media.name ?? "")
+        : (media.title ?? "")
+      : "",
   );
 
   const episodeLabel = $derived.by(() => {
-    if (media?.media_type !== "tv" || season == null || episode == null) return "";
+    if (media?.media_type !== "tv" || season == null || episode == null)
+      return "";
     return `S${season}E${episode}`;
   });
 
@@ -226,7 +240,10 @@
   onDestroy(() => clearTimeout(seekFlashTimer));
 
   function nudgeSeek(delta: number): void {
-    const target = Math.max(0, Math.min(Player.duration || Infinity, Player.position + delta));
+    const target = Math.max(
+      0,
+      Math.min(Player.duration || Infinity, Player.position + delta),
+    );
     Player.seek(target);
   }
 
@@ -248,7 +265,9 @@
   let speedPanelOpen = $state(false);
   let episodesPanelOpen = $state(false);
 
-  const anyPanelOpen = $derived(audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen);
+  const anyPanelOpen = $derived(
+    audioPanelOpen || subsPanelOpen || speedPanelOpen || episodesPanelOpen,
+  );
 
   // ── Controls auto-hide ────────────────────────────────────────────────────────
 
@@ -451,7 +470,6 @@
   Root: fully transparent — mpv renders behind the WebView and shows through.
 -->
 <div class="relative h-full w-full overflow-hidden">
-
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
   {#if !Player.available && !core.streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
@@ -475,15 +493,27 @@
       torrentProgress={core.torrent.progress}
       {displayPos}
       onSeekbarKeydown={handleSeekbarKeydown}
-      onSeekBack={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
+      onSeekBack={() => {
+        nudgeSeek(-10);
+        showSeekFlash("left");
+        showControls();
+      }}
       bind:playPauseBtn
-      onPlayPause={() => { Player.togglePause(); showControls(); }}
-      onSeekForward={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
+      onPlayPause={() => {
+        Player.togglePause();
+        showControls();
+      }}
+      onSeekForward={() => {
+        nudgeSeek(10);
+        showSeekFlash("right");
+        showControls();
+      }}
       bind:audioPanelOpen
       {subtitleItems}
       {selectedSubId}
       subSelection={core.subSelection}
-      hasSubtitles={Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
+      hasSubtitles={Player.subtitleTracks.length > 0 ||
+        externalSubtitles.length > 0}
       bind:subsPanelOpen
       bind:speedPanelOpen
       onCycleAspect={cycleAspect}
@@ -506,7 +536,6 @@
         bind:watchNowBtnEl={upNextPlayBtnEl}
       />
     {/if}
-
   {:else}
     <!-- ── Loading / buffering screen ───────────────────────────────────────── -->
     {#if core.streamDiscoveryPending || Player.available}
@@ -531,7 +560,6 @@
   {#if seekFlash}
     <TvSeekFlash {seekFlash} />
   {/if}
-
 </div>
 
 <!-- ── Track panels (fixed, rendered outside the main div) ───────────────── -->
@@ -573,7 +601,10 @@
 {#if speedPanelOpen}
   <TvTrackPanel
     title={m.player_speed()}
-    items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
+    items={SPEEDS.map((s) => ({
+      id: String(s),
+      label: s === 1 ? "Normal (1×)" : `${s}×`,
+    }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {
       core.chooseSpeed(parseFloat(id as string));
@@ -588,6 +619,9 @@
     activeSeason={season}
     activeEpisode={episode}
     onClose={() => (episodesPanelOpen = false)}
-    onSelect={(s, e) => { episodesPanelOpen = false; onPlayNext?.(s, e); }}
+    onSelect={(s, e) => {
+      episodesPanelOpen = false;
+      onPlayNext?.(s, e);
+    }}
   />
 {/if}

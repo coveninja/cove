@@ -43,6 +43,7 @@
   // The single app-level media detail overlay — floats over whatever page is
   // beneath, Netflix-style. Cards request it via the "openMediaDetail" context.
   let selectedMedia: Media | null = $state(null);
+  let openSelectedMediaStreams = $state(false);
 
   // Person / provider overlays opened from search results.
   let selectedPerson: Person | null = $state(null);
@@ -56,7 +57,8 @@
   // of hover / context-menu behavior that doesn't belong on touch screens.
   setContext("isMobile", true);
 
-  function selectMedia(media: Media): void {
+  function selectMedia(media: Media, showStreams = false): void {
+    openSelectedMediaStreams = showStreams;
     selectedMedia = media;
   }
 
@@ -286,6 +288,7 @@
         streamActive={streamActiveForSelectedMedia}
         activeSeason={activePlaybackSeason}
         activeEpisode={activePlaybackEpisode}
+        openStreamsInitially={openSelectedMediaStreams}
       />
     {/key}
   {/if}
@@ -447,6 +450,8 @@
             season={playback.playerSession?.season}
             episode={playback.playerSession?.episode}
             fileIdx={playback.playerSession?.stream.fileIdx}
+            automaticStartupRecovery={playback.playerSession
+              ?.automaticStartupRecovery ?? false}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;
@@ -455,15 +460,7 @@
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
               if (m)
-                playback.startPlayback(
-                  m,
-                  stream,
-                  s,
-                  e,
-                  name,
-                  candidates ?? [],
-                  0,
-                );
+                playback.startPlayback(m, stream, s, e, name, candidates, 0);
             }}
             onclose={() => playback.closePlayer()}
             onRegisterCloseSheets={(fn) => (closePlayerSheets = fn)}

@@ -33,7 +33,12 @@ import type { Settings } from "$lib/types/settings";
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 function movie(over: Partial<Media> = {}): Media {
-  return { id: 603, media_type: "movie", title: "The Matrix", ...over } as Media;
+  return {
+    id: 603,
+    media_type: "movie",
+    title: "The Matrix",
+    ...over,
+  } as Media;
 }
 
 function show(over: Partial<Media> = {}): Media {
@@ -57,14 +62,16 @@ function episode(n: number): TVEpisode {
  * Builds a controller inside an effect root with reactive, mutable options —
  * mirroring how a component supplies props and $settings as getters.
  */
-function harness(init: {
-  media?: Media;
-  streamActive?: boolean;
-  activeSeason?: number;
-  activeEpisode?: number;
-  autoJumpToActive?: boolean;
-  settings?: Partial<Settings>;
-} = {}) {
+function harness(
+  init: {
+    media?: Media;
+    streamActive?: boolean;
+    activeSeason?: number;
+    activeEpisode?: number;
+    autoJumpToActive?: boolean;
+    settings?: Partial<Settings>;
+  } = {},
+) {
   const props = $state({
     media: init.media ?? movie(),
     streamActive: init.streamActive ?? false,
@@ -92,7 +99,15 @@ function harness(init: {
     ctl = new StreamsListController(opts);
   });
 
-  return { get ctl() { return ctl; }, props, onPlayStream, setMaxQuality, destroyRoot };
+  return {
+    get ctl() {
+      return ctl;
+    },
+    props,
+    onPlayStream,
+    setMaxQuality,
+    destroyRoot,
+  };
 }
 
 /** Runs `fn` inside an effect root so $effect-driven assertions are possible. */
@@ -102,6 +117,7 @@ function withRoot(fn: () => void | (() => void)): () => void {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  delete window.__coveCaps;
   mocks.getStreams.mockReset().mockResolvedValue([]);
   mocks.tvSeasons.mockReset().mockResolvedValue([]);
   mocks.tvEpisodes.mockReset().mockResolvedValue([]);
@@ -112,6 +128,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete window.__coveCaps;
   vi.useRealTimers();
 });
 
@@ -250,7 +267,12 @@ describe("selectedSeasonLabel", () => {
   it("prefers the season's own name", () => {
     const h = harness({ media: show() });
     h.ctl.seasons = [
-      { season_number: 1, episode_count: 7, name: "Chapter One", poster_path: "" },
+      {
+        season_number: 1,
+        episode_count: 7,
+        name: "Chapter One",
+        poster_path: "",
+      },
     ];
     h.ctl.selectedSeason = 1;
     expect(h.ctl.selectedSeasonLabel).toBe("Chapter One");
@@ -396,7 +418,9 @@ describe("loadMovieProgress", () => {
     mocks.progressGet.mockResolvedValue({ position_seconds: 42 });
     const h = harness({ media: movie() });
     h.ctl.loadMovieProgress();
-    await vi.waitFor(() => expect(h.ctl.movieProgress?.position_seconds).toBe(42));
+    await vi.waitFor(() =>
+      expect(h.ctl.movieProgress?.position_seconds).toBe(42),
+    );
     h.destroyRoot();
   });
 
@@ -622,6 +646,28 @@ describe("auto-selection", () => {
     const h = harness({ settings: { autoSelectStream: false } });
     h.ctl.loadStreams();
     await vi.advanceTimersByTimeAsync(1000);
+    expect(h.onPlayStream).not.toHaveBeenCalled();
+    h.destroyRoot();
+  });
+
+  it("does not auto-select when every stream codec is unsupported", async () => {
+    window.__coveCaps = {
+      hevcMain10: true,
+      av1: false,
+      hevc: true,
+      vp9: true,
+    };
+    mocks.getStreams.mockResolvedValue([
+      torrent("A 4K AV1 👤 500"),
+      torrent("B 1080p AV1 👤 50"),
+    ]);
+    const h = harness({ settings: { autoSelectStream: true } });
+
+    h.ctl.loadStreams();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(h.ctl.streams).toHaveLength(2);
+    expect(h.ctl.autoPicking).toBe(false);
     expect(h.onPlayStream).not.toHaveBeenCalled();
     h.destroyRoot();
   });

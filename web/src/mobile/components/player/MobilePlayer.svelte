@@ -35,6 +35,7 @@
     season = undefined,
     episode = undefined,
     fileIdx = undefined,
+    automaticStartupRecovery = true,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream: _onPlayStream = undefined,
@@ -50,6 +51,7 @@
     season?: number;
     episode?: number;
     fileIdx?: number;
+    automaticStartupRecovery?: boolean;
     onPlaybackFailed?: () => void;
     onPlayNext?: (season: number, episode: number) => void;
     onPlayStream?: (
@@ -77,6 +79,7 @@
     getPendingMessage: () => pendingMessage,
     getSettings: () => $settings,
     getTitle: () => title,
+    getAutomaticStartupRecovery: () => automaticStartupRecovery,
     onPlaybackFailed: () => onPlaybackFailed?.(),
     onPlayNext: (s, e) => onPlayNext?.(s, e),
     hasPlayNext: () => !!onPlayNext,
@@ -117,7 +120,12 @@
 
   $effect(() => {
     onRegisterCloseSheets?.(() => {
-      if (audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen) {
+      if (
+        audioSheetOpen ||
+        subsSheetOpen ||
+        speedSheetOpen ||
+        episodesSheetOpen
+      ) {
         audioSheetOpen = false;
         subsSheetOpen = false;
         speedSheetOpen = false;
@@ -145,7 +153,8 @@
       return;
     prefetchedNext = true;
     const m = media;
-    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const mode =
+      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
@@ -197,7 +206,8 @@
   }): void {
     const size = patch.subtitleSize ?? $settings?.subtitleSize ?? 100;
     const pos = patch.subtitlePosition ?? $settings?.subtitlePosition ?? 8;
-    const bg = patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
+    const bg =
+      patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
     Player.setSubtitleStyle(size, pos, bg);
     clearTimeout(subStyleSaveTimer);
     subStyleSaveTimer = setTimeout(() => settings.save(patch), 400);
@@ -223,11 +233,16 @@
   });
 
   const title = $derived(
-    media ? (media.media_type === "tv" ? (media.name ?? "") : (media.title ?? "")) : "",
+    media
+      ? media.media_type === "tv"
+        ? (media.name ?? "")
+        : (media.title ?? "")
+      : "",
   );
 
   const episodeLabel = $derived.by(() => {
-    if (media?.media_type !== "tv" || season == null || episode == null) return "";
+    if (media?.media_type !== "tv" || season == null || episode == null)
+      return "";
     return `S${season}E${episode}`;
   });
 
@@ -263,7 +278,10 @@
   onDestroy(() => clearTimeout(seekFlashTimer));
 
   function nudgeSeek(delta: number): void {
-    const target = Math.max(0, Math.min(Player.duration || Infinity, Player.position + delta));
+    const target = Math.max(
+      0,
+      Math.min(Player.duration || Infinity, Player.position + delta),
+    );
     Player.seek(target);
   }
 
@@ -293,20 +311,40 @@
   // not yet playing. Sheet-open always keeps them active so scrims don't vanish
   // behind an open sheet.
   const controlsActive = $derived(
-    controlsVisible || Player.paused || !core.canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen,
+    controlsVisible ||
+      Player.paused ||
+      !core.canPlay ||
+      audioSheetOpen ||
+      subsSheetOpen ||
+      speedSheetOpen ||
+      episodesSheetOpen,
   );
 
   function showControls(): void {
     controlsVisible = true;
     clearTimeout(hideTimer);
-    if (!Player.paused && !scrubbing && !audioSheetOpen && !subsSheetOpen && !speedSheetOpen && !episodesSheetOpen) {
+    if (
+      !Player.paused &&
+      !scrubbing &&
+      !audioSheetOpen &&
+      !subsSheetOpen &&
+      !speedSheetOpen &&
+      !episodesSheetOpen
+    ) {
       hideTimer = setTimeout(() => (controlsVisible = false), 3000);
     }
   }
 
   // Keep controls visible while paused, buffering, or any sheet is open.
   $effect(() => {
-    if (Player.paused || !core.canPlay || audioSheetOpen || subsSheetOpen || speedSheetOpen || episodesSheetOpen) {
+    if (
+      Player.paused ||
+      !core.canPlay ||
+      audioSheetOpen ||
+      subsSheetOpen ||
+      speedSheetOpen ||
+      episodesSheetOpen
+    ) {
       clearTimeout(hideTimer);
       controlsVisible = true;
     }
@@ -343,7 +381,11 @@
     const now = Date.now();
     const width = containerEl?.clientWidth ?? window.innerWidth;
 
-    if (tapState && now - tapState.time < 300 && Math.abs(x - tapState.x) < 12) {
+    if (
+      tapState &&
+      now - tapState.time < 300 &&
+      Math.abs(x - tapState.x) < 12
+    ) {
       // Double-tap: undo the first-tap toggle and apply seek
       tapState = null;
       // Revert the controls toggle that first tap applied
@@ -385,7 +427,6 @@
   ontouchend={handleTouchEnd}
   onkeydown={() => {}}
 >
-
   <!-- ── Bridge unavailable ──────────────────────────────────────────────────── -->
   {#if !Player.available && !core.streamDiscoveryPending}
     <div class="absolute inset-0 z-30 grid place-items-center bg-black">
@@ -404,12 +445,15 @@
       chapterBars={core.chapterBars}
       isHash={core.isHash}
       torrent={core.torrent}
-      audioLabel={selectedAudio?.title || langName(selectedAudio?.lang ?? "") || "Audio"}
+      audioLabel={selectedAudio?.title ||
+        langName(selectedAudio?.lang ?? "") ||
+        "Audio"}
       subLabel={core.subSelection.kind === "off"
         ? "Subs"
         : (subtitleItems.find((i) => i.id === selectedSubId)?.label ?? "Subs")}
       showAudio={Player.audioTracks.length > 0}
-      showSubs={Player.subtitleTracks.length > 0 || externalSubtitles.length > 0}
+      showSubs={Player.subtitleTracks.length > 0 ||
+        externalSubtitles.length > 0}
       hasNextEp={media?.media_type === "tv" && !!onPlayNext}
       bind:audioSheetOpen
       bind:subsSheetOpen
@@ -417,12 +461,24 @@
       bind:episodesSheetOpen
       {controlsActive}
       {onclose}
-      onSkipSegment={() => core.activeSegment && core.skipSegment(core.activeSegment)}
+      onSkipSegment={() =>
+        core.activeSegment && core.skipSegment(core.activeSegment)}
       onToggleMute={toggleMute}
       onCycleAspect={cycleAspect}
-      onNudgeBack={() => { nudgeSeek(-10); showSeekFlash("left"); showControls(); }}
-      onNudgeForward={() => { nudgeSeek(10); showSeekFlash("right"); showControls(); }}
-      onScrub={(pos) => { scrubbing = pos !== null; if (pos !== null) showControls(); }}
+      onNudgeBack={() => {
+        nudgeSeek(-10);
+        showSeekFlash("left");
+        showControls();
+      }}
+      onNudgeForward={() => {
+        nudgeSeek(10);
+        showSeekFlash("right");
+        showControls();
+      }}
+      onScrub={(pos) => {
+        scrubbing = pos !== null;
+        if (pos !== null) showControls();
+      }}
       onShowControls={showControls}
     />
 
@@ -459,7 +515,6 @@
   {#if seekFlash}
     <SeekFlash {seekFlash} />
   {/if}
-
 </div>
 
 <!-- ── Track sheets (fixed, rendered outside the main div) ───────────────── -->
@@ -479,7 +534,9 @@
 
 {#snippet subStyleFooter()}
   <div class="border-t border-white/10 px-5 pb-3 pt-3">
-    <p class="pb-2 text-xs font-semibold uppercase tracking-widest text-white/40">
+    <p
+      class="pb-2 text-xs font-semibold uppercase tracking-widest text-white/40"
+    >
       {m.player_style()}
     </p>
     <div class="space-y-4">
@@ -569,7 +626,10 @@
 {#if speedSheetOpen}
   <TrackSheet
     title={m.player_speed()}
-    items={SPEEDS.map((s) => ({ id: String(s), label: s === 1 ? "Normal (1×)" : `${s}×` }))}
+    items={SPEEDS.map((s) => ({
+      id: String(s),
+      label: s === 1 ? "Normal (1×)" : `${s}×`,
+    }))}
     selectedId={String(Player.playbackSpeed)}
     onSelect={(id) => {
       core.chooseSpeed(parseFloat(id as string));

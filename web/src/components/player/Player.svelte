@@ -30,6 +30,7 @@
     season = undefined,
     episode = undefined,
     fileIdx = undefined,
+    automaticStartupRecovery = true,
     onPlaybackFailed = undefined,
     onPlayNext = undefined,
     onPlayStream = undefined,
@@ -47,6 +48,7 @@
      * fileIdx). When present, the backend skips regex matching and plays this
      * exact file — more reliable than pattern matching for Torrentio packs. */
     fileIdx?: number;
+    automaticStartupRecovery?: boolean;
     /** Fired once (per src) when playback never starts — a startup timeout
      * or a stalled core.torrent that never got peers. The caller (App.svelte)
      * decides what to do: try the next candidate stream, or give up. */
@@ -91,6 +93,7 @@
     getPendingMessage: () => pendingMessage,
     getSettings: () => $settings,
     getTitle: () => title,
+    getAutomaticStartupRecovery: () => automaticStartupRecovery,
     onPlaybackFailed: () => onPlaybackFailed?.(),
     onPlayNext: (s, e) => onPlayNext?.(s, e),
     hasPlayNext: () => !!onPlayNext,
@@ -211,7 +214,8 @@
       return;
     prefetchedNext = true;
     const m = media;
-    const mode = ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
+    const mode =
+      ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const bandwidth = $settings?.measuredBandwidthMbps;
     const preferredProvider = $settings?.defaultProvider;
     const sourcePreference = $settings?.sourcePreference;
@@ -291,8 +295,8 @@
   }
   function nudgeSeek(delta: number): void {
     const target = Math.max(
-            0,
-            Math.min(Player.duration || Infinity, Player.position + delta),
+      0,
+      Math.min(Player.duration || Infinity, Player.position + delta),
     );
     Player.seek(target);
     flash(`${delta > 0 ? "+" : "−"}${Math.abs(delta)}s`);
@@ -344,10 +348,10 @@
     const el = t as HTMLElement | null;
     if (!el || !el.tagName) return false;
     return (
-            el.tagName === "INPUT" ||
-            el.tagName === "TEXTAREA" ||
-            el.tagName === "SELECT" ||
-            el.isContentEditable
+      el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.tagName === "SELECT" ||
+      el.isContentEditable
     );
   }
 
@@ -433,7 +437,8 @@
   }): void {
     const size = patch.subtitleSize ?? $settings?.subtitleSize ?? 100;
     const pos = patch.subtitlePosition ?? $settings?.subtitlePosition ?? 8;
-    const bg = patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
+    const bg =
+      patch.subtitleBackground ?? $settings?.subtitleBackground ?? false;
     Player.setSubtitleStyle(size, pos, bg);
     clearTimeout(subStyleSaveTimer);
     subStyleSaveTimer = setTimeout(() => settings.save(patch), 400);
@@ -447,11 +452,12 @@
   // re-match on the next episode; speed is stored verbatim.
   function chooseAudioTrack(track: { id: number; lang: string }): void {
     Player.setAudioTrack(track.id);
-    if (media) saveShowTrackPrefs(media.id, { audioLang: track.lang || undefined });
+    if (media)
+      saveShowTrackPrefs(media.id, { audioLang: track.lang || undefined });
   }
 
   const title = $derived(
-          media ? (media.media_type === "tv" ? media.name : media.title) : "",
+    media ? (media.media_type === "tv" ? media.name : media.title) : "",
   );
 
   // ─── Controls auto-hide ──────────────────────────────────────────────────────
@@ -476,11 +482,13 @@
      video region must also be transparent — see integration notes. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-        class="relative h-full w-full overflow-hidden"
-        onmousemove={showControls}
-        onclick={() => Player.togglePause()}
-        onkeydown={() => {}}
-        onwheel={(e) => { if (!menuOpen) nudgeVolume(e.deltaY < 0 ? 5 : -5); }}
+  class="relative h-full w-full overflow-hidden"
+  onmousemove={showControls}
+  onclick={() => Player.togglePause()}
+  onkeydown={() => {}}
+  onwheel={(e) => {
+    if (!menuOpen) nudgeVolume(e.deltaY < 0 ? 5 : -5);
+  }}
 >
   <!-- ── Bridge unavailable (running outside the Cove shell) ─────────────────── -->
   {#if !Player.available && !core.streamDiscoveryPending}
@@ -493,10 +501,12 @@
 
   <!-- ── Keyboard/action feedback flash ──────────────────────────────────────── -->
   {#if feedback}
-    <div class="pointer-events-none absolute inset-0 z-20 grid place-items-center">
+    <div
+      class="pointer-events-none absolute inset-0 z-20 grid place-items-center"
+    >
       <div
-              class="rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"
-              transition:fade={{ duration: 150 }}
+        class="rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"
+        transition:fade={{ duration: 150 }}
       >
         {feedback}
       </div>
@@ -506,7 +516,7 @@
   <!-- ── Controls ───────────────────────────────────────────────────────────── -->
   {#if core.canPlay}
     <div
-            class="absolute inset-0 z-10 flex flex-col justify-end bg-linear-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-200 {controlsVisible ||
+      class="absolute inset-0 z-10 flex flex-col justify-end bg-linear-to-t from-black/85 via-black/15 to-transparent transition-opacity duration-200 {controlsVisible ||
       Player.paused
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"

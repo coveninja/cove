@@ -77,7 +77,8 @@ export class PlaybackStore {
 
   // Injected by the shell so handlePlaybackFailed can reopen the media detail
   // overlay when auto-advance is exhausted and the user needs to pick manually.
-  #openMediaDetail: ((media: Media) => void) | null = null;
+  #openMediaDetail: ((media: Media, showStreams?: boolean) => void) | null =
+    null;
 
   /**
    * Wire up shell-specific callbacks. Call once from the shell's top-level
@@ -85,7 +86,7 @@ export class PlaybackStore {
    */
   init(opts: {
     playStartSound: () => Promise<void>;
-    openMediaDetail: (media: Media) => void;
+    openMediaDetail: (media: Media, showStreams?: boolean) => void;
   }): void {
     this.#playStartSound = opts.playStartSound;
     this.#openMediaDetail = opts.openMediaDetail;
@@ -123,6 +124,7 @@ export class PlaybackStore {
       episode,
       episodeName,
       subtitles: [],
+      automaticStartupRecovery: candidates !== undefined,
       candidates,
       attempt,
     };
@@ -243,10 +245,8 @@ export class PlaybackStore {
     if (myToken !== this.#quickPlayToken) return;
     const best = ranked[0] ?? null;
     if (!best) {
-      this.quickPlayPending = { media, message: "No stream found" };
-      setTimeout(() => {
-        if (myToken === this.#quickPlayToken) this.quickPlayPending = null;
-      }, 2500);
+      this.quickPlayPending = null;
+      this.#openMediaDetail?.(media, true);
       return;
     }
 

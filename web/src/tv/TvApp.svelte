@@ -57,7 +57,7 @@
   // Plain var (not $state) — purely imperative bookkeeping.
   let detailOpenerEl: HTMLElement | null = null;
 
-  function selectMedia(media: Media): void {
+  function selectMedia(media: Media, _showStreams = false): void {
     const el = document.activeElement;
     detailOpenerEl = el instanceof HTMLElement ? el : null;
     selectedMedia = media;
@@ -454,6 +454,8 @@
             season={playback.playerSession?.season}
             episode={playback.playerSession?.episode}
             fileIdx={playback.playerSession?.stream.fileIdx}
+            automaticStartupRecovery={playback.playerSession
+              ?.automaticStartupRecovery ?? false}
             onPlaybackFailed={() => playback.handlePlaybackFailed()}
             onPlayNext={(s, e) => {
               const m = playback.playerSession?.media;
@@ -462,15 +464,7 @@
             onPlayStream={(stream, s, e, name, candidates) => {
               const m = playback.playerSession?.media;
               if (m)
-                playback.startPlayback(
-                  m,
-                  stream,
-                  s,
-                  e,
-                  name,
-                  candidates ?? [],
-                  0,
-                );
+                playback.startPlayback(m, stream, s, e, name, candidates, 0);
             }}
             onclose={() => playback.closePlayer()}
             onRegisterCloseSheets={(fn) => (closePlayerSheets = fn)}

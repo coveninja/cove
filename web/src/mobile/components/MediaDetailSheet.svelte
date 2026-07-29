@@ -2,9 +2,21 @@
   import type { Media, MediaImages, MediaVideos } from "$lib/types/tmdb";
   import type { Stream } from "$lib/types/addons";
   import { onMount } from "svelte";
-  import { X, Play, ListVideo, ChevronDown, Volume2, VolumeOff } from "lucide-svelte";
+  import {
+    X,
+    Play,
+    ListVideo,
+    ChevronDown,
+    Volume2,
+    VolumeOff,
+  } from "lucide-svelte";
   import { api, formatPosition } from "$lib/api";
-  import { getImageOpt, getVideoOpt, formatRuntime, formatRating } from "$lib/utils";
+  import {
+    getImageOpt,
+    getVideoOpt,
+    formatRuntime,
+    formatRating,
+  } from "$lib/utils";
   import PlayerSimple from "../../components/PlayerSimple.svelte";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
@@ -23,6 +35,7 @@
     streamActive = false,
     activeSeason = undefined,
     activeEpisode = undefined,
+    openStreamsInitially = false,
     onwatch,
     onplaystream,
     onclose,
@@ -32,6 +45,7 @@
     streamActive?: boolean;
     activeSeason?: number;
     activeEpisode?: number;
+    openStreamsInitially?: boolean;
     onwatch: (season?: number, episode?: number) => void;
     onplaystream?: (
       stream: Stream,
@@ -47,7 +61,10 @@
   // ── Derived title / year ───────────────────────────────────────────────────
   const title = $derived(media.media_type === "tv" ? media.name : media.title);
   const year = $derived(
-    (media.media_type === "tv" ? media.first_air_date : media.release_date)?.slice(0, 4),
+    (media.media_type === "tv"
+      ? media.first_air_date
+      : media.release_date
+    )?.slice(0, 4),
   );
 
   // ── Detail data ────────────────────────────────────────────────────────────
@@ -79,17 +96,24 @@
         images = img;
         similar = similarList;
         detailsOverview = details.overview ?? null;
-        genres = details.genres?.map((g: { name: string }) => g.name).slice(0, 3) ?? [];
+        genres =
+          details.genres?.map((g: { name: string }) => g.name).slice(0, 3) ??
+          [];
         runtime = formatRuntime(details);
-        castNames = details.credits?.cast?.slice(0, 8).map((c: { name: string }) => c.name) ?? [];
+        castNames =
+          details.credits?.cast
+            ?.slice(0, 8)
+            .map((c: { name: string }) => c.name) ?? [];
         ageRating = formatRating(details);
         if (type === "tv") {
           numberOfEpisodes = details.number_of_episodes ?? null;
           lastAiredSeason = details.last_episode_to_air?.season_number ?? null;
-          lastAiredEpisode = details.last_episode_to_air?.episode_number ?? null;
+          lastAiredEpisode =
+            details.last_episode_to_air?.episode_number ?? null;
         }
         trailerUrl = vids
-          ? (getVideoOpt(vids, "Trailer", { iso: "en", randomize: true }) ?? null)
+          ? (getVideoOpt(vids, "Trailer", { iso: "en", randomize: true }) ??
+            null)
           : null;
         detailsLoading = false;
       })
@@ -133,8 +157,12 @@
           movieProgress = result.progress[0] ?? null;
         } else {
           resolveTvWatchAction(media.id, result.progress)
-            .then((action) => { if (!stale) tvWatchAction = action; })
-            .catch((err) => { if (!stale) console.error(err); });
+            .then((action) => {
+              if (!stale) tvWatchAction = action;
+            })
+            .catch((err) => {
+              if (!stale) console.error(err);
+            });
         }
       })
       .catch((err) => {
@@ -153,7 +181,11 @@
   $effect(() => {
     const entry = libraryEntry;
     if (entry !== null && _prevLibraryEntry === null && libraryPanelEl) {
-      animate(libraryPanelEl, { scale: [1, 1.12, 1], duration: 250, ease: "outBack" });
+      animate(libraryPanelEl, {
+        scale: [1, 1.12, 1],
+        duration: 250,
+        ease: "outBack",
+      });
     }
     _prevLibraryEntry = entry;
   });
@@ -179,7 +211,8 @@
     movieProgress && movieProgress.duration_seconds > 0
       ? Math.min(
           100,
-          (movieProgress.position_seconds / movieProgress.duration_seconds) * 100,
+          (movieProgress.position_seconds / movieProgress.duration_seconds) *
+            100,
         )
       : 0,
   );
@@ -262,6 +295,10 @@
   // ── Stream toggle ──────────────────────────────────────────────────────────
   let showStreams = $state(false);
   let streamMaxQuality = $state<string | null>(null);
+
+  $effect(() => {
+    if (openStreamsInitially) showStreams = true;
+  });
   const streamsToggleLabel = $derived(
     media.media_type === "tv" ? m.media_episodes() : m.streams_choose_source(),
   );
@@ -381,7 +418,8 @@
   // Open uses a springy overshoot curve; close/drag-back stays non-overshooting.
   const sheetTransition = $derived.by(() => {
     if (dragging) return "none";
-    if (closing || !visible) return "transform 300ms cubic-bezier(0.22, 1, 0.36, 1)";
+    if (closing || !visible)
+      return "transform 300ms cubic-bezier(0.22, 1, 0.36, 1)";
     return "transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1)";
   });
 </script>
@@ -389,7 +427,9 @@
 <!-- Dark scrim behind the sheet -->
 <div
   class="fixed inset-0 z-20 bg-black/60"
-  style="opacity: {visible && !closing ? 1 : 0}; transition: opacity 300ms ease;"
+  style="opacity: {visible && !closing
+    ? 1
+    : 0}; transition: opacity 300ms ease;"
 ></div>
 
 <!-- Sheet itself -->
@@ -462,7 +502,9 @@
       ></div>
 
       <!-- Logo or title at bottom-left of hero -->
-      <div class="pointer-events-none absolute bottom-0 left-0 z-10 max-w-[72%] p-4">
+      <div
+        class="pointer-events-none absolute bottom-0 left-0 z-10 max-w-[72%] p-4"
+      >
         {#if logoUrl}
           <img
             src={logoUrl}
@@ -498,7 +540,9 @@
     <!-- ── Body ──────────────────────────────────────────────────────────── -->
     <div class="flex flex-col gap-4 px-4 pt-3">
       <!-- Meta row: year · runtime/seasons · age rating -->
-      <div class="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+      <div
+        class="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground"
+      >
         {#if detailsLoading}
           <div class="h-4 w-8 animate-shimmer rounded"></div>
           <div class="h-4 w-12 animate-shimmer rounded"></div>
@@ -508,7 +552,8 @@
             <span>{year}</span>
           {/if}
           {#if ageRating}
-            <span class="rounded border border-border px-1.5 py-0.5 text-xs text-foreground"
+            <span
+              class="rounded border border-border px-1.5 py-0.5 text-xs text-foreground"
               >{ageRating}</span
             >
           {/if}
@@ -533,7 +578,9 @@
 
       <!-- Movie progress bar -->
       {#if hasIncompleteMovieProgress && movieProgress}
-        <div class="flex items-center gap-2 rounded-md bg-secondary/40 px-3 py-2">
+        <div
+          class="flex items-center gap-2 rounded-md bg-secondary/40 px-3 py-2"
+        >
           <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
             <div
               class="h-full rounded-full bg-accent transition-all"
@@ -629,7 +676,10 @@
         <div class="flex flex-col gap-1.5">
           <div
             bind:this={overviewEl}
-            class="text-sm leading-relaxed text-muted-foreground {!overviewExpanded && !overviewAnimating ? 'line-clamp-4 overflow-hidden' : ''}"
+            class="text-sm leading-relaxed text-muted-foreground {!overviewExpanded &&
+            !overviewAnimating
+              ? 'line-clamp-4 overflow-hidden'
+              : ''}"
           >
             {overviewText}
           </div>
@@ -654,7 +704,9 @@
       <!-- Cast row (names only — cast credits do not include profile photos) -->
       {#if castNames.length}
         <div class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-foreground">{m.media_cast()}</h3>
+          <h3 class="text-sm font-semibold text-foreground">
+            {m.media_cast()}
+          </h3>
           <div
             class="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none]"
             style="-webkit-overflow-scrolling: touch;"
@@ -673,7 +725,9 @@
       <!-- More like this (horizontal poster scroll) -->
       {#if similar.length}
         <div class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-foreground">{m.media_more_like_this()}</h3>
+          <h3 class="text-sm font-semibold text-foreground">
+            {m.media_more_like_this()}
+          </h3>
           <div
             class="flex gap-3 overflow-x-auto pb-2 [scrollbar-width:none]"
             style="-webkit-overflow-scrolling: touch;"

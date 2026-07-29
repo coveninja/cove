@@ -11,11 +11,15 @@ export type PlayerSession = {
   episode?: number;
   episodeName?: string;
   subtitles: { id: string; url: string; lang: string }[];
+  // Automatic picks may time out or react to a terminal pre-start signal so
+  // the playback store can try another ranked candidate. Explicit stream-list
+  // picks keep waiting until the user cancels instead.
+  automaticStartupRecovery: boolean;
   // B2: runner-up streams (ranked, best-first) to fall back to if `stream`
   // never actually starts — see handlePlaybackFailed. Session-local only;
   // no Go/tygo type carries this. Manual stream-list picks carry no
-  // candidates (undefined) — an explicit user pick is never silently
-  // swapped for another stream, it just gets the watchdog UI.
+  // candidates (undefined) — an explicit user pick is never silently swapped
+  // or failed automatically; its waiting UI offers an explicit cancel action.
   candidates?: Stream[];
   // How many candidates have already failed for this playback attempt —
   // caps the auto-advance chain (see handlePlaybackFailed).
@@ -30,4 +34,11 @@ export type Page =
   | { type: "account" }
   | { type: "query"; query: string }
   | { type: "mediaView"; media: Media }
-  | { type: "catalog"; addonId: string; catalogType: string; catalogId: string; name: string; addonUrl?: string };
+  | {
+      type: "catalog";
+      addonId: string;
+      catalogType: string;
+      catalogId: string;
+      name: string;
+      addonUrl?: string;
+    };

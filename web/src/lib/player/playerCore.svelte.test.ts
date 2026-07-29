@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("$lib/api", () => ({ api: mocks }));
-vi.mock("$lib/nextEpisode", () => ({ nextAiredEpisode: mocks.nextAiredEpisode }));
+vi.mock("$lib/nextEpisode", () => ({
+  nextAiredEpisode: mocks.nextAiredEpisode,
+}));
 vi.mock("$lib/player/trackPrefs", () => ({
   loadShowTrackPrefs: mocks.loadShowTrackPrefs,
   saveShowTrackPrefs: mocks.saveShowTrackPrefs,
@@ -26,7 +28,10 @@ vi.mock("$lib/player/aspectRatio", () => ({
 }));
 
 import { Player } from "$lib/player/player.svelte";
-import { PlayerCore, type PlayerCoreOptions } from "$lib/player/playerCore.svelte";
+import {
+  PlayerCore,
+  type PlayerCoreOptions,
+} from "$lib/player/playerCore.svelte";
 import type { Settings } from "$lib/types/settings";
 import type { Media, TVEpisode } from "$lib/types/tmdb";
 
@@ -67,17 +72,19 @@ function readyPlayer(duration = 1000): void {
   Player.subtitleTracks = [];
 }
 
-function harness(init: {
-  src?: string;
-  media?: Media | undefined;
-  season?: number;
-  episode?: number;
-  fileIdx?: number;
-  externalSubtitles?: { id: string; url: string; lang: string }[];
-  pendingMessage?: string;
-  settings?: Partial<Settings>;
-  hooks?: Partial<PlayerCoreOptions>;
-} = {}) {
+function harness(
+  init: {
+    src?: string;
+    media?: Media | undefined;
+    season?: number;
+    episode?: number;
+    fileIdx?: number;
+    externalSubtitles?: { id: string; url: string; lang: string }[];
+    pendingMessage?: string;
+    settings?: Partial<Settings>;
+    hooks?: Partial<PlayerCoreOptions>;
+  } = {},
+) {
   const props = $state({
     src: init.src ?? "http://stream/1.mkv",
     media: "media" in init ? init.media : show(),
@@ -111,15 +118,26 @@ function harness(init: {
       ...init.hooks,
     });
   });
-  return { get core() { return core; }, props, ...spies, destroyRoot };
+  return {
+    get core() {
+      return core;
+    },
+    props,
+    ...spies,
+    destroyRoot,
+  };
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("EventSource", FakeEventSource);
   for (const fn of Object.values(mocks)) fn.mockReset();
-  mocks.playUrl.mockImplementation((src: string) => `http://backend/play?s=${src}`);
-  mocks.subtitleProxyUrl.mockImplementation((url: string) => `http://backend/sub?u=${url}`);
+  mocks.playUrl.mockImplementation(
+    (src: string) => `http://backend/play?s=${src}`,
+  );
+  mocks.subtitleProxyUrl.mockImplementation(
+    (url: string) => `http://backend/sub?u=${url}`,
+  );
   mocks.progressStreamUrl.mockReturnValue("http://backend/progress");
   mocks.loadAspectMode.mockReturnValue("fit");
   mocks.loadShowTrackPrefs.mockReturnValue({});
@@ -352,6 +370,29 @@ describe("playback-start watchdog", () => {
     h.destroyRoot();
   });
 
+  it("waits for explicit cancellation when a stream was picked manually", () => {
+    const h = harness({
+      src: "abc123",
+      hooks: { getAutomaticStartupRecovery: () => false },
+    });
+    Player.duration = 0;
+    h.core.armWatchdog();
+
+    vi.advanceTimersByTime(60_000);
+    expect(h.core.takingAWhile).toBe(true);
+    expect(h.onPlaybackFailed).not.toHaveBeenCalled();
+
+    h.core.torrent.stalled = true;
+    h.core.failOnStalledTorrent();
+    Player.interrupted = true;
+    h.core.failOnPlaybackInterruption();
+    expect(h.onPlaybackFailed).not.toHaveBeenCalled();
+
+    h.core.triggerPlaybackFailed();
+    expect(h.onPlaybackFailed).toHaveBeenCalledTimes(1);
+    h.destroyRoot();
+  });
+
   it("cancels both timers on teardown", () => {
     const h = harness();
     const teardown = h.core.armWatchdog();
@@ -439,7 +480,9 @@ describe("interrupted playback retry", () => {
 
     h.core.retryPlayback();
 
-    expect(play).toHaveBeenCalledWith("http://backend/play?s=http://stream/1.mkv");
+    expect(play).toHaveBeenCalledWith(
+      "http://backend/play?s=http://stream/1.mkv",
+    );
     expect(Player.interrupted).toBe(false);
     expect(Player.position).toBe(0);
 
@@ -573,7 +616,9 @@ describe("loadLogo", () => {
 
 describe("loadTimestamps", () => {
   it("stores the fetched IntroDB data", async () => {
-    mocks.getTimestamps.mockResolvedValue({ intro: [{ start_ms: 0, end_ms: 10 }] });
+    mocks.getTimestamps.mockResolvedValue({
+      intro: [{ start_ms: 0, end_ms: 10 }],
+    });
     const h = harness();
     h.core.loadTimestamps();
     await vi.waitFor(() => expect(h.core.timestamps).not.toBeNull());
@@ -598,7 +643,9 @@ describe("loadTimestamps", () => {
 describe("activeSegment", () => {
   it("reports the segment the position sits inside", () => {
     const h = harness();
-    h.core.timestamps = { intro: [{ start_ms: 5_000, end_ms: 20_000 }] } as never;
+    h.core.timestamps = {
+      intro: [{ start_ms: 5_000, end_ms: 20_000 }],
+    } as never;
     Player.position = 10;
     expect(h.core.activeSegment?.type).toBe("intro");
     h.destroyRoot();
@@ -606,7 +653,9 @@ describe("activeSegment", () => {
 
   it("reports nothing outside every segment", () => {
     const h = harness();
-    h.core.timestamps = { intro: [{ start_ms: 5_000, end_ms: 20_000 }] } as never;
+    h.core.timestamps = {
+      intro: [{ start_ms: 5_000, end_ms: 20_000 }],
+    } as never;
     Player.position = 30;
     expect(h.core.activeSegment).toBeNull();
     h.destroyRoot();
@@ -636,7 +685,9 @@ describe("autoSkipSegment", () => {
   it("skips to the end of an intro when auto-skip is on", () => {
     const h = harness({ settings: { autoSkipIntro: true } });
     const seek = vi.spyOn(Player, "seek");
-    h.core.timestamps = { intro: [{ start_ms: 5_000, end_ms: 20_000 }] } as never;
+    h.core.timestamps = {
+      intro: [{ start_ms: 5_000, end_ms: 20_000 }],
+    } as never;
     Player.position = 10;
     h.core.autoSkipSegment();
     expect(seek).toHaveBeenCalledWith(20);
@@ -646,7 +697,9 @@ describe("autoSkipSegment", () => {
   it("leaves the segment alone when the setting is off", () => {
     const h = harness({ settings: { autoSkipIntro: false } });
     const seek = vi.spyOn(Player, "seek");
-    h.core.timestamps = { intro: [{ start_ms: 5_000, end_ms: 20_000 }] } as never;
+    h.core.timestamps = {
+      intro: [{ start_ms: 5_000, end_ms: 20_000 }],
+    } as never;
     Player.position = 10;
     h.core.autoSkipSegment();
     expect(seek).not.toHaveBeenCalled();
@@ -656,7 +709,9 @@ describe("autoSkipSegment", () => {
   it("does not re-skip a segment the user seeked back into", () => {
     const h = harness({ settings: { autoSkipIntro: true } });
     const seek = vi.spyOn(Player, "seek");
-    h.core.timestamps = { intro: [{ start_ms: 5_000, end_ms: 20_000 }] } as never;
+    h.core.timestamps = {
+      intro: [{ start_ms: 5_000, end_ms: 20_000 }],
+    } as never;
     Player.position = 10;
     h.core.autoSkipSegment();
     h.core.autoSkipSegment();
@@ -790,7 +845,9 @@ describe("resolveOriginalLang", () => {
 
 describe("applySubtitleDefault", () => {
   it("honours a remembered 'off' choice", () => {
-    const h = harness({ settings: { subtitlesEnabled: true, defaultSubtitleLang: "en" } });
+    const h = harness({
+      settings: { subtitlesEnabled: true, defaultSubtitleLang: "en" },
+    });
     h.core.showPrefs = { sub: { kind: "off" } };
     Player.subtitleTracks = [track(1, "eng", { type: "sub" })] as never;
     const set = vi.spyOn(Player, "setSubtitleTrack");
@@ -821,7 +878,9 @@ describe("applySubtitleDefault", () => {
   });
 
   it("stays unlatched while the external list has not arrived", () => {
-    const h = harness({ settings: { subtitlesEnabled: true, defaultSubtitleLang: "de" } });
+    const h = harness({
+      settings: { subtitlesEnabled: true, defaultSubtitleLang: "de" },
+    });
     const set = vi.spyOn(Player, "setSubtitleTrack");
     h.core.applySubtitleDefault();
     expect(set).not.toHaveBeenCalled();
@@ -854,7 +913,9 @@ describe("applySubtitleDefault", () => {
   });
 
   it("only applies once per source", () => {
-    const h = harness({ settings: { subtitlesEnabled: true, defaultSubtitleLang: "en" } });
+    const h = harness({
+      settings: { subtitlesEnabled: true, defaultSubtitleLang: "en" },
+    });
     Player.subtitleTracks = [track(1, "eng", { type: "sub" })] as never;
     const set = vi.spyOn(Player, "setSubtitleTrack");
     h.core.applySubtitleDefault();
@@ -889,7 +950,11 @@ describe("selectSubtitle", () => {
     const add = vi.spyOn(Player, "addSubtitle");
     const set = vi.spyOn(Player, "setSubtitleTrack");
     h.core.selectSubtitle({ kind: "external", id: "os-1" });
-    expect(add).toHaveBeenCalledWith("http://backend/sub?u=http://s/1.srt", "DE", "de");
+    expect(add).toHaveBeenCalledWith(
+      "http://backend/sub?u=http://s/1.srt",
+      "DE",
+      "de",
+    );
 
     Player.subtitleTracks = [track(7, "de", { type: "sub" })] as never;
     h.core.selectSubtitle({ kind: "external", id: "os-1" });
@@ -950,7 +1015,9 @@ describe("user track choices", () => {
     const set = vi.spyOn(Player, "setPlaybackSpeed");
     h.core.chooseSpeed(1.25);
     expect(set).toHaveBeenCalledWith(1.25);
-    expect(mocks.saveShowTrackPrefs).toHaveBeenCalledWith(1396, { speed: 1.25 });
+    expect(mocks.saveShowTrackPrefs).toHaveBeenCalledWith(1396, {
+      speed: 1.25,
+    });
     h.destroyRoot();
   });
 });
@@ -958,7 +1025,11 @@ describe("user track choices", () => {
 describe("applySubtitleStyle", () => {
   it("pushes the configured size, position and background to mpv", () => {
     const h = harness({
-      settings: { subtitleSize: 140, subtitlePosition: 12, subtitleBackground: true },
+      settings: {
+        subtitleSize: 140,
+        subtitlePosition: 12,
+        subtitleBackground: true,
+      },
     });
     const set = vi.spyOn(Player, "setSubtitleStyle");
     h.core.applySubtitleStyle();
@@ -1030,7 +1101,9 @@ describe("showUpNext", () => {
   it("shows as soon as a credits segment starts", () => {
     const h = harness();
     h.core.nextEp = { season: 1, episode: { episode_number: 2 } as TVEpisode };
-    h.core.timestamps = { credits: [{ start_ms: 0, end_ms: 999_000 }] } as never;
+    h.core.timestamps = {
+      credits: [{ start_ms: 0, end_ms: 999_000 }],
+    } as never;
     Player.position = 10;
     expect(h.core.showUpNext).toBe(true);
     h.destroyRoot();

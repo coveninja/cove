@@ -65,6 +65,12 @@ export interface PlayerCoreOptions {
   getSettings: () => Settings | undefined;
   /** The shell's display title — each computes it slightly differently. */
   getTitle: () => string;
+  /**
+   * Whether failures before playback starts should automatically hand control
+   * back to the playback store for candidate fallback. Manual stream picks
+   * return false and wait until the user explicitly cancels.
+   */
+  getAutomaticStartupRecovery?: () => boolean;
 
   onPlaybackFailed?: () => void;
   onPlayNext?: (season: number, episode: number) => void;
@@ -259,6 +265,10 @@ export class PlayerCore {
     return this.#opts.hasPlayNext
       ? this.#opts.hasPlayNext()
       : !!this.#opts.onPlayNext;
+  }
+
+  #automaticStartupRecovery(): boolean {
+    return this.#opts.getAutomaticStartupRecovery?.() ?? true;
   }
 
   advance(): void {
@@ -470,13 +480,15 @@ export class PlayerCore {
     // right layer instead of racing it.
     const isHashSrc = !src.startsWith("http");
     const failTimeoutMs = isHashSrc ? 50_000 : 25_000;
-    const failTimer = setTimeout(() => this.triggerPlaybackFailed(), failTimeoutMs);
+    const failTimer = this.#automaticStartupRecovery()
+      ? setTimeout(() => this.triggerPlaybackFailed(), failTimeoutMs)
+      : undefined;
     const slowTimer = setTimeout(() => {
       this.takingAWhile = true;
     }, 15_000);
 
     return () => {
-      clearTimeout(failTimer);
+      if (failTimer !== undefined) clearTimeout(failTimer);
       clearTimeout(slowTimer);
     };
   }
@@ -491,7 +503,11 @@ export class PlayerCore {
   /** A stalled torrent is effectively dead — treat it as a startup timeout
    *  rather than leaving the loading screen spinning. */
   failOnStalledTorrent(): void {
-    if (this.torrent.stalled && !this.canPlay) {
+    if (
+      this.#automaticStartupRecovery() &&
+      this.torrent.stalled &&
+      !this.canPlay
+    ) {
       this.triggerPlaybackFailed();
     }
   }
@@ -504,7 +520,11 @@ export class PlayerCore {
    * disabled because Player.ended is false.
    */
   failOnPlaybackInterruption(): void {
-    if (Player.interrupted && !this.#everCanPlay) {
+    if (
+      this.#automaticStartupRecovery() &&
+      Player.interrupted &&
+      !this.#everCanPlay
+    ) {
       this.triggerPlaybackFailed();
     }
   }
@@ -799,7 +819,8 @@ export class PlayerCore {
         })
         .catch(() => {})
         .finally(() => {
-          if (this.#opts.getSrc() === requestedSrc) this.#resolvingNextEp = false;
+          if (this.#opts.getSrc() === requestedSrc)
+            this.#resolvingNextEp = false;
         });
     });
   }
@@ -819,7 +840,11 @@ export class PlayerCore {
    * Returns the interval teardown.
    */
   runUpNextCountdown(): (() => void) | undefined {
-    if (!this.showUpNext || !this.#opts.getSettings()?.autoPlay || this.#advanced) {
+    if (
+      !this.showUpNext ||
+      !this.#opts.getSettings()?.autoPlay ||
+      this.#advanced
+    ) {
       untrack(() => (this.countdownSecs = null));
       return;
     }
@@ -884,7 +909,12 @@ export class PlayerCore {
           ? this.#opts.getDestroyCompleted()
           : Player.ended;
         void this.progress
-          .saveNow(Player.position, Player.duration, this.progressCtx, completed)
+          .saveNow(
+            Player.position,
+            Player.duration,
+            this.progressCtx,
+            completed,
+          )
           .then(() => libraryChanged.update((n) => n + 1));
       }
     } catch (e) {
