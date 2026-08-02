@@ -48,7 +48,7 @@
     "clsx": "^2.1.1",
     "eslint": "^10.8.0",
     "eslint-plugin-svelte": "^3.22.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "layerchart": "^2.0.2",
     "prettier": "^3.9.6",
     "prettier-plugin-svelte": "^3.4.0",
