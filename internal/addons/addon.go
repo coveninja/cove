@@ -292,8 +292,26 @@ func (m *Manager) FetchManifest(ctx context.Context, addonURL string) (Manifest,
 	return manifest, nil
 }
 
+// StremioType maps Cove's internal media type onto the Stremio protocol type
+// used in addon request paths. Cove speaks TMDB's vocabulary ("movie"/"tv"),
+// but in Stremio "tv" means *live TV channels* — episodic shows are "series".
+// Requesting /stream/tv/tt123:1:1.json gets a well-formed HTTP 200 with an
+// empty stream list from addons that only serve movie/series, so the mismatch
+// looks like "no streams found" rather than an error. Movies are unaffected
+// because "movie" means the same thing in both vocabularies.
+//
+// Anything that isn't "tv" passes through untouched, so catalog/meta types
+// already read out of an addon manifest (which are Stremio vocabulary
+// already) stay as they are.
+func StremioType(mediaType string) string {
+	if mediaType == "tv" {
+		return "series"
+	}
+	return mediaType
+}
+
 func (m *Manager) FetchStreams(ctx context.Context, addonURL string, mediaType string, imdbID string) ([]Stream, error) {
-	url := fmt.Sprintf("%s/stream/%s/%s.json", addonURL, mediaType, imdbID)
+	url := fmt.Sprintf("%s/stream/%s/%s.json", addonURL, StremioType(mediaType), imdbID)
 
 	res, err := m.addonRequest(ctx, url)
 	if err != nil {
@@ -315,7 +333,7 @@ func (m *Manager) FetchStreams(ctx context.Context, addonURL string, mediaType s
 }
 
 func (m *Manager) FetchSubtitles(ctx context.Context, addonURL string, mediaType string, id string) ([]Subtitle, error) {
-	url := fmt.Sprintf("%s/subtitles/%s/%s.json", addonURL, mediaType, id)
+	url := fmt.Sprintf("%s/subtitles/%s/%s.json", addonURL, StremioType(mediaType), id)
 	res, err := m.addonRequest(ctx, url)
 	if err != nil {
 		return nil, err

@@ -408,6 +408,11 @@ func (m *Manager) GetAllStreamsPrefetch(ctx context.Context, mediaType string, s
 }
 
 func (m *Manager) getAllStreams(ctx context.Context, mediaType string, stremioID string, hitTTL, emptyTTL time.Duration) ([]Stream, error) {
+	// Normalise here as well as in FetchStreams so the per-addon cache key is
+	// the Stremio type, and callers passing "tv" and "series" for the same
+	// title share one entry instead of two.
+	mediaType = StremioType(mediaType)
+
 	m.mu.RLock()
 	addonsSnapshot := make([]AddonEntry, len(m.stremioAddons))
 	copy(addonsSnapshot, m.stremioAddons)
@@ -564,6 +569,8 @@ func (m *Manager) streamCacheSet(key string, streams []Stream, ttl time.Duration
 // (one goroutine per addon), under the same overall fanOutDeadline as
 // GetAllStreams. Per-addon errors are swallowed.
 func (m *Manager) GetAllSubtitles(ctx context.Context, mediaType string, stremioID string) []Subtitle {
+	mediaType = StremioType(mediaType)
+
 	m.mu.RLock()
 	addonsSnapshot := make([]AddonEntry, len(m.stremioAddons))
 	copy(addonsSnapshot, m.stremioAddons)

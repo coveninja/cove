@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,50 @@ func TestAddonClientFetchContracts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, subtitles, 1)
 	assert.Equal(t, "en", subtitles[0].Lang)
+}
+
+// TV episodes must go out as Stremio's "series" type, not TMDB's "tv" — in
+// Stremio "tv" is live TV, and addons answer /stream/tv/… with an empty list
+// rather than an error, so the mismatch reads as "no streams found".
+func TestAddonClientMapsTVToSeries(t *testing.T) {
+	var streamPaths, subtitlePaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/stream/"):
+			streamPaths = append(streamPaths, r.URL.Path)
+			fmt.Fprint(w, `{"streams":[{"name":"S","url":"https://video.example/e1"}]}`)
+		case strings.HasPrefix(r.URL.Path, "/subtitles/"):
+			subtitlePaths = append(subtitlePaths, r.URL.Path)
+			fmt.Fprint(w, `{"subtitles":[{"id":"one","url":"https://subs.example/one.vtt","lang":"en"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	manager := newTestManager(nil)
+
+	streams, err := manager.FetchStreams(context.Background(), srv.URL, "tv", "tt1:2:3")
+	require.NoError(t, err)
+	require.Len(t, streams, 1)
+
+	subtitles, err := manager.FetchSubtitles(context.Background(), srv.URL, "tv", "tt1:2:3")
+	require.NoError(t, err)
+	require.Len(t, subtitles, 1)
+
+	_, err = manager.FetchStreams(context.Background(), srv.URL, "movie", "tt1")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"/stream/series/tt1:2:3.json", "/stream/movie/tt1.json"}, streamPaths)
+	assert.Equal(t, []string{"/subtitles/series/tt1:2:3.json"}, subtitlePaths)
+
+	// Movie passes through unchanged; unknown types are left alone so
+	// manifest-sourced types (live "tv" catalogs included) aren't rewritten
+	// out from under an addon that really does mean them.
+	assert.Equal(t, "series", StremioType("tv"))
+	assert.Equal(t, "movie", StremioType("movie"))
+	assert.Equal(t, "anime", StremioType("anime"))
 }
 
 func TestAddonClientRejectsInvalidResponses(t *testing.T) {
