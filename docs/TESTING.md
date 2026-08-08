@@ -1,113 +1,110 @@
-# Testing and continuous integration
+# Testing and release checks
 
-This document describes Cove's local checks, GitHub Actions matrix, coverage
-reporting, and release gates. Contributor conventions live in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md).
+## Fast path
 
-## Local checks
-
-For the normal pre-PR suite, run:
+From the repository root:
 
 ```sh
 make test
 ```
 
-This runs the public and Supabase-tagged Go checks plus the Kotlin
-shared/desktop test suite. For the broadest local approximation of CI,
-including workflow/security checks and cross-platform compilation, run:
+This delegates to `app/gradlew test` and covers common repositories/models, the
+backend desktop and Android host targets, UI/common tests, mobile artifact
+contracts, desktop launcher/options, and player logic.
 
-```sh
-make test-all
-```
-
-`make test-all` additionally requires network access, libmpv, JDK 17, and
-ShellCheck. On Arch Linux, install the last dependency with
-`sudo pacman -S shellcheck`.
-
-### Go
-
-```sh
-# Public/no-op implementation
-go test -count=1 ./...
-go vet ./...
-
-# Checked-in Supabase auth/sync implementation
-go test -count=1 -tags supabase ./...
-go vet -tags supabase ./...
-go test -count=1 -race -tags supabase ./...
-
-# Exact private release combination (maintainers, after make inject-private)
-go test -count=1 -tags supabase,discover ./...
-go vet -tags supabase,discover ./...
-```
-
-Run `gofmt` on changed Go files. CI checks every tracked `.go` file and rejects
-an unformatted tree. Changes to mirrored Supabase source must also pass:
-
-```sh
-bash scripts/check-private-sync.sh
-```
-
-### Kotlin
+Focused examples:
 
 ```sh
 cd app
-./gradlew test
+./gradlew :backend:desktopTest --tests '*LegacyMigrationTest'
+./gradlew :backend:desktopTest --tests '*CoreRoutesTest'
+./gradlew :backend:desktopTest --tests '*MediaBoundaryTest'
+./gradlew :desktop:test
+./gradlew :mobile:testDebugUnitTest
 ```
 
-This runs both the `shared` (KMP) and `desktop` (JVM) test suites. The
-`shared` suite covers `CoveApi` request invariants, `ImageUrls` proxied-vs-raw
-path handling, `LiveSettingsRepository` round-trip correctness, and fixture
-wiring. The `desktop` suite covers `BackendSupervisor` lifecycle,
-`RestartPolicy` crash-budget accounting, `SingleInstanceLock`, `LaunchOptions`
-parsing, and mpv binding smoke tests.
+Use `--no-daemon` for CI-equivalent runs. Tests that exercise config or stores
+should use temporary directories and mock HTTP engines; they must not read a
+developer's real account, `.env`, or SQLite database.
 
-Maintainers can add the private release-tag checks after injection with
-`make test-private`. This target is intentionally not a prerequisite of
-`make test-all`.
+## Packaged images and smoke runs
 
-## Pull-request and branch CI
+```sh
+cd app
+./gradlew :desktop:createDistributable --no-daemon
+./gradlew :desktop:run --args='--smoke-seconds 3' --no-daemon
+```
 
-`.github/workflows/ci.yml` runs on every branch push, version tag, pull
-request, and manual dispatch.
+The distributable check verifies the single-JVM packaging graph and bundled
+runtime. The smoke run needs a graphical session, libmpv, and a usable
+`TMDB_API_KEY`. When validating an artifact, inspect the generated image under
+`app/desktop/build/compose/binaries/main/app/Cove` and confirm it does not
+contain a backend sidecar.
 
-| Job                  | What it protects                                                          |
-| -------------------- | ------------------------------------------------------------------------- |
-| Workflow lint        | Invalid GitHub Actions workflow definitions                               |
-| Go test matrix       | Public and `supabase` variants, gofmt, vet, and coverage                  |
-| Go race              | Concurrency bugs in the Supabase-tagged build                             |
-| Go build matrix      | Static Linux and Windows compilation                                      |
-| Private integrations | Trusted pushes only: source-copy check plus `supabase,discover` test/vet  |
-| Kotlin               | `shared` and `desktop` test suites (JVM target)                           |
-| Dependency review    | Vulnerable dependency changes introduced by pull requests                 |
-| govulncheck          | Reachable Go vulnerability scan                                           |
+For the shared phone/tablet UI:
 
-GitHub CodeQL default setup analyzes Actions, C/C++, Go, and Kotlin/Java
-without a competing advanced workflow. Dependabot checks Go modules, Gradle,
-and GitHub Actions weekly.
+```sh
+cd app
+./gradlew :mobile:lintDebug :mobile:assembleDebug --no-daemon
+./gradlew :mobile:installDebug --no-daemon
+adb shell am start -S -W -n com.coveninja.cove/.MainActivity
+adb shell pidof com.coveninja.cove
+```
 
-## Coverage
+Use a phone/tablet AVD on API 28 or newer. Verify edge-to-edge system bars,
+compact hero actions, touch scrolling/long-press behavior, real TMDB loading,
+and process survival after opening details. The mobile manifest intentionally
+requires a touchscreen and must not gain a Leanback launcher; the eventual TV
+host has its own UI.
 
-Go jobs upload `coverage-public.out` and `coverage-supabase.out`. Raw reports
-remain downloadable from each workflow run even if the external coverage upload
-is unavailable.
+## Workflow checks
 
-The CI jobs publish Go coverage to Codecov using GitHub OIDC, so no
-`CODECOV_TOKEN` repository secret is required. The README badge reflects the
-combined default-branch report. Coverage is intentionally informational while
-the baseline is being expanded—CI does not yet reject a change based on a
-percentage. If a new repository shows an unknown badge after its first
-successful `master` run, enable that repository in the Codecov dashboard.
+```sh
+make test-workflows
+```
+
+This runs release-note filtering, the local-action fixture checks, ShellCheck,
+and actionlint. Local actionlint and ShellCheck binaries are required. CI uses
+the pinned actionlint container.
+
+## CI matrix
+
+| Job | Purpose |
+|---|---|
+| Workflow lint | Release-note behavior and GitHub Actions syntax/shell analysis |
+| Kotlin desktop/mobile build and test | Full Gradle build/test plus Android lint/APK assembly |
+| Android phone launch smoke | Install and start the shared mobile UI on an API 35 emulator |
+| Dependency review | Pull-request dependency policy and known-vulnerability review |
+
+GitHub's default CodeQL setup and Dependabot cover Kotlin/Java, Gradle, and
+workflow dependencies. There is no active Go job or private-source gate.
 
 ## Release gates
 
-`.github/workflows/release.yml` publishes only for `v*` tags; manual dispatch
-runs its shared private Go validation without creating a release. A tagged
-GitHub release is created only after public/private Go tests, the tagged build,
-and the Kotlin test suite succeed. Linux/Flatpak and Windows packaging then
-upload their assets with job-scoped `contents: write`; the workflow default
-remains read-only. `make patch`, `make minor`, and `make major` generate the
-release's linked change list from conventional `fix` and `feat` commit subjects
-only; run `make test-release-notes` to verify that filter locally.
+A version tag must first pass the complete Kotlin desktop/mobile build/test job. Linux release
+packaging then builds one Compose distributable, a tarball/PKGBUILD, and a
+Flatpak. Windows packaging builds the same application graph, adds the mpv DLL,
+and produces the portable zip plus NSIS installer. Android packaging signs and
+publishes `cove-android.apk` plus its SHA-256 checksum. Deployment keys are
+supplied to the desktop resource or Android `BuildConfig` during packaging.
 
-Coverage artifacts are diagnostic rather than release assets.
+The release workflow must not fetch private source submodules or stage a second
+backend executable. Platform package managers own updates; the zip checksum is
+an integrity artifact, not an in-app self-update protocol.
+
+## Final local checklist
+
+For a backend or release refactor:
+
+```sh
+cd app
+./gradlew test --no-daemon
+./gradlew :mobile:lintDebug :mobile:assembleDebug --no-daemon
+cd ..
+git diff --check
+```
+
+Also run `:desktop:createDistributable` when dependencies, entry points,
+resources, native libraries, or packaging changed. Run the desktop GUI and
+Android emulator smoke tests when the relevant host changed. Document an
+environmental failure instead of treating it as a product regression.

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -124,6 +125,7 @@ private fun FeaturedMedia(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .widthIn(max = 560.dp)
+                .fillMaxWidth()
                 .padding(28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -168,30 +170,36 @@ private fun FeaturedMedia(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(
-                    onClick = onOpen,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiary,
-                        contentColor = Color.White,
-                    ),
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val compactActions = maxWidth < 360.dp
+                Row(
+                    modifier = if (compactActions) Modifier.fillMaxWidth() else Modifier,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconifyIcon(
-                        icon = "lucide:play",
-                        modifier = Modifier.size(18.dp),
-                        tint = Color.White,
-                    )
-                    Spacer(Modifier.size(7.dp))
-                    Text("View details")
-                }
-                OutlinedButton(
-                    onClick = onExplore,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                ) {
-                    Text("Explore")
+                    Button(
+                        onClick = onOpen,
+                        modifier = if (compactActions) Modifier.weight(1.55f) else Modifier,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.tertiary,
+                            contentColor = Color.White,
+                        ),
+                    ) {
+                        IconifyIcon(
+                            icon = "lucide:play",
+                            modifier = Modifier.size(18.dp),
+                            tint = Color.White,
+                        )
+                        Spacer(Modifier.size(7.dp))
+                        Text(if (compactActions) "Details" else "View details", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onExplore,
+                        modifier = if (compactActions) Modifier.weight(1f) else Modifier,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                    ) {
+                        Text(if (compactActions) "Browse" else "Explore", maxLines = 1)
+                    }
                 }
             }
         }

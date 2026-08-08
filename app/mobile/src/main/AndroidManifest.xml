@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- This artifact is intentionally the shared touch UI. Android TV gets a
+         separate launcher/UI module instead of mode-switching this activity. -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="true" />
+
+    <application
+        android:name=".CoveMobileApplication"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_cove"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_cove"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Cove"
+        android:usesCleartextTraffic="false">
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

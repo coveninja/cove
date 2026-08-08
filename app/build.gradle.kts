@@ -7,11 +7,19 @@ plugins {
     alias(libs.plugins.kotlin.serialization)  apply false
     alias(libs.plugins.compose.multiplatform) apply false
     alias(libs.plugins.compose.hot.reload)    apply false
+    alias(libs.plugins.sqldelight)             apply false
+    alias(libs.plugins.android.application)    apply false
+    alias(libs.plugins.android.kmp.library)    apply false
 }
 
-// Convenience: `./gradlew test` from the app root runs both the shared KMP
-// tests (desktopTest target) and the desktop JVM test suite.
+// Convenience: `./gradlew test` from the app root covers the shared KMP
+// targets, desktop JVM suite, and mobile host logic.
 tasks.register("test") {
     group = "verification"
-    dependsOn(":shared:allTests", ":desktop:test")
+    dependsOn(
+        ":shared:allTests",
+        ":backend:allTests",
+        ":desktop:test",
+        ":mobile:testDebugUnitTest",
+    )
 }

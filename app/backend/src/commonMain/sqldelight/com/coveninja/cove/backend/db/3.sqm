@@ -1,0 +1,22 @@
+CREATE TABLE auth_session (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    user_id TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL DEFAULT '',
+    expires_at INTEGER,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE client_session (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE profile_store_versions (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, kind)
+);

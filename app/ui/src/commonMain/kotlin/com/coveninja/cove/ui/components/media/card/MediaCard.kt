@@ -48,9 +48,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.text.font.FontWeight
@@ -68,8 +65,9 @@ import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.media.drag.MediaDragPayload
 import com.coveninja.cove.ui.components.menu.CMenuItem
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.platform.onSecondaryClick
 
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun MediaCard(
     media: Media,
@@ -225,18 +223,9 @@ fun MediaCard(
                     },
                 )
             }
-            .onPointerEvent(PointerEventType.Press) { event ->
-                if (event.buttons.isSecondaryPressed) {
-                    contextMenuPosition =
-                        event.changes.firstOrNull()?.position
-                            ?: Offset.Zero
-
-                    contextMenuVisible = true
-
-                    event.changes.forEach { change ->
-                        change.consume()
-                    }
-                }
+            .onSecondaryClick { position ->
+                contextMenuPosition = position
+                contextMenuVisible = true
             }
             .clickable(
                 interactionSource = interactionSource,

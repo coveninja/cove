@@ -2,12 +2,21 @@ plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.android.kmp.library)
 }
 
 kotlin {
     jvm("desktop")
+    android {
+        namespace = "com.coveninja.cove.ui"
+        compileSdk = 36
+        minSdk = 28
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
+    }
 
-    jvmToolchain(17)
+    jvmToolchain(21)
 
     sourceSets {
         commonMain.dependencies {
@@ -20,7 +29,6 @@ kotlin {
 
             implementation(libs.coil3.compose)
             implementation(libs.coil3.network.ktor)
-            implementation("com.ongshok:iconify:1.0.4")
 
             implementation(libs.kotlinx.coroutines.core)
         }

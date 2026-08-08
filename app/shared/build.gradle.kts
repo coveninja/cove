@@ -1,13 +1,22 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.android.kmp.library)
 }
 
 kotlin {
-    // Adding androidTarget() later is a one-line change here.
     jvm("desktop")
+    android {
+        namespace = "com.coveninja.cove.shared"
+        compileSdk = 36
+        minSdk = 28
+        withHostTest {}
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
+    }
 
-    jvmToolchain(17)
+    jvmToolchain(21)
 
     sourceSets {
         commonMain.dependencies {
@@ -17,12 +26,11 @@ kotlin {
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
         }
-        val desktopMain by getting {
-            dependencies {
-                // OkHttp engine is JVM-only; lives here so androidTarget() can
-                // bring its own engine without touching commonMain.
-                implementation(libs.ktor.client.okhttp)
-            }
+        desktopMain.dependencies {
+            implementation(libs.ktor.client.okhttp)
+        }
+        androidMain.dependencies {
+            implementation(libs.ktor.client.okhttp)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

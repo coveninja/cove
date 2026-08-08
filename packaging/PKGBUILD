@@ -14,7 +14,6 @@ sha256sums=('__SHA256__')
 
 package() {
     install -Dm755 "${srcdir}/bin/cove"          "${pkgdir}/usr/bin/cove"
-    install -Dm755 "${srcdir}/lib/cove/cove"     "${pkgdir}/usr/lib/cove/cove"
     mkdir -p "${pkgdir}/usr/lib/cove"
     cp -r "${srcdir}/lib/cove/Cove"              "${pkgdir}/usr/lib/cove/Cove"
     chmod -R a+rX                                "${pkgdir}/usr/lib/cove/Cove"

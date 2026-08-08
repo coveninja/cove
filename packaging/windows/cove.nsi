@@ -51,8 +51,8 @@ Section "-Core" SecCore
 
   SetOutPath "$INSTDIR"
   ; All files are pre-assembled in staging\ by the CI package-windows job.
-  ; This includes: Cove.exe (jpackage launcher), cove.exe (Go backend),
-  ; mpv-2.dll, the bundled JRE (runtime\), and the app JARs (app\).
+  ; This includes: Cove.exe (jpackage launcher), mpv-2.dll, the bundled JRE
+  ; (runtime\), and the app JARs (app\) containing the Kotlin backend.
   !cd "..\..\staging"
   File /r "*"
   !cd "..\packaging\windows"
@@ -71,8 +71,7 @@ Section "-Core" SecCore
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$StartMenuFolder"
     CreateShortcut  "$SMPROGRAMS\$StartMenuFolder\${APP_NAME}.lnk" \
-                    "$INSTDIR\Cove.exe" \
-                    '--backend "$INSTDIR\cove.exe"' \
+                    "$INSTDIR\Cove.exe" "" \
                     "$INSTDIR\Cove.exe"
     CreateShortcut  "$SMPROGRAMS\$StartMenuFolder\Uninstall ${APP_NAME}.lnk" \
                     "$INSTDIR\uninstall.exe"
@@ -81,8 +80,7 @@ SectionEnd
 
 Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" \
-                 "$INSTDIR\Cove.exe" \
-                 '--backend "$INSTDIR\cove.exe"' \
+                 "$INSTDIR\Cove.exe" "" \
                  "$INSTDIR\Cove.exe"
 SectionEnd
 

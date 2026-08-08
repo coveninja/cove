@@ -80,17 +80,14 @@ modules:
         url: https://github.com/mpv-player/mpv.git
         tag: v0.38.0
 
-  # cove: Go backend + Compose Desktop app image, assembled in one module.
-  # Both are pre-built in CI before flatpak-builder runs; this module copies
-  # them into /app. The Compose app image (compose-app/Cove/) includes its own
+  # cove: Compose Desktop app image with the Kotlin backend in-process.
+  # It is pre-built in CI before flatpak-builder runs. The Compose app image
+  # (compose-app/Cove/) includes its own
   # bundled JRE produced by jpackage createDistributable — no Java runtime
   # extension or system JDK is required inside the sandbox.
   - name: cove
     buildsystem: simple
     build-commands:
-      # Go backend (pre-built static binary)
-      - install -Dm755 cove /app/lib/cove/cove
-
       # Compose Desktop app image (pre-built, includes bundled JRE).
       # compose-app/Cove/ is populated by the CI package job from
       # app/desktop/build/compose/binaries/main/app/Cove/ before flatpak-builder
@@ -101,7 +98,7 @@ modules:
       - chmod -R a+rX /app/lib/cove/Cove
       - chmod +x /app/lib/cove/Cove/bin/Cove
 
-      # Launcher that wires the backend path into the app invocation
+      # Stable launcher for the bundled app image.
       - install -Dm755 flatpak/cove.sh /app/bin/cove
 
       # Icon (SVG scales better than PNG for HiDPI)
@@ -115,14 +112,14 @@ modules:
           /app/share/metainfo/io.github.coveninja.Cove.metainfo.xml
 
     sources:
-      # Whole repo (including pre-built cove binary)
+      # Whole repo for metadata and packaging assets.
       - type: dir
         path: ..
         skip:
           - .env
           - .git
           - .flatpak-builder
-          - _private
+          - legacy
           - node_modules
           - cove-linux-amd64.flatpak
           - app/desktop/build

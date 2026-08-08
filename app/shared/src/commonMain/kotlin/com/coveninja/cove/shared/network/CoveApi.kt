@@ -7,7 +7,7 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 
-// All HTTP calls to the Go backend. Takes an already-configured HttpClient so
+// HTTP compatibility client for the embedded Ktor boundary. Takes an already-configured HttpClient so
 // the engine choice (OkHttp on desktop, CIO for future targets) stays outside
 // this class and MockEngine can be injected in tests.
 class CoveApi(
@@ -247,7 +247,7 @@ class CoveApi(
         }.requireSuccess().body()
 
     // PUT is a whole-object replace — any field absent from the body is written
-    // as its Go zero value. Callers must supply the complete settings object;
+    // as its persisted default value. Callers must supply the complete settings object;
     // LiveSettingsRepository enforces this structurally.
     suspend fun updateSettings(settings: AppSettings): AppSettings =
         httpClient.put("${config.baseUrl}/api/settings") {

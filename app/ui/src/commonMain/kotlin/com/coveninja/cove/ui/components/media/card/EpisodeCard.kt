@@ -35,16 +35,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,10 +49,11 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.platform.onSecondaryClick
 import com.ongshok.iconify.ui.IconifyIcon
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun EpisodeCard(
     episode: MediaEpisode,
@@ -115,16 +112,9 @@ fun EpisodeCard(
                     scaleY = scale
                 }
                 .hoverable(interactionSource)
-                .onPointerEvent(PointerEventType.Press) { event ->
-                    if (event.buttons.isSecondaryPressed) {
-                        contextMenuPosition =
-                            event.changes.firstOrNull()?.position
-                                ?: Offset.Zero
-                        contextMenuVisible = true
-                        event.changes.forEach { change ->
-                            change.consume()
-                        }
-                    }
+                .onSecondaryClick { position ->
+                    contextMenuPosition = position
+                    contextMenuVisible = true
                 }
                 .combinedClickable(
                     interactionSource = interactionSource,

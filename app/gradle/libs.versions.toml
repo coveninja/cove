@@ -1,5 +1,6 @@
 [versions]
 kotlin                = "2.4.10"
+android-gradle-plugin = "9.3.0"
 compose-multiplatform = "1.11.1"
 compose-hot-reload    = "1.1.1"
 # Underlying material3 version bundled by CMP 1.11.1; declared here for
@@ -8,19 +9,22 @@ compose-hot-reload    = "1.1.1"
 compose-material3     = "1.9.0"
 coroutines            = "1.11.0"
 serialization-json    = "1.11.0"
-# Phase 2+ dependencies — declared now so the catalog is the single source
-# of truth, but none are wired into build files yet.
+# Runtime dependency versions shared by the desktop and Android targets.
 ktor                  = "3.5.1"
 coil3                 = "3.5.0"
 jna                   = "5.19.0"
 jogl                  = "2.6.0"
+sqldelight            = "2.3.2"
+jlibtorrent           = "2.0.12.9"
+graaljs               = "25.0.2"
+androidx-activity     = "1.13.0"
 
 [libraries]
 kotlinx-coroutines-core  = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core",  version.ref = "coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization-json" }
 
-# Phase 2+ — networking
+# Networking and persistence
 ktor-client-core                  = { module = "io.ktor:ktor-client-core",                   version.ref = "ktor" }
 ktor-client-cio                   = { module = "io.ktor:ktor-client-cio",                    version.ref = "ktor" }
 ktor-client-okhttp                = { module = "io.ktor:ktor-client-okhttp",                 version.ref = "ktor" }
@@ -28,12 +32,33 @@ ktor-client-mock                  = { module = "io.ktor:ktor-client-mock",      
 ktor-client-content-negotiation   = { module = "io.ktor:ktor-client-content-negotiation",    version.ref = "ktor" }
 ktor-serialization-kotlinx-json   = { module = "io.ktor:ktor-serialization-kotlinx-json",   version.ref = "ktor" }
 kotlinx-coroutines-test           = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+ktor-server-core                  = { module = "io.ktor:ktor-server-core",                  version.ref = "ktor" }
+ktor-server-cio                   = { module = "io.ktor:ktor-server-cio",                   version.ref = "ktor" }
+ktor-server-content-negotiation   = { module = "io.ktor:ktor-server-content-negotiation",   version.ref = "ktor" }
+ktor-server-cors                  = { module = "io.ktor:ktor-server-cors",                  version.ref = "ktor" }
+ktor-server-partial-content       = { module = "io.ktor:ktor-server-partial-content",       version.ref = "ktor" }
+ktor-server-sse                   = { module = "io.ktor:ktor-server-sse",                   version.ref = "ktor" }
+ktor-server-status-pages          = { module = "io.ktor:ktor-server-status-pages",          version.ref = "ktor" }
+ktor-server-test-host             = { module = "io.ktor:ktor-server-test-host",             version.ref = "ktor" }
+sqldelight-runtime                = { module = "app.cash.sqldelight:runtime",                version.ref = "sqldelight" }
+sqldelight-coroutines-extensions = { module = "app.cash.sqldelight:coroutines-extensions",  version.ref = "sqldelight" }
+sqldelight-sqlite-driver          = { module = "app.cash.sqldelight:sqlite-driver",          version.ref = "sqldelight" }
+sqldelight-android-driver         = { module = "app.cash.sqldelight:android-driver",         version.ref = "sqldelight" }
+jlibtorrent                       = { module = "com.frostwire:jlibtorrent",                   version.ref = "jlibtorrent" }
+jlibtorrent-linux-x86-64          = { module = "com.frostwire:jlibtorrent-linux-x86_64",      version.ref = "jlibtorrent" }
+jlibtorrent-linux-arm64           = { module = "com.frostwire:jlibtorrent-linux-arm64",       version.ref = "jlibtorrent" }
+jlibtorrent-macos-x86-64          = { module = "com.frostwire:jlibtorrent-macosx-x86_64",     version.ref = "jlibtorrent" }
+jlibtorrent-macos-arm64           = { module = "com.frostwire:jlibtorrent-macosx-arm64",      version.ref = "jlibtorrent" }
+jlibtorrent-windows               = { module = "com.frostwire:jlibtorrent-windows",           version.ref = "jlibtorrent" }
+graal-polyglot                    = { module = "org.graalvm.polyglot:polyglot",                version.ref = "graaljs" }
+graal-js                          = { module = "org.graalvm.polyglot:js-community",             version.ref = "graaljs" }
+androidx-activity-compose         = { module = "androidx.activity:activity-compose",            version.ref = "androidx-activity" }
 
-# Phase 2+ — image loading
+# Image loading
 coil3-compose     = { module = "io.coil-kt.coil3:coil-compose",         version.ref = "coil3" }
 coil3-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3",  version.ref = "coil3" }
 
-# Phase 2+ — native windowing / video
+# Desktop native windowing/video
 jna        = { module = "net.java.dev.jna:jna",             version.ref = "jna" }
 jogl-all   = { module = "org.jogamp.jogl:jogl-all",       version.ref = "jogl" }
 gluegen-rt = { module = "org.jogamp.gluegen:gluegen-rt",  version.ref = "jogl" }
@@ -47,3 +72,6 @@ kotlin-compose       = { id = "org.jetbrains.kotlin.plugin.compose",     version
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 compose-multiplatform = { id = "org.jetbrains.compose",                  version.ref = "compose-multiplatform" }
 compose-hot-reload    = { id = "org.jetbrains.compose.hot-reload",       version.ref = "compose-hot-reload" }
+sqldelight             = { id = "app.cash.sqldelight",                    version.ref = "sqldelight" }
+android-application     = { id = "com.android.application",                version.ref = "android-gradle-plugin" }
+android-kmp-library     = { id = "com.android.kotlin.multiplatform.library", version.ref = "android-gradle-plugin" }

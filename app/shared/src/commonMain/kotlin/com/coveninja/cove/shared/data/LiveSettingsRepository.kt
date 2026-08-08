@@ -29,7 +29,7 @@ class LiveSettingsRepository(
     }
 
     // PUT /api/settings is a whole-object replace — any field absent from the body
-    // is persisted as its Go zero value, silently erasing unrelated settings.
+    // is persisted as its default value, silently erasing unrelated settings.
     // The StateFlow always holds the full last-loaded AppSettings, so callers
     // can safely do `current.copy(oneField = newValue)` and pass the result here.
     // Passing anything less than a complete object is a caller bug.

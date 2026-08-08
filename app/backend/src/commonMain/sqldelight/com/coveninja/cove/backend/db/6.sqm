@@ -1,0 +1,28 @@
+CREATE TABLE activity_hours (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(profile_id, date, hour)
+);
+
+CREATE TABLE activity_titles (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    title_key TEXT NOT NULL,
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(profile_id, date, title_key)
+);
+
+CREATE TABLE activity_positions (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    progress_key TEXT NOT NULL,
+    position REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY(profile_id, progress_key)
+);
+
+CREATE TABLE activity_state (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    backfilled INTEGER NOT NULL DEFAULT 0,
+    legacy_imported INTEGER NOT NULL DEFAULT 0
+);

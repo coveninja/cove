@@ -3,14 +3,14 @@ package com.coveninja.cove.shared.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// Mirrors internal/settings.Settings field-for-field, defaults included.
+// Persisted settings contract, defaults included.
 //
 // Completeness here is a correctness requirement, not tidiness: PUT
 // /api/settings is a whole-object replace with no server-side merge, so any
-// field missing from this class is written back as its Go zero value. Dropping
+// field missing from this class is written back as its default value. Dropping
 // allowUploading alone would silently turn off seeding; dropping
 // remoteAccessToken would invalidate every already-paired device. If a field is
-// added to the Go struct it must be added here in the same change.
+// added to storage it must be added here in the same change.
 @Serializable
 data class AppSettings(
     val openOnMute: Boolean = false,
@@ -43,7 +43,7 @@ data class AppSettings(
     val allowUploading: Boolean = true,
     val probeStreams: Boolean = true,
     // Device-local security config, deliberately excluded from Supabase sync on
-    // the Go side. Round-tripped verbatim — regenerating the token would orphan
+    // the embedded HTTP boundary. Round-tripped verbatim — regenerating the token would orphan
     // every device already paired against it.
     val remoteAccessEnabled: Boolean = false,
     val remoteAccessToken: String = "",

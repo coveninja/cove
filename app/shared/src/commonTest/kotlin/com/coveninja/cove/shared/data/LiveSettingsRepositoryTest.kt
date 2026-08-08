@@ -155,9 +155,9 @@ class LiveSettingsRepositoryTest {
         // The general invariant behind all the assertions above: whatever keys
         // the server sent us must come back. Any field the model does not know
         // about is dropped by ignoreUnknownKeys on read and then absent on
-        // write, which the backend persists as a Go zero value. Comparing key
+        // write, which the backend persists as a default value. Comparing key
         // sets catches that for fields nobody has thought to assert yet —
-        // including ones added to the Go struct in future.
+        // including ones added to the persisted contract in future.
         val sentKeys     = testJson.parseToJsonElement(capturedPutBody!!).jsonObject.keys
         val receivedKeys = testJson.parseToJsonElement(settingsJson).jsonObject.keys
         assertEquals(

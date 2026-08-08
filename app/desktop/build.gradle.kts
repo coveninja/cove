@@ -1,4 +1,34 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+
+val coveVersion = rootProject.file("../VERSION").readText().trim()
+val generatedCoveConfig = layout.buildDirectory.dir("generated/cove-config")
+val generateCoveConfig by tasks.registering {
+    val keys = listOf(
+        "TMDB_API_KEY",
+        "SUPABASE_URL",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "TRAKT_CLIENT_ID",
+        "TRAKT_CLIENT_SECRET",
+    )
+    val values = keys.associateWith { providers.environmentVariable(it).orElse("") }
+    inputs.property("COVE_VERSION", coveVersion)
+    values.forEach { (key, value) -> inputs.property(key, value) }
+    outputs.dir(generatedCoveConfig)
+    doLast {
+        val output = generatedCoveConfig.get().file("cove-build.properties").asFile
+        output.parentFile.mkdirs()
+        val lines = buildList {
+            add("COVE_VERSION=${coveVersion.replace("\n", "")}")
+            values.forEach { (key, value) ->
+                value.orNull?.takeIf(String::isNotBlank)?.let {
+                    add("$key=${it.replace("\\", "\\\\").replace("\n", "")}")
+                }
+            }
+        }
+        output.writeText(lines.joinToString("\n", postfix = "\n"))
+    }
+}
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -7,11 +37,24 @@ plugins {
     alias(libs.plugins.compose.hot.reload)
 }
 
+val desktopJava = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(21))
+}
+
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(21)
+}
+
+sourceSets.main {
+    resources.srcDir(generatedCoveConfig)
+}
+
+tasks.named("processResources") {
+    dependsOn(generateCoveConfig)
 }
 
 dependencies {
+    implementation(project(":backend"))
     implementation(project(":shared"))
     implementation(project(":ui"))
     implementation(compose.desktop.currentOs)
@@ -40,11 +83,25 @@ dependencies {
 
 compose.desktop {
     application {
+        // Compose's run/jlink/jpackage tasks otherwise use the JVM that happens
+        // to run Gradle. Iconify and Cove target Java 21, so pin the actual app
+        // launcher and bundled runtime to the same provisioned toolchain.
+        javaHome = desktopJava.get().metadata.installationPath.asFile.absolutePath
         mainClass = "com.coveninja.cove.desktop.MainKt"
         nativeDistributions {
+            // jlink cannot discover modules referenced only through JDBC,
+            // Graal/polyglot, JNA, and other reflective service loading.
+            modules(
+                "java.management",
+                "java.naming",
+                "java.net.http",
+                "java.scripting",
+                "java.sql",
+                "jdk.unsupported",
+            )
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)
             packageName    = "Cove"
-            packageVersion = "0.31.3"
+            packageVersion = coveVersion
         }
     }
 }

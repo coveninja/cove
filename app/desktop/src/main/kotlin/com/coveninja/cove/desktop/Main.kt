@@ -17,14 +17,13 @@ import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import com.coveninja.cove.desktop.backend.BackendState
-import com.coveninja.cove.desktop.backend.BackendSupervisor
 import com.coveninja.cove.desktop.backend.SingleInstanceLock
-import com.coveninja.cove.desktop.backend.SupervisorConfig
 import com.coveninja.cove.desktop.player.DesktopPlayer
 import com.coveninja.cove.desktop.player.MpvOpenGlPanel
 import com.coveninja.cove.desktop.player.MpvOpenGlPlayer
 import com.coveninja.cove.desktop.player.MpvSoftwarePlayer
+import com.coveninja.cove.backend.LocalBackendRuntime
+import com.coveninja.cove.backend.LocalStoreGraph
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.createLiveAppGraph
 import com.coveninja.cove.shared.fixture.FixtureAppGraph
@@ -32,18 +31,20 @@ import com.coveninja.cove.shared.network.CoveApiConfig
 import com.coveninja.cove.ui.CoveApp
 import com.coveninja.cove.ui.CoveTheme
 import kotlinx.coroutines.delay
-import java.nio.file.Path
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     val parsedOptions = LaunchOptions.parse(args)
-    val options = if (parsedOptions.backendPath == null) {
-        parsedOptions.copy(
-            backendPath = System.getenv("COVE_BACKEND_PATH")
-                ?.takeIf { it.isNotBlank() },
-        )
-    } else {
-        parsedOptions
+    val environmentMode = System.getenv("COVE_BACKEND_MODE")
+        ?.takeIf(String::isNotBlank)
+        ?.let(BackendMode::parse)
+    val selectedMode = parsedOptions.backendMode ?: environmentMode ?: BackendMode.Kotlin
+    val options = parsedOptions.copy(backendMode = selectedMode)
+
+    if (options.exportLegacy) {
+        LocalStoreGraph.open().use { it.exportLegacyFallback() }
+        println("Exported the SQLite stores to legacy JSON sidecars.")
+        return
     }
 
     // --play is a standalone probe of the player with no backend and no shared
@@ -54,16 +55,22 @@ fun main(args: Array<String>) {
         exitProcess(1)
     }
 
-    val supervisor = options.backendPath?.let {
-        BackendSupervisor(SupervisorConfig(executable = Path.of(it))).apply { start() }
+    // Kotlin owns stores, integrations, and the compatibility media boundary
+    // in-process. Fixtures and an explicit API URL remain available for UI work.
+    val kotlinRuntime = if (
+        options.backendMode == BackendMode.Kotlin &&
+        options.apiBase == null &&
+        options.playFile == null
+    ) {
+        LocalBackendRuntime.open()
+    } else {
+        null
     }
-
-    // Live only when told where to reach a backend; otherwise fixtures, so the
-    // UI is workable without a running Go process.
     val graph: AppGraph = when {
-        options.apiBase    != null -> createLiveAppGraph(CoveApiConfig(options.apiBase))
-        options.backendPath != null -> createLiveAppGraph()
-        else                        -> FixtureAppGraph()
+        options.apiBase != null                     -> createLiveAppGraph(CoveApiConfig(options.apiBase))
+        options.backendMode == BackendMode.Fixtures -> FixtureAppGraph()
+        kotlinRuntime != null                       -> kotlinRuntime.graph
+        else                                        -> FixtureAppGraph()
     }
 
     try {
@@ -86,21 +93,13 @@ fun main(args: Array<String>) {
             } else {
                 Window(onCloseRequest = ::exitApplication, title = "Cove") {
                     CoveTheme {
-                        if (supervisor == null) {
-                            CoveApp(graph)
-                        } else {
-                            val state by supervisor.state.collectAsState()
-                            BackendGate(state, onRestartRequested = ::exitApplication) {
-                                CoveApp(graph)
-                            }
-                        }
+                        CoveApp(graph)
                     }
                 }
             }
         }
     } finally {
         graph.close()
-        supervisor?.stop()
         lock?.close()
     }
 }
@@ -188,31 +187,4 @@ private fun OpenGlPlayerSurface(file: String, fallbackToSoftware: Boolean) {
             Text(err, modifier = Modifier.align(Alignment.BottomCenter))
         }
     }
-}
-
-// Holds the UI back until the sidecar answers /api/ping. Rendering the app
-// against a backend that is not listening yet would surface every screen as a
-// connection error on launch.
-@Composable
-private fun BackendGate(
-    state: BackendState,
-    onRestartRequested: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    when (state) {
-        BackendState.Ready   -> content()
-        BackendState.Starting -> Centered("Starting backend…")
-        is BackendState.Failed -> Centered("Backend failed: ${state.message}")
-        // The backend replaced its own binary and exited 42. Re-exec is not
-        // wired up yet, so exit cleanly rather than sitting on a dead sidecar.
-        BackendState.RestartRequested -> {
-            LaunchedEffect(Unit) { onRestartRequested() }
-            Centered("Update applied — restart Cove.")
-        }
-    }
-}
-
-@Composable
-private fun Centered(message: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(message) }
 }
