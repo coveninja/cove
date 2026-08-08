@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -33,9 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import com.coveninja.cove.ui.pages.common.MediaShelf
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.pages.common.MediaShelf
 import com.ongshok.iconify.ui.IconifyIcon
 
 @Composable
@@ -60,9 +59,7 @@ fun HomePage(
                     onExplore = onExplore,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .padding(bottom = 16.dp)
-                    ,
+                        .padding(bottom = 16.dp),
                 )
             }
         }
@@ -89,8 +86,7 @@ private fun FeaturedMedia(
 ) {
     Box(
         modifier = modifier
-            .height(512.dp)
-            .clip(RoundedCornerShape(26.dp))
+            .height(560.dp)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(onClick = onOpen),
     ) {
@@ -100,6 +96,7 @@ private fun FeaturedMedia(
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
         )
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -113,12 +110,16 @@ private fun FeaturedMedia(
                     ),
                 ),
         )
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.48f)),
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.48f),
+                        ),
                     ),
                 ),
         )
@@ -126,9 +127,14 @@ private fun FeaturedMedia(
         Column(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .widthIn(max = 560.dp)
+                .widthIn(max = 600.dp)
                 .fillMaxWidth()
-                .padding(28.dp),
+                .padding(
+                    start = 48.dp,
+                    end = 32.dp,
+                    top = 72.dp,
+                    bottom = 32.dp,
+                ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
@@ -148,6 +154,7 @@ private fun FeaturedMedia(
                         fontWeight = FontWeight.Bold,
                     )
                 }
+
                 Text(
                     text = listOfNotNull(media.released, media.type?.label).joinToString(" • "),
                     color = Color.White.copy(alpha = 0.78f),
@@ -163,6 +170,7 @@ private fun FeaturedMedia(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+
             media.overview?.let { overview ->
                 Text(
                     text = overview,
@@ -172,8 +180,10 @@ private fun FeaturedMedia(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val compactActions = maxWidth < 360.dp
+
                 Row(
                     modifier = if (compactActions) Modifier.fillMaxWidth() else Modifier,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -193,14 +203,23 @@ private fun FeaturedMedia(
                             tint = Color.White,
                         )
                         Spacer(Modifier.size(7.dp))
-                        Text(if (compactActions) "Details" else "View details", maxLines = 1)
+                        Text(
+                            if (compactActions) "Details" else "View details",
+                            maxLines = 1,
+                        )
                     }
+
                     OutlinedButton(
                         onClick = onExplore,
                         modifier = if (compactActions) Modifier.weight(1f) else Modifier,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White,
+                        ),
                     ) {
-                        Text(if (compactActions) "Browse" else "Explore", maxLines = 1)
+                        Text(
+                            if (compactActions) "Browse" else "Explore",
+                            maxLines = 1,
+                        )
                     }
                 }
             }

@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,9 +46,7 @@ import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.shared.data.SettingsState
-import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
-import com.coveninja.cove.shared.model.Media as DomainMedia
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.media.card.MediaCard
 import com.coveninja.cove.ui.components.media.details.MediaDetailsSharedOverlay
@@ -298,154 +295,173 @@ fun CoveApp(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background),
         ) {
-            Column(
-                modifier = Modifier
-                    .safeContentPadding()
-                    .fillMaxSize()
-                    .padding(top = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                NavBar(
-                    selectedDestination = selectedDestination,
-                    searchMode = searchMode,
-                    listCategoryMode = draggedPayload != null,
-                    hoveredListCategory = hoveredListCategory,
-                    searchQuery = searchQuery,
-                    onSearchQueryChange = { searchQuery = it },
-                    onOpenSearch = { searchMode = true },
-                    onCloseSearch = {
-                        searchMode = false
-                        searchQuery = submittedQuery.orEmpty()
-                    },
-                    onSubmitSearch = { query ->
-                        submittedQuery = query
-                        searchQuery = query
-                        searchMode = false
-                        selectedDestination = NavDestination.Search
-                        scope.launch { graph.content.search(query) }
-                    },
-                    onDestinationSelected = { destination ->
-                        searchMode = false
-                        selectedDestination = destination
-                    },
-                    onListCategoryBoundsChanged = { category, bounds ->
-                        categoryBounds[category] = bounds
-                    },
-                    modifier = Modifier.graphicsLayer { alpha = underlyingNavAlpha },
-                )
-
-                val pageMediaCard: @Composable (Media, Modifier) -> Unit =
-                    { media, cardModifier ->
-                        this@SharedTransitionLayout.SharedMediaCard(
-                            media = media,
-                            selectedMedia = selectedMedia,
-                            listCategory = listAssignments[media.id],
-                            onOpen = { selectedMedia = media },
-                            onSetListCategory = { setListCategory(media, it) },
-                            onRemoveFromList = { removeFromList(media) },
-                            onToggleWatched = {
-                                val next = if (listAssignments[media.id] == MyListCategory.Finished) {
+            val pageMediaCard: @Composable (Media, Modifier) -> Unit =
+                { media, cardModifier ->
+                    this@SharedTransitionLayout.SharedMediaCard(
+                        media = media,
+                        selectedMedia = selectedMedia,
+                        listCategory = listAssignments[media.id],
+                        onOpen = { selectedMedia = media },
+                        onSetListCategory = { setListCategory(media, it) },
+                        onRemoveFromList = { removeFromList(media) },
+                        onToggleWatched = {
+                            val next =
+                                if (listAssignments[media.id] == MyListCategory.Finished) {
                                     MyListCategory.Watching
                                 } else {
                                     MyListCategory.Finished
                                 }
-                                setListCategory(media, next)
-                            },
-                            onDragStart = { payload, position ->
-                                detailsDragActive = false
-                                draggedPayload = payload
-                                draggedSource = media
-                                dragPositionInRoot = position
-                            },
-                            onDrag = { dragPositionInRoot = it },
-                            onDragEnd = ::finishDrag,
-                            onDragCancel = ::cancelDrag,
-                            modifier = cardModifier,
+                            setListCategory(media, next)
+                        },
+                        onDragStart = { payload, position ->
+                            detailsDragActive = false
+                            draggedPayload = payload
+                            draggedSource = media
+                            dragPositionInRoot = position
+                        },
+                        onDrag = { dragPositionInRoot = it },
+                        onDragEnd = ::finishDrag,
+                        onDragCancel = ::cancelDrag,
+                        modifier = cardModifier,
+                    )
+                }
+
+            // Home is intentionally edge-to-edge so FeaturedMedia can render beneath
+            // the floating navigation bar. Other destinations retain top clearance.
+            val pageModifier =
+                if (selectedDestination == NavDestination.Home) {
+                    Modifier.fillMaxSize()
+                } else {
+                    Modifier
+                        .fillMaxSize()
+                        .safeContentPadding()
+                        .padding(top = 96.dp)
+                }
+
+            Box(modifier = pageModifier) {
+                when (selectedDestination) {
+                    NavDestination.Home -> when (val state = homeState) {
+                        HomeState.Loading -> LoadingPage("Loading your home feed…")
+                        is HomeState.Failed -> ErrorPage("Home could not load", state.message)
+                        is HomeState.Ready -> HomePage(
+                            media = homeMedia,
+                            mediaCard = pageMediaCard,
+                            onOpenMedia = { selectedMedia = it },
+                            onExplore = { selectedDestination = NavDestination.Explore },
                         )
                     }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .padding(top = 14.dp),
-                ) {
-                    when (selectedDestination) {
-                        NavDestination.Home -> when (val state = homeState) {
-                            HomeState.Loading -> LoadingPage("Loading your home feed…")
-                            is HomeState.Failed -> ErrorPage("Home could not load", state.message)
-                            is HomeState.Ready -> HomePage(
-                                media = homeMedia,
-                                mediaCard = pageMediaCard,
-                                onOpenMedia = { selectedMedia = it },
-                                onExplore = { selectedDestination = NavDestination.Explore },
-                            )
-                        }
+                    NavDestination.MyList -> when (val state = libraryState) {
+                        LibraryState.Loading -> LoadingPage("Loading your list…")
+                        is LibraryState.Failed -> ErrorPage("My List could not load", state.message)
+                        is LibraryState.Ready -> MyListPage(
+                            media = libraryMedia,
+                            assignments = listAssignments,
+                            mediaCard = pageMediaCard,
+                            onExplore = { selectedDestination = NavDestination.Explore },
+                        )
+                    }
 
-                        NavDestination.MyList -> when (val state = libraryState) {
-                            LibraryState.Loading -> LoadingPage("Loading your list…")
-                            is LibraryState.Failed -> ErrorPage("My List could not load", state.message)
-                            is LibraryState.Ready -> MyListPage(
-                                media = libraryMedia,
-                                assignments = listAssignments,
-                                mediaCard = pageMediaCard,
-                                onExplore = { selectedDestination = NavDestination.Explore },
-                            )
-                        }
+                    NavDestination.Explore -> when (val state = exploreState) {
+                        ExploreState.Loading -> LoadingPage("Loading the catalog…")
+                        is ExploreState.Failed -> ErrorPage("Explore could not load", state.message)
+                        is ExploreState.Ready -> ExplorePage(
+                            media = exploreMedia,
+                            mediaCard = pageMediaCard,
+                        )
+                    }
 
-                        NavDestination.Explore -> when (val state = exploreState) {
-                            ExploreState.Loading -> LoadingPage("Loading the catalog…")
-                            is ExploreState.Failed -> ErrorPage("Explore could not load", state.message)
-                            is ExploreState.Ready -> ExplorePage(
-                                media = exploreMedia,
-                                mediaCard = pageMediaCard,
-                            )
-                        }
+                    NavDestination.Search -> when (val state = searchState) {
+                        SearchState.Loading ->
+                            LoadingPage("Searching for ${submittedQuery.orEmpty()}…")
 
-                        NavDestination.Search -> when (val state = searchState) {
-                            SearchState.Loading -> LoadingPage("Searching for ${submittedQuery.orEmpty()}…")
-                            is SearchState.Failed -> ErrorPage("Search failed", state.message)
-                            SearchState.Idle -> SearchPage(
-                                query = null,
-                                media = emptyList(),
-                                mediaCard = pageMediaCard,
-                                onOpenSearch = { searchMode = true },
-                            )
-                            is SearchState.Ready -> SearchPage(
-                                query = submittedQuery,
-                                media = searchMedia,
-                                mediaCard = pageMediaCard,
-                                onOpenSearch = { searchMode = true },
-                            )
-                        }
+                        is SearchState.Failed ->
+                            ErrorPage("Search failed", state.message)
 
-                        NavDestination.Account -> when (val state = settingsState) {
-                            SettingsState.Loading -> LoadingPage("Loading your preferences…")
-                            is SettingsState.Failed -> ErrorPage("Preferences could not load", state.message)
-                            is SettingsState.Ready -> ProfilePage(
-                                autoplayNext = state.settings.autoPlay,
-                                onAutoplayNextChange = { enabled ->
-                                    scope.launch {
-                                        graph.settings.update(state.settings.copy(autoPlay = enabled))
-                                    }
-                                },
-                                hideSpoilers = state.settings.hideSpoilers,
-                                onHideSpoilersChange = { enabled ->
-                                    scope.launch {
-                                        graph.settings.update(state.settings.copy(hideSpoilers = enabled))
-                                    }
-                                },
-                                streamSelectionMode = state.settings.streamSelectionMode,
-                                onStreamSelectionModeChange = { mode ->
-                                    scope.launch {
-                                        graph.settings.update(state.settings.copy(streamSelectionMode = mode))
-                                    }
-                                },
-                            )
-                        }
+                        SearchState.Idle -> SearchPage(
+                            query = null,
+                            media = emptyList(),
+                            mediaCard = pageMediaCard,
+                            onOpenSearch = { searchMode = true },
+                        )
+
+                        is SearchState.Ready -> SearchPage(
+                            query = submittedQuery,
+                            media = searchMedia,
+                            mediaCard = pageMediaCard,
+                            onOpenSearch = { searchMode = true },
+                        )
+                    }
+
+                    NavDestination.Account -> when (val state = settingsState) {
+                        SettingsState.Loading -> LoadingPage("Loading your preferences…")
+                        is SettingsState.Failed ->
+                            ErrorPage("Preferences could not load", state.message)
+
+                        is SettingsState.Ready -> ProfilePage(
+                            autoplayNext = state.settings.autoPlay,
+                            onAutoplayNextChange = { enabled ->
+                                scope.launch {
+                                    graph.settings.update(
+                                        state.settings.copy(autoPlay = enabled),
+                                    )
+                                }
+                            },
+                            hideSpoilers = state.settings.hideSpoilers,
+                            onHideSpoilersChange = { enabled ->
+                                scope.launch {
+                                    graph.settings.update(
+                                        state.settings.copy(hideSpoilers = enabled),
+                                    )
+                                }
+                            },
+                            streamSelectionMode = state.settings.streamSelectionMode,
+                            onStreamSelectionModeChange = { mode ->
+                                scope.launch {
+                                    graph.settings.update(
+                                        state.settings.copy(streamSelectionMode = mode),
+                                    )
+                                }
+                            },
+                        )
                     }
                 }
             }
+
+            // Floating nav: it no longer consumes vertical layout space.
+            NavBar(
+                selectedDestination = selectedDestination,
+                searchMode = searchMode,
+                listCategoryMode = draggedPayload != null,
+                hoveredListCategory = hoveredListCategory,
+                searchQuery = searchQuery,
+                onSearchQueryChange = { searchQuery = it },
+                onOpenSearch = { searchMode = true },
+                onCloseSearch = {
+                    searchMode = false
+                    searchQuery = submittedQuery.orEmpty()
+                },
+                onSubmitSearch = { query ->
+                    submittedQuery = query
+                    searchQuery = query
+                    searchMode = false
+                    selectedDestination = NavDestination.Search
+                    scope.launch { graph.content.search(query) }
+                },
+                onDestinationSelected = { destination ->
+                    searchMode = false
+                    selectedDestination = destination
+                },
+                onListCategoryBoundsChanged = { category, bounds ->
+                    categoryBounds[category] = bounds
+                },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .safeContentPadding()
+                    .padding(top = 16.dp)
+                    .graphicsLayer { alpha = underlyingNavAlpha }
+                    .zIndex(100f),
+            )
 
             val activePayload = draggedPayload
             val activePosition = dragPositionInRoot
@@ -476,14 +492,16 @@ fun CoveApp(
                         emptyList()
                     } else {
                         val type = active.type.toDomainType()
-                        val watchStates = if (type == null) {
-                            emptyMap()
-                        } else {
-                            graph.library.episodeWatchStates(active.tmdbId, type)
-                        }
+                        val watchStates =
+                            if (type == null) {
+                                emptyMap()
+                            } else {
+                                graph.library.episodeWatchStates(active.tmdbId, type)
+                            }
                         graph.content.episodes(active.tmdbId, season.number).map { episode ->
                             episode.toUiEpisode(active.id, season.number).copy(
-                                watched = watchStates[season.number to episode.episodeNumber] == true,
+                                watched =
+                                    watchStates[season.number to episode.episodeNumber] == true,
                             )
                         }
                     }
@@ -505,7 +523,9 @@ fun CoveApp(
                 onMediaDragStart = { payload, position ->
                     detailsDragActive = true
                     draggedPayload = payload
-                    draggedSource = (detailedMedia?.moreLikeThis.orEmpty())
+                    draggedSource = detailedMedia
+                        ?.moreLikeThis
+                        .orEmpty()
                         .firstOrNull { it.id == payload.mediaId }
                         ?.toMedia()
                         ?: mediaById[payload.mediaId]
@@ -531,7 +551,9 @@ fun CoveApp(
 
             AnimatedVisibility(
                 visible = detailsDragActive,
-                modifier = Modifier.fillMaxSize().zIndex(300f),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(300f),
                 enter = fadeIn(tween(160)) + slideInVertically(
                     animationSpec = spring(
                         dampingRatio = 0.72f,
@@ -563,7 +585,9 @@ fun CoveApp(
                         onSubmitSearch = {},
                         onDestinationSelected = {},
                         onListCategoryBoundsChanged = { category, bounds ->
-                            if (detailsDragActive) categoryBounds[category] = bounds
+                            if (detailsDragActive) {
+                                categoryBounds[category] = bounds
+                            }
                         },
                     )
                 }
@@ -574,7 +598,10 @@ fun CoveApp(
 
 @Composable
 private fun LoadingPage(message: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(
+        Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator()
             Text(
