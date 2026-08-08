@@ -60,7 +60,9 @@ fun HomePage(
                     onExplore = onExplore,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                        .padding(horizontal = 24.dp)
+                        .padding(bottom = 16.dp)
+                    ,
                 )
             }
         }
@@ -87,7 +89,7 @@ private fun FeaturedMedia(
 ) {
     Box(
         modifier = modifier
-            .height(310.dp)
+            .height(512.dp)
             .clip(RoundedCornerShape(26.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(onClick = onOpen),

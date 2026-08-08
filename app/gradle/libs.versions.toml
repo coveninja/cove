@@ -1,6 +1,6 @@
 [versions]
 kotlin                = "2.4.10"
-android-gradle-plugin = "9.3.0"
+android-gradle-plugin = "9.0.0"
 compose-multiplatform = "1.11.1"
 compose-hot-reload    = "1.1.1"
 # Underlying material3 version bundled by CMP 1.11.1; declared here for
@@ -41,15 +41,15 @@ ktor-server-sse                   = { module = "io.ktor:ktor-server-sse",       
 ktor-server-status-pages          = { module = "io.ktor:ktor-server-status-pages",          version.ref = "ktor" }
 ktor-server-test-host             = { module = "io.ktor:ktor-server-test-host",             version.ref = "ktor" }
 sqldelight-runtime                = { module = "app.cash.sqldelight:runtime",                version.ref = "sqldelight" }
-sqldelight-coroutines-extensions = { module = "app.cash.sqldelight:coroutines-extensions",  version.ref = "sqldelight" }
+sqldelight-coroutines-extensions  = { module = "app.cash.sqldelight:coroutines-extensions",  version.ref = "sqldelight" }
 sqldelight-sqlite-driver          = { module = "app.cash.sqldelight:sqlite-driver",          version.ref = "sqldelight" }
 sqldelight-android-driver         = { module = "app.cash.sqldelight:android-driver",         version.ref = "sqldelight" }
-jlibtorrent                       = { module = "com.frostwire:jlibtorrent",                   version.ref = "jlibtorrent" }
-jlibtorrent-linux-x86-64          = { module = "com.frostwire:jlibtorrent-linux-x86_64",      version.ref = "jlibtorrent" }
-jlibtorrent-linux-arm64           = { module = "com.frostwire:jlibtorrent-linux-arm64",       version.ref = "jlibtorrent" }
-jlibtorrent-macos-x86-64          = { module = "com.frostwire:jlibtorrent-macosx-x86_64",     version.ref = "jlibtorrent" }
-jlibtorrent-macos-arm64           = { module = "com.frostwire:jlibtorrent-macosx-arm64",      version.ref = "jlibtorrent" }
-jlibtorrent-windows               = { module = "com.frostwire:jlibtorrent-windows",           version.ref = "jlibtorrent" }
+jlibtorrent                       = { module = "com.frostwire:jlibtorrent",               version.ref = "jlibtorrent" }
+jlibtorrent-linux-x8664           = { module = "com.frostwire:jlibtorrent-linux-x86_64", version.ref = "jlibtorrent" }
+jlibtorrent-linux-arm64           = { module = "com.frostwire:jlibtorrent-linux-arm64",  version.ref = "jlibtorrent" }
+jlibtorrent-macos-x8664           = { module = "com.frostwire:jlibtorrent-macosx-x86_64", version.ref = "jlibtorrent" }
+jlibtorrent-macos-arm64           = { module = "com.frostwire:jlibtorrent-macosx-arm64", version.ref = "jlibtorrent" }
+jlibtorrent-windows               = { module = "com.frostwire:jlibtorrent-windows",      version.ref = "jlibtorrent" }
 graal-polyglot                    = { module = "org.graalvm.polyglot:polyglot",                version.ref = "graaljs" }
 graal-js                          = { module = "org.graalvm.polyglot:js-community",             version.ref = "graaljs" }
 androidx-activity-compose         = { module = "androidx.activity:activity-compose",            version.ref = "androidx-activity" }
