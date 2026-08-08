@@ -5,7 +5,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/coveninja/cove/internal/server"
 	"github.com/joho/godotenv"
@@ -35,6 +39,44 @@ var SupabaseAnonKey = ""
 // code / out-of-band flows — the secret does not grant elevated privileges.
 var TraktClientID = ""
 var TraktClientSecret = ""
+
+// managedParentPID parses the COVE_PARENT_PID environment variable that the
+// Compose desktop app sets before spawning the backend. Returns (0, false) for
+// an absent value, non-numeric input, or a pid that is not positive.
+func managedParentPID(env string) (int, bool) {
+	s := strings.TrimSpace(env)
+	if s == "" {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(s)
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// parentHasExited reports whether the process we consider our parent is gone.
+// Getppid catches Linux re-parenting to init (pid 1) in the window before the
+// old parent is reaped; processAlive catches PID reuse and covers Windows,
+// where Getppid is not meaningful. Both checks are needed — either alone would
+// miss one of those two races.
+func parentHasExited(expectedPID int) bool {
+	return os.Getppid() != expectedPID || !processAlive(expectedPID)
+}
+
+// monitorParent polls until expectedPID is gone, then calls onExit exactly
+// once and returns. interval is kept as a parameter so tests can use a short
+// tick without sleeping for a real second.
+func monitorParent(pid int, interval time.Duration, onExit func()) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		if parentHasExited(pid) {
+			onExit()
+			return
+		}
+	}
+}
 
 func main() {
 	// Load .env if present — for local development only.
@@ -85,16 +127,38 @@ func main() {
 
 	// Flush the library's debounced writes (D3) on a clean shutdown so the
 	// last mutation before exit isn't lost to the ~1s debounce window the
-	// process didn't live to see. The Qt shell sends SIGTERM on normal quit
-	// (main.cpp's aboutToQuit handler); SIGINT covers `./cove` run directly
-	// in a terminal during development.
+	// process didn't live to see. The Compose desktop app sends SIGTERM on
+	// normal quit; SIGINT covers `./cove` run directly in a terminal during
+	// development. When the app spawns the backend it also sets COVE_PARENT_PID
+	// so the backend can detect and exit on its own if the parent is killed
+	// without a chance to send SIGTERM — see monitorParent below.
+	var shutdownOnce sync.Once
+	shutdown := func(reason string) {
+		shutdownOnce.Do(func() {
+			log.Println("shutting down:", reason)
+			// Hard-kill guard: if handle.Stop() wedges, we still exit.
+			time.AfterFunc(5*time.Second, func() { os.Exit(1) })
+			handle.Stop()
+			os.Exit(0)
+		})
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		handle.Stop()
-		os.Exit(0)
+		sig := <-sigCh
+		shutdown("signal " + sig.String())
 	}()
+
+	// When the Compose desktop app spawns us it sets COVE_PARENT_PID to its
+	// own pid. If the parent is killed without sending SIGTERM (crash, OOM
+	// kill, force-quit), the monitor detects the disappearance and initiates
+	// shutdown so we don't orphan port 6969.
+	if pid, ok := managedParentPID(os.Getenv("COVE_PARENT_PID")); ok {
+		go monitorParent(pid, time.Second, func() {
+			shutdown("parent process exited")
+		})
+	}
 
 	// Block forever while the server runs — main must not return.
 	select {}

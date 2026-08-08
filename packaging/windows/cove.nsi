@@ -1,10 +1,9 @@
 Unicode True
 !include "MUI2.nsh"
 
-; Installer/uninstaller exe icon — cove_shell.exe embeds the same icon itself
-; via qt/resources/cove.rc, so this only covers the setup.exe/uninstall.exe.
-!define MUI_ICON   "..\..\qt\resources\cove.ico"
-!define MUI_UNICON "..\..\qt\resources\cove.ico"
+; Installer/uninstaller exe icon
+!define MUI_ICON   "..\..\packaging\icons\cove.ico"
+!define MUI_UNICON "..\..\packaging\icons\cove.ico"
 
 ; Passed in from CI: makensis /DVERSION=v0.14.5 /DOUTDIR=C:\...\workspace cove.nsi
 ; Falls back to sensible defaults for local testing.
@@ -50,17 +49,10 @@ Var StartMenuFolder
 Section "-Core" SecCore
   SectionIn RO
 
-  ; cove_shell.exe is MSVC-built and needs the VC++ 2015-2022 (x64) runtime to
-  ; run at all; a fresh/minimal Windows install may lack it. This is a warning,
-  ; not a blocker — the install still proceeds either way.
-  ClearErrors
-  ReadRegDWORD $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64" "Installed"
-  IfErrors 0 +2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "Cove requires the Microsoft Visual C++ Redistributable (x64), which doesn't appear to be installed.$\r$\n$\r$\nIf Cove doesn't start after installing, get it from:$\r$\nhttps://aka.ms/vs/17/release/vc_redist.x64.exe"
-
   SetOutPath "$INSTDIR"
-  ; All files are pre-assembled in staging\ by the CI package job.
-  ; This includes: cove.exe, cove_shell.exe, mpv-2.dll, Qt DLLs, and web\.
+  ; All files are pre-assembled in staging\ by the CI package-windows job.
+  ; This includes: Cove.exe (jpackage launcher), cove.exe (Go backend),
+  ; mpv-2.dll, the bundled JRE (runtime\), and the app JARs (app\).
   !cd "..\..\staging"
   File /r "*"
   !cd "..\packaging\windows"
@@ -79,9 +71,9 @@ Section "-Core" SecCore
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$StartMenuFolder"
     CreateShortcut  "$SMPROGRAMS\$StartMenuFolder\${APP_NAME}.lnk" \
-                    "$INSTDIR\cove_shell.exe" \
-                    '--backend "$INSTDIR\cove.exe" --webroot "$INSTDIR\web"' \
-                    "$INSTDIR\cove_shell.exe"
+                    "$INSTDIR\Cove.exe" \
+                    '--backend "$INSTDIR\cove.exe"' \
+                    "$INSTDIR\Cove.exe"
     CreateShortcut  "$SMPROGRAMS\$StartMenuFolder\Uninstall ${APP_NAME}.lnk" \
                     "$INSTDIR\uninstall.exe"
   !insertmacro MUI_STARTMENU_WRITE_END
@@ -89,24 +81,18 @@ SectionEnd
 
 Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" \
-                 "$INSTDIR\cove_shell.exe" \
-                 '--backend "$INSTDIR\cove.exe" --webroot "$INSTDIR\web"' \
-                 "$INSTDIR\cove_shell.exe"
+                 "$INSTDIR\Cove.exe" \
+                 '--backend "$INSTDIR\cove.exe"' \
+                 "$INSTDIR\Cove.exe"
 SectionEnd
 
 ; ── Uninstall ─────────────────────────────────────────────────────────────────
 Section "Uninstall"
-  RMDir /r "$INSTDIR\web"
+  ; jpackage-bundled JRE and app JARs
+  RMDir /r "$INSTDIR\runtime"
+  RMDir /r "$INSTDIR\app"
   Delete "$INSTDIR\*.exe"
   Delete "$INSTDIR\*.dll"
-  ; Qt platform/imageformat/etc plugin subdirectories left by windeployqt
-  RMDir /r "$INSTDIR\platforms"
-  RMDir /r "$INSTDIR\imageformats"
-  RMDir /r "$INSTDIR\iconengines"
-  RMDir /r "$INSTDIR\styles"
-  RMDir /r "$INSTDIR\tls"
-  RMDir /r "$INSTDIR\translations"
-  RMDir /r "$INSTDIR\resources"
 
   !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
   Delete "$SMPROGRAMS\$StartMenuFolder\${APP_NAME}.lnk"

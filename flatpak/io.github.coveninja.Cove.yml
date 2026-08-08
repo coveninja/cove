@@ -1,12 +1,10 @@
 app-id: io.github.coveninja.Cove
-# Qt WebEngine (Chromium) is too large for the KDE runtime; it's distributed
-# as a separate BaseApp layer that provides libQt6WebEngineQuick and cmake
-# config files at both build time and runtime.
-base: io.qt.qtwebengine.BaseApp
-base-version: '6.9'
-runtime: org.kde.Platform
-runtime-version: '6.9'
-sdk: org.kde.Sdk
+# Compose Desktop ships a bundled JRE via jpackage createDistributable, so no
+# Java SDK extension is needed. org.freedesktop.Platform provides glibc and the
+# essential system libs the JVM and libmpv need at runtime.
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
 command: cove
 
 # Permissions needed for a network media streaming + video player app.
@@ -68,9 +66,8 @@ modules:
         url: https://github.com/haasn/libplacebo.git
         tag: v7.349.0
 
-  # mpv: video player library used by the Qt shell (MpvObject).
-  # Same libdir fix as libplacebo so mpv.pc lands in /app/lib/pkgconfig
-  # where the cove cmake step can find it without extra PKG_CONFIG_PATH.
+  # mpv: video player library used by the Compose Desktop app (via JNA).
+  # Same libdir fix as libplacebo so mpv.pc lands in /app/lib/pkgconfig.
   - name: mpv
     buildsystem: meson
     config-opts:
@@ -83,30 +80,32 @@ modules:
         url: https://github.com/mpv-player/mpv.git
         tag: v0.38.0
 
-  # cove: Go backend + web frontend + Qt shell, assembled in one module.
-  # The Go backend (cove) and web/dist are pre-built in CI before
-  # flatpak-builder runs; this module just copies them in and builds
-  # the Qt shell against Qt6 from the KDE SDK.
+  # cove: Go backend + Compose Desktop app image, assembled in one module.
+  # Both are pre-built in CI before flatpak-builder runs; this module copies
+  # them into /app. The Compose app image (compose-app/Cove/) includes its own
+  # bundled JRE produced by jpackage createDistributable — no Java runtime
+  # extension or system JDK is required inside the sandbox.
   - name: cove
     buildsystem: simple
     build-commands:
       # Go backend (pre-built static binary)
       - install -Dm755 cove /app/lib/cove/cove
 
-      # Web frontend (pre-built by npm)
-      - mkdir -p /app/share/cove
-      - cp -r web/dist /app/share/cove/web
+      # Compose Desktop app image (pre-built, includes bundled JRE).
+      # compose-app/Cove/ is populated by the CI package job from
+      # app/desktop/build/compose/binaries/main/app/Cove/ before flatpak-builder
+      # runs. The jpackage launcher (bin/Cove) finds the bundled JRE via a
+      # relative path (../lib/runtime) so the structure must be kept intact.
+      - mkdir -p /app/lib/cove
+      - cp -r compose-app/Cove /app/lib/cove/Cove
+      - chmod -R a+rX /app/lib/cove/Cove
+      - chmod +x /app/lib/cove/Cove/bin/Cove
 
-      # Qt shell: built inside sandbox so it links against Qt from org.kde.Sdk
-      - cmake -S qt -B qt_build -G Ninja -DCMAKE_BUILD_TYPE=Release
-      - cmake --build qt_build
-      - install -Dm755 qt_build/cove_shell /app/lib/cove/cove_shell
-
-      # Launcher that wires backend + webroot paths together
+      # Launcher that wires the backend path into the app invocation
       - install -Dm755 flatpak/cove.sh /app/bin/cove
 
       # Icon (SVG scales better than PNG for HiDPI)
-      - install -Dm644 web/src/assets/CoveIcon.svg
+      - install -Dm644 packaging/icons/cove.svg
           /app/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg
 
       # Desktop entry and AppStream metadata
@@ -116,7 +115,7 @@ modules:
           /app/share/metainfo/io.github.coveninja.Cove.metainfo.xml
 
     sources:
-      # Whole repo (including pre-built cove binary and web/dist)
+      # Whole repo (including pre-built cove binary)
       - type: dir
         path: ..
         skip:
@@ -125,6 +124,10 @@ modules:
           - .flatpak-builder
           - _private
           - node_modules
-          - web/node_modules
-          - qt/build
           - cove-linux-amd64.flatpak
+          - app/desktop/build
+      # Pre-built Compose Desktop distributable (populated by CI step
+      # "Stage Compose app for Flatpak" before flatpak-builder runs).
+      - type: dir
+        path: ../compose-app
+        dest: compose-app

@@ -33,7 +33,6 @@ import (
 	traktpkg "github.com/coveninja/cove/internal/trakt"
 	"github.com/coveninja/cove/internal/updater"
 	"github.com/coveninja/cove/internal/utils"
-	"github.com/coveninja/cove/internal/webstatic"
 )
 
 var (
@@ -414,7 +413,6 @@ func Start(cfg Config) (*Handle, error) {
 	disc.SetupHandlers(mux)
 
 	clientsession.SetupHandlers(mux)
-	webstatic.Mount(mux)
 
 	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, _ *http.Request) {
 		utils.WriteJSON(w, map[string]string{"status": "ok"})

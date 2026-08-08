@@ -9,19 +9,18 @@ submodules, and the conventions this codebase already follows.
 Follow the README's "Build from source" section for prerequisites and the
 first `make run`. A few things specific to iterating on the code:
 
-- `make hot` is the tightest loop: it builds the Go backend and Qt shell, then
-  runs Vite with HMR served in-window via the shell's `--dev` mode — frontend
-  changes apply live without a full rebuild. `make hot-debug` adds QtWebEngine
-  remote devtools on `:9222`.
-- `make web-dev` runs a browser-only Vite dev server with no Qt shell at all.
-  The player will show "unavailable" (no `QWebChannel`/mpv bridge exists in a
-  plain browser), but everything else — search, library, settings, addons —
-  works against the real Go backend.
-- After changing a Go struct exported to the frontend (see every package in
-  `tygo.yaml`), run `make generate` to regenerate the mirrored TypeScript
-  types in `web/src/lib/types/*.ts`. **Never hand-edit those generated files**
-  — they're overwritten on the next generation pass. `time.Time` fields must
-  have a `string` mapping in `tygo.yaml`, matching their JSON encoding.
+- `make go` and `make app` build a single component at a time. `make run`
+  builds both and launches the app. For Kotlin-only iterations you can also
+  run `cd app && ./gradlew :desktop:run` directly.
+- `make hot` is the preferred UI loop. It builds the Go sidecar, starts the
+  Compose desktop app against it, and automatically recompiles and hot-reloads
+  Kotlin UI changes while preserving the running window and most UI state.
+- If you add a field to a Go struct mirrored in Kotlin (notably `Settings` →
+  `AppSettings`), update both in the same change. `PUT /api/settings` is a
+  whole-object replace — a missing field in `AppSettings` will write the Go
+  zero value back on the next save. See `AppSettings.kt` in `app/shared`
+  (`model/`) and the note in `CoveJson.kt` (`network/`) about
+  `encodeDefaults = true`.
 - `internal/nuvio` embeds pure-Go dependencies (`goja`, `goja_nodejs`,
   `andybalholm/brotli`) for its sandboxed JS runtime, so the OSS build stays
   `CGO_ENABLED=0` with no Node/V8 dependency. Keep any new dependency for that
@@ -64,10 +63,10 @@ Push CI and release builds intentionally fail if those copies diverge.
   packages, a package-level `SetupHandlers(mux, ...)` function) called once
   from `main.go`. Keep new routes consistent with that pattern rather than
   wiring `http.HandleFunc` calls elsewhere.
-- `web/src/lib/api.ts` is the single point of contact with the backend from
-  the frontend — never construct a backend URL anywhere else. If you're
-  adding a new endpoint, add its method there alongside the existing ones for
-  that package's routes.
+- `CoveApi.kt` in `app/shared` (`network/`) is the single point of contact
+  with the backend from the Kotlin side — never construct a backend URL
+  anywhere else. If you're adding a new endpoint, add its method there
+  alongside the existing ones for that package's routes.
 - Go doc comments: every package should have a `// Package x ...` comment
   explaining its purpose and any non-obvious constraint (see
   `internal/clientsession/clientsession.go` for the bar to hit — a couple of
@@ -77,46 +76,35 @@ Push CI and release builds intentionally fail if those copies diverge.
 ## Testing
 
 ```sh
-make test      # complete Go + web suite; recommended before a PR
-make test-all  # add workflow/security checks plus Qt and Android builds
+make test      # Go + Kotlin test suites; recommended before a PR
+make test-all  # add workflow/security checks and cross-platform builds
 ```
 
-The individual `test-go`, `test-web`, `test-build`, `test-workflows`,
-`test-security`, `test-qt`, and `test-android` targets are useful when changing
-one component. The web browser suite needs a one-time
-`cd web && npx playwright install chromium` setup. `test-workflows` also
-requires ShellCheck so actionlint performs the same embedded-shell analysis as
-CI.
+The individual `test-go`, `test-kotlin`, `test-build`, `test-workflows`, and
+`test-security` targets are useful when changing one component.
+`test-workflows` requires ShellCheck so actionlint performs the same
+embedded-shell analysis as CI.
 
 ```sh
-make test-private            # maintainers, after make inject-private
-make test-android-connected  # with an Android device/emulator running
-```
-
-Run Prettier before committing frontend changes:
-
-```sh
-cd android
-npm run format
+make test-private  # maintainers, after make inject-private
 ```
 
 The pull-request workflow runs public and Supabase-tagged Go tests with
 coverage, vet/format checks, the race detector, Linux/Windows compilation,
-Vitest/Playwright/typecheck/lint/build, a Qt build, Android lint/JVM tests and
-an API 35 emulator smoke test, dependency review, and vulnerability scans.
-Private `supabase,discover` integration tests additionally run on trusted
-pushes where the private-submodule token is available. Coverage is uploaded
-to Codecov and retained as downloadable workflow artifacts; it is currently
-informational, with no hard percentage gate.
+the Kotlin shared/desktop test suite, dependency review, and vulnerability
+scans. Private `supabase,discover` integration tests additionally run on
+trusted pushes where the private-submodule token is available. Coverage is
+uploaded to Codecov and retained as downloadable workflow artifacts; it is
+currently informational, with no hard percentage gate.
 
 See [`docs/TESTING.md`](docs/TESTING.md) for the complete job matrix, coverage
-artifacts, Android emulator setup, and release gating.
+artifacts, and release gating.
 
 ## Before opening a PR
 
 - Run the build/test/lint commands above for whatever you touched.
-- If you changed a Go struct consumed by the frontend, confirm you also ran
-  `make generate` and committed the regenerated `.ts` files.
+- If you changed a Go struct mirrored in Kotlin (e.g. `Settings` →
+  `AppSettings`), confirm both the Go and Kotlin sides are updated together.
 - Keep the scope focused — this repo doesn't have issue/PR templates yet, so
   a clear description of *why* the change is needed (not just what changed)
   in the PR body goes a long way.

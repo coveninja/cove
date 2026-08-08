@@ -12,18 +12,17 @@ For the normal pre-PR suite, run:
 make test
 ```
 
-This runs the public and Supabase-tagged Go checks plus the complete web unit,
-type, lint, build, and browser suite. For the broadest local approximation of
-CI, including workflow/security checks and Qt/Android compilation, run:
+This runs the public and Supabase-tagged Go checks plus the Kotlin
+shared/desktop test suite. For the broadest local approximation of CI,
+including workflow/security checks and cross-platform compilation, run:
 
 ```sh
 make test-all
 ```
 
-The first browser-test run needs `npx playwright install chromium` from
-`web/`. `make test-all` additionally requires network access, Qt/libmpv, the
-Android SDK/NDK, gomobile, JDK 17, and ShellCheck. On Arch Linux, install the
-last dependency with `sudo pacman -S shellcheck`.
+`make test-all` additionally requires network access, libmpv, JDK 17, and
+ShellCheck. On Arch Linux, install the last dependency with
+`sudo pacman -S shellcheck`.
 
 ### Go
 
@@ -49,82 +48,51 @@ an unformatted tree. Changes to mirrored Supabase source must also pass:
 bash scripts/check-private-sync.sh
 ```
 
-### Web
+### Kotlin
 
 ```sh
-cd web
-npm ci
-npm test
-npm run check
-npm run lint
-npm run build
-npx playwright install chromium  # first local run only
-npm run test:e2e
-npm audit --audit-level=low
+cd app
+./gradlew test
 ```
 
-Vitest covers API request invariants and automatic sync behavior. Playwright
-uses a mocked Go API and covers degraded startup, login/session persistence,
-profile activation, and sync push-error presentation.
-
-### Qt
-
-```sh
-cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCOVE_BUILD_TESTS=ON
-cmake --build qt/build
-ctest --test-dir qt/build --output-on-failure
-```
-
-### Android
-
-Build `android/app/libs/cove.aar` first if it is absent or its Go/web inputs
-changed:
-
-```sh
-make android-aar
-cd android
-./gradlew lintDebug testDebugUnitTest assembleDebugAndroidTest
-```
-
-With an API 35 emulator running, execute the activity launch test with:
-
-```sh
-make test-android-connected
-```
+This runs both the `shared` (KMP) and `desktop` (JVM) test suites. The
+`shared` suite covers `CoveApi` request invariants, `ImageUrls` proxied-vs-raw
+path handling, `LiveSettingsRepository` round-trip correctness, and fixture
+wiring. The `desktop` suite covers `BackendSupervisor` lifecycle,
+`RestartPolicy` crash-budget accounting, `SingleInstanceLock`, `LaunchOptions`
+parsing, and mpv binding smoke tests.
 
 Maintainers can add the private release-tag checks after injection with
-`make test-private`. These two environment-dependent targets are intentionally
-not prerequisites of `make test-all`.
+`make test-private`. This target is intentionally not a prerequisite of
+`make test-all`.
 
 ## Pull-request and branch CI
 
 `.github/workflows/ci.yml` runs on every branch push, version tag, pull
 request, and manual dispatch.
 
-| Job                  | What it protects                                                                       |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| Workflow lint        | Invalid GitHub Actions workflow definitions                                            |
-| Go test matrix       | Public and `supabase` variants, gofmt, vet, and coverage                               |
-| Go race              | Concurrency bugs in the Supabase-tagged build                                          |
-| Go build matrix      | Static Linux and Windows compilation                                                   |
-| Private integrations | Trusted pushes only: source-copy check plus `supabase,discover` test/vet               |
-| Web                  | Vitest coverage, Svelte typecheck, ESLint, production build, npm audit, and Playwright |
-| Qt                   | Blocking Ubuntu QtWebEngine/libmpv configure, build, and environment-policy tests       |
-| Android              | Fresh gomobile AAR, lint, JVM tests, and API 35 emulator launch                        |
-| Dependency review    | Vulnerable dependency changes introduced by pull requests                              |
-| govulncheck          | Reachable Go vulnerability scan                                                        |
+| Job                  | What it protects                                                          |
+| -------------------- | ------------------------------------------------------------------------- |
+| Workflow lint        | Invalid GitHub Actions workflow definitions                               |
+| Go test matrix       | Public and `supabase` variants, gofmt, vet, and coverage                  |
+| Go race              | Concurrency bugs in the Supabase-tagged build                             |
+| Go build matrix      | Static Linux and Windows compilation                                      |
+| Private integrations | Trusted pushes only: source-copy check plus `supabase,discover` test/vet  |
+| Kotlin               | `shared` and `desktop` test suites (JVM target)                           |
+| Dependency review    | Vulnerable dependency changes introduced by pull requests                 |
+| govulncheck          | Reachable Go vulnerability scan                                           |
 
-GitHub CodeQL default setup analyzes Actions, C/C++, Go, and
-JavaScript/TypeScript without a competing advanced workflow. Dependabot checks
-Go modules, npm, Gradle, and GitHub Actions weekly.
+GitHub CodeQL default setup analyzes Actions, C/C++, Go, and Kotlin/Java
+without a competing advanced workflow. Dependabot checks Go modules, Gradle,
+and GitHub Actions weekly.
 
 ## Coverage
 
-Go jobs upload `coverage-public.out` and `coverage-supabase.out`; Vitest writes
-`web/coverage/lcov.info`. Raw reports remain downloadable from each workflow
-run even if the external coverage upload is unavailable.
+Go jobs upload `coverage-public.out` and `coverage-supabase.out`. Raw reports
+remain downloadable from each workflow run even if the external coverage upload
+is unavailable.
 
-The CI jobs publish all three reports to Codecov using GitHub OIDC, so no
+The CI jobs publish Go coverage to Codecov using GitHub OIDC, so no
 `CODECOV_TOKEN` repository secret is required. The README badge reflects the
 combined default-branch report. Coverage is intentionally informational while
 the baseline is being expanded—CI does not yet reject a change based on a
@@ -136,12 +104,10 @@ successful `master` run, enable that repository in the Codecov dashboard.
 `.github/workflows/release.yml` publishes only for `v*` tags; manual dispatch
 runs its shared private Go validation without creating a release. A tagged
 GitHub release is created only after public/private Go tests, the tagged build,
-web unit/browser/type/lint/build/audit checks, and the Linux Qt build succeed.
-Linux/Flatpak, Windows, and Android packaging then upload their assets with
-job-scoped `contents: write`; the workflow default remains read-only. Android
-packaging reruns lint and JVM tests before signing. `make patch`, `make minor`,
-and `make major` generate the release's linked change list from conventional
-`fix` and `feat` commit subjects only; run `make test-release-notes` to verify
-that filter locally.
+and the Kotlin test suite succeed. Linux/Flatpak and Windows packaging then
+upload their assets with job-scoped `contents: write`; the workflow default
+remains read-only. `make patch`, `make minor`, and `make major` generate the
+release's linked change list from conventional `fix` and `feat` commit subjects
+only; run `make test-release-notes` to verify that filter locally.
 
 Coverage artifacts are diagnostic rather than release assets.

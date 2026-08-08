@@ -3,17 +3,16 @@
 
 # Cove
 
-A media streaming app for Linux, Windows, Android & Android TV. Discover, track, and stream movies and TV shows - powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
+A media streaming app for Linux and Windows. Discover, track, and stream movies and TV shows — powered by TMDB metadata, Stremio & Nuvio compatible addons & plugins, and a built-in mpv player.
 
 [![CI](https://github.com/coveninja/cove/actions/workflows/ci.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/coveninja/cove/branch/master/graph/badge.svg)](https://codecov.io/gh/coveninja/cove)
 [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![Svelte](https://img.shields.io/badge/Svelte-5-FF3E00?logo=svelte&logoColor=white)](https://svelte.dev)
-[![Qt](https://img.shields.io/badge/Qt-6-41CD52?logo=qt&logoColor=white)](https://www.qt.io)
+[![Kotlin](https://img.shields.io/badge/Kotlin-Compose%20Multiplatform-7F52FF?logo=kotlin&logoColor=white)](https://www.jetbrains.com/compose-multiplatform/)
 
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20android-informational)](#install)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-informational)](#install)
 [![Downloads](https://img.shields.io/github/downloads/coveninja/cove/total)](https://github.com/coveninja/cove/releases/latest)
 [![Stars](https://img.shields.io/github/stars/coveninja/cove?style=social)](https://github.com/coveninja/cove/stargazers)
 [![Issues](https://img.shields.io/github/issues/coveninja/cove)](https://github.com/coveninja/cove/issues)
@@ -53,7 +52,7 @@ A media streaming app for Linux, Windows, Android & Android TV. Discover, track,
 - **Multiple profiles** — profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
 - **Trakt.tv integration** — optional Trakt sign-in scrobbles what you watch in real time and two-way syncs your watch history and watchlist with Trakt automatically
-- **Android & Android TV App** — native Kotlin shell hosting the responsive Svelte UI, with the same embedded Go backend and mpv playback; runs standalone, or connects to your desktop Cove over LAN in remote mode
+- **Cross-platform architecture** — Go backend and Compose Multiplatform desktop app share a clean HTTP boundary; the backend is frontend-agnostic
 
 ## Install
 
@@ -82,13 +81,7 @@ Download `cove-windows-amd64-setup.exe` from the [latest release](https://github
 
 ### Android & Android TV
 
-> **⚠️ Experimental:** Mobile & TV support is covered by JVM and emulator launch tests, but remains new. Expect rough edges — please [file an issue](https://github.com/coveninja/cove/issues) if you hit one.
-
-Download `cove-android.apk` from the [latest release](https://github.com/coveninja/cove/releases/latest) and install it (sideloading — your browser or file manager will ask you to allow installs from unknown sources). The app is fully standalone; optionally point it at a desktop Cove on your LAN from Settings → Server.
-
-You only need to sideload once — the app checks GitHub for new releases and updates itself in-app (downloads are SHA-256 verified; the very first self-update asks for confirmation, after that they're silent).
-
-The same APK runs on Android TV — Cove detects the TV environment automatically and loads a D-pad-navigable 10-foot UI.
+Not currently supported. The previous Kotlin WebView shell was removed along with the Svelte UI it hosted. There is no Android APK in current releases. A proper Android port targeting the Compose Multiplatform modules is planned as a separate project — see [Roadmap](#roadmap--known-limitations).
 
 ### macOS
 
@@ -96,7 +89,7 @@ Not currently supported. There's no native build or packaging for macOS yet — 
 
 ## Build from source
 
-**Prerequisites:** Go 1.26+, Node.js 20.19+ or 22.12+, Qt 6 with QtWebEngine and QtWebChannel, libmpv, and CMake
+**Prerequisites:** Go 1.26+, JDK 17+, and libmpv (`mpv` on Arch/CachyOS, `libmpv-dev` on Debian/Ubuntu)
 
 ```sh
 git clone https://github.com/coveninja/cove
@@ -107,22 +100,13 @@ make run  # builds everything and launches the app
 
 > Need a TMDB key? Create a free account at [themoviedb.org](https://www.themoviedb.org/), then generate one under **Settings → API** in your account.
 
-### Development
-
-```sh
-make hot        # hot-reload: Vite HMR in-window, rebuilds Go + Qt on changes
-make hot-debug  # same + QtWebEngine remote devtools on :9222
-make web-dev    # browser-only Vite dev server (player shows "unavailable")
-```
-
 ### Individual builds
 
 ```sh
-make go      # build the Go backend binary
-make web     # build the Svelte frontend
-make qt      # build the Qt shell
-make dev     # full build + regenerate TypeScript types from Go structs
-make android # build the Android APK (gomobile AAR + Gradle; see android/README.md)
+make go   # build the Go backend binary only
+make app  # build the Compose Desktop app only
+make dev  # alias for make run
+make hot  # launch with automatic Compose UI hot reload
 ```
 
 ## Testing and CI
@@ -132,34 +116,22 @@ The standard target exercises both the public/no-op build and the checked-in
 can separately run the exact release combination with `supabase,discover`.
 
 ```sh
-make test      # complete Go + web suite
-make test-all  # add workflow/security checks plus Qt and Android builds
+make test      # Go + Kotlin test suites
+make test-all  # add workflow/security checks and static cross-platform builds
 ```
 
-`make test` includes API/sync unit tests with coverage and browser flows for
-startup degradation, login persistence, profile switching, and sync errors.
-Install the Playwright browser once before the first run:
+The check requiring private sources is kept explicit:
 
 ```sh
-cd web
-npx playwright install chromium
-```
-
-The checks requiring private sources or an already-running Android target are
-kept explicit:
-
-```sh
-make test-private            # maintainers, after make inject-private
-make test-android-connected  # run instrumentation tests on a device/emulator
+make test-private  # maintainers, after make inject-private
 ```
 
 Pull requests and branch pushes run the full matrix in
 [`ci.yml`](.github/workflows/ci.yml): formatting/vet, public and tagged Go
-tests, the race detector, Linux/Windows builds, web checks, a blocking Qt
-build, Android lint/JVM/emulator tests, dependency review, and vulnerability
-scanning. Coverage reports are retained as workflow artifacts and published to
-Codecov for the badge above; the current baseline is informational rather than
-a merge threshold.
+tests, the race detector, Linux/Windows builds, the Kotlin shared/desktop test
+suite, dependency review, and vulnerability scanning. Coverage reports are
+retained as workflow artifacts and published to Codecov for the badge above;
+the current baseline is informational rather than a merge threshold.
 
 ## Configuration
 
@@ -167,11 +139,10 @@ A fresh profile ships with no provider addons and no plugin repos enabled — on
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how the Go backend, Svelte frontend, and Qt shell fit together, the playback data flow, and the open-source/proprietary build-tag split
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how the Go backend and Compose Multiplatform app fit together, the playback data flow, and the open-source/proprietary build-tag split
 - [docs/API.md](docs/API.md) — HTTP endpoint reference
 - [docs/TESTING.md](docs/TESTING.md) — local test commands, CI matrix, coverage, and release gates
 - [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup and code style for contributors
-- [android/README.md](android/README.md) — Android app: toolchain setup, emulator, build/install loops, release signing
 
 ## Community & Support
 
@@ -182,23 +153,7 @@ New contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev 
 
 ## Localization
 
-Cove checks message-catalog completeness and scans Svelte UI source for visible, untranslated literals. The source percentage is a static guard rather than a substitute for review; brand names, media-format abbreviations, and URL examples are intentionally excluded.
-
-<!-- i18n-coverage:start -->
-<!-- Generated by web/scripts/i18n-audit.mjs; do not edit by hand. -->
-| Language / check | Coverage |
-| --- | ---: |
-| Deutsch (`de`) | 100.0% (657/657 messages) |
-| English (`en`) | 100.0% (657/657 messages) |
-| Español (`es`) | 100.0% (657/657 messages) |
-| Italiano (`it`) | 100.0% (657/657 messages) |
-| 日本語 (`ja`) | 100.0% (657/657 messages) |
-| Português (`pt`) | 100.0% (657/657 messages) |
-| Türkçe (`tr`) | 100.0% (657/657 messages) |
-| UI source audit | 100.0% (1246 localized call sites, 0 unlocalized literals) |
-<!-- i18n-coverage:end -->
-
-This table is generated by `cd web && npm run i18n:coverage` and verified by CI. `npm run check` fails when catalogs, placeholders, or visible UI literals are invalid.
+658 message keys × 7 locales (en, de, es, it, ja, pt, tr) are preserved in `app/i18n/messages/`, salvaged from the deleted Svelte UI before that tree was removed. They are **not wired into the Compose app yet** — nothing reads them at build or run time. When the real screens exist, the relevant keys will be converted to Compose string resources and the rest dropped. See `app/i18n/messages/README.md` for context.
 
 
 ## Star History
@@ -213,6 +168,7 @@ This table is generated by `cd web && npm run i18n:coverage` and verified by CI.
 
 ## Roadmap / Known Limitations
 
-- **Android & Android TV** are experimental — expect rough edges (see [Install](#install))
 - **macOS** is not yet supported — no native build exists
+- **Android** is not currently supported — the previous Kotlin WebView shell was removed with the Svelte UI; a proper Compose Multiplatform port is planned
+- The **desktop UI** is intentional scaffolding — the maintainer is designing and writing the real screens
 - Have a request? Open an [issue](https://github.com/coveninja/cove/issues) to discuss it

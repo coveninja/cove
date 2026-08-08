@@ -142,119 +142,26 @@ jobs:
       - run: go test -count=1 -tags supabase,discover ./...
       - run: go vet -tags supabase,discover ./...
 
-  web:
-    name: Web test, typecheck, lint, and build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      id-token: write
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-web
-      - name: Generate localization coverage
-        run: npm run i18n:coverage
-      - name: Verify generated localization coverage
-        working-directory: .
-        run: git diff --exit-code -- README.md
-      - run: npm test
-      - run: npm run check
-      - run: npm run lint
-      - run: npm run build
-      - name: Audit production dependencies
-        run: npm audit --audit-level=low --omit=dev
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: web-test-results
-          path: |
-            web/coverage
-            web/playwright-report
-            web/test-results
-          if-no-files-found: ignore
-      - name: Publish web coverage
-        uses: codecov/codecov-action@v7
-        with:
-          files: web/coverage/lcov.info
-          flags: web
-          use_oidc: true
-          fail_ci_if_error: false
-
-  qt:
-    name: Qt shell build
+  kotlin:
+    name: Kotlin build and test
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      - name: Install Qt and mpv development packages
+      - name: Install libmpv
+        # The desktop app links libmpv in-process through JNA, so the shared
+        # library must be present for the JVM to load it at test time.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y cmake ninja-build pkg-config \
-            qt6-base-dev qt6-declarative-dev qt6-webengine-dev \
-            qt6-webchannel-dev libmpv-dev
-      - run: cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCOVE_BUILD_TESTS=ON
-      - run: cmake --build qt/build
-      - run: ctest --test-dir qt/build --output-on-failure
-
-  android:
-    name: Android lint, unit, and emulator tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-go
+          sudo apt-get install -y libmpv-dev
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v6
-      - uses: ./.github/actions/setup-web
-      - name: Install Android NDK
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
-      - name: Install gomobile
-        run: |
-          MOBILE_VERSION=$(go list -m -f '{{.Version}}' golang.org/x/mobile)
-          go install golang.org/x/mobile/cmd/gomobile@"$MOBILE_VERSION"
-          go install golang.org/x/mobile/cmd/gobind@"$MOBILE_VERSION"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
-          gomobile init
-      - name: Build test AAR
-        run: make android-aar
-      - name: Lint and unit test
-        working-directory: android
-        run: ./gradlew lintDebug testDebugUnitTest
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Emulator launch smoke test
-        uses: ReactiveCircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_2
-          working-directory: android
-          script: ./gradlew connectedDebugAndroidTest
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: android-reports
-          path: |
-            android/app/build/reports/lint-results-debug.html
-            android/app/build/reports/tests
-            android/app/build/reports/androidTests
-            android/app/build/outputs/androidTest-results
-          if-no-files-found: ignore
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Build and test
+        working-directory: app
+        run: ./gradlew build test --no-daemon
 
   dependency-review:
     name: Dependency review

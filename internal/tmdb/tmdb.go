@@ -536,9 +536,11 @@ type Details struct {
 	ReleaseDate string `json:"release_date"`
 	Credits     struct {
 		Cast []struct {
-			ID    int    `json:"id"`
-			Name  string `json:"name"`
-			Order int    `json:"order"`
+			ID          int    `json:"id"`
+			Name        string `json:"name"`
+			Character   string `json:"character"`
+			ProfilePath string `json:"profile_path"`
+			Order       int    `json:"order"`
 		} `json:"cast"`
 		Crew []struct {
 			ID   int    `json:"id"`
@@ -1422,6 +1424,11 @@ func (c *Client) fetchDetails(tmdbID int, mediaType string) (*Details, error) {
 	}
 	if details.PosterPath != "" {
 		details.PosterPath = imgURL("w500", details.PosterPath)
+	}
+	for i := range details.Credits.Cast {
+		if details.Credits.Cast[i].ProfilePath != "" {
+			details.Credits.Cast[i].ProfilePath = imgURL("w185", details.Credits.Cast[i].ProfilePath)
+		}
 	}
 	if details.NextEpisodeToAir != nil && details.NextEpisodeToAir.StillPath != "" {
 		details.NextEpisodeToAir.StillPath = imgURL("w300", details.NextEpisodeToAir.StillPath)

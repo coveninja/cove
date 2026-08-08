@@ -9,39 +9,30 @@ build instructions.
 For an API endpoint reference, see [docs/API.md](docs/API.md). For dev setup
 and contribution conventions, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Three components at a glance
+## Two components at a glance
 
-Cove is three processes cooperating over local sockets, not one monolith:
+Cove is two cooperating processes, not one monolith:
 
 1. **Go backend** (`main.go` + `internal/`) — an HTTP server on `:6969`
    handling TMDB metadata, streaming, addon integration (Stremio-style
    providers/subtitles), sandboxed community plugin execution, the local
    library/settings/profiles stores, and personalized recommendations.
-2. **Svelte frontend** (`web/`) — a Svelte 5 + TypeScript + Vite SPA that
-   talks exclusively to the Go backend over HTTP (`web/src/lib/api.ts`). It
-   has no direct filesystem or process access of its own.
-3. **Qt shell** (`qt/`) — a native Qt Quick application that hosts the web UI
-   in a `QtWebEngine` view and renders video via libmpv, composited *behind*
-   the (transparent) web layer. It also owns process lifecycle: it spawns the
-   Go binary as a child process and serves the built frontend.
+2. **Compose Multiplatform desktop app** (`app/`) — a Kotlin/JVM Compose
+   Multiplatform application that spawns the Go binary as a child process and
+   talks to it over HTTP. Structured as three Gradle subprojects: `shared`
+   (KMP library with domain models, repositories, and Ktor network layer),
+   `ui` (Compose Multiplatform screens — intentional scaffolding, the
+   maintainer is writing the real UI), and `desktop` (the JVM entry point,
+   backend lifecycle management, and libmpv player integration via JNA).
 
-The Android/Android TV package replaces the Qt shell rather than adding a
-fourth desktop process. `gomobile` embeds the Go backend in `cove.aar`,
-`CoveService` owns that backend inside a foreground service, and
-`WebViewActivity` hosts the same responsive Svelte bundle in a WebView.
-`MpvBridge`/`MpvPlayerView` provide native libmpv rendering and controls. In
-remote mode the WebView and native bridge point at a paired desktop backend
-instead of starting the embedded one.
-
-At startup, `qt/src/main.cpp` does three things in parallel: starts a small
-built-in static file server for `web/dist` (see below), spawns the Go binary
-as a `QProcess` (`startBackend()` in `qt/src/main.cpp`, stdout/stderr merged
-and forwarded to Qt's log with a `[go]` prefix), and polls `localhost:6969`
-with a raw TCP connect every 150ms (`BackendProbe::waitFor()` in
-`qt/src/main.cpp` — a connectivity check, not an HTTP health check). Once the
-backend answers, the shell loads the QML scene and points the `WebEngineView`
-at either the static server's URL or, in `--dev` mode, Vite's dev server at
-`localhost:5173`.
+At startup, `app/desktop`'s `BackendSupervisor` spawns the Go binary as a
+child process (capturing stdout/stderr), polls `:6969` via `ReadinessProbe`
+(a TCP connect every 250ms — a connectivity check, not an HTTP health check)
+until the backend answers, then hands control to the Compose UI. The Go
+backend polls `COVE_PARENT_PID` and exits when its parent JVM process
+disappears (`monitorParent` in `main.go`) — the JVM cannot use
+`PR_SET_PDEATHSIG`/Job Objects for child teardown, so the backend does it
+itself.
 
 ## Backend package map (`internal/*`)
 
@@ -89,12 +80,13 @@ at either the static server's URL or, in `--dev` mode, Vite's dev server at
 - **`updater`** — self-update via GitHub releases; skips the check entirely
   on managed distributions (`APPIMAGE`/`FLATPAK_ID` env vars set) or dev
   builds (non-semver version string). Applying an update exits the process
-  with code `42`, which the Qt shell interprets as "restart me" (handled in
-  the `launchBackend` lambda in `qt/src/main.cpp`).
+  with code `42`, which `BackendSupervisor` intercepts as a clean restart
+  sentinel rather than a crash (no crash-budget slot consumed).
 - **`clientsession`** — a tiny opaque JSON blob store
   (`os.UserConfigDir()/cove/session.json`) used for client-side auth token
-  persistence, because QtWebEngine's `localStorage` isn't reliably durable
-  across restarts.
+  persistence. The original motivation was QtWebEngine's unreliable
+  `localStorage`; the same dedicated server-side store is equally useful for
+  a native Compose desktop app with no DOM storage layer.
 - **`utils`** — shared infrastructure: per-OS config paths and atomic writes,
   bounded expiring caches, debounced persistence and background schedules,
   request parameter/method validation, JSON responses, UUID creation, media
@@ -127,14 +119,11 @@ so the rest of the dependency graph sees it as the normal upstream module.
    infohashes and/or direct URLs — and, if any Nuvio scrapers are enabled,
    `nuvio.Manager.GetStreams`, which runs each one in its own sandboxed goja
    runtime and appends whatever direct-HTTP streams they produce.
-2. `Player.svelte` picks a source (`streamSelection.ts`'s `pickBestStream`, or
-   a manual choice) and calls `Player.play(api.playUrl(src))`
-   (`web/src/lib/player/player.svelte.ts`). `playUrl` builds either
+2. The Compose UI picks a source (auto-ranked or user-chosen) and builds either
    `/api/play?hash=<infohash>` or passes a direct URL through unchanged.
-3. The `MpvPlayer` wrapper sends that URL over a `QWebChannel` bridge to the
-   native `MpvObject`, which issues an mpv `loadfile` command
-   (`MpvObject::play()` in `qt/src/MpvObject.cpp` — deferred until the render
-   context exists, since loading before that silently drops video for that file).
+3. `DesktopPlayer` issues an mpv `loadfile` command via the JNA bindings in
+   `app/desktop/player/Mpv.kt`. Loading is deferred until the render context
+   exists — doing it before that silently drops video for that file.
 4. **mpv itself opens the URL as an HTTP client**, hitting the Go backend's
    `GET /api/play` route directly (Qt/QML plays no part in the actual byte
    transfer):
@@ -171,125 +160,90 @@ progress UI is still open, from being collected mid-watch. Without this
 reaper, downloaded pieces and open file handles would accumulate for the life
 of the process.
 
-An earlier browser-video + HLS.js architecture (predating the current mpv/Qt
-shell) left behind an unused `Settings.PreferHLS` field, `api.ts`'s
-`hlsStart`/`hlsStop`/`hlsMasterUrl`/`probe`/`subtitleExtractUrl`, a
-`subtitleCues.svelte.ts` WebVTT cue-tracker with no callers, and an unused
-`player.NewServer()` helper (`main.go` built its own inline `*http.Server`).
+An earlier browser-video + HLS.js architecture (predating the current mpv
+integration) left behind an unused `Settings.PreferHLS` field and a family
+of HLS-related API helpers and WebVTT cue-tracking code in the old frontend.
 All of this has since been removed — mentioned here only so a future
 spelunk through git history for "HLS" doesn't look like it's chasing a
 still-live feature.
 
-## The Qt shell in detail
+## The Compose Multiplatform app (`app/`)
 
-`MpvObject` (`qt/src/MpvObject.h/cpp`) subclasses `QQuickFramebufferObject`.
-Its nested `MpvRenderer` runs on the Qt Quick render thread and does the
-actual libmpv work: it creates an mpv render context configured for OpenGL
-(`MPV_RENDER_PARAM_API_TYPE = "opengl"`, with `get_proc_address` resolved
-through the *current* `QOpenGLContext`), then on every frame wraps the Quick-
-provided framebuffer object into an `mpv_opengl_fbo` and calls
-`mpv_render_context_render` — mpv draws directly into the same FBO Qt Quick
-composites from. mpv's own update callback fires on mpv's render thread, so
-it's marshalled to the GUI thread via a queued `QMetaObject::invokeMethod`
-before touching any Qt signal.
+The app is structured as three Gradle subprojects that share a single Gradle
+build in `app/`:
 
-**"Video behind a transparent web layer"** is ordinary QML z-ordering, not a
-special video flag: `main.qml` declares the `MpvObject` first (bottom of the
-scene graph) and a `WebEngineView` with `backgroundColor: "transparent"`
-after it (on top), filling the same window. Three things in `main()` in
-`qt/src/main.cpp` make this actually render correctly:
-`Qt::AA_ShareOpenGLContexts` (mpv and Quick's renderer must share GL
-contexts), forcing Quick onto the OpenGL RHI backend to match mpv's OpenGL
-render API, and giving the window's default surface format an 8-bit alpha
-channel so the WebEngineView's transparent background has something to show
-through to.
+**`shared/`** is a KMP library with a `jvm("desktop")` target (structured
+so an Android target would be a small addition later). It contains:
+- `model/` — `AppSettings`, `Media`, `LibraryEntry`, `WatchProgress`, and
+  the other domain types that mirror Go structs.
+- `data/` — repository interfaces (`ContentRepository`, `LibraryRepository`,
+  `SettingsRepository`) exposing `StateFlow<Loading|Ready|Failed>` sealed
+  states, `Live*` implementations over a Ktor HTTP client, and `Fixture*`
+  implementations for running with no backend.
+- `network/` — `CoveApi` (Ktor-based HTTP client), `CoveJson` (the
+  `kotlinx.serialization` `Json` instance — `encodeDefaults = true` is
+  mandatory, see below), `ImageUrls` (handles the inconsistent proxied-vs-raw
+  TMDB path distinction), and `WireMappers` (response → domain transforms).
 
-**The `QWebChannel` bridge** is used *only* for player control/state — every
-other piece of app data (metadata, library, settings, addon config) goes over
-plain HTTP from the web layer to the Go backend, same as if the web UI were
-running in an ordinary browser. `main.qml` registers the `MpvObject` instance
-under the id `"mpv"` on a `WebChannel` attached to the `WebEngineView`, which
-causes QtWebEngine to inject `qt.webChannelTransport` into `window`. Since the
-JS-side `QWebChannel` shim class also needs to exist before app code runs,
-`main.cpp` reads Qt's own compiled-in `qwebchannel.js` resource and injects it
-via a `QWebEngineScript` at `DocumentCreation` time (`installBridgeScript()`
-in `qt/src/main.cpp`) on every page load. On the frontend,
-`web/src/lib/player/player.svelte.ts`'s `MpvPlayer` class is the sole
-consumer: if `window.qt.webChannelTransport`/`window.QWebChannel` aren't
-present (e.g. plain `npm run dev` in a browser via `make web-dev`), it stays
-in an `available: false` no-op state rather than throwing.
+**`ui/`** is the Compose Multiplatform layer: `CoveTheme` design tokens,
+`AppRoute` sealed class, a hand-rolled back stack (deliberately no navigation
+library), and five placeholder screens (`HomeScreen`, `SearchScreen`,
+`LibraryScreen`, `SettingsScreen`, `ExploreScreen`). **This layer is
+intentional scaffolding** — the maintainer is designing and writing the real
+UI themselves. Do not mistake the placeholder screens for finished product.
 
-**The static file server** (the `StaticServer` class in
-`qt/src/StaticServer.h` and `qt/src/StaticServer.cpp`, a `QTcpServer`
-subclass) is a small hand-rolled HTTP/1.1 server — not a separate binary —
-that exists purely to serve `web/dist` to the
-`WebEngineView` without hitting `file://` URL CORS/fetch restrictions in
-Chromium. It parses only the request line (no Range support, no keep-alive,
-one request per connection), guards against path traversal, and falls back to
-`index.html` for extensionless paths (SPA routing). It plays no role in video
-delivery — that's exclusively the Go backend's `/api/play`, which mpv hits
-directly over its own HTTP client.
+**`desktop/`** is the JVM entry point:
+- `Main.kt` — Compose `application` block; shows `BackendState` before
+  handing off to the real UI.
+- `LaunchOptions.kt` — CLI flag and environment parsing.
+- `backend/` — `BackendSupervisor` (child process management, crash/restart
+  loop, exit-42 handling), `ReadinessProbe` (TCP polling), `RestartPolicy`
+  (sliding crash budget: 3 crashes per 60 s), `SingleInstanceLock` (prevents
+  two desktop processes from starting the same backend binary),
+  `BackendProcessFactory`.
+- `player/` — `DesktopPlayer` (the Compose-facing player interface), `Mpv`
+  (JNA bindings to libmpv), `MpvOpenGlPanel` (JOGL `GLJPanel` bridged via
+  `SwingPanel` for the hardware OpenGL path), `MpvOpenGlPlayer`,
+  `MpvSoftwarePlayer` (`bgr0` frame capture → `BufferedImage` → Compose
+  `Canvas`, selected by `--software-renderer`), `PlayerSnapshot`.
 
-## Frontend structure (`web/src/`)
+**libmpv in the JVM — four traps, each of which fails silently:**
 
-`App.svelte` is the true top-level component (not `web/src/renderer/...`
-despite older references — see current tree). Routing is **not** a router:
-`currentPage` is a single reactive `$state` holding a discriminated union
-(`web/src/lib/types/types.ts`), and every page component is always mounted,
-toggled purely via `class:hidden` rather than conditional rendering — this
-preserves scroll position and component state across navigation. Pages:
-`HomePage` (personalized feed), `QueryPage` (search), `MyListPage` (library),
-`SettingsPage`, `InsightsPage` (taste/library stats), `ExplorePage`
-(genre browse, no personalization), and `OnboardingPage` (first-run wizard,
-rendered as a full-screen overlay rather than a `currentPage` value).
+1. **`setlocale(LC_NUMERIC, "C")` before `mpv_create`** — AWT sets the
+   process-wide C locale at JVM startup. libmpv parses floating-point values
+   with `strtod` and misreads decimal separators if the locale is not `C`.
+   The call and the OS-specific constant for `LC_NUMERIC` live in `Mpv.kt`.
 
-Media detail is a floating overlay, not a page — Netflix-style. `App.svelte`
-provides `openMediaDetail`/`watchMedia` via Svelte context; any card
-component calls `getContext("openMediaDetail")` to pop open
-`MediaExpandedModal` without prop drilling, keyed by media id so switching
-titles remounts cleanly.
+2. **`GLJPanel.setSkipGLOrientationVerticalFlip(true)`** — JOGL's FBO
+   compositing applies a vertical flip by default to compensate for OpenGL's
+   bottom-left origin. mpv's FBO is already correctly oriented (it renders
+   right-side-up for screen display). Skipping the flip is mandatory or video
+   renders upside-down. See `MpvOpenGlPanel`.
 
-Stores (`web/src/lib/stores/`): `settings.ts` (writable wrapping the
-backend's `Settings`, optimistic save), `auth.svelte.ts` (session/profile
-state, Supabase `onAuthStateChange` wiring), `library.ts` (a trivial mutation
-counter other components react to, not a cache).
+3. **Rebind the JOGL FBO after `mpv_render_context_render`** — mpv leaves
+   framebuffer 0 bound when the call returns. The JOGL compositing listener
+   exits expecting the panel's own FBO to be bound; failing to rebind it
+   immediately after the mpv render call breaks compositing silently, typically
+   showing a black or corrupted frame. See `MpvOpenGlPanel`.
 
-Player-adjacent modules (`web/src/lib/player/`): `player.svelte.ts`
-(`MpvPlayer`, the `QWebChannel` bridge described above),
-`progressSaver.svelte.ts` (throttled watch-position saves),
-`torrentProgress.svelte.ts` (SSE-driven download stats), `playerCore.svelte.ts`
-(shared player lifecycle), `trackList.ts` (audio/subtitle list shaping), and
-`format.ts` (playback clock formatting). Not in this
-directory but related: `streamSelection.ts` (stream-ranking heuristics).
+4. **The mpv render update callback must only `EventQueue.invokeLater`** —
+   the callback fires on mpv's internal render thread. Calling any AWT/Swing
+   state directly from that thread causes silent data races or deadlocks.
+   The callback must only schedule a repaint via `EventQueue.invokeLater`.
 
-The desktop, mobile, and TV shells intentionally keep separate markup and
-interaction layers, but share stateful data controllers under `web/src/lib`:
-`homeFeed`, `continueWatching`, `catalogPager`, `myList`, `searchController`,
-`calendarAgenda`, `streamsList`, `settingsController`, `onboarding`, and
-`insights`; `authController` likewise backs both the desktop dialog and TV
-panel, while `accountActions` owns profile/session mutations across account
-surfaces. Platform files should own presentation concerns (touch gestures,
-desktop hover/scroll behavior, and TV D-pad focus); API orchestration,
-sequencing, cache rules, and domain transforms belong in these shared modules.
-`playbackChime.ts` similarly owns the single Web Audio start sound used by all
-three shells.
+**Settings round-trip correctness.** `AppSettings` in `shared/model/` mirrors
+Go's `Settings` struct field-for-field (currently 35 fields). `PUT
+/api/settings` is a whole-object replace — any field absent from the body is
+written as its Go zero value. `CoveJson` sets `encodeDefaults = true`; if that
+is removed, any field holding its Kotlin default will be silently omitted and
+the round-trip will clobber user data with no error. If a field is added to
+the Go struct it must be added to `AppSettings` in the same change.
 
-`web/src/lib/api.ts` is the single point of contact with the backend and
-carries three load-bearing mechanisms worth knowing about before touching it:
-a concurrency limiter (max 8 in-flight fetches — a full homepage can fire
-hundreds of metadata requests at once, and Chromium throws
-`ERR_INSUFFICIENT_RESOURCES` past its own cap), request coalescing (an
-in-flight `Map` keyed by request signature, so duplicate concurrent GETs
-share one promise instead of re-firing), and a single `BASE` URL constant
-(overridable via `VITE_API_BASE`) that every other URL-builder in the file
-routes through. The torrent progress SSE and the speed test deliberately
-bypass the concurrency limiter — they'd hold a slot open indefinitely.
-
-UI components come from **shadcn-svelte** (built on **bits-ui** primitives),
-styled with **TailwindCSS 4**. `vidstack` powers `PlayerSimple.svelte`, a
-separate lightweight browser-native player used for trailer/preview clips in
-cards, carousels, and modals — it's unrelated to the main mpv-backed content
-player (`Player.svelte`) described above.
+**Image paths.** Most routes return absolute proxied URLs
+(`http://127.0.0.1:6969/api/img/w500/...`); `/api/images` returns raw TMDB
+paths (`/abc.jpg`). `ImageUrls` in `shared/network/` handles this — use it
+rather than building URLs directly. Passing an already-proxied URL through
+the proxy builder yields a 400 from the backend.
 
 ## The OSS/proprietary split
 

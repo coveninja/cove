@@ -172,13 +172,11 @@ Always compiled identically.
 | Route | Method | Response |
 |---|---|---|
 | `/api/update/check` | any | `CheckResult{available, current_version, latest_version, release_name}`. Skips the GitHub call entirely on managed distros (`APPIMAGE`/`FLATPAK_ID` set) or dev builds (non-semver version) |
-| `/api/update/apply` | POST only (405 otherwise) | Downloads and applies the previously-checked release asset (server-cached URL, not client-supplied), then exits with code `42` so the Qt shell can restart the process |
+| `/api/update/apply` | POST only (405 otherwise) | Downloads and applies the previously-checked release asset (server-cached URL, not client-supplied), then exits with code `42` so `BackendSupervisor` can restart it |
 
 ## `internal/clientsession` — opaque client blob (`internal/clientsession/clientsession.go`)
 
-Always compiled identically. Exists because QtWebEngine's `localStorage`
-isn't reliably durable across restarts, so auth tokens round-trip through
-this instead.
+Always compiled identically. Exists to persist auth tokens to a JSON file in the OS user-config directory — a dedicated server-side store any frontend can use, more reliable than browser `localStorage` (the original motivation from the previous Qt WebEngine host) and the only durable option for a native Compose desktop app with no DOM storage layer.
 
 | Route | Method | Body | Response |
 |---|---|---|---|
