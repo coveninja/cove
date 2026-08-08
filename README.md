@@ -20,19 +20,21 @@ mpv and extension runtime.
 
 ## Features
 
-- TMDB-powered discovery, localized metadata, search, recommendations, library,
-  profiles, progress, ratings, calendar, and insights
-- Stremio-compatible stream, subtitle, and catalog addons
-- Opt-in Nuvio community scrapers executed in a restricted child JVM
-- In-process mpv playback, jlibtorrent streaming, subtitle conversion, image
-  caching, source probing, speed testing, and predictive stream prefetch
-- Optional Supabase account sync and Trakt device login/scrobbling/two-way sync
-- SQLite persistence with an atomic, one-time import from Cove's legacy JSON
-  stores and an explicit JSON export for recovery
-- A small embedded Ktor boundary for mpv/media URLs, diagnostics, optional LAN
-  clients, and compatibility with existing HTTP consumers
-- One adaptive Compose UI for desktop and Android touch devices, backed by
-  platform SQLDelight drivers and in-process repositories
+- **Stream anything** — connects to Stremio-compatible addon sources and streams directly in the app
+- **Extend with plugins** — add community JS scraper plugins for additional stream sources, sandboxed and opt-in per scraper
+- **Built-in player** — hardware-accelerated mpv playback with subtitle support, live buffering/download progress, and progress saving
+- **Smart stream picker** — auto-selects the best available stream using a configurable strategy (quality, size, reliability, or a connection-speed match via a built-in speed test), or sort/filter candidates yourself
+- **Skip intro & recap** — auto-skip buttons for intro, recap, and credits segments during playback, independently toggleable
+- **Where to watch** — see which legal streaming/rental services carry a title alongside the stream picker
+- **Discover** — personalized recommendations based on your watch history, ratings, and taste profile
+- **Library** — track what you've watched, mark favorites, and pick up where you left off with continue watching
+- **Explore** — browse trending, upcoming releases, genres, and curated categories
+- **Insights** — view your watch stats and genre/actor taste breakdown
+- **Search** — find any movie or TV show by title
+- **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
+- **Multiple profiles** — profile switching, works fully offline with no sign-in required
+- **Accounts & sync** — optional sign-in syncs your library and preferences across devices
+- **Trakt.tv integration** — optional Trakt sign-in scrobbles what you watch in real time and two-way syncs your watch history and watchlist with Trakt automatically
 
 ## Install
 
@@ -60,14 +62,14 @@ Use `cove-windows-amd64-setup.exe` from the latest release, or the portable
 ### Android phone/tablet
 
 Download `cove-android.apk` from the latest release and install it on Android 9
-(API 28) or newer. The package keeps Cove's existing `com.coveninja.cove`
-identity so an upgrade can import profiles, settings, library state, and watch
-progress written by the former Android app.
+(API 28) or newer.
 
 Android TV is intentionally not included in this APK: TV keeps its own
 ten-foot/D-pad presentation while sharing the Kotlin domain and backend layers.
-That dedicated TV host is not packaged yet. macOS is also not currently
-packaged.
+That dedicated TV host is not packaged yet.
+
+### macOS
+Not currently supported. There's no native build or packaging for macOS yet — see [Roadmap](#roadmap--known-limitations).
 
 ## Build from source
 
@@ -99,28 +101,6 @@ is built. Supported deployment keys are `TMDB_API_KEY`,
 `TRAKT_CLIENT_SECRET`. On desktop, set `COVE_DATA_DIR` to override the data
 directory; Android always uses app-private storage.
 
-## Data migration and recovery
-
-On first startup, Cove parses the existing JSON stores, creates a timestamped
-backup, and imports them into SQLite in one transaction. Desktop imports the
-complete profile/settings/library/session/addon/Nuvio/Trakt/activity snapshot.
-Android imports profiles, settings, library state, and progress from its
-existing app-private `filesDir`; service state not yet active on mobile is kept
-as opaque JSON for later adapters. A parse or write failure leaves the source
-files untouched, and the import marker makes later startups idempotent.
-
-To write the current SQLite state back to legacy-compatible sidecars without
-starting the UI or network services:
-
-```sh
-cd app
-./gradlew :desktop:run --args='--export-legacy'
-```
-
-The retired backend remains available in Git history, with a local ignored copy
-kept under `legacy/go-backend` during cutover. It is not built, tested, packaged,
-or run.
-
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md)
@@ -130,3 +110,26 @@ or run.
 
 Translations salvaged from the former Svelte UI remain in `app/i18n/messages/`.
 They are not wired into the current Compose screens yet.
+
+## Community & Support
+
+- **Bugs & feature requests:** [GitHub Issues](https://github.com/coveninja/cove/issues)
+- **Questions & discussion:** [GitHub Discussions](https://github.com/coveninja/cove/discussions)
+
+New contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and code style before opening a PR.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=coveninja%2Fcove&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=coveninja/cove&type=date&theme=dark&legend=top-left&sealed_token=4GbbMkGKGiaXN1d60vfao3mhJl3TIFYWtueyZuta_mcDXrGkF63OQqyv4VgSp4DbPhGKYc8UNJubllPuYou3pnWPc9IAmJuem_27FHCoO_20WiA7vsx4LQ" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=coveninja/cove&type=date&legend=top-left&sealed_token=4GbbMkGKGiaXN1d60vfao3mhJl3TIFYWtueyZuta_mcDXrGkF63OQqyv4VgSp4DbPhGKYc8UNJubllPuYou3pnWPc9IAmJuem_27FHCoO_20WiA7vsx4LQ" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=coveninja/cove&type=date&legend=top-left&sealed_token=4GbbMkGKGiaXN1d60vfao3mhJl3TIFYWtueyZuta_mcDXrGkF63OQqyv4VgSp4DbPhGKYc8UNJubllPuYou3pnWPc9IAmJuem_27FHCoO_20WiA7vsx4LQ" />
+ </picture>
+</a>
+
+## Roadmap / Known Limitations
+
+- **Android & Android TV** are experimental — expect rough edges (see [Install](#install))
+- **macOS** is not yet supported — no native build exists
+- Have a request? Open an [issue](https://github.com/coveninja/cove/issues) to discuss it
