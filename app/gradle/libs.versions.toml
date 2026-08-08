@@ -1,0 +1,49 @@
+[versions]
+kotlin                = "2.4.10"
+compose-multiplatform = "1.11.1"
+compose-hot-reload    = "1.1.1"
+# Underlying material3 version bundled by CMP 1.11.1; declared here for
+# explicit pinning in later phases if needed. Build files use compose.material3
+# accessor rather than referencing this directly.
+compose-material3     = "1.9.0"
+coroutines            = "1.11.0"
+serialization-json    = "1.11.0"
+# Phase 2+ dependencies — declared now so the catalog is the single source
+# of truth, but none are wired into build files yet.
+ktor                  = "3.5.1"
+coil3                 = "3.5.0"
+jna                   = "5.19.0"
+jogl                  = "2.6.0"
+
+[libraries]
+kotlinx-coroutines-core  = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core",  version.ref = "coroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization-json" }
+
+# Phase 2+ — networking
+ktor-client-core                  = { module = "io.ktor:ktor-client-core",                   version.ref = "ktor" }
+ktor-client-cio                   = { module = "io.ktor:ktor-client-cio",                    version.ref = "ktor" }
+ktor-client-okhttp                = { module = "io.ktor:ktor-client-okhttp",                 version.ref = "ktor" }
+ktor-client-mock                  = { module = "io.ktor:ktor-client-mock",                   version.ref = "ktor" }
+ktor-client-content-negotiation   = { module = "io.ktor:ktor-client-content-negotiation",    version.ref = "ktor" }
+ktor-serialization-kotlinx-json   = { module = "io.ktor:ktor-serialization-kotlinx-json",   version.ref = "ktor" }
+kotlinx-coroutines-test           = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+# Phase 2+ — image loading
+coil3-compose     = { module = "io.coil-kt.coil3:coil-compose",         version.ref = "coil3" }
+coil3-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3",  version.ref = "coil3" }
+
+# Phase 2+ — native windowing / video
+jna        = { module = "net.java.dev.jna:jna",             version.ref = "jna" }
+jogl-all   = { module = "org.jogamp.jogl:jogl-all",       version.ref = "jogl" }
+gluegen-rt = { module = "org.jogamp.gluegen:gluegen-rt",  version.ref = "jogl" }
+
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+
+[plugins]
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform",      version.ref = "kotlin" }
+kotlin-jvm           = { id = "org.jetbrains.kotlin.jvm",                version.ref = "kotlin" }
+kotlin-compose       = { id = "org.jetbrains.kotlin.plugin.compose",     version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose",                  version.ref = "compose-multiplatform" }
+compose-hot-reload    = { id = "org.jetbrains.compose.hot-reload",       version.ref = "compose-hot-reload" }

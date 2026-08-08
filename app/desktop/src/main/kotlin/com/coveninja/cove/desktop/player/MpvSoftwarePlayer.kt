@@ -1,0 +1,324 @@
+package com.coveninja.cove.desktop.player
+
+import com.sun.jna.Memory
+import com.sun.jna.Native
+import com.sun.jna.Pointer
+import com.sun.jna.StringArray
+import com.sun.jna.ptr.PointerByReference
+import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * In-process libmpv player backed by mpv's software render API.
+ *
+ * Decoded frames land in a direct ByteBuffer as bgr0 pixels and are converted
+ * to a Compose ImageBitmap for display. No GPU interop or Swing embedding.
+ * Establish this path before introducing OpenGL so there is always a working
+ * fallback if GL context creation fails.
+ */
+class MpvSoftwarePlayer(
+    private val frameConsumer: (BufferedImage) -> Unit,
+) : DesktopPlayer {
+    private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
+    override val snapshot: StateFlow<PlayerSnapshot> = _snapshot.asStateFlow()
+
+    private val handle        = AtomicReference<Pointer?>()
+    private val renderContext = AtomicReference<Pointer?>()
+    private val closing       = AtomicBoolean(false)
+    private val renderQueued  = AtomicBoolean(false)
+    private val renderWidth   = AtomicInteger(1280)
+    private val renderHeight  = AtomicInteger(720)
+
+    private val renderExecutor = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-render"))
+    private val eventExecutor  = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-events"))
+    private val stateExecutor  = Executors.newSingleThreadScheduledExecutor(namedDaemon("cove-mpv-state"))
+
+    // The render update callback fires on mpv's internal thread. It must only
+    // schedule work and never touch GL or mpv API functions directly.
+    private val updateCallback = MpvRenderUpdateCallback { requestRender() }
+
+    @Volatile private var renderBuffer: ByteBuffer? = null
+
+    @Synchronized
+    override fun start() {
+        if (handle.get() != null || closing.get()) return
+
+        try {
+            val library = Mpv.library()
+            // LC_NUMERIC is reset to "C" inside Mpv.create() before mpv_create().
+            val created = checkNotNull(Mpv.create()) {
+                "mpv_create returned null — is libmpv installed?"
+            }
+            handle.set(created)
+
+            setOption(library, created, "vo",        "libmpv")
+            setOption(library, created, "terminal",  "no")
+            setOption(library, created, "msg-level", "all=warn")
+            setOption(library, created, "keep-open", "yes")
+            // Software path: no GPU decode. hwdec=auto-safe comes with OpenGL.
+            setOption(library, created, "hwdec",     "no")
+
+            checkMpv(library, library.mpv_initialize(created), "initialize")
+
+            val context = renderExecutor.submit<Pointer> {
+                createSoftwareRenderContext(library, created)
+            }.get()
+            renderContext.set(context)
+            library.mpv_render_context_set_update_callback(context, updateCallback, null)
+
+            _snapshot.value = _snapshot.value.copy(initialized = true, error = null)
+            eventExecutor.execute { drainEvents(library, created) }
+            stateExecutor.scheduleAtFixedRate(
+                { pollState(library, created) },
+                0, 200, TimeUnit.MILLISECONDS,
+            )
+            requestRender()
+        } catch (error: Throwable) {
+            _snapshot.value = _snapshot.value.copy(
+                initialized = false,
+                error = error.cause?.message ?: error.message ?: error::class.java.simpleName,
+            )
+            close()
+        }
+    }
+
+    override fun load(source: String, startPositionSeconds: Double) {
+        command(*mpvLoadFileArgs(source, startPositionSeconds))
+    }
+
+    override fun togglePause() = setPaused(!_snapshot.value.paused)
+
+    override fun setPaused(paused: Boolean) {
+        val target = handle.get() ?: return
+        val value = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (paused) 1 else 0) }
+        val result = Mpv.library().mpv_set_property(target, "pause", Mpv.FORMAT_FLAG, value)
+        if (result < 0) recordError(result, "set pause")
+    }
+
+    override fun seek(seconds: Double) {
+        command("seek", seconds.coerceAtLeast(0.0).toString(), "absolute", "exact")
+    }
+
+    override fun setVolume(volume: Double) {
+        val target = handle.get() ?: return
+        val value = Memory(Double.SIZE_BYTES.toLong()).apply {
+            setDouble(0, volume.coerceIn(0.0, 100.0))
+        }
+        val result = Mpv.library().mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, value)
+        if (result < 0) recordError(result, "set volume")
+    }
+
+    override fun stop() = command("stop")
+
+    fun resize(width: Int, height: Int) {
+        val w = width.coerceIn(1, 8192)
+        val h = height.coerceIn(1, 8192)
+        if (renderWidth.getAndSet(w) != w || renderHeight.getAndSet(h) != h) requestRender()
+    }
+
+    override fun close() {
+        if (!closing.compareAndSet(false, true)) return
+
+        stateExecutor.shutdownNow()
+        val target = handle.getAndSet(null)
+        target?.let { runCatching { Mpv.library().mpv_wakeup(it) } }
+
+        eventExecutor.shutdown()
+        runCatching { eventExecutor.awaitTermination(2, TimeUnit.SECONDS) }
+
+        val context = renderContext.get()
+        if (context != null) {
+            runCatching {
+                Mpv.library().mpv_render_context_set_update_callback(context, null, null)
+            }
+            runCatching {
+                renderExecutor.submit {
+                    renderContext.getAndSet(null)
+                        ?.let(Mpv.library()::mpv_render_context_free)
+                }.get(3, TimeUnit.SECONDS)
+            }
+        }
+        renderExecutor.shutdown()
+        runCatching { renderExecutor.awaitTermination(2, TimeUnit.SECONDS) }
+
+        target?.let { runCatching { Mpv.library().mpv_terminate_destroy(it) } }
+        _snapshot.value = _snapshot.value.copy(initialized = false, hasMedia = false, paused = true)
+    }
+
+    private fun requestRender() {
+        if (closing.get() || !renderQueued.compareAndSet(false, true)) return
+        renderExecutor.execute {
+            try {
+                renderFrame()
+            } catch (error: Throwable) {
+                _snapshot.value = _snapshot.value.copy(error = "Render failed: ${error.message}")
+            } finally {
+                renderQueued.set(false)
+                val ctx = renderContext.get()
+                if (ctx != null && !closing.get() &&
+                    Mpv.library().mpv_render_context_update(ctx) and Mpv.RENDER_UPDATE_FRAME != 0L
+                ) {
+                    requestRender()
+                }
+            }
+        }
+    }
+
+    private fun renderFrame() {
+        val context = renderContext.get() ?: return
+        val width   = renderWidth.get()
+        val height  = renderHeight.get()
+        val bytes   = Math.multiplyExact(Math.multiplyExact(width, height), Int.SIZE_BYTES)
+
+        val target = renderBuffer
+            ?.takeIf { it.capacity() == bytes }
+            ?: ByteBuffer.allocateDirect(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                .also { renderBuffer = it }
+
+        val size = Memory(2L * Int.SIZE_BYTES).apply {
+            setInt(0, width)
+            setInt(Int.SIZE_BYTES.toLong(), height)
+        }
+        val format = Memory(5).apply { setString(0, "bgr0") }
+        val stride = Memory(Native.SIZE_T_SIZE.toLong()).apply {
+            if (Native.SIZE_T_SIZE == Long.SIZE_BYTES) setLong(0, width.toLong() * Int.SIZE_BYTES)
+            else                                       setInt(0,  width          * Int.SIZE_BYTES)
+        }
+
+        val params = renderParamArray(5)
+        params[0].type = Mpv.RENDER_PARAM_SW_SIZE;    params[0].data = size
+        params[1].type = Mpv.RENDER_PARAM_SW_FORMAT;  params[1].data = format
+        params[2].type = Mpv.RENDER_PARAM_SW_STRIDE;  params[2].data = stride
+        params[3].type = Mpv.RENDER_PARAM_SW_POINTER; params[3].data = Native.getDirectBufferPointer(target)
+        params.forEach(MpvRenderParam::write)
+
+        Mpv.library().mpv_render_context_update(context)
+        checkMpv(
+            Mpv.library(),
+            Mpv.library().mpv_render_context_render(context, params[0].pointer),
+            "sw render frame",
+        )
+        frameConsumer(bgr0ToBufferedImage(target, width, height))
+    }
+
+    private fun drainEvents(library: MpvLibrary, target: Pointer) {
+        while (!closing.get()) {
+            val event = MpvEvent(library.mpv_wait_event(target, 0.1))
+            if (event.eventId == Mpv.EVENT_SHUTDOWN) break
+        }
+    }
+
+    private fun pollState(library: MpvLibrary, target: Pointer) {
+        if (closing.get()) return
+        try {
+            val idle     = getFlag(library, target, "idle-active")      ?: true
+            val paused   = getFlag(library, target, "pause")            ?: true
+            val position = getDouble(library, target, "time-pos")       ?: 0.0
+            val duration = getDouble(library, target, "duration")       ?: 0.0
+            val volume   = getDouble(library, target, "volume")         ?: _snapshot.value.volume
+            val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
+            val codec    = if (idle) "" else getString(library, target, "video-codec").orEmpty()
+            val tracks   = if (idle) "" else getString(library, target, "track-list").orEmpty()
+
+            _snapshot.value = _snapshot.value.copy(
+                initialized     = true,
+                hasMedia        = !idle,
+                paused          = paused,
+                positionSeconds = position.finiteOrZero(),
+                durationSeconds = duration.finiteOrZero(),
+                volume          = volume.coerceIn(0.0, 100.0),
+                title           = title,
+                videoCodec      = codec,
+                hwdecCurrent    = "",       // software path: no hardware decode
+                renderBackend   = "Software",
+                trackListJson   = tracks,
+                error           = null,
+            )
+        } catch (error: Throwable) {
+            _snapshot.value = _snapshot.value.copy(error = "State update failed: ${error.message}")
+        }
+    }
+
+    private fun command(vararg args: String) {
+        val target = handle.get() ?: return
+        val result = Mpv.library().mpv_command(target, StringArray(args))
+        if (result < 0) recordError(result, args.firstOrNull() ?: "command")
+    }
+
+    private fun recordError(code: Int, operation: String) {
+        _snapshot.value = _snapshot.value.copy(
+            error = "$operation: ${Mpv.library().mpv_error_string(code)}",
+        )
+    }
+
+    private fun createSoftwareRenderContext(library: MpvLibrary, target: Pointer): Pointer {
+        val api    = Memory(3).apply { setString(0, "sw") }
+        val params = renderParamArray(2)
+        params[0].type = Mpv.RENDER_PARAM_API_TYPE; params[0].data = api
+        params.forEach(MpvRenderParam::write)
+
+        val result = PointerByReference()
+        checkMpv(
+            library,
+            library.mpv_render_context_create(result, target, params[0].pointer),
+            "create software render context",
+        )
+        return checkNotNull(result.value) { "mpv returned null render context" }
+    }
+
+    private fun setOption(library: MpvLibrary, target: Pointer, name: String, value: String) {
+        checkMpv(library, library.mpv_set_option_string(target, name, value), "set option $name")
+    }
+
+    private fun getFlag(library: MpvLibrary, target: Pointer, name: String): Boolean? {
+        val v = Memory(Int.SIZE_BYTES.toLong())
+        return if (library.mpv_get_property(target, name, Mpv.FORMAT_FLAG, v) >= 0) v.getInt(0) != 0
+        else null
+    }
+
+    private fun getDouble(library: MpvLibrary, target: Pointer, name: String): Double? {
+        val v = Memory(Double.SIZE_BYTES.toLong())
+        return if (library.mpv_get_property(target, name, Mpv.FORMAT_DOUBLE, v) >= 0) v.getDouble(0)
+        else null
+    }
+
+    private fun getString(library: MpvLibrary, target: Pointer, name: String): String? {
+        val ptr = library.mpv_get_property_string(target, name) ?: return null
+        return try { ptr.getString(0) } finally { library.mpv_free(ptr) }
+    }
+}
+
+/**
+ * Convert a bgr0 direct ByteBuffer (little-endian) to a TYPE_INT_RGB image.
+ *
+ * bgr0 pixel layout: [B, G, R, 0] at byte offsets 0–3.
+ * Read as a little-endian int32: value = B | G<<8 | R<<16 | 0<<24 = 0x00RRGGBB.
+ * TYPE_INT_RGB stores 0x00RRGGBB, so the in-memory representation is identical
+ * and a single bulk int-buffer copy is sufficient.
+ */
+internal fun bgr0ToBufferedImage(source: ByteBuffer, width: Int, height: Int): BufferedImage {
+    require(width > 0 && height > 0) { "Frame dimensions must be positive" }
+    val pixelCount = Math.multiplyExact(width, height)
+    require(source.capacity() >= pixelCount * Int.SIZE_BYTES) {
+        "Frame buffer is smaller than the declared ${width}x${height} dimensions"
+    }
+    val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    val dest  = (image.raster.dataBuffer as DataBufferInt).data
+    source.duplicate().order(ByteOrder.LITTLE_ENDIAN).apply { clear() }.asIntBuffer()
+        .get(dest, 0, pixelCount)
+    return image
+}
+
+private fun namedDaemon(name: String) = java.util.concurrent.ThreadFactory { task ->
+    Thread(task, name).apply { isDaemon = true }
+}
