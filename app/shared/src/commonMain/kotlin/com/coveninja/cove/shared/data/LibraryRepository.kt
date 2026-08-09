@@ -3,6 +3,8 @@ package com.coveninja.cove.shared.data
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.WatchProgress
+import com.coveninja.cove.shared.network.WatchProgressRequest
 import kotlinx.coroutines.flow.StateFlow
 
 sealed interface LibraryState {
@@ -38,4 +40,18 @@ interface LibraryRepository {
         runtimeMinutes: Int?,
         watched: Boolean,
     )
+
+    /** Null when the title has never been played. Season and episode are ignored for movies. */
+    suspend fun progress(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int? = null,
+        episode: Int? = null,
+    ): WatchProgress?
+
+    /**
+     * Upserts the resume point. Called repeatedly during playback, so implementations
+     * must treat it as cheap and idempotent.
+     */
+    suspend fun recordProgress(request: WatchProgressRequest): WatchProgress
 }

@@ -38,7 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.menu.CMenuItem
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 @Composable
 fun MyListButton(
     modifier: Modifier = Modifier,

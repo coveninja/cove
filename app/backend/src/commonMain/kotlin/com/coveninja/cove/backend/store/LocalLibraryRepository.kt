@@ -174,11 +174,13 @@ class LocalLibraryRepository(
         )
     }
 
-    suspend fun progress(
+    // Defaults live on the LibraryRepository declaration; Kotlin forbids repeating
+    // them on an override.
+    override suspend fun progress(
         tmdbId: Int,
         mediaType: MediaType,
-        season: Int? = null,
-        episode: Int? = null,
+        season: Int?,
+        episode: Int?,
     ): WatchProgress? {
         require(tmdbId > 0) { "tmdb id must be positive" }
         require(season == null || season >= 0) { "season must not be negative" }
@@ -189,7 +191,7 @@ class LocalLibraryRepository(
             ?.toModel()
     }
 
-    suspend fun recordProgress(request: WatchProgressRequest): WatchProgress = mutate {
+    override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress = mutate {
         require(request.tmdbId > 0) { "tmdb id must be positive" }
         require(request.positionSeconds >= 0 && request.durationSeconds >= 0) {
             "position and duration must be non-negative"

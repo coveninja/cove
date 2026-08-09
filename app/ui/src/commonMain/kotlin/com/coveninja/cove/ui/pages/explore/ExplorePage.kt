@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,15 +20,42 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.shared.data.ExploreState
+import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.PageEmptyState
+import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageHeader
-import com.coveninja.cove.ui.model.Media
-import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.pages.common.PageLoading
+import com.coveninja.cove.ui.state.LocalAppGraph
 
 @Composable
 fun ExplorePage(
+    mediaCard: @Composable (Media, Modifier) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val graph = LocalAppGraph.current
+    val exploreState by graph.content.explore.collectAsState()
+
+    when (val state = exploreState) {
+        ExploreState.Loading -> PageLoading("Loading the catalog…")
+        is ExploreState.Failed -> PageError("Explore could not load", state.message)
+        is ExploreState.Ready -> {
+            val media = remember(state) { (state.movies + state.tv).map { it.toUiMedia() } }
+            ExploreReady(
+                media = media,
+                mediaCard = mediaCard,
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExploreReady(
     media: List<Media>,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     modifier: Modifier = Modifier,

@@ -52,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 
 private val RatingGold = Color(0xFFFFC107)
 private val RatingGoldBright = Color(0xFFFFD54F)

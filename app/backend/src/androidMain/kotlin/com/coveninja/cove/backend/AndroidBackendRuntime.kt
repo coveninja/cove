@@ -5,6 +5,8 @@ import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.data.UnavailableAddonRepository
+import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -29,6 +31,10 @@ class AndroidBackendRuntime private constructor(
         content = content,
         library = stores.repositories.library,
         settings = stores.repositories.settings,
+        // Android runs no HTTP host and has no player, so there is nothing to
+        // resolve streams against yet. Fails with the reason if anything asks.
+        playback = UnavailablePlaybackRepository,
+        addons = UnavailableAddonRepository,
         onClose = ::close,
     )
 

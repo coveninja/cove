@@ -50,7 +50,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.components.media.MyListCategory
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt

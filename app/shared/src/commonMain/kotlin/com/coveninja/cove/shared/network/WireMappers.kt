@@ -82,3 +82,10 @@ data class WatchProgressRequest(
     @SerialName("duration_seconds")   val durationSeconds: Double = 0.0,
     val completed: Boolean = false,
 )
+
+// Both the addon and Nuvio "add" routes take the same single-field body.
+@Serializable
+data class AddAddonRequest(val url: String)
+
+@Serializable
+data class ToggleEnabledRequest(val enabled: Boolean)

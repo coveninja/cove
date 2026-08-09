@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.model.MediaVideo
 import com.coveninja.cove.ui.model.tmdbImageSize
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 
 @Composable
 fun MediaVideoCard(

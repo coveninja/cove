@@ -24,6 +24,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,13 +39,44 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.MediaShelf
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.pages.common.PageError
+import com.coveninja.cove.ui.pages.common.PageLoading
+import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.icons.IconifyIcon
 
 @Composable
 fun HomePage(
+    mediaCard: @Composable (Media, Modifier) -> Unit,
+    onOpenMedia: (Media) -> Unit,
+    onExplore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val graph = LocalAppGraph.current
+    val homeState by graph.content.home.collectAsState()
+
+    when (val state = homeState) {
+        HomeState.Loading -> PageLoading("Loading your home feed…")
+        is HomeState.Failed -> PageError("Home could not load", state.message)
+        is HomeState.Ready -> {
+            val media = remember(state) { state.items.map { it.toUiMedia() } }
+            HomeReady(
+                media = media,
+                mediaCard = mediaCard,
+                onOpenMedia = onOpenMedia,
+                onExplore = onExplore,
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeReady(
     media: List<Media>,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,

@@ -12,14 +12,18 @@ val generateCoveConfig by tasks.registering {
         "TRAKT_CLIENT_SECRET",
     )
     val values = keys.associateWith { providers.environmentVariable(it).orElse("") }
-    inputs.property("COVE_VERSION", coveVersion)
+    // Captured as locals so the doLast lambda holds plain values and Providers rather than a
+    // reference to this build script — the configuration cache cannot serialize the latter.
+    val version = coveVersion
+    val outputDir = generatedCoveConfig
+    inputs.property("COVE_VERSION", version)
     values.forEach { (key, value) -> inputs.property(key, value) }
-    outputs.dir(generatedCoveConfig)
+    outputs.dir(outputDir)
     doLast {
-        val output = generatedCoveConfig.get().file("cove-build.properties").asFile
+        val output = outputDir.get().file("cove-build.properties").asFile
         output.parentFile.mkdirs()
         val lines = buildList {
-            add("COVE_VERSION=${coveVersion.replace("\n", "")}")
+            add("COVE_VERSION=${version.replace("\n", "")}")
             values.forEach { (key, value) ->
                 value.orNull?.takeIf(String::isNotBlank)?.let {
                     add("$key=${it.replace("\\", "\\\\").replace("\n", "")}")

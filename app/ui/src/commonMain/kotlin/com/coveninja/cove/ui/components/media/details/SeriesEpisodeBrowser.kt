@@ -52,7 +52,7 @@ import com.coveninja.cove.ui.components.common.HorizontalLazyListScrollbar
 import com.coveninja.cove.ui.components.media.card.EpisodeCard
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaSeason
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 
 @Composable
 fun SeriesEpisodeBrowser(

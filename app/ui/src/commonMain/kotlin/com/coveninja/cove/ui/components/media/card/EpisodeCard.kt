@@ -50,7 +50,7 @@ import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.platform.onSecondaryClick
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalFoundationApi::class)

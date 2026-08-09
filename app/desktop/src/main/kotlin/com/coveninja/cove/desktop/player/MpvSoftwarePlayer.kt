@@ -27,6 +27,11 @@ import kotlinx.coroutines.flow.asStateFlow
  * fallback if GL context creation fails.
  */
 class MpvSoftwarePlayer(
+    // Software *rendering*, not necessarily software decoding. auto-copy keeps the
+    // decode on the GPU and copies finished frames back to system memory, which is
+    // what this path needs and is far cheaper than decoding on the CPU. mpv falls
+    // back to software decode by itself when no copy-back decoder is available.
+    private val hardwareDecoding: Boolean = true,
     private val frameConsumer: (BufferedImage) -> Unit,
 ) : DesktopPlayer {
     private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
@@ -65,8 +70,12 @@ class MpvSoftwarePlayer(
             setOption(library, created, "terminal",  "no")
             setOption(library, created, "msg-level", "all=warn")
             setOption(library, created, "keep-open", "yes")
-            // Software path: no GPU decode. hwdec=auto-safe comes with OpenGL.
-            setOption(library, created, "hwdec",     "no")
+            setOption(
+                library,
+                created,
+                "hwdec",
+                if (hardwareDecoding) "auto-copy" else "no",
+            )
 
             checkMpv(library, library.mpv_initialize(created), "initialize")
 
@@ -229,6 +238,7 @@ class MpvSoftwarePlayer(
             val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
             val codec    = if (idle) "" else getString(library, target, "video-codec").orEmpty()
             val tracks   = if (idle) "" else getString(library, target, "track-list").orEmpty()
+            val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
 
             _snapshot.value = _snapshot.value.copy(
                 initialized     = true,
@@ -239,7 +249,9 @@ class MpvSoftwarePlayer(
                 volume          = volume.coerceIn(0.0, 100.0),
                 title           = title,
                 videoCodec      = codec,
-                hwdecCurrent    = "",       // software path: no hardware decode
+                // Real now that the path asks for auto-copy: the decode can still be
+                // on the GPU even though the rendering is not.
+                hwdecCurrent    = hwdec,
                 renderBackend   = "Software",
                 trackListJson   = tracks,
                 error           = null,

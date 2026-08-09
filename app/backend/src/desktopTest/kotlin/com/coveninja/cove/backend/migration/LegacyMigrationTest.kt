@@ -142,7 +142,7 @@ class LegacyMigrationTest {
             queries.upsertActivityTitle("primary", "2026-08-08", "42:movie", 45)
             queries.upsertActivityPosition("primary", "42:movie", 45.0)
             queries.upsertActivityState("primary", 1, 1)
-            queries.upsertAddon(
+            queries.insertAddonIfMissing(
                 profile_id = "primary",
                 url = "https://addon.test",
                 addon_id = "provider",

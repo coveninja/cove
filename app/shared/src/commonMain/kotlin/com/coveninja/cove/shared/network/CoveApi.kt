@@ -122,21 +122,105 @@ class CoveApi(
         }.requireSuccess().body()
 
     // Pure URL builder — no HTTP. mpv / the player module opens this directly.
-    fun playUrl(hash: String? = null, url: String? = null): String {
+    //
+    // Every argument given is emitted; nothing is filtered here. season/episode/
+    // fileIdx only mean anything to the backend's torrent path (playDirect ignores
+    // them), but deciding when they apply is the caller's job — a builder that
+    // silently dropped parameters it was handed would be the surprising one.
+    // LivePlaybackRepository is where that choice is made.
+    fun playUrl(
+        hash: String? = null,
+        url: String? = null,
+        season: Int? = null,
+        episode: Int? = null,
+        fileIdx: Int? = null,
+    ): String {
         require(hash != null || url != null) { "Either hash or url must be provided" }
-        return buildString {
-            append(config.baseUrl)
-            append("/api/play?")
-            if (hash != null) {
-                append("hash=")
-                append(hash)
-                if (url != null) append("&")
-            }
-            if (url != null) {
-                append("url=")
-                append(url.encodeURLParameter())
-            }
+        val parameters = buildList {
+            // hash is hex and url is the only value that can carry reserved
+            // characters, so it is the only one that needs encoding.
+            hash?.let { add("hash=$it") }
+            url?.let { add("url=${it.encodeURLParameter()}") }
+            season?.let { add("season=$it") }
+            episode?.let { add("episode=$it") }
+            fileIdx?.let { add("fileIdx=$it") }
         }
+        return "${config.baseUrl}/api/play?${parameters.joinToString("&")}"
+    }
+
+    // ── Addons ──────────────────────────────────────────────────────────────
+
+    suspend fun addons(): List<Addon> =
+        httpClient.get("${config.baseUrl}/api/addons") { applyAuthHeaders() }
+            .requireSuccess().body()
+
+    suspend fun addAddon(url: String): Addon =
+        httpClient.post("${config.baseUrl}/api/addons") {
+            applyAuthHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(AddAddonRequest(url))
+        }.requireSuccess().body()
+
+    suspend fun setAddonEnabled(id: String, enabled: Boolean) {
+        httpClient.patch("${config.baseUrl}/api/addons") {
+            applyAuthHeaders()
+            parameter("id", id)
+            contentType(ContentType.Application.Json)
+            setBody(ToggleEnabledRequest(enabled))
+        }.requireSuccess()
+    }
+
+    suspend fun removeAddon(id: String) {
+        httpClient.delete("${config.baseUrl}/api/addons") {
+            applyAuthHeaders()
+            parameter("id", id)
+        }.requireSuccess()
+    }
+
+    suspend fun refreshAddon(id: String) {
+        httpClient.post("${config.baseUrl}/api/addons/refresh") {
+            applyAuthHeaders()
+            parameter("id", id)
+        }.requireSuccess()
+    }
+
+    // ── Nuvio scraper repositories ──────────────────────────────────────────
+
+    suspend fun nuvioRepos(): List<NuvioRepoSummary> =
+        httpClient.get("${config.baseUrl}/api/nuvio/repos") { applyAuthHeaders() }
+            .requireSuccess().body()
+
+    suspend fun addNuvioRepo(url: String): NuvioRepoSummary =
+        httpClient.post("${config.baseUrl}/api/nuvio/repos") {
+            applyAuthHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(AddAddonRequest(url))
+        }.requireSuccess().body()
+
+    suspend fun setNuvioRepoEnabled(id: String, enabled: Boolean) {
+        httpClient.patch("${config.baseUrl}/api/nuvio/repos") {
+            applyAuthHeaders()
+            parameter("id", id)
+            contentType(ContentType.Application.Json)
+            setBody(ToggleEnabledRequest(enabled))
+        }.requireSuccess()
+    }
+
+    suspend fun removeNuvioRepo(id: String) {
+        httpClient.delete("${config.baseUrl}/api/nuvio/repos") {
+            applyAuthHeaders()
+            parameter("id", id)
+        }.requireSuccess()
+    }
+
+    suspend fun setNuvioScraperEnabled(repoId: String, scraperId: String, enabled: Boolean) {
+        httpClient.patch("${config.baseUrl}/api/nuvio/scrapers") {
+            applyAuthHeaders()
+            parameter("repoId", repoId)
+            parameter("scraperId", scraperId)
+            contentType(ContentType.Application.Json)
+            setBody(ToggleEnabledRequest(enabled))
+        }.requireSuccess()
     }
 
     // ── Library ─────────────────────────────────────────────────────────────

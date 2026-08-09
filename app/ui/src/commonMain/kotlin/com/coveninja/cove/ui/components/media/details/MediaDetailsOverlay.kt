@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.components.common.HorizontalLazyListScrollbar
 import com.coveninja.cove.ui.components.media.MyListCategory
+import com.coveninja.cove.ui.components.media.action.ChooseSourceButton
 import com.coveninja.cove.ui.components.media.action.MyListButton
 import com.coveninja.cove.ui.components.media.action.PrimaryWatchButton
 import com.coveninja.cove.ui.components.media.action.RatingButton
@@ -89,7 +90,7 @@ import com.coveninja.cove.ui.model.MediaSeason
 import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.model.toMedia
-import com.ongshok.iconify.ui.IconifyIcon
+import com.coveninja.cove.ui.icons.IconifyIcon
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -104,6 +105,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
     currentListCategory: MyListCategory? = null,
     currentRating: Int? = null,
     onWatch: (Media) -> Unit = {},
+    onChooseSource: (Media) -> Unit = {},
     onListCategorySelected: (Media, MyListCategory) -> Unit = { _, _ -> },
     onRatingSelected: (Media, Int) -> Unit = { _, _ -> },
     onMediaSelected: (Media) -> Unit = {},
@@ -324,6 +326,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                         currentListCategory = currentListCategory,
                         currentRating = currentRating,
                         onWatch = { onWatch(currentMedia) },
+                        onChooseSource = { onChooseSource(currentMedia) },
                         onListCategorySelected = { category ->
                             onListCategorySelected(currentMedia, category)
                         },
@@ -467,6 +470,7 @@ private fun MediaDetailsHeroContent(
     currentListCategory: MyListCategory?,
     currentRating: Int?,
     onWatch: () -> Unit,
+    onChooseSource: () -> Unit,
     onListCategorySelected: (MyListCategory) -> Unit,
     onRatingSelected: (Int) -> Unit,
     onMediaSelected: (Media) -> Unit,
@@ -605,6 +609,10 @@ private fun MediaDetailsHeroContent(
                         .weight(2f)
                         .height(48.dp),
                 )
+
+                // Watch resolves a source on its own; this is the way past that
+                // for anyone who wants to see what is on offer and pick.
+                ChooseSourceButton(onClick = onChooseSource)
 
                 MyListButton(
                     currentStatus = currentListCategory,

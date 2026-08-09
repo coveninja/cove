@@ -16,19 +16,15 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,17 +32,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.AppGraph
-import com.coveninja.cove.shared.data.ExploreState
-import com.coveninja.cove.shared.data.HomeState
-import com.coveninja.cove.shared.data.LibraryState
-import com.coveninja.cove.shared.data.SearchState
-import com.coveninja.cove.shared.data.SettingsState
-import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.media.card.MediaCard
 import com.coveninja.cove.ui.components.media.details.MediaDetailsSharedOverlay
@@ -56,18 +45,25 @@ import com.coveninja.cove.ui.components.media.drag.MediaDragPayload
 import com.coveninja.cove.ui.components.media.drag.MediaDragPreview
 import com.coveninja.cove.ui.components.navigation.NavBar
 import com.coveninja.cove.ui.components.navigation.NavDestination
+import com.coveninja.cove.ui.components.player.PlayerLayer
 import com.coveninja.cove.ui.model.Media
-import com.coveninja.cove.ui.model.toDomainMedia
-import com.coveninja.cove.ui.model.toDomainType
 import com.coveninja.cove.ui.model.toMedia
-import com.coveninja.cove.ui.model.toUiEpisode
 import com.coveninja.cove.ui.model.toUiMedia
-import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.explore.ExplorePage
 import com.coveninja.cove.ui.pages.home.HomePage
 import com.coveninja.cove.ui.pages.mylist.MyListPage
 import com.coveninja.cove.ui.pages.profile.ProfilePage
 import com.coveninja.cove.ui.pages.search.SearchPage
+import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LocalVideoPlayerHost
+import com.coveninja.cove.ui.state.VideoPlayerHost
+import com.coveninja.cove.ui.state.rememberDragSession
+import com.coveninja.cove.ui.state.rememberLibraryIndex
+import com.coveninja.cove.ui.state.rememberMediaActions
+import com.coveninja.cove.ui.state.rememberMediaCatalog
+import com.coveninja.cove.ui.state.rememberMediaDetailsState
+import com.coveninja.cove.ui.state.rememberPlaybackSession
+import com.coveninja.cove.ui.state.toUiCategory
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -146,145 +142,38 @@ private fun SharedTransitionScope.SharedMediaCard(
 @Composable
 fun CoveApp(
     graph: AppGraph,
-    @Suppress("UNUSED_PARAMETER") videoSurface: @Composable () -> Unit = {},
+    // Null on any target without a player (currently everything but desktop); the
+    // Watch button then reports that playback is unavailable instead of crashing.
+    videoPlayerHost: VideoPlayerHost? = null,
 ) {
-    val homeState by graph.content.home.collectAsState()
-    val exploreState by graph.content.explore.collectAsState()
-    val searchState by graph.content.searchResults.collectAsState()
-    val libraryState by graph.library.entries.collectAsState()
-    val settingsState by graph.settings.settings.collectAsState()
-    val scope = rememberCoroutineScope()
+    CompositionLocalProvider(
+        LocalAppGraph provides graph,
+        LocalVideoPlayerHost provides videoPlayerHost,
+    ) {
+        CoveAppContent()
+    }
+}
 
-    val homeDomain = (homeState as? HomeState.Ready)?.items.orEmpty()
-    val exploreDomain = (exploreState as? ExploreState.Ready)?.let { it.movies + it.tv }.orEmpty()
-    val searchDomain = (searchState as? SearchState.Ready)?.results.orEmpty()
-    val libraryEntries = (libraryState as? LibraryState.Ready)?.entries.orEmpty()
-    val domainCatalog = (homeDomain + exploreDomain + searchDomain)
-        .distinctBy { it.mediaType to it.id }
-    val domainByUiId = domainCatalog.associateBy { it.toUiMedia().id }
-    val homeMedia = homeDomain.map { it.toUiMedia() }
-    val exploreMedia = exploreDomain.map { it.toUiMedia() }
-    val searchMedia = searchDomain.map { it.toUiMedia() }
-    val libraryMedia = libraryEntries.map { entry ->
-        domainCatalog.firstOrNull {
-            it.id == entry.tmdbId && it.mediaType == entry.mediaType
-        }?.toUiMedia() ?: entry.toUiMedia()
-    }
-    val mediaById = (homeMedia + exploreMedia + searchMedia + libraryMedia)
-        .associateBy(Media::id)
-    val libraryById = libraryEntries.associateBy { it.toUiMedia().id }
-    val listAssignments = libraryById.mapValues { (_, entry) ->
-        entry.status.toUiCategory()
-    }
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun CoveAppContent() {
+    val scope = rememberCoroutineScope()
+    val graph = LocalAppGraph.current
+
+    val catalog = rememberMediaCatalog()
+    val index = rememberLibraryIndex()
+    val actions = rememberMediaActions(index)
+    val detailsState = rememberMediaDetailsState(catalog)
+    val drag = rememberDragSession()
+    val playback = rememberPlaybackSession()
 
     var selectedDestination by remember { mutableStateOf(NavDestination.Home) }
     var searchMode by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var submittedQuery by remember { mutableStateOf<String?>(null) }
-    var selectedMedia by remember { mutableStateOf<Media?>(null) }
-    var detailedMedia by remember { mutableStateOf<Media?>(null) }
-    var retainedMedia by remember { mutableStateOf<Media?>(null) }
-    var detailsError by remember { mutableStateOf<String?>(null) }
-
-    var draggedPayload by remember { mutableStateOf<MediaDragPayload?>(null) }
-    var draggedSource by remember { mutableStateOf<Media?>(null) }
-    var dragPositionInRoot by remember { mutableStateOf<Offset?>(null) }
-    var detailsDragActive by remember { mutableStateOf(false) }
-    val categoryBounds = remember { mutableStateMapOf<MyListCategory, Rect>() }
-
-    val hoveredListCategory = dragPositionInRoot?.let { position ->
-        MyListCategory.entries.firstOrNull { category ->
-            categoryBounds[category]?.contains(position) == true
-        }
-    }
-
-    fun setListCategory(media: Media, category: MyListCategory) {
-        val type = media.type.toDomainType() ?: return
-        scope.launch {
-            val existing = libraryById[media.id]
-            if (category == MyListCategory.NotInterested) {
-                if (existing != null) graph.library.remove(media.tmdbId, type)
-                graph.library.setDismissed(media.tmdbId, type, true)
-                return@launch
-            }
-
-            if (existing == null) {
-                graph.library.add(
-                    tmdbId = media.tmdbId,
-                    mediaType = type,
-                    title = media.title ?: media.name ?: "Untitled",
-                    posterPath = media.posterUrl.orEmpty(),
-                    voteAverage = media.rating ?: 0.0,
-                )
-            }
-            category.toLibraryStatus()?.let { status ->
-                graph.library.setStatus(media.tmdbId, type, status)
-            }
-        }
-    }
-
-    fun removeFromList(media: Media) {
-        val type = media.type.toDomainType() ?: return
-        scope.launch { graph.library.remove(media.tmdbId, type) }
-    }
-
-    fun setRating(media: Media, rating: Int) {
-        val type = media.type.toDomainType() ?: return
-        scope.launch {
-            if (libraryById[media.id] == null) {
-                graph.library.add(
-                    tmdbId = media.tmdbId,
-                    mediaType = type,
-                    title = media.title ?: media.name ?: "Untitled",
-                    posterPath = media.posterUrl.orEmpty(),
-                    voteAverage = media.rating ?: 0.0,
-                )
-            }
-            graph.library.setRating(media.tmdbId, type, rating.toDouble())
-        }
-    }
-
-    fun cancelDrag() {
-        detailsDragActive = false
-        draggedPayload = null
-        draggedSource = null
-        dragPositionInRoot = null
-        categoryBounds.clear()
-    }
-
-    fun finishDrag() {
-        val source = draggedSource
-        val category = hoveredListCategory
-        if (source != null && category != null) setListCategory(source, category)
-        cancelDrag()
-    }
-
-    LaunchedEffect(selectedMedia?.id) {
-        val selected = selectedMedia ?: run {
-            detailedMedia = null
-            return@LaunchedEffect
-        }
-        detailedMedia = selected
-        retainedMedia = selected
-        detailsError = null
-
-        val domain = domainByUiId[selected.id] ?: selected.toDomainMedia()
-        runCatching { graph.content.details(domain).toUiMedia() }
-            .onSuccess { loaded ->
-                if (selectedMedia?.id == selected.id) {
-                    detailedMedia = loaded
-                    retainedMedia = loaded
-                }
-            }
-            .onFailure { error ->
-                if (selectedMedia?.id == selected.id) {
-                    detailsError = error.message ?: "Unable to load media details"
-                }
-            }
-    }
 
     val underlyingNavAlpha by animateFloatAsState(
-        targetValue = if (selectedMedia == null) 1f else 0f,
+        targetValue = if (detailsState.selected == null) 1f else 0f,
         animationSpec = tween(120),
         label = "UnderlyingNavVisibility",
     )
@@ -299,29 +188,18 @@ fun CoveApp(
                 { media, cardModifier ->
                     this@SharedTransitionLayout.SharedMediaCard(
                         media = media,
-                        selectedMedia = selectedMedia,
-                        listCategory = listAssignments[media.id],
-                        onOpen = { selectedMedia = media },
-                        onSetListCategory = { setListCategory(media, it) },
-                        onRemoveFromList = { removeFromList(media) },
-                        onToggleWatched = {
-                            val next =
-                                if (listAssignments[media.id] == MyListCategory.Finished) {
-                                    MyListCategory.Watching
-                                } else {
-                                    MyListCategory.Finished
-                                }
-                            setListCategory(media, next)
-                        },
+                        selectedMedia = detailsState.selected,
+                        listCategory = index.categoryOf(media.id),
+                        onOpen = { detailsState.open(media) },
+                        onSetListCategory = { actions.setListCategory(media, it) },
+                        onRemoveFromList = { actions.removeFromList(media) },
+                        onToggleWatched = { actions.toggleWatched(media) },
                         onDragStart = { payload, position ->
-                            detailsDragActive = false
-                            draggedPayload = payload
-                            draggedSource = media
-                            dragPositionInRoot = position
+                            drag.start(payload, media, position, fromDetails = false)
                         },
-                        onDrag = { dragPositionInRoot = it },
-                        onDragEnd = ::finishDrag,
-                        onDragCancel = ::cancelDrag,
+                        onDrag = { drag.move(it) },
+                        onDragEnd = { drag.finish(actions::setListCategory) },
+                        onDragCancel = { drag.cancel() },
                         modifier = cardModifier,
                     )
                 }
@@ -340,91 +218,28 @@ fun CoveApp(
 
             Box(modifier = pageModifier) {
                 when (selectedDestination) {
-                    NavDestination.Home -> when (val state = homeState) {
-                        HomeState.Loading -> LoadingPage("Loading your home feed…")
-                        is HomeState.Failed -> ErrorPage("Home could not load", state.message)
-                        is HomeState.Ready -> HomePage(
-                            media = homeMedia,
-                            mediaCard = pageMediaCard,
-                            onOpenMedia = { selectedMedia = it },
-                            onExplore = { selectedDestination = NavDestination.Explore },
-                        )
-                    }
+                    NavDestination.Home -> HomePage(
+                        mediaCard = pageMediaCard,
+                        onOpenMedia = { detailsState.open(it) },
+                        onExplore = { selectedDestination = NavDestination.Explore },
+                    )
 
-                    NavDestination.MyList -> when (val state = libraryState) {
-                        LibraryState.Loading -> LoadingPage("Loading your list…")
-                        is LibraryState.Failed -> ErrorPage("My List could not load", state.message)
-                        is LibraryState.Ready -> MyListPage(
-                            media = libraryMedia,
-                            assignments = listAssignments,
-                            mediaCard = pageMediaCard,
-                            onExplore = { selectedDestination = NavDestination.Explore },
-                        )
-                    }
+                    NavDestination.MyList -> MyListPage(
+                        mediaCard = pageMediaCard,
+                        onExplore = { selectedDestination = NavDestination.Explore },
+                    )
 
-                    NavDestination.Explore -> when (val state = exploreState) {
-                        ExploreState.Loading -> LoadingPage("Loading the catalog…")
-                        is ExploreState.Failed -> ErrorPage("Explore could not load", state.message)
-                        is ExploreState.Ready -> ExplorePage(
-                            media = exploreMedia,
-                            mediaCard = pageMediaCard,
-                        )
-                    }
+                    NavDestination.Explore -> ExplorePage(
+                        mediaCard = pageMediaCard,
+                    )
 
-                    NavDestination.Search -> when (val state = searchState) {
-                        SearchState.Loading ->
-                            LoadingPage("Searching for ${submittedQuery.orEmpty()}…")
+                    NavDestination.Search -> SearchPage(
+                        query = submittedQuery,
+                        mediaCard = pageMediaCard,
+                        onOpenSearch = { searchMode = true },
+                    )
 
-                        is SearchState.Failed ->
-                            ErrorPage("Search failed", state.message)
-
-                        SearchState.Idle -> SearchPage(
-                            query = null,
-                            media = emptyList(),
-                            mediaCard = pageMediaCard,
-                            onOpenSearch = { searchMode = true },
-                        )
-
-                        is SearchState.Ready -> SearchPage(
-                            query = submittedQuery,
-                            media = searchMedia,
-                            mediaCard = pageMediaCard,
-                            onOpenSearch = { searchMode = true },
-                        )
-                    }
-
-                    NavDestination.Account -> when (val state = settingsState) {
-                        SettingsState.Loading -> LoadingPage("Loading your preferences…")
-                        is SettingsState.Failed ->
-                            ErrorPage("Preferences could not load", state.message)
-
-                        is SettingsState.Ready -> ProfilePage(
-                            autoplayNext = state.settings.autoPlay,
-                            onAutoplayNextChange = { enabled ->
-                                scope.launch {
-                                    graph.settings.update(
-                                        state.settings.copy(autoPlay = enabled),
-                                    )
-                                }
-                            },
-                            hideSpoilers = state.settings.hideSpoilers,
-                            onHideSpoilersChange = { enabled ->
-                                scope.launch {
-                                    graph.settings.update(
-                                        state.settings.copy(hideSpoilers = enabled),
-                                    )
-                                }
-                            },
-                            streamSelectionMode = state.settings.streamSelectionMode,
-                            onStreamSelectionModeChange = { mode ->
-                                scope.launch {
-                                    graph.settings.update(
-                                        state.settings.copy(streamSelectionMode = mode),
-                                    )
-                                }
-                            },
-                        )
-                    }
+                    NavDestination.Account -> ProfilePage()
                 }
             }
 
@@ -432,8 +247,8 @@ fun CoveApp(
             NavBar(
                 selectedDestination = selectedDestination,
                 searchMode = searchMode,
-                listCategoryMode = draggedPayload != null,
-                hoveredListCategory = hoveredListCategory,
+                listCategoryMode = drag.draggedPayload != null,
+                hoveredListCategory = drag.hoveredCategory,
                 searchQuery = searchQuery,
                 onSearchQueryChange = { searchQuery = it },
                 onOpenSearch = { searchMode = true },
@@ -453,7 +268,7 @@ fun CoveApp(
                     selectedDestination = destination
                 },
                 onListCategoryBoundsChanged = { category, bounds ->
-                    categoryBounds[category] = bounds
+                    drag.categoryBounds[category] = bounds
                 },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -463,81 +278,75 @@ fun CoveApp(
                     .zIndex(100f),
             )
 
-            val activePayload = draggedPayload
-            val activePosition = dragPositionInRoot
+            val activePayload = drag.draggedPayload
+            val activePosition = drag.dragPositionInRoot
             if (activePayload != null && activePosition != null) {
                 MediaDragPreview(
                     media = activePayload,
                     positionInRoot = activePosition,
-                    hoveredCategory = hoveredListCategory,
+                    hoveredCategory = drag.hoveredCategory,
                     modifier = Modifier.zIndex(400f),
                 )
             }
 
-            val overlayMedia = if (selectedMedia != null) detailedMedia else retainedMedia
-            val overlayEntry = overlayMedia?.let { libraryById[it.id] }
+            val overlayEntry = detailsState.overlayMedia?.let { index.entryOf(it.id) }
             MediaDetailsSharedOverlay(
-                media = overlayMedia,
-                visible = selectedMedia != null,
-                onDismiss = { selectedMedia = null },
+                media = detailsState.overlayMedia,
+                visible = detailsState.selected != null,
+                onDismiss = { detailsState.dismiss() },
                 currentListCategory = overlayEntry?.status?.toUiCategory(),
                 currentRating = overlayEntry?.rating?.roundToInt(),
-                onWatch = { selectedMedia = null },
-                onListCategorySelected = ::setListCategory,
-                onRatingSelected = ::setRating,
-                onMediaSelected = { selectedMedia = it },
+                onWatch = { media ->
+                    // Dismiss first: the player takes the whole window, and leaving
+                    // the overlay open behind it means returning to a stale details
+                    // sheet on close.
+                    detailsState.dismiss()
+                    playback.open(media)
+                },
+                onChooseSource = { media ->
+                    detailsState.dismiss()
+                    playback.open(media, forcePicker = true)
+                },
+                onListCategorySelected = actions::setListCategory,
+                onRatingSelected = actions::setRating,
+                onMediaSelected = { detailsState.open(it) },
+                onEpisodeSelected = { media, season, episode ->
+                    detailsState.dismiss()
+                    playback.open(
+                        media = media,
+                        season = season.number,
+                        episode = episode.number,
+                        episodeTitle = episode.title,
+                    )
+                },
                 onLoadEpisodes = { season ->
-                    val active = detailedMedia ?: selectedMedia
-                    if (active == null) {
-                        emptyList()
-                    } else {
-                        val type = active.type.toDomainType()
-                        val watchStates =
-                            if (type == null) {
-                                emptyMap()
-                            } else {
-                                graph.library.episodeWatchStates(active.tmdbId, type)
-                            }
-                        graph.content.episodes(active.tmdbId, season.number).map { episode ->
-                            episode.toUiEpisode(active.id, season.number).copy(
-                                watched =
-                                    watchStates[season.number to episode.episodeNumber] == true,
-                            )
-                        }
-                    }
+                    val active = detailsState.detailed ?: detailsState.selected
+                    if (active == null) emptyList()
+                    else actions.episodesFor(active, season)
                 },
                 onEpisodeWatchedChange = { media, season, episode, watched ->
-                    scope.launch {
-                        graph.library.setEpisodeWatched(
-                            tmdbId = media.tmdbId,
-                            title = media.title ?: media.name ?: "Untitled",
-                            posterPath = media.posterUrl.orEmpty(),
-                            voteAverage = media.rating ?: 0.0,
-                            season = season.number,
-                            episode = episode.number,
-                            runtimeMinutes = episode.runtimeMinutes,
-                            watched = watched,
-                        )
-                    }
+                    actions.setEpisodeWatched(media, season, episode, watched)
                 },
                 onMediaDragStart = { payload, position ->
-                    detailsDragActive = true
-                    draggedPayload = payload
-                    draggedSource = detailedMedia
+                    // Prefer the recommendation's own Media from moreLikeThis; fall back
+                    // to the cross-page catalog (home/explore/search), then to the library,
+                    // which is the only source for a saved title no feed happens to list.
+                    val source = detailsState.detailed
                         ?.moreLikeThis
                         .orEmpty()
                         .firstOrNull { it.id == payload.mediaId }
                         ?.toMedia()
-                        ?: mediaById[payload.mediaId]
-                    dragPositionInRoot = position
+                        ?: catalog.domainByUiId[payload.mediaId]?.toUiMedia()
+                        ?: index.entryOf(payload.mediaId)?.toUiMedia()
+                    drag.start(payload, source, position, fromDetails = true)
                 },
-                onMediaDrag = { dragPositionInRoot = it },
-                onMediaDragEnd = ::finishDrag,
-                onMediaDragCancel = ::cancelDrag,
+                onMediaDrag = { drag.move(it) },
+                onMediaDragEnd = { drag.finish(actions::setListCategory) },
+                onMediaDragCancel = { drag.cancel() },
                 modifier = Modifier.zIndex(200f),
             )
 
-            detailsError?.let { message ->
+            detailsState.error?.let { message ->
                 Text(
                     text = message,
                     modifier = Modifier
@@ -550,7 +359,7 @@ fun CoveApp(
             }
 
             AnimatedVisibility(
-                visible = detailsDragActive,
+                visible = drag.detailsDragActive,
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(300f),
@@ -577,7 +386,7 @@ fun CoveApp(
                         selectedDestination = selectedDestination,
                         searchMode = false,
                         listCategoryMode = true,
-                        hoveredListCategory = hoveredListCategory,
+                        hoveredListCategory = drag.hoveredCategory,
                         searchQuery = searchQuery,
                         onSearchQueryChange = {},
                         onOpenSearch = {},
@@ -585,54 +394,19 @@ fun CoveApp(
                         onSubmitSearch = {},
                         onDestinationSelected = {},
                         onListCategoryBoundsChanged = { category, bounds ->
-                            if (detailsDragActive) {
-                                categoryBounds[category] = bounds
+                            if (drag.detailsDragActive) {
+                                drag.categoryBounds[category] = bounds
                             }
                         },
                     )
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun LoadingPage(message: String) {
-    Box(
-        Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Text(
-                text = message,
-                modifier = Modifier.padding(top = 14.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // Above every other layer: playback owns the window while it is open.
+            PlayerLayer(
+                session = playback,
+                modifier = Modifier.zIndex(500f),
             )
         }
     }
-}
-
-@Composable
-private fun ErrorPage(title: String, message: String) {
-    PageEmptyState(
-        iconName = "lucide:triangle-alert",
-        title = title,
-        message = message,
-    )
-}
-
-private fun LibraryStatus.toUiCategory(): MyListCategory = when (this) {
-    LibraryStatus.Watching -> MyListCategory.Watching
-    LibraryStatus.WatchLater -> MyListCategory.WatchLater
-    LibraryStatus.Finished -> MyListCategory.Finished
-    LibraryStatus.Dropped -> MyListCategory.Dropped
-}
-
-private fun MyListCategory.toLibraryStatus(): LibraryStatus? = when (this) {
-    MyListCategory.Watching -> LibraryStatus.Watching
-    MyListCategory.WatchLater -> LibraryStatus.WatchLater
-    MyListCategory.Finished -> LibraryStatus.Finished
-    MyListCategory.Dropped -> LibraryStatus.Dropped
-    MyListCategory.NotInterested -> null
 }

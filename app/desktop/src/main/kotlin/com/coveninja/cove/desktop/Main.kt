@@ -22,6 +22,7 @@ import com.coveninja.cove.desktop.player.DesktopPlayer
 import com.coveninja.cove.desktop.player.MpvOpenGlPanel
 import com.coveninja.cove.desktop.player.MpvOpenGlPlayer
 import com.coveninja.cove.desktop.player.MpvSoftwarePlayer
+import com.coveninja.cove.desktop.player.MpvVideoPlayerHost
 import com.coveninja.cove.backend.LocalBackendRuntime
 import com.coveninja.cove.backend.LocalStoreGraph
 import com.coveninja.cove.shared.data.AppGraph
@@ -91,9 +92,13 @@ fun main(args: Array<String>) {
                     onClose          = ::exitApplication,
                 )
             } else {
+                val playerHost = remember { MpvVideoPlayerHost(options.softwareRenderer) }
+                androidx.compose.runtime.DisposableEffect(playerHost) {
+                    onDispose { playerHost.dispose() }
+                }
                 Window(onCloseRequest = ::exitApplication, title = "Cove") {
                     CoveTheme {
-                        CoveApp(graph)
+                        CoveApp(graph, videoPlayerHost = playerHost)
                     }
                 }
             }

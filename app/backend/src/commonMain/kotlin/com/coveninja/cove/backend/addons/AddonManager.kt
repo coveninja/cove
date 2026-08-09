@@ -51,6 +51,10 @@ class AddonManager(
         val profileId = session.profileId.value
         ensureLegacyImported(profileId)
         ensureOfficialEntries(profileId)
+        // sortedBy is stable, so within each group this keeps selectAddons' rowid
+        // order — registration order for installed addons, seed order for the
+        // built-in ones. That only holds because persist() updates rows in place;
+        // see the note on insertAddonIfMissing in Cove.sq.
         return database.coveQueries.selectAddons(profileId).executeAsList().map(AddonRow::toModel)
             .sortedBy { if (it.source == "official") 0 else 1 }
     }
@@ -97,7 +101,11 @@ class AddonManager(
         val normalizedUrl = rawUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
         val existing = find(profileId, id, normalizedUrl)
             ?: throw IllegalStateException("addon not found")
-        require(existing.source == "stremio") { "official addons cannot be removed" }
+        // No source check here, unlike remove and refresh. Official integrations
+        // are meant to be switched off — officialEnabled() gates JustWatch and
+        // IntroDB on exactly this flag — and the guard that used to sit here was a
+        // copy of remove()'s, right down to its "cannot be removed" message. It
+        // made every toggle of a built-in addon fail with a 400.
         persist(profileId, existing.copy(enabled = enabled))
         invalidateStreamCache()
     }
@@ -350,17 +358,36 @@ class AddonManager(
         updatedAt: String = now(),
         updateVersion: Boolean = true,
     ) {
-        database.coveQueries.upsertAddon(
-            profile_id = profileId,
-            url = entry.url,
-            addon_id = entry.id,
-            manifest_json = CoveJson.encodeToString(entry.manifest),
-            kind = entry.kind.wireName,
-            source = entry.source,
-            enabled = if (entry.enabled) 1L else 0L,
-            disabled_catalogs_json = CoveJson.encodeToString(entry.disabledCatalogs),
-            updated_at = updatedAt,
-        )
+        val manifestJson = CoveJson.encodeToString(entry.manifest)
+        val catalogsJson = CoveJson.encodeToString(entry.disabledCatalogs)
+        val enabled = if (entry.enabled) 1L else 0L
+        // Insert-then-update in one transaction: the insert creates the row only
+        // when it is missing, and the update edits it in place, so an existing
+        // addon keeps its rowid and therefore its position in the list.
+        database.coveQueries.transaction {
+            database.coveQueries.insertAddonIfMissing(
+                profile_id = profileId,
+                url = entry.url,
+                addon_id = entry.id,
+                manifest_json = manifestJson,
+                kind = entry.kind.wireName,
+                source = entry.source,
+                enabled = enabled,
+                disabled_catalogs_json = catalogsJson,
+                updated_at = updatedAt,
+            )
+            database.coveQueries.updateAddon(
+                addon_id = entry.id,
+                manifest_json = manifestJson,
+                kind = entry.kind.wireName,
+                source = entry.source,
+                enabled = enabled,
+                disabled_catalogs_json = catalogsJson,
+                updated_at = updatedAt,
+                profile_id = profileId,
+                url = entry.url,
+            )
+        }
         if (updateVersion) {
             database.coveQueries.upsertProfileStoreVersion(profileId, "addons", updatedAt)
         }

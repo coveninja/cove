@@ -69,6 +69,70 @@ class AddonManagerTest {
         http.close()
     }
 
+    // Official integrations are gated on the same enabled flag, so they have to be
+    // switchable. setEnabled used to carry a copy of remove()'s source guard —
+    // message and all — which turned every built-in toggle into an HTTP 400.
+    // Mutation applied to verify: restored `require(existing.source == "stremio")`
+    // in setEnabled → test failed with IllegalArgumentException.
+    @Test
+    fun `official addons can be switched off`() = runBlocking {
+        val http = HttpClient(MockEngine { respond("{}", HttpStatusCode.OK) })
+        val dir = Files.createTempDirectory("cove-addons-official")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val manager = AddonManager(
+                store.database,
+                ActiveProfileSession(store.database),
+                http,
+                { "now" },
+            )
+
+            assertTrue(manager.entries().first { it.id == "cove.justwatch" }.enabled)
+
+            manager.setEnabled("cove.justwatch", null, false)
+
+            assertEquals(false, manager.entries().first { it.id == "cove.justwatch" }.enabled)
+            // The others are untouched by a single toggle.
+            assertTrue(manager.entries().first { it.id == "cove.introdb" }.enabled)
+        }
+        http.close()
+    }
+
+    // selectAddons orders by rowid, so the storage write has to preserve it.
+    // Mutation applied to verify: reverted upsertAddon to INSERT OR REPLACE
+    // → test failed, the toggled addon had moved to the end of the list.
+    @Test
+    fun `toggling an addon does not reorder the list`() = runBlocking {
+        val http = HttpClient(MockEngine { request ->
+            val id = request.url.host.substringBefore('.')
+            respond(
+                """{"id":"$id","name":"${id.uppercase()}","resources":["stream"]}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        val dir = Files.createTempDirectory("cove-addons-order")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val manager = AddonManager(
+                store.database,
+                ActiveProfileSession(store.database),
+                http,
+                { "now" },
+            )
+            manager.add("https://alpha.test/manifest.json")
+            manager.add("https://bravo.test/manifest.json")
+            manager.add("https://charlie.test/manifest.json")
+
+            val before = manager.entries().map { it.id }
+            manager.setEnabled("alpha", null, false)
+            val after = manager.entries().map { it.id }
+
+            assertEquals(before, after, "toggling must not move an addon")
+        }
+        http.close()
+    }
+
     @Test
     fun `addon state is isolated per active profile`() = runBlocking {
         val http = HttpClient(MockEngine {

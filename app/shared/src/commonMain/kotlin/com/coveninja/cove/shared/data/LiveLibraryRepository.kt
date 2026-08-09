@@ -2,6 +2,7 @@ package com.coveninja.cove.shared.data
 
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.CoveApi
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import kotlinx.coroutines.CoroutineScope
@@ -133,4 +134,20 @@ class LiveLibraryRepository(
             )
         }
     }
+
+    override suspend fun progress(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int?,
+        episode: Int?,
+    ): WatchProgress? = api.libraryProgress(tmdbId, mediaType, season, episode)
+
+    // Deliberately no reload(): this runs on a timer for the whole length of a
+    // playback session, and refetching the entire library every few seconds to
+    // refresh a resume point nobody is looking at yet is pure waste. The library
+    // reloads when playback ends and on the next page load. Errors propagate —
+    // the caller decides whether a failed save is worth interrupting playback for
+    // (it is not).
+    override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress =
+        api.postLibraryProgress(request)
 }

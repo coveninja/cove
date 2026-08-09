@@ -2,6 +2,7 @@ package com.coveninja.cove.shared.fixture
 
 import com.coveninja.cove.shared.data.*
 import com.coveninja.cove.shared.model.*
+import com.coveninja.cove.shared.network.WatchProgressRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -139,6 +140,7 @@ private class FixtureLibraryRepository : LibraryRepository {
     private val _entries = MutableStateFlow<LibraryState>(LibraryState.Ready(fixtureEntries))
     override val entries: StateFlow<LibraryState> = _entries
     private val watchedEpisodes = mutableMapOf<Triple<Int, Int, Int>, Boolean>()
+    private val savedProgress = mutableMapOf<String, WatchProgress>()
 
     private fun readyEntries(): List<LibraryEntry> =
         (_entries.value as? LibraryState.Ready)?.entries.orEmpty()
@@ -228,6 +230,35 @@ private class FixtureLibraryRepository : LibraryRepository {
             add(tmdbId, MediaType.Tv, title, posterPath, voteAverage)
         }
     }
+
+    override suspend fun progress(
+        tmdbId: Int,
+        mediaType: MediaType,
+        season: Int?,
+        episode: Int?,
+    ): WatchProgress? = savedProgress[progressKey(tmdbId, mediaType, season, episode)]
+
+    override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress {
+        val key = progressKey(request.tmdbId, request.mediaType, request.season, request.episode)
+        val progress = WatchProgress(
+            id = "fixture-progress-$key",
+            libraryEntryId = "fixture-${request.mediaType.wireName}-${request.tmdbId}",
+            tmdbId = request.tmdbId,
+            mediaType = request.mediaType,
+            season = request.season,
+            episode = request.episode,
+            positionSeconds = request.positionSeconds,
+            durationSeconds = request.durationSeconds,
+            completed = request.completed,
+        )
+        savedProgress[key] = progress
+        return progress
+    }
+
+    private fun progressKey(tmdbId: Int, mediaType: MediaType, season: Int?, episode: Int?): String =
+        // Movies ignore season/episode, so they collapse to a single key per title.
+        if (mediaType == MediaType.Tv) "${mediaType.wireName}-$tmdbId-$season-$episode"
+        else "${mediaType.wireName}-$tmdbId"
 }
 
 private class FixtureSettingsRepository : SettingsRepository {
@@ -239,10 +270,125 @@ private class FixtureSettingsRepository : SettingsRepository {
     }
 }
 
+/**
+ * Two candidates so the source picker has something to show without a backend.
+ * The URLs resolve to nothing — fixtures carry no media — so choosing one gets as
+ * far as handing the player a URL and then fails there, which is the intent: the
+ * flow up to playback stays walkable with no addons configured.
+ */
+private class FixturePlaybackRepository : PlaybackRepository {
+    override suspend fun streams(
+        tmdbId: Int,
+        type: MediaType,
+        season: Int?,
+        episode: Int?,
+    ): List<StreamSource> = listOf(
+        StreamSource(
+            name = "Fixture 1080p",
+            title = "fixture.1080p.WEB-DL.mkv",
+            url = "http://127.0.0.1:6969/api/play?url=fixture-1080p",
+            addonName = "Fixtures",
+            sizeBytes = 4_200_000_000,
+            cached = true,
+        ),
+        StreamSource(
+            name = "Fixture 720p",
+            title = "fixture.720p.WEB.mkv",
+            infoHash = "0".repeat(40),
+            addonName = "Fixtures",
+            sizeBytes = 1_900_000_000,
+        ),
+    )
+
+    override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
+        source.url ?: "http://127.0.0.1:6969/api/play?hash=${source.infoHash}"
+}
+
+/** In-memory, so the addon screens are usable with no backend running. */
+private class FixtureAddonRepository : AddonRepository {
+    private val addons = mutableListOf(
+        Addon(
+            id = "fixture.provider",
+            url = "https://example.com/manifest.json",
+            manifest = AddonManifestSummary(
+                id = "fixture.provider",
+                name = "Fixture Provider",
+                description = "A stand-in provider addon. Supplies the fixture streams.",
+                version = "1.0.0",
+            ),
+            kind = AddonKind.Provider,
+        ),
+    )
+    private val repos = mutableListOf<NuvioRepoSummary>()
+
+    private val _state = MutableStateFlow<AddonsState>(AddonsState.Ready(addons.toList(), repos.toList()))
+    override val state: StateFlow<AddonsState> = _state
+    override val lastError: StateFlow<String?> = MutableStateFlow(null)
+
+    override suspend fun reload() {
+        _state.value = AddonsState.Ready(addons.toList(), repos.toList())
+    }
+
+    override suspend fun addAddon(url: String) {
+        addons += Addon(
+            id = "fixture-${addons.size + 1}",
+            url = url,
+            manifest = AddonManifestSummary(name = url.substringAfter("://").substringBefore('/')),
+        )
+        reload()
+    }
+
+    override suspend fun setAddonEnabled(id: String, enabled: Boolean) {
+        addons.replaceAll { if (it.id == id) it.copy(enabled = enabled) else it }
+        reload()
+    }
+
+    override suspend fun removeAddon(id: String) {
+        addons.removeAll { it.id == id }
+        reload()
+    }
+
+    override suspend fun refreshAddon(id: String) = reload()
+
+    override suspend fun addNuvioRepo(url: String) {
+        repos += NuvioRepoSummary(
+            id = "fixture-repo-${repos.size + 1}",
+            owner = "fixture",
+            repo = url.substringAfterLast('/'),
+            url = url,
+        )
+        reload()
+    }
+
+    override suspend fun setNuvioRepoEnabled(id: String, enabled: Boolean) {
+        repos.replaceAll { if (it.id == id) it.copy(enabled = enabled) else it }
+        reload()
+    }
+
+    override suspend fun removeNuvioRepo(id: String) {
+        repos.removeAll { it.id == id }
+        reload()
+    }
+
+    override suspend fun setNuvioScraperEnabled(repoId: String, scraperId: String, enabled: Boolean) {
+        repos.replaceAll { repo ->
+            if (repo.id != repoId) repo
+            else repo.copy(
+                scrapers = repo.scrapers.map {
+                    if (it.id == scraperId) it.copy(enabled = enabled) else it
+                },
+            )
+        }
+        reload()
+    }
+}
+
 // ── Public factory ───────────────────────────────────────────────────────────
 
 fun FixtureAppGraph(): AppGraph = AppGraph(
     content  = FixtureContentRepository(),
     library  = FixtureLibraryRepository(),
     settings = FixtureSettingsRepository(),
+    playback = FixturePlaybackRepository(),
+    addons   = FixtureAddonRepository(),
 )

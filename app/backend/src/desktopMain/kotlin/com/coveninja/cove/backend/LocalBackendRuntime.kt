@@ -24,7 +24,15 @@ import com.coveninja.cove.backend.torrent.JlibtorrentPlaybackEngine
 import com.coveninja.cove.backend.platform.DesktopBackendEnvironment
 import com.coveninja.cove.backend.platform.DesktopConfigPaths
 import com.coveninja.cove.shared.data.AppGraph
+import com.coveninja.cove.shared.data.AddonRepository
+import com.coveninja.cove.shared.data.LiveAddonRepository
+import com.coveninja.cove.shared.data.LivePlaybackRepository
+import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.data.UnavailableAddonRepository
+import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
+import com.coveninja.cove.shared.network.CoveApi
+import com.coveninja.cove.shared.network.CoveApiConfig
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -46,11 +54,15 @@ class LocalBackendRuntime private constructor(
     private val host: LocalBackendHost?,
     private val media: MediaBoundary,
     content: LocalContentRepository,
+    playback: PlaybackRepository,
+    addonRepository: AddonRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
         library = stores.library,
         settings = stores.settings,
+        playback = playback,
+        addons = addonRepository,
         onClose = ::close,
     )
 
@@ -196,7 +208,19 @@ class LocalBackendRuntime private constructor(
                     remoteAddress.port,
                 ).takeIf { startHttpHost }
                 httpHost?.start()
-                return LocalBackendRuntime(stores, client, untrustedClient, scope, httpHost, media, content)
+                // Playback deliberately goes back out over loopback HTTP instead of
+                // calling addons/media in-process: /api/play only serves a URL that a
+                // prior /api/streams call registered, and that registry lives behind
+                // the route. Loopback requests carry no auth (ApiAccess.Loopback).
+                val loopback = httpHost?.let { CoveApi(client, CoveApiConfig("http://$host:$port")) }
+                val playback = loopback?.let(::LivePlaybackRepository)
+                    ?: UnavailablePlaybackRepository
+                val addonRepository = loopback?.let { LiveAddonRepository(it, scope) }
+                    ?: UnavailableAddonRepository
+                return LocalBackendRuntime(
+                    stores, client, untrustedClient, scope, httpHost, media, content,
+                    playback, addonRepository,
+                )
             } catch (error: Throwable) {
                 scope.cancel()
                 untrustedClient.close()

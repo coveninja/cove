@@ -31,6 +31,8 @@ fun createLiveAppGraph(
         content  = LiveContentRepository(api, scope),
         library  = LiveLibraryRepository(api, scope),
         settings = LiveSettingsRepository(api, scope),
+        playback = LivePlaybackRepository(api),
+        addons   = LiveAddonRepository(api, scope),
         onClose  = {
             scope.cancel()
             client.close()

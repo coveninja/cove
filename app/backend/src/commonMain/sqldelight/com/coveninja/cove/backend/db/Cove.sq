@@ -332,11 +332,30 @@ SELECT * FROM legacy_payloads ORDER BY profile_id, kind;
 deleteLegacyPayloads:
 DELETE FROM legacy_payloads;
 
-upsertAddon:
-INSERT OR REPLACE INTO addons(
+-- Insert-then-update rather than INSERT OR REPLACE, and deliberately not the
+-- ON CONFLICT DO UPDATE form: this schema is compiled against the SQLite 3.18
+-- dialect, which predates UPSERT (3.24).
+--
+-- REPLACE deletes the conflicting row and inserts a new one, handing it a fresh
+-- rowid — and selectAddons orders by rowid, so merely toggling an addon moved it
+-- to the bottom of the list. IGNORE leaves an existing row, and rowid with it,
+-- for the UPDATE below to edit in place. Callers must run both, in a transaction.
+insertAddonIfMissing:
+INSERT OR IGNORE INTO addons(
     profile_id, url, addon_id, manifest_json, kind, source, enabled,
     disabled_catalogs_json, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateAddon:
+UPDATE addons SET
+    addon_id = ?,
+    manifest_json = ?,
+    kind = ?,
+    source = ?,
+    enabled = ?,
+    disabled_catalogs_json = ?,
+    updated_at = ?
+WHERE profile_id = ? AND url = ?;
 
 selectAddons:
 SELECT * FROM addons WHERE profile_id = ? ORDER BY rowid;
