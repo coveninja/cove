@@ -20,7 +20,7 @@ object CoveColors {
     val accent       = Color(0xFF4ADE80)
     val text         = Color(0xFFFAFAFA)
     val muted        = Color(0xFFA3A3A3)
-    val border       = Color.White.copy(alpha = 0.10f)
+    val border       = Color(0xFF6F6F6F)
 }
 
 object CoveSpacing {

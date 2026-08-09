@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -27,8 +29,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -58,8 +62,7 @@ fun HomePage(
                     onOpen = { onOpenMedia(item) },
                     onExplore = onExplore,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
+                        .fillMaxWidth(),
                 )
             }
         }
@@ -87,6 +90,7 @@ private fun FeaturedMedia(
     Box(
         modifier = modifier
             .height(560.dp)
+            .clip(RoundedCornerShape(bottomEnd = 24.dp, bottomStart = 24.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(onClick = onOpen),
     ) {
@@ -126,49 +130,47 @@ private fun FeaturedMedia(
 
         Column(
             modifier = Modifier
-                .align(Alignment.CenterStart)
+                .align(Alignment.BottomCenter)
                 .widthIn(max = 600.dp)
                 .fillMaxWidth()
                 .padding(
                     start = 48.dp,
                     end = 32.dp,
-                    top = 72.dp,
-                    bottom = 32.dp,
+                    top = 74.dp,
+                    bottom = 16.dp,
                 ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
+            if (media.logoUrl != null) {
+                AsyncImage(
+                    model = tmdbImageSize(
+                        media.logoUrl,
+                        "w500",
+                    ),
+                    contentDescription = "${media.title} logo",
                     modifier = Modifier
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.tertiary)
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                ) {
-                    Text(
-                        text = "FEATURED",
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-
+                        .width(256.dp)
+                        .align(Alignment.CenterHorizontally),
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.High,
+                )
+            } else {
                 Text(
-                    text = listOfNotNull(media.released, media.type?.label).joinToString(" • "),
-                    color = Color.White.copy(alpha = 0.78f),
-                    style = MaterialTheme.typography.labelMedium,
+                    text = media.title ?: media.name ?: "Untitled",
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
                 )
             }
 
             Text(
-                text = media.title ?: media.name ?: "Untitled",
-                color = Color.White,
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.ExtraBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                textAlign = TextAlign.Center,
+                text = listOfNotNull(media.released, media.type?.label).joinToString(" • "),
+                color = Color.White.copy(alpha = 0.78f),
+                style = MaterialTheme.typography.labelMedium,
             )
 
             media.overview?.let { overview ->
@@ -181,47 +183,19 @@ private fun FeaturedMedia(
                 )
             }
 
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val compactActions = maxWidth < 360.dp
-
-                Row(
-                    modifier = if (compactActions) Modifier.fillMaxWidth() else Modifier,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Button(
-                        onClick = onOpen,
-                        modifier = if (compactActions) Modifier.weight(1.55f) else Modifier,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiary,
-                            contentColor = Color.White,
-                        ),
-                    ) {
-                        IconifyIcon(
-                            icon = "lucide:play",
-                            modifier = Modifier.size(18.dp),
-                            tint = Color.White,
-                        )
-                        Spacer(Modifier.size(7.dp))
-                        Text(
-                            if (compactActions) "Details" else "View details",
-                            maxLines = 1,
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = onExplore,
-                        modifier = if (compactActions) Modifier.weight(1f) else Modifier,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color.White,
-                        ),
-                    ) {
-                        Text(
-                            if (compactActions) "Browse" else "Explore",
-                            maxLines = 1,
-                        )
-                    }
-                }
+            OutlinedButton(
+                onClick = onOpen,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                IconifyIcon(
+                    icon = "lucide:play",
+                    modifier = Modifier.size(18.dp),
+                    tint = Color.White,
+                )
+                Spacer(Modifier.size(7.dp))
+                Text(
+                    "Details"
+                )
             }
         }
     }

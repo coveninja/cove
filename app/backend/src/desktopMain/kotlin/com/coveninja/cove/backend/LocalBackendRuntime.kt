@@ -91,15 +91,11 @@ class LocalBackendRuntime private constructor(
             }
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             try {
+                // TODO: Wire locale setting in there
                 val catalog = TmdbClient(
                     httpClient = client,
                     apiKey = tmdbApiKey,
-                    localeProvider = {
-                        (stores.settings.settings.value as? SettingsState.Ready)
-                            ?.settings
-                            ?.uiLanguage
-                            .orEmpty()
-                    },
+                    localeProvider = { "en" },
                 )
                 val content = LocalContentRepository(catalog, scope)
                 val activity = ActivityService(stores.databaseHandle, stores.profileSession)
