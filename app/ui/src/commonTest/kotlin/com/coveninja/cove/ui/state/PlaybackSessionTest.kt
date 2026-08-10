@@ -188,6 +188,8 @@ private class FakeHost : VideoPlayerHost {
     override fun togglePause() = Unit
     override fun seek(seconds: Double) = Unit
     override fun setVolume(volume: Double) { volumeSet = volume }
+    var mutedSet: Boolean? = null
+    override fun setMuted(muted: Boolean) { mutedSet = muted }
     override fun setScaling(scaling: VideoScaling) = Unit
     var speedSet: Double? = null
     override fun setSpeed(speed: Double) { speedSet = speed }

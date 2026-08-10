@@ -23,6 +23,8 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlin.test.Test
+import kotlin.time.Clock as KotlinClock
+import kotlin.time.Instant as KotlinInstant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -64,7 +66,13 @@ class DiscoveryServiceTest {
         test: suspend (LocalLibraryRepository, DiscoveryService) -> Unit,
     ) {
         val dir = Files.createTempDirectory("cove-discovery")
-        val clock = Clock.fixed(Instant.parse("2026-08-08T12:00:00Z"), ZoneOffset.UTC)
+        val clock = Clock.fixed(Instant.parse(FIXED_NOW), ZoneOffset.UTC)
+        // DiscoveryService moved to commonMain and so takes kotlin.time.Clock, while the
+        // migration and the repositories still take java.time's. Both are pinned to the
+        // same moment: the recency decay in signalWeight compares them against each other.
+        val discoveryClock = object : KotlinClock {
+            override fun now(): KotlinInstant = KotlinInstant.parse(FIXED_NOW)
+        }
         DesktopDatabase.inMemory().use { store ->
             LegacyMigration(store.database, dir, clock) { "primary" }.importIfNeeded()
             val session = ActiveProfileSession(store.database)
@@ -100,7 +108,7 @@ class DiscoveryServiceTest {
                         TmdbClient(tmdbHttp, "key", baseUrl = "https://tmdb.test/3"),
                         customHttp,
                         DesktopAddonUrlPolicy,
-                        clock,
+                        discoveryClock,
                     ),
                 )
             } finally {
@@ -112,6 +120,8 @@ class DiscoveryServiceTest {
     }
 
     private companion object {
+        const val FIXED_NOW = "2026-08-08T12:00:00Z"
+
         const val DETAILS = """{
             "title":"Loved",
             "genres":[{"id":28,"name":"Action"}],

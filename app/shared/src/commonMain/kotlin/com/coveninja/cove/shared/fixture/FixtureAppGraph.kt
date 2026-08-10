@@ -12,22 +12,55 @@ import kotlinx.datetime.todayIn
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
 
-// Six movies and four TV titles that the app renders before any network code
-// is wired up. Values are plausible but obviously fake.
+// The catalog the app renders before any network code is wired up. Values are plausible
+// but obviously fake.
+//
+// Deliberately larger and more varied than the ten titles this started as: Explore builds
+// per-genre rails and a sorted, paged grid out of whatever the catalog holds, and a corpus
+// of ten titles sharing three genres cannot exercise any of that — every rail comes out
+// either empty or identical, which makes a broken layout indistinguishable from a working
+// one. Genre ids are real TMDB ids so they resolve through the same table the live backend
+// feeds, and popularity is spread so sorting visibly reorders.
 private val fixtureMovies = listOf(
-    Media(id = 550,   title = "Fight Club",              mediaType = MediaType.Movie, voteAverage = 8.8, releaseDate = "1999-10-15", posterPath = "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg"),
-    Media(id = 278,   title = "The Shawshank Redemption",mediaType = MediaType.Movie, voteAverage = 8.7, releaseDate = "1994-09-23", posterPath = "/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg"),
-    Media(id = 238,   title = "The Godfather",           mediaType = MediaType.Movie, voteAverage = 8.7, releaseDate = "1972-03-14", posterPath = "/3bhkrj58Vtu7enYsLMId5rcSyj2.jpg"),
-    Media(id = 424,   title = "Schindler's List",        mediaType = MediaType.Movie, voteAverage = 8.6, releaseDate = "1993-12-15", posterPath = "/sF1U4EUQS8YHUYjNl3pMGNIQyr0.jpg"),
-    Media(id = 680,   title = "Pulp Fiction",            mediaType = MediaType.Movie, voteAverage = 8.5, releaseDate = "1994-09-10", posterPath = "/dM2w364MScsjFf8pfMbaWUcWrR.jpg"),
-    Media(id = 13,    title = "Forrest Gump",            mediaType = MediaType.Movie, voteAverage = 8.5, releaseDate = "1994-07-06", posterPath = "/arw2vcBveWOVZr6pxd9XTd1TdQa.jpg"),
+    Media(id = 550,    title = "Fight Club",               mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 61.0, releaseDate = "1999-10-15", posterPath = "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg", genreIds = listOf(18, 53)),
+    Media(id = 278,    title = "The Shawshank Redemption", mediaType = MediaType.Movie, voteAverage = 8.7, popularity = 88.0, releaseDate = "1994-09-23", posterPath = "/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg", genreIds = listOf(18, 80)),
+    Media(id = 238,    title = "The Godfather",            mediaType = MediaType.Movie, voteAverage = 8.7, popularity = 92.0, releaseDate = "1972-03-14", posterPath = "/3bhkrj58Vtu7enYsLMId5rcSyj2.jpg", genreIds = listOf(18, 80)),
+    Media(id = 424,    title = "Schindler's List",         mediaType = MediaType.Movie, voteAverage = 8.6, popularity = 47.0, releaseDate = "1993-12-15", posterPath = "/sF1U4EUQS8YHUYjNl3pMGNIQyr0.jpg", genreIds = listOf(18, 36, 10752)),
+    Media(id = 680,    title = "Pulp Fiction",             mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 74.0, releaseDate = "1994-09-10", posterPath = "/dM2w364MScsjFf8pfMbaWUcWrR.jpg", genreIds = listOf(53, 80)),
+    Media(id = 13,     title = "Forrest Gump",             mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 69.0, releaseDate = "1994-07-06", posterPath = "/arw2vcBveWOVZr6pxd9XTd1TdQa.jpg", genreIds = listOf(35, 18, 10749)),
+    Media(id = 27205,  title = "Inception",                mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 96.0, releaseDate = "2010-07-15", posterPath = "/oYuLEt3zVCKq57qu2F8dT7NIa6f.jpg", genreIds = listOf(28, 878, 12)),
+    Media(id = 157336, title = "Interstellar",             mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 99.0, releaseDate = "2014-11-05", posterPath = "/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg", genreIds = listOf(12, 18, 878)),
+    Media(id = 155,    title = "The Dark Knight",          mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 94.0, releaseDate = "2008-07-16", posterPath = "/qJ2tW6WMUDux911r6m7haRef0WH.jpg", genreIds = listOf(18, 28, 80, 53)),
+    Media(id = 603,    title = "The Matrix",               mediaType = MediaType.Movie, voteAverage = 8.2, popularity = 83.0, releaseDate = "1999-03-30", posterPath = "/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg", genreIds = listOf(28, 878)),
+    Media(id = 129,    title = "Spirited Away",            mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 78.0, releaseDate = "2001-07-20", posterPath = "/39wmItIWsg5sZMyRUHLkWBcuVCM.jpg", genreIds = listOf(16, 10751, 14)),
+    Media(id = 496243, title = "Parasite",                 mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 81.0, releaseDate = "2019-05-30", posterPath = "/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg", genreIds = listOf(35, 53, 18)),
+    Media(id = 122,    title = "The Return of the King",   mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 86.0, releaseDate = "2003-12-01", posterPath = "/rCzpDGLbOoPwLjy3OAm5NUPOTrC.jpg", genreIds = listOf(12, 14, 28)),
+    Media(id = 76341,  title = "Mad Max: Fury Road",       mediaType = MediaType.Movie, voteAverage = 7.6, popularity = 72.0, releaseDate = "2015-05-13", posterPath = "/8tZYtuWezp8JbcsvHYO0O46tFbo.jpg", genreIds = listOf(28, 12, 878)),
+    Media(id = 372058, title = "Your Name.",               mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 64.0, releaseDate = "2016-08-26", posterPath = "/q719jXXEzOoYaps6babgKnONONX.jpg", genreIds = listOf(16, 10749, 18)),
+    Media(id = 694,    title = "The Shining",              mediaType = MediaType.Movie, voteAverage = 8.2, popularity = 58.0, releaseDate = "1980-05-23", posterPath = "/b6ko0IKC8MdYBBPkkA1aBPLe2yz.jpg", genreIds = listOf(27, 53)),
+    Media(id = 429,    title = "The Good, the Bad and the Ugly", mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 41.0, releaseDate = "1966-12-23", posterPath = "/bX2xnavhMYjWDoZp1VM6VnU1xwe.jpg", genreIds = listOf(37)),
+    Media(id = 12477,  title = "Grave of the Fireflies",   mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 36.0, releaseDate = "1988-04-16", posterPath = "/k9tv1rXZbOhH7eiCk378x61kNQ1.jpg", genreIds = listOf(16, 18, 10752)),
+    Media(id = 1891,   title = "The Empire Strikes Back",  mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 67.0, releaseDate = "1980-05-20", posterPath = "/7BuH8itoSrLExs2YZSsM01Qk2no.jpg", genreIds = listOf(12, 28, 878)),
+    Media(id = 807,    title = "Se7en",                    mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 76.0, releaseDate = "1995-09-22", posterPath = "/6yoghtyTpznpBik8EngEmJskVUO.jpg", genreIds = listOf(80, 9648, 53)),
 )
 
 private val fixtureTv = listOf(
-    Media(id = 1396, name = "Breaking Bad",        mediaType = MediaType.Tv, voteAverage = 8.9, firstAirDate = "2008-01-20", posterPath = "/ggFHVNu6YYI5L9pCfOacjizRGt.jpg"),
-    Media(id = 60625,name = "Rick and Morty",      mediaType = MediaType.Tv, voteAverage = 8.7, firstAirDate = "2013-12-02", posterPath = "/cvhNj9eoRBe5SxjCbQTkh05UP5K.jpg"),
-    Media(id = 66732,name = "Stranger Things",     mediaType = MediaType.Tv, voteAverage = 8.6, firstAirDate = "2016-07-15", posterPath = "/49WJfeN0moxb9IPfGn8AIqMGskD.jpg"),
-    Media(id = 1399, name = "Game of Thrones",     mediaType = MediaType.Tv, voteAverage = 8.4, firstAirDate = "2011-04-17", posterPath = "/u3bZgnGQ9T01sWNhyveQz0wH0Hl.jpg"),
+    Media(id = 1396,  name = "Breaking Bad",       mediaType = MediaType.Tv, voteAverage = 8.9, popularity = 97.0, firstAirDate = "2008-01-20", posterPath = "/ggFHVNu6YYI5L9pCfOacjizRGt.jpg", genreIds = listOf(18, 80)),
+    Media(id = 60625, name = "Rick and Morty",     mediaType = MediaType.Tv, voteAverage = 8.7, popularity = 91.0, firstAirDate = "2013-12-02", posterPath = "/cvhNj9eoRBe5SxjCbQTkh05UP5K.jpg", genreIds = listOf(16, 35, 10765)),
+    Media(id = 66732, name = "Stranger Things",    mediaType = MediaType.Tv, voteAverage = 8.6, popularity = 95.0, firstAirDate = "2016-07-15", posterPath = "/49WJfeN0moxb9IPfGn8AIqMGskD.jpg", genreIds = listOf(18, 9648, 10765)),
+    Media(id = 1399,  name = "Game of Thrones",    mediaType = MediaType.Tv, voteAverage = 8.4, popularity = 89.0, firstAirDate = "2011-04-17", posterPath = "/u3bZgnGQ9T01sWNhyveQz0wH0Hl.jpg", genreIds = listOf(10765, 18, 10759)),
+    Media(id = 1398,  name = "The Sopranos",       mediaType = MediaType.Tv, voteAverage = 8.7, popularity = 62.0, firstAirDate = "1999-01-10", posterPath = "/rTc7ZXdroqjkKivFPvCPX0Ru7uw.jpg", genreIds = listOf(18, 80)),
+    Media(id = 94605, name = "Arcane",             mediaType = MediaType.Tv, voteAverage = 8.7, popularity = 84.0, firstAirDate = "2021-11-06", posterPath = "/fqldf2t8ztc9aiwn3k6mlX3tvRT.jpg", genreIds = listOf(16, 10765, 10759)),
+    Media(id = 87108, name = "Chernobyl",          mediaType = MediaType.Tv, voteAverage = 8.7, popularity = 55.0, firstAirDate = "2019-05-06", posterPath = "/hlLXt2tOPT6RRnjiUmoxyG1LTFi.jpg", genreIds = listOf(18, 10768)),
+    Media(id = 46648, name = "True Detective",     mediaType = MediaType.Tv, voteAverage = 8.3, popularity = 58.0, firstAirDate = "2014-01-12", posterPath = "/aowr4xpLP5sRi9r6vt7sZH1L0kg.jpg", genreIds = listOf(18, 80, 9648)),
+    Media(id = 71912, name = "The Witcher",        mediaType = MediaType.Tv, voteAverage = 7.8, popularity = 79.0, firstAirDate = "2019-12-20", posterPath = "/7vjaCdMw15FEbXyLQTVa04URsPm.jpg", genreIds = listOf(10765, 18, 10759)),
+    Media(id = 82856, name = "The Mandalorian",    mediaType = MediaType.Tv, voteAverage = 8.4, popularity = 82.0, firstAirDate = "2019-11-12", posterPath = "/eU1i6eHXlzMOlEq0ku1Rzq7Y4wA.jpg", genreIds = listOf(10765, 10759, 37)),
+    Media(id = 76479, name = "The Boys",           mediaType = MediaType.Tv, voteAverage = 8.4, popularity = 87.0, firstAirDate = "2019-07-25", posterPath = "/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg", genreIds = listOf(10765, 10759)),
+    Media(id = 1668,  name = "Friends",            mediaType = MediaType.Tv, voteAverage = 8.4, popularity = 71.0, firstAirDate = "1994-09-22", posterPath = "/f496cm9enuEsZkSPzCwnTESEK5s.jpg", genreIds = listOf(35)),
+    Media(id = 2316,  name = "The Office",         mediaType = MediaType.Tv, voteAverage = 8.6, popularity = 74.0, firstAirDate = "2005-03-24", posterPath = "/7DJKHzAi83BmQrWLrYYOqcoKfhR.jpg", genreIds = listOf(35)),
+    Media(id = 85937, name = "Demon Slayer",       mediaType = MediaType.Tv, voteAverage = 8.6, popularity = 77.0, firstAirDate = "2019-04-06", posterPath = "/xUfRZu2mi8jH6SzQEJGP6tjBuYj.jpg", genreIds = listOf(16, 10759, 10765)),
+    Media(id = 456,   name = "The Simpsons",       mediaType = MediaType.Tv, voteAverage = 8.0, popularity = 66.0, firstAirDate = "1989-12-17", posterPath = "/qcr9bBY6MVeLzriKCmJOv1562vJ.jpg", genreIds = listOf(16, 35, 10751)),
+    Media(id = 63174, name = "Lucifer",            mediaType = MediaType.Tv, voteAverage = 8.5, popularity = 60.0, firstAirDate = "2016-01-25", posterPath = "/4EYPN5mVIhSp3zoHz1eMKcCm1Xg.jpg", genreIds = listOf(80, 10765)),
 )
 
 // Dates are generated relative to the day the app runs, not hardcoded: My List sorts by
@@ -295,6 +328,86 @@ private class FixtureContentRepository : ContentRepository {
     private fun fixtureOverview(media: Media): String =
         "${media.displayTitle} is fixture content for developing Cove's interface without a running backend."
 }
+
+/**
+ * Browsing and taste over the fixture catalog.
+ *
+ * Everything is derived from the same fixture list rather than canned per-rail arrays, so a
+ * sort really sorts, a genre filter really narrows, and paging really runs out. That last
+ * one matters: infinite scroll that never reaches the end looks identical to infinite
+ * scroll that is broken, and only a finite corpus tells them apart.
+ */
+private class FixtureDiscoveryRepository : DiscoveryRepository {
+
+    private val catalog = fixtureMovies + fixtureTv
+
+    override suspend fun genres(type: MediaType): List<MediaGenre> =
+        catalog.filter { it.mediaType == type }
+            .flatMap(Media::genreIds)
+            .distinct()
+            .mapNotNull { id -> FIXTURE_GENRE_NAMES[id]?.let { MediaGenre(id, it) } }
+            .sortedBy(MediaGenre::name)
+
+    override suspend fun browse(query: BrowseQuery): List<Media> {
+        val matching = catalog
+            .filter { it.mediaType == query.type }
+            .filter { query.genreId == null || query.genreId in it.genreIds }
+        val ordered = when (query.sort) {
+            CatalogSort.Popularity -> matching.sortedByDescending(Media::popularity)
+            CatalogSort.Rating -> matching.sortedByDescending(Media::voteAverage)
+            CatalogSort.Newest -> matching.sortedByDescending { it.displayDate.orEmpty() }
+            CatalogSort.Oldest -> matching.sortedBy { it.displayDate.orEmpty() }
+            CatalogSort.Title -> matching.sortedBy { it.displayTitle.lowercase() }
+        }
+        return ordered.drop((query.page - 1).coerceAtLeast(0) * FIXTURE_PAGE_SIZE)
+            .take(FIXTURE_PAGE_SIZE)
+    }
+
+    // The fixture library is what fixtureEntries says it is, so "taste" is simply the
+    // genres those saved titles carry — enough to make the personalized rails appear and
+    // be visibly different from the popularity rail.
+    override suspend fun recommended(type: MediaType, limit: Int): List<Media> {
+        val savedIds = fixtureEntries.map { it.tmdbId }.toSet()
+        val tasteGenres = catalog.filter { it.id in savedIds }.flatMap(Media::genreIds).toSet()
+        return catalog.filter { it.mediaType == type && it.id !in savedIds }
+            .sortedByDescending { item -> item.genreIds.count { it in tasteGenres } }
+            .take(limit)
+    }
+
+    override suspend fun topGenres(type: MediaType, limit: Int): List<MediaGenre> {
+        val savedIds = fixtureEntries.map { it.tmdbId }.toSet()
+        return catalog.filter { it.id in savedIds && it.mediaType == type }
+            .flatMap(Media::genreIds)
+            .groupingBy { it }.eachCount()
+            .entries.sortedWith(compareByDescending<Map.Entry<Int, Int>> { it.value }.thenBy { it.key })
+            .mapNotNull { (id, _) -> FIXTURE_GENRE_NAMES[id]?.let { MediaGenre(id, it) } }
+            .take(limit)
+    }
+
+    override suspend fun similarTo(type: MediaType, tmdbId: Int, limit: Int): List<Media> {
+        val source = catalog.firstOrNull { it.id == tmdbId } ?: return emptyList()
+        return catalog.filter { it.mediaType == type && it.id != tmdbId }
+            .sortedByDescending { item -> item.genreIds.count { it in source.genreIds } }
+            .take(limit)
+    }
+
+    override suspend fun favorites(limit: Int): List<FavoriteTitle> =
+        fixtureEntries.filter { it.status == LibraryStatus.Finished || it.rating != null }
+            .sortedByDescending { it.rating ?: 0.0 }
+            .take(limit)
+            .map { FavoriteTitle(it.tmdbId, it.mediaType, it.title) }
+}
+
+/** Small enough that scrolling the fixture grid reaches a second page and then the end. */
+private const val FIXTURE_PAGE_SIZE = 12
+
+private val FIXTURE_GENRE_NAMES = mapOf(
+    12 to "Adventure", 14 to "Fantasy", 16 to "Animation", 18 to "Drama",
+    27 to "Horror", 28 to "Action", 35 to "Comedy", 36 to "History",
+    37 to "Western", 53 to "Thriller", 80 to "Crime", 878 to "Science Fiction",
+    9648 to "Mystery", 10749 to "Romance", 10751 to "Family", 10752 to "War",
+    10759 to "Action & Adventure", 10765 to "Sci-Fi & Fantasy", 10768 to "War & Politics",
+)
 
 private class FixtureLibraryRepository : LibraryRepository {
     private val _entries = MutableStateFlow<LibraryState>(LibraryState.Ready(fixtureEntries))
@@ -576,10 +689,11 @@ private class FixtureCalendarRepository : CalendarRepository {
 }
 
 fun FixtureAppGraph(): AppGraph = AppGraph(
-    content  = FixtureContentRepository(),
-    library  = FixtureLibraryRepository(),
-    settings = FixtureSettingsRepository(),
-    playback = FixturePlaybackRepository(),
-    addons   = FixtureAddonRepository(),
-    calendar = FixtureCalendarRepository(),
+    content   = FixtureContentRepository(),
+    library   = FixtureLibraryRepository(),
+    settings  = FixtureSettingsRepository(),
+    playback  = FixturePlaybackRepository(),
+    addons    = FixtureAddonRepository(),
+    calendar  = FixtureCalendarRepository(),
+    discovery = FixtureDiscoveryRepository(),
 )

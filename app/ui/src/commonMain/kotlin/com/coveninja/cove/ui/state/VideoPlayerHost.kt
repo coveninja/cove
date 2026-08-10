@@ -49,6 +49,12 @@ data class PlaybackStatus(
     val durationSeconds: Double = 0.0,
     /** 0..100, matching mpv. Not the 0..1 scale AppSettings.defaultVolume uses. */
     val volume: Double = 100.0,
+    /**
+     * Independent of [volume]: a muted player at volume 100 is silent. The "start
+     * muted" setting mutes at load, so the UI has to read this rather than infer
+     * silence from the volume alone.
+     */
+    val muted: Boolean = false,
     /** How full the player's read-ahead buffer is, 0-100, while it is filling. */
     val bufferingPercent: Int = 0,
     /** The player has data to decode but is stalled waiting for more. */
@@ -96,6 +102,9 @@ interface VideoPlayerHost {
 
     /** [volume] is 0..100, matching mpv. */
     fun setVolume(volume: Double)
+
+    /** Toggles the player's own mute flag, which [setVolume] does not affect. */
+    fun setMuted(muted: Boolean)
 
     fun selectAudioTrack(id: Int)
 

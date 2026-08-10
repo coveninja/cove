@@ -17,6 +17,8 @@ import com.coveninja.cove.shared.data.CalendarRepository
 import com.coveninja.cove.backend.trakt.TraktService
 import com.coveninja.cove.backend.platform.DeviceSettingsService
 import com.coveninja.cove.backend.discovery.DiscoveryService
+import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
+import com.coveninja.cove.shared.data.DiscoveryRepository
 import com.coveninja.cove.backend.quality.QualityService
 import com.coveninja.cove.backend.updater.UpdateService
 import com.coveninja.cove.backend.prefetch.PrefetchService
@@ -59,6 +61,7 @@ class LocalBackendRuntime private constructor(
     playback: PlaybackRepository,
     addonRepository: AddonRepository,
     calendarRepository: CalendarRepository,
+    discoveryRepository: DiscoveryRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
@@ -67,6 +70,7 @@ class LocalBackendRuntime private constructor(
         playback = playback,
         addons = addonRepository,
         calendar = calendarRepository,
+        discovery = discoveryRepository,
         onClose = ::close,
     )
 
@@ -229,9 +233,13 @@ class LocalBackendRuntime private constructor(
                     session = stores.profileSession,
                     library = stores.library,
                 )
+                // In-process like the calendar, not over loopback like playback: discovery
+                // has no per-request registry living behind a route, and the HTTP host is
+                // optional here.
+                val discoveryRepository = LocalDiscoveryRepository(catalog, discovery)
                 return LocalBackendRuntime(
                     stores, client, untrustedClient, scope, httpHost, media, content,
-                    playback, addonRepository, calendarRepository,
+                    playback, addonRepository, calendarRepository, discoveryRepository,
                 )
             } catch (error: Throwable) {
                 scope.cancel()

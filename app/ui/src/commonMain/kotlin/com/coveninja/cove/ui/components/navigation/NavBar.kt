@@ -77,6 +77,16 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import com.coveninja.cove.ui.components.media.MyListCategory
 
+/**
+ * How much room the floating nav bar needs above a page that must not run under it.
+ *
+ * The bar is 48.dp tall and sits 16.dp below the safe area, so this is those plus enough
+ * breathing room that content does not crowd it. Pages that deliberately *do* run beneath
+ * the bar — anything leading with a full-bleed hero — go edge-to-edge instead and apply
+ * this only to whatever part of themselves starts at the top without one.
+ */
+val NavBarClearance = 96.dp
+
 private enum class NavBarMode {
     Navigation,
     Search,

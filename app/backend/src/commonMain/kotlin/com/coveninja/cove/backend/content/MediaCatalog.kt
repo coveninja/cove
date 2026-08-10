@@ -1,7 +1,9 @@
 package com.coveninja.cove.backend.content
 
+import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
+import com.coveninja.cove.shared.model.MediaGenre
 import com.coveninja.cove.shared.model.MediaImages
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
@@ -21,4 +23,23 @@ interface MediaCatalog {
     suspend fun seasons(id: Int): List<TvSeason>
     suspend fun episodes(id: Int, season: Int): List<TvEpisode>
     suspend fun imdbId(id: Int, type: MediaType): String
+
+    /** The provider's own genre vocabulary for [type]. Ids are only meaningful alongside it. */
+    suspend fun genres(type: MediaType): List<MediaGenre>
+
+    /**
+     * One page of the catalog narrowed by any combination of genre, keyword and person.
+     *
+     * This is the whole catalog, unfiltered by taste — [com.coveninja.cove.backend.discovery.DiscoveryService]
+     * is what applies a profile on top. Browsing must be able to reach titles the viewer
+     * has already saved; recommending must not.
+     */
+    suspend fun discoverFiltered(
+        type: MediaType,
+        genreId: Int? = null,
+        keywordId: Int? = null,
+        personId: Int? = null,
+        sort: CatalogSort = CatalogSort.Popularity,
+        page: Int = 1,
+    ): List<Media>
 }

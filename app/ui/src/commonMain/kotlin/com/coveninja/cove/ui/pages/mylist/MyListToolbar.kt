@@ -3,7 +3,6 @@ package com.coveninja.cove.ui.pages.mylist
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -32,7 +31,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -55,8 +53,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.components.media.MyListCategory
@@ -65,90 +61,8 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
-
-/**
- * A two-or-more-way switch with an indicator that slides between segments.
- *
- * Segments are equal width by construction — the indicator is positioned by index alone,
- * which is what keeps the animation a cheap offset rather than a per-frame measure.
- */
-@Composable
-fun <T> SegmentedControl(
-    options: List<T>,
-    selected: T,
-    label: (T) -> String,
-    onSelect: (T) -> Unit,
-    modifier: Modifier = Modifier,
-    icon: (T) -> String? = { null },
-    showLabels: Boolean = true,
-) {
-    val colors = MaterialTheme.colorScheme
-    val selectedIndex = options.indexOf(selected).coerceAtLeast(0)
-
-    BoxWithConstraints(
-        modifier = modifier
-            .height(36.dp)
-            .clip(CircleShape)
-            .background(colors.surfaceContainer),
-    ) {
-        val segmentWidth = maxWidth / options.size
-        val indicatorOffset by animateDpAsState(
-            targetValue = segmentWidth * selectedIndex,
-            animationSpec = spring(
-                dampingRatio = 0.78f,
-                stiffness = Spring.StiffnessMediumLow,
-            ),
-            label = "SegmentedIndicator",
-        )
-
-        Box(
-            modifier = Modifier
-                .offset(x = indicatorOffset)
-                .width(segmentWidth)
-                .fillMaxHeight()
-                .padding(3.dp)
-                .clip(CircleShape)
-                .background(colors.onSurface.copy(alpha = 0.12f)),
-        )
-
-        Row(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
-            options.forEach { option ->
-                val isSelected = option == selected
-                val interaction = remember { MutableInteractionSource() }
-                Row(
-                    modifier = Modifier
-                        .width(segmentWidth)
-                        .fillMaxHeight()
-                        .clickable(
-                            interactionSource = interaction,
-                            indication = null,
-                            onClick = { onSelect(option) },
-                        ),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val contentColor = if (isSelected) colors.onSurface else colors.onSurfaceVariant
-                    icon(option)?.let { name ->
-                        IconifyIcon(
-                            icon = name,
-                            modifier = Modifier.size(15.dp),
-                            tint = contentColor,
-                        )
-                    }
-                    if (showLabels) {
-                        Text(
-                            text = label(option),
-                            color = contentColor,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+import com.coveninja.cove.ui.pages.common.SegmentedControl
+import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 
 /**
  * The category filters, with counts that roll rather than cut when the library changes.
@@ -517,40 +431,3 @@ private fun SortControl(
     }
 }
 
-@Composable
-fun ToolbarIconButton(
-    iconName: String,
-    description: String,
-    onClick: () -> Unit,
-    active: Boolean = false,
-    modifier: Modifier = Modifier,
-) {
-    val colors = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-
-    Box(
-        modifier = modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(
-                when {
-                    active -> colors.tertiary.copy(alpha = 0.18f)
-                    hovered -> colors.onSurface.copy(alpha = 0.10f)
-                    else -> colors.surfaceContainer
-                },
-            )
-            .hoverable(interaction)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            // IconifyIcon draws with a null contentDescription, so the label has to live
-            // on the button itself for a screen reader to find anything here.
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
-    ) {
-        IconifyIcon(
-            icon = iconName,
-            modifier = Modifier.size(17.dp),
-            tint = if (active) colors.tertiary else colors.onSurfaceVariant,
-        )
-    }
-}

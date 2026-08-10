@@ -30,6 +30,7 @@ import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.ProfilesState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.AppSettings
+import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.network.AddLibraryRequest
@@ -365,6 +366,28 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                 ))
             }
         }
+        // Browsing, as distinct from /discover: this reaches the whole catalog, including
+        // titles already in the library, and never runs candidates through a taste profile.
+        // /discover/genre is not a substitute — it excludes everything already saved, which
+        // is right for a recommendation and wrong for "show me every sci-fi film".
+        // Alongside /browse rather than inside the TmdbClient block: the genre vocabulary is
+        // part of MediaCatalog now, and a genre id in a /browse query is unreadable without it.
+        get("/genres") {
+            call.markLegacy(legacy)
+            call.respond(catalog.genres(call.request.queryParameters["type"].toMediaType()))
+        }
+        get("/browse") {
+            call.markLegacy(legacy)
+            val parameters = call.request.queryParameters
+            call.respond(
+                catalog.discoverFiltered(
+                    type = parameters["type"].toMediaType(default = MediaType.Movie),
+                    genreId = parameters["genre"]?.toIntOrNull()?.takeIf { it > 0 },
+                    sort = CatalogSort.fromWire(parameters["sort"]),
+                    page = parameters["page"]?.toIntOrNull() ?: 1,
+                ),
+            )
+        }
         get("/search/multi") {
             call.markLegacy(legacy)
             val query = call.request.queryParameters["q"]
@@ -453,10 +476,6 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                     ?: throw IllegalArgumentException("invalid media id")
                 val type = call.request.queryParameters["type"].toMediaType(default = MediaType.Tv)
                 call.respond(mapOf("imdb_id" to catalog.imdbId(id, type)))
-            }
-            get("/genres") {
-                call.markLegacy(legacy)
-                call.respond(catalog.genreList(call.request.queryParameters["type"].toMediaType()))
             }
         }
 

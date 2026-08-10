@@ -12,9 +12,19 @@ import com.coveninja.cove.backend.store.LocalLibraryRepository
 import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.backend.store.LocalSettingsRepository
 import com.coveninja.cove.shared.model.AppSettings
+import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.LibraryEntry
+import com.coveninja.cove.shared.model.Media
+import com.coveninja.cove.shared.model.MediaDetails
+import com.coveninja.cove.shared.model.MediaGenre
+import com.coveninja.cove.shared.model.MediaImages
+import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.MediaVideos
+import com.coveninja.cove.shared.model.TvEpisode
+import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.CoveJson
+import com.coveninja.cove.shared.network.SearchResultsDto
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -219,7 +229,47 @@ class CoreRoutesTest {
         }
     }
 
-    private fun fixture(test: (CoreRouteServices) -> Unit) {
+    // Browsing is the one catalog route whose whole job is translating a query string into
+    // catalog arguments, so what is worth asserting is the translation, not the payload.
+    @Test
+    fun browseMapsQueryParametersOntoTheCatalog() {
+        val catalog = RecordingCatalog()
+        fixture(catalog) { services ->
+            testApplication {
+                application { configureCoreRoutes(services) }
+
+                assertEquals(
+                    HttpStatusCode.OK,
+                    client.get("/api/v1/browse?type=tv&genre=18&sort=rating&page=3").status,
+                )
+                assertEquals(MediaType.Tv, catalog.lastType)
+                assertEquals(18, catalog.lastGenre)
+                assertEquals(CatalogSort.Rating, catalog.lastSort)
+                assertEquals(3, catalog.lastPage)
+
+                // An unreadable or absent sort falls back rather than failing the request:
+                // a client asking for an order this build does not have should still get
+                // titles back, not a 400.
+                assertEquals(
+                    HttpStatusCode.OK,
+                    client.get("/api/v1/browse?type=movie&sort=nonsense").status,
+                )
+                assertEquals(MediaType.Movie, catalog.lastType)
+                assertEquals(CatalogSort.Popularity, catalog.lastSort)
+                assertEquals(null, catalog.lastGenre)
+                assertEquals(1, catalog.lastPage)
+
+                // The genre vocabulary moved out of the TmdbClient-only block when it
+                // joined MediaCatalog, so it has to answer for a plain catalog too.
+                assertEquals(HttpStatusCode.OK, client.get("/api/v1/genres?type=tv").status)
+            }
+        }
+    }
+
+    private fun fixture(
+        catalog: com.coveninja.cove.backend.content.MediaCatalog? = null,
+        test: (CoreRouteServices) -> Unit,
+    ) {
         val dir = Files.createTempDirectory("cove-routes")
         DesktopDatabase.inMemory().use { database ->
             LegacyMigration(database.database, dir) { "primary" }.importIfNeeded()
@@ -235,6 +285,7 @@ class CoreRoutesTest {
                         library = LocalLibraryRepository(database.database, session, scope, ids) { "now" },
                         clientSessions = ClientSessionStore(database.database) { "now" },
                         deviceSettings = DeviceSettingsService(dir),
+                        catalog = catalog,
                     ),
                 )
             } finally {
@@ -242,4 +293,38 @@ class CoreRoutesTest {
             }
         }
     }
+}
+
+private class RecordingCatalog : com.coveninja.cove.backend.content.MediaCatalog {
+    var lastType: MediaType? = null
+    var lastGenre: Int? = null
+    var lastSort: CatalogSort? = null
+    var lastPage: Int? = null
+
+    override suspend fun discoverFiltered(
+        type: MediaType,
+        genreId: Int?,
+        keywordId: Int?,
+        personId: Int?,
+        sort: CatalogSort,
+        page: Int,
+    ): List<Media> {
+        lastType = type
+        lastGenre = genreId
+        lastSort = sort
+        lastPage = page
+        return listOf(Media(id = 1, title = "Recorded", mediaType = type))
+    }
+
+    override suspend fun genres(type: MediaType) = listOf(MediaGenre(18, "Drama"))
+    override suspend fun discover(type: MediaType, limit: Int) = emptyList<Media>()
+    override suspend fun searchMulti(query: String) = SearchResultsDto()
+    override suspend fun media(id: Int, type: MediaType) = Media(id, mediaType = type)
+    override suspend fun details(id: Int, type: MediaType) = MediaDetails()
+    override suspend fun images(id: Int, type: MediaType) = MediaImages()
+    override suspend fun videos(id: Int, type: MediaType) = MediaVideos()
+    override suspend fun similar(id: Int, type: MediaType) = emptyList<Media>()
+    override suspend fun seasons(id: Int) = emptyList<TvSeason>()
+    override suspend fun episodes(id: Int, season: Int) = emptyList<TvEpisode>()
+    override suspend fun imdbId(id: Int, type: MediaType) = "tt$id"
 }

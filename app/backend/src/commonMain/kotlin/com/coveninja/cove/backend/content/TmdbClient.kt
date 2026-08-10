@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.content
 
 import com.coveninja.cove.backend.addons.AddonCatalogItem
+import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaCastMember
 import com.coveninja.cove.shared.model.MediaDetails
@@ -207,24 +208,28 @@ class TmdbClient(
             .take(capped)
     }
 
-    suspend fun genreList(type: MediaType): List<MediaGenre> =
+    override suspend fun genres(type: MediaType): List<MediaGenre> =
         request<TmdbGenres>("/genre/${type.wireName}/list").genres
 
-    suspend fun discoverFiltered(
+    override suspend fun discoverFiltered(
         type: MediaType,
-        genreId: Int? = null,
-        keywordId: Int? = null,
-        personId: Int? = null,
-        page: Int = 1,
+        genreId: Int?,
+        keywordId: Int?,
+        personId: Int?,
+        sort: CatalogSort,
+        page: Int,
     ): List<Media> = results("/discover/${type.wireName}") {
         parameter("include_adult", false)
-        parameter("sort_by", "popularity.desc")
-        parameter("vote_count.gte", if (type == MediaType.Movie) 100 else 40)
-        parameter("page", page.coerceAtLeast(1))
+        parameter("sort_by", sort.tmdbSortBy(type))
+        // The vote floor is what makes Rating usable at all: without it TMDB happily
+        // returns titles sitting at 10.0 on three votes ahead of anything recognisable.
+        // Every other order wants it too, to keep untouched entries out of the results.
+        parameter("vote_count.gte", sort.voteFloor(type))
+        parameter("page", page.coerceIn(1, TMDB_MAX_PAGE))
         genreId?.let { parameter("with_genres", it) }
         keywordId?.let { parameter("with_keywords", it) }
         personId?.let { parameter("with_people", it) }
-    }.withType(type)
+    }.withType(type).filter { !it.posterPath.isNullOrBlank() }
 
     suspend fun resolveAddonMeta(meta: AddonCatalogItem): Media? {
         val type = when (meta.type) {
@@ -285,6 +290,40 @@ class TmdbClient(
 }
 
 class TmdbException(message: String) : RuntimeException(message)
+
+/** TMDB refuses anything beyond this and answers 400 rather than an empty page. */
+private const val TMDB_MAX_PAGE = 500
+
+/**
+ * TMDB spells the same ordering differently for films and series — a series has no
+ * `primary_release_date` and no `title`, only `first_air_date` and `name` — so the
+ * translation has to know which endpoint it is bound for.
+ */
+private fun CatalogSort.tmdbSortBy(type: MediaType): String = when (this) {
+    CatalogSort.Popularity -> "popularity.desc"
+    CatalogSort.Rating -> "vote_average.desc"
+    CatalogSort.Newest -> if (type == MediaType.Movie) {
+        "primary_release_date.desc"
+    } else {
+        "first_air_date.desc"
+    }
+    CatalogSort.Oldest -> if (type == MediaType.Movie) {
+        "primary_release_date.asc"
+    } else {
+        "first_air_date.asc"
+    }
+    CatalogSort.Title -> if (type == MediaType.Movie) "title.asc" else "name.asc"
+}
+
+/**
+ * Series are rated by far fewer people than films, so one floor applied to both would
+ * empty the series catalogue. [CatalogSort.Rating] needs a much higher bar again: it is
+ * the order that a handful of perfect scores would otherwise dominate outright.
+ */
+private fun CatalogSort.voteFloor(type: MediaType): Int {
+    val base = if (type == MediaType.Movie) 100 else 40
+    return if (this == CatalogSort.Rating) base * 5 else base
+}
 
 @Serializable
 private data class TmdbResults<T>(val results: List<T> = emptyList())

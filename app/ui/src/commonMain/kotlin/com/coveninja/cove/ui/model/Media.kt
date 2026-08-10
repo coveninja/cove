@@ -75,6 +75,12 @@ data class Media(
     val status: String? = null,
     val tagline: String? = null,
     val genres: List<String> = emptyList(),
+    /**
+     * The same genres as ids. Kept alongside the names because filtering has to be done on
+     * these: a name is localized and may have come from the baked-in fallback table, so two
+     * spellings of one genre would split a filter that an id keeps whole.
+     */
+    val genreIds: List<Int> = emptyList(),
     val directors: List<String> = emptyList(),
     val writers: List<String> = emptyList(),
     val productionCompanies: List<String> = emptyList(),
@@ -104,6 +110,12 @@ fun DomainMedia.toUiMedia(): Media {
         popularity = popularity,
         adult = adult,
         originalLanguage = originalLanguage,
+        // List-level media carries genre ids and no names. Resolving them here is what
+        // gives every card and every filter row real genres without a details fetch —
+        // without it `genres` is empty for anything that never went through details(),
+        // which is everything on Home, Explore and Search.
+        genres = TmdbGenres.namesOf(genreIds, uiType),
+        genreIds = genreIds,
     )
 }
 
@@ -155,6 +167,7 @@ fun ContentDetails.toUiMedia(): Media {
         certification = metadata.certification.ifBlank { null },
         status = metadata.status.ifBlank { null },
         genres = metadata.genres.map { it.name }.filter { it.isNotBlank() },
+        genreIds = metadata.genres.map { it.id }.filter { it > 0 },
         directors = crew.filter { it.job == "Director" }.map { it.name }.distinct(),
         writers = crew.filter {
             it.job in setOf("Writer", "Screenplay", "Teleplay", "Story")
@@ -235,6 +248,7 @@ fun Media.toDomainMedia(): DomainMedia = DomainMedia(
     popularity = popularity ?: 0.0,
     adult = adult ?: false,
     originalLanguage = originalLanguage.orEmpty(),
+    genreIds = genreIds,
 )
 
 fun TvEpisode.toUiEpisode(mediaId: String, season: Int): MediaEpisode =

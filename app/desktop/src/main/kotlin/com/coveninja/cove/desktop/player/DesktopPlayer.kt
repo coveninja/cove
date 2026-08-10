@@ -13,6 +13,12 @@ interface DesktopPlayer : AutoCloseable {
     fun setVolume(volume: Double)
 
     /**
+     * mpv's mute flag. Separate from [setVolume] because they are separate in mpv:
+     * raising the volume of a muted handle changes nothing audible.
+     */
+    fun setMuted(muted: Boolean)
+
+    /**
      * Sets an mpv option by name. Deliberately untyped: the caller is translating
      * user preferences into mpv's own vocabulary, and a typed method per option
      * would hide that without making it safer.

@@ -9,6 +9,12 @@ data class PlayerSnapshot(
     val positionSeconds: Double  = 0.0,
     val durationSeconds: Double  = 0.0,
     val volume:          Double  = 100.0,
+    /**
+     * mpv's own mute flag, which is independent of [volume] — muted playback at
+     * volume 100 is silent. Polled rather than assumed: the "start muted" setting
+     * mutes the handle at load, and nothing else would ever tell the UI about it.
+     */
+    val muted:           Boolean = false,
     /** 1.0 is normal; mpv keeps pitch corrected by default. */
     val speed:           Double  = 1.0,
     val title:           String  = "",

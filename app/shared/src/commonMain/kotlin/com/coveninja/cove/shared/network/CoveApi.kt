@@ -52,6 +52,57 @@ class CoveApi(
             parameter("q", q)
         }.requireSuccess().body()
 
+    /** The provider's genre vocabulary. Ids returned by [browse] are only readable with it. */
+    suspend fun genres(type: MediaType): List<MediaGenre> =
+        httpClient.get("${config.baseUrl}/api/genres") {
+            applyAuthHeaders()
+            parameter("type", type.wireName)
+        }.requireSuccess().body()
+
+    /**
+     * One page of the whole catalog. Unlike [discover] this is impersonal and includes
+     * titles already in the library.
+     */
+    suspend fun browse(
+        type: MediaType,
+        genreId: Int? = null,
+        sort: CatalogSort = CatalogSort.Popularity,
+        page: Int = 1,
+    ): List<Media> =
+        httpClient.get("${config.baseUrl}/api/browse") {
+            applyAuthHeaders()
+            parameter("type", type.wireName)
+            genreId?.let { parameter("genre", it) }
+            parameter("sort", sort.wireName)
+            parameter("page", page)
+        }.requireSuccess().body()
+
+    // ── Personalized discovery ──────────────────────────────────────────────
+    //
+    // Each of these is backed by a taste profile that costs one metadata request per
+    // saved title on a cold cache. They are not first-paint calls.
+
+    suspend fun discoverTopGenres(type: MediaType, limit: Int): List<DiscoveryTasteDto> =
+        httpClient.get("${config.baseUrl}/api/discover/genres") {
+            applyAuthHeaders()
+            parameter("type", type.wireName)
+            parameter("limit", limit)
+        }.requireSuccess().body()
+
+    suspend fun discoverSimilarTo(type: MediaType, tmdbId: Int, limit: Int): List<Media> =
+        httpClient.get("${config.baseUrl}/api/discover/similar-to") {
+            applyAuthHeaders()
+            parameter("type", type.wireName)
+            parameter("tmdb_id", tmdbId)
+            parameter("limit", limit)
+        }.requireSuccess().body()
+
+    suspend fun discoverFavorites(limit: Int): List<FavoriteSignalDto> =
+        httpClient.get("${config.baseUrl}/api/discover/favorites") {
+            applyAuthHeaders()
+            parameter("limit", limit)
+        }.requireSuccess().body()
+
     // ── Media metadata ──────────────────────────────────────────────────────
 
     suspend fun media(id: Int, type: MediaType): Media =

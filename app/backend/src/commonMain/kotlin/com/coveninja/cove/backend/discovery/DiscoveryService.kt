@@ -1,7 +1,7 @@
 package com.coveninja.cove.backend.discovery
 
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
-import com.coveninja.cove.backend.content.TmdbClient
+import com.coveninja.cove.backend.content.MediaCatalog
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalSettingsRepository
@@ -17,9 +17,10 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import java.time.Clock
-import java.time.Instant
 import kotlin.math.max
+import kotlin.math.pow
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -34,15 +35,21 @@ import kotlinx.serialization.Serializable
 /**
  * Public Kotlin implementation of personalized discovery. Candidate generation
  * remains with TMDB; local taste only filters and re-ranks vetted candidates.
+ *
+ * Lives in commonMain so Android gets the same recommendations the desktop does. Like
+ * [com.coveninja.cove.backend.calendar.CalendarService], the only thing that ever kept it
+ * desktop-only was `java.time`; it needs nothing from the JVM that kotlin-stdlib does not
+ * already provide. It depends on [MediaCatalog] rather than a concrete client so a fake
+ * can drive it in tests without an HTTP engine.
  */
 class DiscoveryService(
     private val database: CoveDatabase,
     private val session: ActiveProfileSession,
     private val settings: LocalSettingsRepository,
-    private val catalog: TmdbClient,
+    private val catalog: MediaCatalog,
     private val customHttpClient: HttpClient,
     private val customUrlPolicy: AddonUrlPolicy,
-    private val clock: Clock = Clock.systemUTC(),
+    private val clock: Clock = Clock.System,
 ) {
     private val cacheMutex = Mutex()
     private var cached: CachedProfile? = null
@@ -202,11 +209,11 @@ class DiscoveryService(
             dismissals.forEach { append(it.tmdb_id).append(it.media_type).append(it.dismissed_at) }
             removals.forEach { append(it.tmdb_id).append(it.media_type).append(it.removed_at) }
         }.hashCode()
-        cached?.takeIf { it.fingerprint == fingerprint && clock.millis() - it.createdAt < CACHE_TTL_MILLIS }
+        cached?.takeIf { it.fingerprint == fingerprint && clock.now().toEpochMilliseconds() - it.createdAt < CACHE_TTL_MILLIS }
             ?.let { return it.profile }
 
         return cacheMutex.withLock {
-            cached?.takeIf { it.fingerprint == fingerprint && clock.millis() - it.createdAt < CACHE_TTL_MILLIS }
+            cached?.takeIf { it.fingerprint == fingerprint && clock.now().toEpochMilliseconds() - it.createdAt < CACHE_TTL_MILLIS }
                 ?.let { return@withLock it.profile }
             val semaphore = Semaphore(6)
             val signals = coroutineScope {
@@ -231,7 +238,7 @@ class DiscoveryService(
                 dismissals.forEach { add("${it.media_type}:${it.tmdb_id}") }
                 removals.forEach { add("${it.media_type}:${it.tmdb_id}") }
             })
-            cached = CachedProfile(fingerprint, clock.millis(), profile)
+            cached = CachedProfile(fingerprint, clock.now().toEpochMilliseconds(), profile)
             profile
         }
     }
@@ -280,7 +287,7 @@ class DiscoveryService(
             ContributingTitle(it.tmdbId, it.type.wireName, it.title, it.posterPath, it.weight)
         }.sortedByDescending { it.weight }
         val favorites = contributors.filter { it.weight > 0 }.map {
-            FavoriteSignal(it.tmdbId, it.mediaType, it.weight)
+            FavoriteSignal(it.tmdbId, it.mediaType, it.weight, it.title)
         }
         val total = movieEngaged + tvEngaged
         return TasteProfile(
@@ -337,9 +344,9 @@ class DiscoveryService(
             else -> 0.0
         } + (rating?.let { (it - 2.5) * 1.5 } ?: 0.0)
         val ageDays = updatedAt.toInstantOrNull()?.let {
-            max(0.0, (clock.instant().epochSecond - it.epochSecond) / 86_400.0)
+            max(0.0, (clock.now().epochSeconds - it.epochSeconds) / 86_400.0)
         } ?: 0.0
-        return base * Math.pow(0.5, ageDays / 365.0)
+        return base * 0.5.pow(ageDays / 365.0)
     }
 
     private data class TasteSignal(
@@ -384,6 +391,10 @@ data class FavoriteSignal(
     @SerialName("tmdb_id") val tmdbId: Int,
     @SerialName("media_type") val mediaType: String,
     val weight: Double,
+    // Defaulted so an older client reading this payload is unaffected. Explore needs it to
+    // title a rail after the thing that produced it — "Because you watched Fight Club"
+    // cannot be assembled from an id alone without a second lookup.
+    val title: String = "",
 )
 
 @Serializable

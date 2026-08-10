@@ -91,6 +91,7 @@ fun PlayerControls(
     onTogglePause: () -> Unit,
     onSeek: (Double) -> Unit,
     onSetVolume: (Double) -> Unit,
+    onSetMuted: (Boolean) -> Unit,
     onSelectAudio: (Int) -> Unit,
     onSelectSubtitle: (Int?) -> Unit,
     scaling: VideoScaling,
@@ -150,7 +151,12 @@ fun PlayerControls(
                 style = MaterialTheme.typography.labelLarge,
             )
 
-            VolumeControl(volume = status.volume, onSetVolume = onSetVolume)
+            VolumeControl(
+                volume = status.volume,
+                muted = status.muted,
+                onSetVolume = onSetVolume,
+                onSetMuted = onSetMuted,
+            )
 
             Box(modifier = Modifier.weight(1f))
 
@@ -453,9 +459,19 @@ private fun PlayPauseButton(paused: Boolean, onClick: () -> Unit) {
     }
 }
 
+/**
+ * @param muted the player's own mute flag. Silence has two independent causes — a zero
+ *   volume and a muted player — and the icon has to report either, or a player muted at
+ *   load looks unmuted at full volume and no amount of dragging the slider helps.
+ */
 @Composable
-private fun VolumeControl(volume: Double, onSetVolume: (Double) -> Unit) {
-    val muted = volume <= 0.0
+private fun VolumeControl(
+    volume: Double,
+    muted: Boolean,
+    onSetVolume: (Double) -> Unit,
+    onSetMuted: (Boolean) -> Unit,
+) {
+    val silent = muted || volume <= 0.0
     var trackWidth by remember { mutableStateOf(0) }
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -470,10 +486,18 @@ private fun VolumeControl(volume: Double, onSetVolume: (Double) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         ControlButton(
-            icon = if (muted) "lucide:volume-x" else "lucide:volume-2",
-            // Restore to full rather than to the pre-mute level: tracking that
-            // would need state this control does not own.
-            onClick = { onSetVolume(if (muted) 100.0 else 0.0) },
+            icon = if (silent) "lucide:volume-x" else "lucide:volume-2",
+            onClick = {
+                if (silent) {
+                    onSetMuted(false)
+                    // A player left at zero volume needs a level to come back to;
+                    // restore to full rather than track a pre-mute level this
+                    // control does not own.
+                    if (volume <= 0.0) onSetVolume(100.0)
+                } else {
+                    onSetMuted(true)
+                }
+            },
         )
 
         Box(
@@ -510,7 +534,9 @@ private fun VolumeControl(volume: Double, onSetVolume: (Double) -> Unit) {
                     .fillMaxWidth((volume / 100.0).coerceIn(0.0, 1.0).toFloat())
                     .height(barHeight)
                     .clip(RoundedCornerShape(3.dp))
-                    .background(Color.White.copy(alpha = 0.9f)),
+                    // Dimmed while muted: the level is still what it was, but nothing
+                    // is coming out, and a bright full bar over silence reads as a bug.
+                    .background(Color.White.copy(alpha = if (silent) 0.3f else 0.9f)),
             )
         }
     }

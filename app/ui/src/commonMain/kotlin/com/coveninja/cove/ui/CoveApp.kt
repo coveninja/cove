@@ -44,6 +44,7 @@ import com.coveninja.cove.ui.components.media.details.MediaSharedPart
 import com.coveninja.cove.ui.components.media.drag.MediaDragPayload
 import com.coveninja.cove.ui.components.media.drag.MediaDragPreview
 import com.coveninja.cove.ui.components.navigation.NavBar
+import com.coveninja.cove.ui.components.navigation.NavBarClearance
 import com.coveninja.cove.ui.components.navigation.NavDestination
 import com.coveninja.cove.ui.components.player.PlayerLayer
 import com.coveninja.cove.ui.model.Media
@@ -217,16 +218,21 @@ private fun CoveAppContent() {
                     )
                 }
 
-            // Home is intentionally edge-to-edge so FeaturedMedia can render beneath
-            // the floating navigation bar. Other destinations retain top clearance.
+            // Home and Explore are intentionally edge-to-edge so their heroes can render
+            // beneath the floating navigation bar — anything else leaves a band of bare
+            // background between the bar and the top of the image. Both pages then apply
+            // NavBarClearance themselves to whichever parts of them do not lead with a
+            // hero. Other destinations take the clearance wholesale.
             val pageModifier =
-                if (selectedDestination == NavDestination.Home) {
+                if (selectedDestination == NavDestination.Home ||
+                    selectedDestination == NavDestination.Explore
+                ) {
                     Modifier.fillMaxSize()
                 } else {
                     Modifier
                         .fillMaxSize()
                         .safeContentPadding()
-                        .padding(top = 96.dp)
+                        .padding(top = NavBarClearance)
                 }
 
             Box(modifier = pageModifier) {
@@ -254,6 +260,7 @@ private fun CoveAppContent() {
 
                     NavDestination.Explore -> ExplorePage(
                         mediaCard = pageMediaCard,
+                        onOpenMedia = { detailsState.open(it) },
                     )
 
                     NavDestination.Search -> SearchPage(

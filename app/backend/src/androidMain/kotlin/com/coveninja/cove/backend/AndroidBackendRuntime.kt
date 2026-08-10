@@ -1,12 +1,16 @@
 package com.coveninja.cove.backend
 
 import android.content.Context
+import com.coveninja.cove.backend.addons.BasicAddonUrlPolicy
 import com.coveninja.cove.backend.calendar.CalendarService
 import com.coveninja.cove.backend.calendar.LocalCalendarRepository
 import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
+import com.coveninja.cove.backend.discovery.DiscoveryService
+import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.CalendarRepository
+import com.coveninja.cove.shared.data.DiscoveryRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailableAddonRepository
 import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
@@ -28,6 +32,7 @@ class AndroidBackendRuntime private constructor(
     private val scope: CoroutineScope,
     content: LocalContentRepository,
     calendar: CalendarRepository,
+    discovery: DiscoveryRepository,
 ) : AutoCloseable {
     private var closed = false
 
@@ -41,6 +46,9 @@ class AndroidBackendRuntime private constructor(
         addons = UnavailableAddonRepository,
         // The calendar needs only the database and TMDB, both of which Android has.
         calendar = calendar,
+        // Likewise discovery, now that DiscoveryService lives in commonMain: Explore is
+        // the same page here as on the desktop, personalized rails included.
+        discovery = discovery,
         onClose = ::close,
     )
 
@@ -83,7 +91,22 @@ class AndroidBackendRuntime private constructor(
                     session = stores.repositories.profileSession,
                     library = stores.repositories.library,
                 )
-                return AndroidBackendRuntime(stores, client, scope, content, calendar)
+                // The custom-algorithm hook needs an HTTP client and a URL policy even
+                // though nothing on Android configures one yet; BasicAddonUrlPolicy is the
+                // commonMain structural check, which is the right floor for a URL the user
+                // typed. Desktop swaps in the stricter DNS/IP-aware policy.
+                val discovery = LocalDiscoveryRepository(
+                    catalog = catalog,
+                    service = DiscoveryService(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        settings = stores.repositories.settings,
+                        catalog = catalog,
+                        customHttpClient = client,
+                        customUrlPolicy = BasicAddonUrlPolicy,
+                    ),
+                )
+                return AndroidBackendRuntime(stores, client, scope, content, calendar, discovery)
             } catch (error: Throwable) {
                 scope.cancel()
                 client.close()

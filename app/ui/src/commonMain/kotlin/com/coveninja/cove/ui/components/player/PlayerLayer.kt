@@ -469,6 +469,7 @@ fun PlayerLayer(
                         onTogglePause = { host?.togglePause() },
                         onSeek = { host?.seek(it) },
                         onSetVolume = { host?.setVolume(it) },
+                        onSetMuted = { host?.setMuted(it) },
                         onSelectAudio = { host?.selectAudioTrack(it) },
                         onSelectSubtitle = { host?.selectSubtitleTrack(it) },
                         scaling = scaling,

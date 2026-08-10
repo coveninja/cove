@@ -30,6 +30,25 @@ data class ProfilesResponseDto(
     @SerialName("active_profile_id") val activeProfileId: String = "",
 )
 
+// /api/discover/genres, /people, /keywords — a ranked taste entry. The score is the raw
+// profile weight and is deliberately not shown to anyone; it only fixes the order.
+@Serializable
+data class DiscoveryTasteDto(
+    val id: Int = 0,
+    val name: String = "",
+    val score: Double = 0.0,
+)
+
+// /api/discover/favorites. `title` was added later and so has to tolerate its own absence
+// from an older host, which is what the empty default is for.
+@Serializable
+data class FavoriteSignalDto(
+    @SerialName("tmdb_id") val tmdbId: Int = 0,
+    @SerialName("media_type") val mediaType: MediaType = MediaType.Movie,
+    val weight: Double = 0.0,
+    val title: String = "",
+)
+
 // /api/update/check
 @Serializable
 data class UpdateCheckDto(

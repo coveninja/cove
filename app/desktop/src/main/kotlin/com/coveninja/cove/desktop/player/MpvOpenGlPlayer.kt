@@ -144,6 +144,15 @@ class MpvOpenGlPlayer(
         command("set", "video-zoom", zoom.toString())
     }
 
+    override fun setMuted(muted: Boolean) {
+        submitCommand("set mute") { library, target ->
+            val v = Memory(Int.SIZE_BYTES.toLong()).apply {
+                setInt(0, if (muted) 1 else 0)
+            }
+            library.mpv_set_property(target, "mute", Mpv.FORMAT_FLAG, v)
+        }
+    }
+
     override fun selectAudioTrack(id: Int) = command("set", "aid", id.toString())
 
     override fun selectSubtitleTrack(id: Int?) =
@@ -263,6 +272,7 @@ class MpvOpenGlPlayer(
             val position = getDouble(library, target, "time-pos")   ?: 0.0
             val duration = getDouble(library, target, "duration")   ?: 0.0
             val volume   = getDouble(library, target, "volume")     ?: _snapshot.value.volume
+            val muted    = getFlag(library, target, "mute")          ?: _snapshot.value.muted
             val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
             val codec    = if (idle) "" else getString(library, target, "video-codec").orEmpty()
             val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
@@ -279,6 +289,7 @@ class MpvOpenGlPlayer(
                 positionSeconds = position.finiteOrZero(),
                 durationSeconds = duration.finiteOrZero(),
                 volume          = volume.coerceIn(0.0, 100.0),
+                muted           = muted,
                 title           = title,
                 videoCodec      = codec,
                 hwdecCurrent    = hwdec,

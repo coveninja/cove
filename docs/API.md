@@ -27,7 +27,7 @@ All paths below are relative to `/api/v1`.
 | Health/session | `GET /ping`; `GET`, `POST`, `DELETE /client-session` |
 | Auth/sync | `POST /auth/register`, `/register/confirm`, `/login`, `/otp`, `/verify-otp`, `/refresh`, `/logout`, `/sync`; `GET /auth/me` |
 | Trakt | `POST /trakt/device-code`, `/poll`, `/unlink`, `/scrobble`, `/sync`; `GET /trakt/status` |
-| TMDB/content | `GET /discover`, `/search/multi`, `/search`, `/keywords`, `/media`, `/details`, `/images`, `/logos`, `/videos`, `/similar`, `/imdb`, `/person`, `/provider`, `/genres`, `/tv/seasons`, `/tv/episodes` |
+| TMDB/content | `GET /discover`, `/browse`, `/search/multi`, `/search`, `/keywords`, `/media`, `/details`, `/images`, `/logos`, `/videos`, `/similar`, `/imdb`, `/person`, `/provider`, `/genres`, `/tv/seasons`, `/tv/episodes` |
 | Personalized discovery | `GET /discover/genres`, `/keywords`, `/people`, `/genre`, `/keyword`, `/person`, `/similar-to`, `/favorites`, `/insights`; `POST /discover/algorithm/test` |
 | Sources | `GET /streams`, `/subtitles`, `/watch-options`, `/timestamps`, `/quality/batch` |
 | Media boundary | `POST /streams/probe`, `/prefetch-download`; `GET /play`, `/torrent/{hash}`, `/progress`, `/progress/stream`, `/speedtest`, `/subtitle-proxy`, `/img/{size}/{file}` |
@@ -40,6 +40,16 @@ All paths below are relative to `/api/v1`.
 `/quality/batch` is newline-delimited JSON. `/progress/stream` is server-sent
 events. `/play`, `/torrent`, `/subtitle-proxy`, `/img`, and `/speedtest` may
 stream response bodies instead of materializing them in memory.
+
+`/browse` and `/discover` both return `Media` lists and are easy to confuse.
+`/browse` is the whole catalog — `type`, optional `genre`, `sort`
+(`popularity`|`rating`|`newest`|`oldest`|`title`, unknown values falling back to
+popularity) and `page` — and deliberately includes titles already in the library,
+because browsing has to be able to reach them. `/discover` is personalized: when a
+discovery service is present it ranks by the profile's taste and excludes anything
+already saved or dismissed. Use `/browse` to let someone look for a title, and
+`/discover` to suggest one. Genre ids are only meaningful alongside `/genres`, whose
+vocabularies for films and series differ.
 
 ## Addressing media
 

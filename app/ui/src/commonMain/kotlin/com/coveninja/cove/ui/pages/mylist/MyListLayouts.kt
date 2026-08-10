@@ -1,11 +1,7 @@
 package com.coveninja.cove.ui.pages.mylist
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -42,7 +38,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -60,6 +55,8 @@ import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.pages.common.StaggeredAppear
+import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
 import kotlinx.datetime.LocalDate
 import kotlin.math.roundToInt
@@ -353,61 +350,4 @@ private fun SelectionLayer(
 /** Cards are 2:3; the overlay has to be too, or it would cover the gap below them. */
 private fun Modifier.matchCardBounds(): Modifier = fillMaxWidth().aspectRatio(2f / 3f)
 
-/**
- * Fades and lifts an item in on first composition, offset by its position so a screenful
- * arrives as a ripple rather than all at once. The offset is capped: past the first row or
- * two the delay stops reading as intent and starts reading as lag.
- */
-@Composable
-private fun StaggeredAppear(index: Int, content: @Composable () -> Unit) {
-    val progress = remember { Animatable(0f) }
 
-    LaunchedEffect(Unit) {
-        progress.animateTo(
-            targetValue = 1f,
-            animationSpec = tween(
-                durationMillis = 260,
-                delayMillis = (index.coerceIn(0, MAX_STAGGER_STEPS) * STAGGER_STEP_MILLIS),
-                easing = FastOutSlowInEasing,
-            ),
-        )
-    }
-
-    Box(
-        modifier = Modifier.graphicsLayer {
-            alpha = progress.value
-            translationY = (1f - progress.value) * 16.dp.toPx()
-        },
-    ) {
-        content()
-    }
-}
-
-@Composable
-fun ScrollToTopButton(
-    visible: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    AnimatedVisibility(
-        visible = visible,
-        modifier = modifier,
-        enter = fadeIn(tween(160)) + androidx.compose.animation.scaleIn(
-            initialScale = 0.7f,
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessMedium,
-            ),
-        ),
-        exit = fadeOut(tween(120)) + androidx.compose.animation.scaleOut(targetScale = 0.7f),
-    ) {
-        ToolbarIconButton(
-            iconName = "lucide:arrow-up",
-            description = "Scroll to top",
-            onClick = onClick,
-        )
-    }
-}
-
-private const val STAGGER_STEP_MILLIS = 24
-private const val MAX_STAGGER_STEPS = 9

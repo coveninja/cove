@@ -99,10 +99,25 @@ class MpvVideoPlayerHost(
             pendingVolume = clamped
         } else {
             active.setVolume(clamped)
+            // Reaching for the volume means "I want to hear this", so a deliberate
+            // raise clears the mute too. Without this, turning the slider up on a
+            // player muted at load does nothing audible and offers no clue why.
+            if (clamped > 0.0 && _status.value.muted) {
+                active.setMuted(false)
+            }
             // mpv's property poll runs on a 200 ms timer; reflecting the change now
             // keeps the volume slider from snapping back under the pointer.
-            _status.value = _status.value.copy(volume = clamped)
+            _status.value = _status.value.copy(
+                volume = clamped,
+                muted = if (clamped > 0.0) false else _status.value.muted,
+            )
         }
+    }
+
+    override fun setMuted(muted: Boolean) {
+        val active = player ?: return
+        active.setMuted(muted)
+        _status.value = _status.value.copy(muted = muted)
     }
 
     override fun setScaling(scaling: VideoScaling) {
@@ -304,6 +319,7 @@ private fun PlayerSnapshot.playbackStatus(
     positionSeconds = positionSeconds,
     durationSeconds = durationSeconds,
     volume = volume,
+    muted = muted,
     bufferingPercent = cacheBufferingPercent,
     waitingForData = pausedForCache,
     fileLoaded = fileLoaded,

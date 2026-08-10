@@ -132,6 +132,13 @@ class MpvSoftwarePlayer(
         if (result < 0) recordError(result, "set volume")
     }
 
+    override fun setMuted(muted: Boolean) {
+        val target = handle.get() ?: return
+        val value = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (muted) 1 else 0) }
+        val result = Mpv.library().mpv_set_property(target, "mute", Mpv.FORMAT_FLAG, value)
+        if (result < 0) recordError(result, "set mute")
+    }
+
     // set, not set-property: mpv accepts "no" for sid, which the typed property
     // setters cannot express.
     override fun setOption(name: String, value: String) = command("set", name, value)
@@ -289,6 +296,7 @@ class MpvSoftwarePlayer(
             val position = getDouble(library, target, "time-pos")       ?: 0.0
             val duration = getDouble(library, target, "duration")       ?: 0.0
             val volume   = getDouble(library, target, "volume")         ?: _snapshot.value.volume
+            val muted    = getFlag(library, target, "mute")             ?: _snapshot.value.muted
             val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
             val codec    = if (idle) "" else getString(library, target, "video-codec").orEmpty()
             val tracks   = if (idle) "" else getString(library, target, "track-list").orEmpty()
@@ -305,6 +313,7 @@ class MpvSoftwarePlayer(
                 positionSeconds = position.finiteOrZero(),
                 durationSeconds = duration.finiteOrZero(),
                 volume          = volume.coerceIn(0.0, 100.0),
+                muted           = muted,
                 title           = title,
                 videoCodec      = codec,
                 // Real now that the path asks for auto-copy: the decode can still be
