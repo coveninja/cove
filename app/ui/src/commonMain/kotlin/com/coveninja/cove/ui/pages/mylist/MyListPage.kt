@@ -45,9 +45,11 @@ import com.coveninja.cove.ui.pages.common.PageHeader
 import com.coveninja.cove.ui.pages.common.PageLoading
 import com.coveninja.cove.ui.pages.mylist.calendar.CalendarAgenda
 import com.coveninja.cove.ui.pages.mylist.calendar.CalendarMonthBar
+import com.coveninja.cove.ui.pages.mylist.calendar.CalendarSectionState
 import com.coveninja.cove.ui.pages.mylist.calendar.availableNow
 import com.coveninja.cove.ui.pages.mylist.calendar.groupByDay
 import com.coveninja.cove.ui.pages.mylist.calendar.itemsInMonth
+import com.coveninja.cove.ui.pages.mylist.calendar.rememberCalendarSections
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.MediaActions
@@ -129,6 +131,9 @@ private fun MyListReady(
     modifier: Modifier = Modifier,
 ) {
     var view by remember { mutableStateOf(MyListView.Library) }
+    // Owned here rather than inside the calendar so a trip to the Library tab does not
+    // silently unfold everything the viewer collapsed.
+    val sections = rememberCalendarSections()
 
     Column(modifier = modifier.fillMaxSize()) {
         // The switch sits beside the title where there is room and beneath it where there
@@ -193,6 +198,7 @@ private fun MyListReady(
 
                 MyListView.Calendar -> CalendarView(
                     index = index,
+                    sections = sections,
                     onOpenMedia = onOpenMedia,
                     onPlayMedia = onPlayMedia,
                     onPlayEpisode = onPlayEpisode,
@@ -378,6 +384,7 @@ private fun LibraryView(
 @Composable
 private fun CalendarView(
     index: LibraryIndex,
+    sections: CalendarSectionState,
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
     onPlayEpisode: (Media, Int, Int, String?) -> Unit,
@@ -424,6 +431,7 @@ private fun CalendarView(
                     today = today,
                     // Backlog belongs to now, not to whichever month is being browsed.
                     showAvailable = month == today.yearMonth,
+                    sections = sections,
                     state = listState,
                     contentPadding = PaddingValues(
                         start = 24.dp,

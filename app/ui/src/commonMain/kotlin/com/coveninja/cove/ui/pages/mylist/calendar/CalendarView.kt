@@ -5,9 +5,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -40,7 +43,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,12 +53,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.shared.model.CalendarItem
-import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.mylist.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
@@ -165,12 +173,34 @@ fun CalendarMonthBar(
     }
 }
 
+/**
+ * Which sections the viewer has folded away, by section key.
+ *
+ * Held outside the agenda so it survives switching to the Library tab and back, and so
+ * collapsing "Available now" — a backlog that can be dozens of episodes long — is not
+ * undone the moment the calendar recomposes.
+ */
+@Stable
+class CalendarSectionState {
+    private val collapsedKeys = mutableStateListOf<String>()
+
+    fun isCollapsed(key: String): Boolean = key in collapsedKeys
+
+    fun toggle(key: String) {
+        if (!collapsedKeys.remove(key)) collapsedKeys.add(key)
+    }
+}
+
+@Composable
+fun rememberCalendarSections(): CalendarSectionState = remember { CalendarSectionState() }
+
 @Composable
 fun CalendarAgenda(
     available: List<CalendarItem>,
     days: List<CalendarDay>,
     today: LocalDate,
     showAvailable: Boolean,
+    sections: CalendarSectionState,
     state: LazyListState,
     contentPadding: PaddingValues,
     onOpen: (CalendarItem) -> Unit,
@@ -197,39 +227,65 @@ fun CalendarAgenda(
         // aired six weeks ago is still waiting, and filing it under the month it aired
         // would hide the one thing the viewer came here to find.
         if (showAvailable && available.isNotEmpty()) {
+            val key = AVAILABLE_SECTION_KEY
+            val collapsed = sections.isCollapsed(key)
+
             item(key = "available-header") {
                 CalendarSectionHeader(
                     title = "Available now",
                     detail = "${available.size} waiting",
+                    collapsed = collapsed,
                     accent = true,
+                    onToggle = { sections.toggle(key) },
+                    modifier = Modifier.animateItem(),
                 )
             }
-            items(available, key = { "available-${it.id}" }) { item ->
-                Box(modifier = Modifier.animateItem()) {
-                    CalendarRow(
-                        item = item,
-                        today = today,
-                        onOpen = { onOpen(item) },
-                        onPlay = { onPlay(item) },
-                    )
+            // Collapsed sections emit no rows at all rather than hiding them: a lazy list
+            // should not carry the cost of what is not on screen, and animateItem gives
+            // the fold its exit for free.
+            if (!collapsed) {
+                items(available, key = { "available-${it.id}" }) { item ->
+                    Box(modifier = Modifier.animateItem()) {
+                        CalendarRow(
+                            item = item,
+                            today = today,
+                            onOpen = { onOpen(item) },
+                            onPlay = { onPlay(item) },
+                        )
+                    }
                 }
             }
         }
 
         days.forEach { day ->
-            item(key = "day-${day.key}") {
-                Box(modifier = Modifier.animateItem()) {
-                    CalendarSectionHeader(title = day.label, detail = day.relative)
-                }
+            val key = "day-${day.key}"
+            val collapsed = sections.isCollapsed(key)
+
+            item(key = key) {
+                CalendarSectionHeader(
+                    title = day.label,
+                    // The count earns its place once it is either not obvious (more than
+                    // one) or not visible (folded away).
+                    detail = if (collapsed || day.items.size > 1) {
+                        "${day.relative}  ·  ${day.items.size}"
+                    } else {
+                        day.relative
+                    },
+                    collapsed = collapsed,
+                    onToggle = { sections.toggle(key) },
+                    modifier = Modifier.animateItem(),
+                )
             }
-            items(day.items, key = { "${day.key}-${it.id}" }) { item ->
-                Box(modifier = Modifier.animateItem()) {
-                    CalendarRow(
-                        item = item,
-                        today = today,
-                        onOpen = { onOpen(item) },
-                        onPlay = { onPlay(item) },
-                    )
+            if (!collapsed) {
+                items(day.items, key = { "${day.key}-${it.id}" }) { item ->
+                    Box(modifier = Modifier.animateItem()) {
+                        CalendarRow(
+                            item = item,
+                            today = today,
+                            onOpen = { onOpen(item) },
+                            onPlay = { onPlay(item) },
+                        )
+                    }
                 }
             }
         }
@@ -240,14 +296,48 @@ fun CalendarAgenda(
 private fun CalendarSectionHeader(
     title: String,
     detail: String,
+    collapsed: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
     accent: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (collapsed) -90f else 0f,
+        animationSpec = spring(
+            dampingRatio = 0.7f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "CalendarSectionChevron",
+    )
+
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (hovered) colors.onSurface.copy(alpha = 0.06f) else Color.Transparent,
+            )
+            .hoverable(interaction)
+            .clickable(interactionSource = interaction, indication = null, onClick = onToggle)
+            .semantics {
+                contentDescription =
+                    if (collapsed) "$title, collapsed. Expand" else "$title, expanded. Collapse"
+            }
+            .padding(top = 12.dp, bottom = 4.dp, start = 4.dp, end = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        IconifyIcon(
+            icon = "lucide:chevron-down",
+            modifier = Modifier
+                .size(15.dp)
+                .graphicsLayer { rotationZ = chevronRotation },
+            tint = if (accent) colors.tertiary else colors.onSurfaceVariant,
+        )
         Text(
             text = title.uppercase(),
             color = if (accent) colors.tertiary else colors.onBackground,
@@ -267,6 +357,8 @@ private fun CalendarSectionHeader(
         )
     }
 }
+
+private const val AVAILABLE_SECTION_KEY = "available"
 
 @Composable
 private fun CalendarRow(
@@ -299,13 +391,25 @@ private fun CalendarRow(
                 .aspectRatio(2f / 3f)
                 .clip(RoundedCornerShape(6.dp))
                 .background(colors.surfaceContainer),
+            contentAlignment = Alignment.Center,
         ) {
-            AsyncImage(
-                model = tmdbImageSize(item.posterPath.takeIf { it.isNotBlank() }, "w185"),
-                contentDescription = "${item.title} poster",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
+            val artwork = calendarImageUrl(item)
+            if (artwork == null) {
+                // A tinted glyph rather than an empty box, so "this title has no art" does
+                // not look like "the image failed to load".
+                IconifyIcon(
+                    icon = if (item.type == MediaType.Movie) "lucide:film" else "lucide:tv",
+                    modifier = Modifier.size(16.dp),
+                    tint = colors.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            } else {
+                AsyncImage(
+                    model = artwork,
+                    contentDescription = "${item.title} poster",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
         }
 
         Column(

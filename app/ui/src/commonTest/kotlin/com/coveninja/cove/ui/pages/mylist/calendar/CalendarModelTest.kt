@@ -140,6 +140,41 @@ class CalendarModelTest {
         assertTrue(backlog.id != upcoming.id)
     }
 
+    // The bug this guards: the row used tmdbImageSize, which only rewrites the size
+    // segment of an existing URL. Handed a bare TMDB path it returns it unchanged, so
+    // every calendar row rendered no artwork at all.
+    // Mutation applied to verify: returned the path unchanged instead of prefixing it →
+    // test failed, the "URL" was still "/poster.jpg".
+    @Test
+    fun `a bare TMDB path becomes a loadable URL`() {
+        val url = calendarImageUrl(item("2026-08-10").copy(posterPath = "/poster.jpg"))
+
+        assertEquals("https://image.tmdb.org/t/p/w185/poster.jpg", url)
+    }
+
+    // Mutation applied to verify: prefixed unconditionally → test failed, an already
+    // proxied URL came back doubled up behind the TMDB host.
+    @Test
+    fun `an already absolute URL is left alone`() {
+        val proxied = "http://127.0.0.1:6969/api/v1/img/w500/abc.jpg"
+        val url = calendarImageUrl(item("2026-08-10").copy(posterPath = proxied))
+
+        assertEquals(proxied, url)
+    }
+
+    // Mutation applied to verify: read stillPath first → test failed, an episode with
+    // both showed the still where the consistent poster slot expects a poster.
+    @Test
+    fun `the poster wins and the still fills in for titles without one`() {
+        val both = item("2026-08-10").copy(posterPath = "/poster.jpg", stillPath = "/still.jpg")
+        assertEquals("https://image.tmdb.org/t/p/w185/poster.jpg", calendarImageUrl(both))
+
+        val stillOnly = item("2026-08-10").copy(posterPath = "", stillPath = "/still.jpg")
+        assertEquals("https://image.tmdb.org/t/p/w185/still.jpg", calendarImageUrl(stillOnly))
+
+        assertNull(calendarImageUrl(item("2026-08-10").copy(posterPath = "", stillPath = "")))
+    }
+
     // Mutation applied to verify: indexed the month tables from zero → test failed by one
     // month across the board.
     @Test

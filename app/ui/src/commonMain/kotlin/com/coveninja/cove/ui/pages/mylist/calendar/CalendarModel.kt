@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.pages.mylist.calendar
 
 import com.coveninja.cove.shared.model.CalendarItem
+import com.coveninja.cove.ui.model.displayImageUrl
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.YearMonth
 import kotlinx.datetime.daysUntil
@@ -78,6 +79,20 @@ fun monthLabel(month: YearMonth): String =
 
 fun CalendarItem.parsedDate(): LocalDate? =
     runCatching { LocalDate.parse(date) }.getOrNull()
+
+/**
+ * The thumbnail for a calendar row, as a URL Coil can actually load.
+ *
+ * Calendar items carry TMDB's own paths (`/abc.jpg`), not the absolute proxied URLs the
+ * rest of the UI passes around, so they need [displayImageUrl] — which prefixes a bare
+ * path and leaves an already-absolute URL alone. Handing them to `tmdbImageSize` instead
+ * yields the raw path back unchanged and silently renders nothing.
+ *
+ * The poster comes first because every title has one; an episode still is the fallback for
+ * the rare item with no poster, so the row is never blank when any art exists.
+ */
+fun calendarImageUrl(item: CalendarItem, size: String = "w185"): String? =
+    displayImageUrl(item.posterPath.ifBlank { item.stillPath }, size)
 
 /**
  * Episode identity as `S3 E7`, or null for movies. Separate from the row composable so the
