@@ -12,6 +12,10 @@ class DesktopDatabaseMigrationTest {
         val path = Files.createTempDirectory("cove-schema-migration").resolve("cove.db")
         JdbcSqliteDriver("jdbc:sqlite:${path.toAbsolutePath()}").use { driver ->
             CoveDatabase.Schema.create(driver)
+            // A version-3 database is faked by creating the current schema and dropping
+            // everything the later migrations add — so every new migration has to drop
+            // its table here too, or that migration re-creates a table that exists.
+            driver.execute(null, "DROP TABLE calendar_cache", 0)
             driver.execute(null, "DROP TABLE auth_session", 0)
             driver.execute(null, "DROP TABLE client_session", 0)
             driver.execute(null, "DROP TABLE profile_store_versions", 0)

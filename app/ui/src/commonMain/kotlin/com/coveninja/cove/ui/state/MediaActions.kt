@@ -5,6 +5,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import com.coveninja.cove.shared.data.AppGraph
+import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaEpisode
@@ -49,6 +50,27 @@ class MediaActions(
     fun removeFromList(media: Media) {
         val type = media.type.toDomainType() ?: return
         scope.launch { graph.library.remove(media.tmdbId, type) }
+    }
+
+    /**
+     * Puts a removed entry back exactly as it was — this is what Undo calls.
+     *
+     * `add` re-creates the row with a default status, so the status and rating have to be
+     * reapplied afterwards; skipping that would silently downgrade a Finished title to
+     * Watch Later on undo.
+     */
+    fun restore(entry: LibraryEntry) {
+        scope.launch {
+            graph.library.add(
+                tmdbId = entry.tmdbId,
+                mediaType = entry.mediaType,
+                title = entry.title,
+                posterPath = entry.posterPath,
+                voteAverage = entry.voteAverage,
+            )
+            graph.library.setStatus(entry.tmdbId, entry.mediaType, entry.status)
+            entry.rating?.let { graph.library.setRating(entry.tmdbId, entry.mediaType, it) }
+        }
     }
 
     fun setRating(media: Media, rating: Int) {

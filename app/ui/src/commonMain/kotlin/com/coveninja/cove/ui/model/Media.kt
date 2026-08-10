@@ -273,5 +273,13 @@ fun tmdbImageSize(url: String?, size: String): String? = url
 private fun com.coveninja.cove.shared.model.MediaImage.displayUrl(size: String): String? =
     url.takeIf { it.isNotBlank() } ?: displayImageUrl(filePath, size)
 
+/**
+ * The UI identity for a title known only by its TMDB id and domain type — watch progress
+ * rows and calendar items, neither of which carries a [Media]. Shares [uiId] so those keys
+ * cannot drift from the ones the cards are built with.
+ */
+fun uiMediaId(tmdbId: Int, mediaType: DomainMediaType?): String =
+    uiId(tmdbId, mediaType.toUiType())
+
 private fun uiId(id: Int, type: MediaType?): String =
     "${type?.name ?: "Media"}:$id"

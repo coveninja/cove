@@ -3,6 +3,8 @@ package com.coveninja.cove.shared.data
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.SubtitleSource
+import com.coveninja.cove.shared.model.TorrentProgress
 
 /**
  * Resolves playable sources for a title and turns a chosen source into a URL the
@@ -43,6 +45,26 @@ interface PlaybackRepository {
         season: Int? = null,
         episode: Int? = null,
     ): MediaTimestamps
+
+    /**
+     * Subtitle files offered by addons, already pointed at the proxy that
+     * converts and validates them. Never throws — a title with none is ordinary.
+     */
+    suspend fun subtitles(
+        tmdbId: Int,
+        type: MediaType,
+        season: Int? = null,
+        episode: Int? = null,
+    ): List<SubtitleSource>
+
+    /**
+     * URLs from [urls] that still answer. A failed probe returns everything —
+     * losing a working source to a flaky check is worse than offering a dead one.
+     */
+    suspend fun aliveUrls(urls: List<String>): Set<String>
+
+    /** Null when the torrent is not active. */
+    suspend fun torrentProgress(hash: String): TorrentProgress?
 }
 
 /** Thrown when a source list comes back but nothing in it can actually be played. */

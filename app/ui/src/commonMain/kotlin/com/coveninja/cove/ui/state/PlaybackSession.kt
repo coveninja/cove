@@ -74,6 +74,17 @@ class PlaybackSession(
     var timestamps by mutableStateOf(MediaTimestamps.None)
         private set
 
+    /**
+     * Where playback was resumed from, if it was. Cleared once acknowledged so
+     * the notice does not reappear on every recomposition.
+     */
+    var resumedFrom by mutableStateOf<Double?>(null)
+        private set
+
+    fun acknowledgeResume() {
+        resumedFrom = null
+    }
+
     /** Season the episode picker is showing, which need not be the one playing. */
     var browsingSeason by mutableStateOf<Int?>(null)
         private set
@@ -87,6 +98,11 @@ class PlaybackSession(
 
     private var generation = 0
     private var progressJob: Job? = null
+
+    // Kept so a source that dies can be stepped over without resolving again.
+    // Named apart from the lambda parameter it would otherwise shadow.
+    private var resolvedCandidates: List<StreamSource> = emptyList()
+    private var failedSources = mutableSetOf<String>()
 
     /**
      * @param forcePicker show the source list even when the settings would have
@@ -114,6 +130,9 @@ class PlaybackSession(
 
         val token = ++generation
         stopProgressTicker()
+        resolvedCandidates = emptyList()
+        failedSources = mutableSetOf()
+        resumedFrom = null
         timestamps = MediaTimestamps.None
         browsingSeason = null
         browsingEpisodes = emptyList()
@@ -152,13 +171,31 @@ class PlaybackSession(
                 // who asked for original audio should not be handed a dub just
                 // because the dub is a bigger file.
                 val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
+
+                // Probing costs a round trip but happens while the viewer is
+                // already waiting, and it is far cheaper than picking a dead
+                // link and finding out after the eight seconds mpv needs to open
+                // one. Only direct URLs can be checked; torrents are left alone.
+                val checked = if (settings?.probeStreams == true) {
+                    val urls = playable.mapNotNull { it.url?.takeIf(String::isNotBlank) }
+                    val alive = graph.playback.aliveUrls(urls)
+                    playable.filter { it.url.isNullOrBlank() || it.url in alive }
+                        // Never probe every candidate out of existence: if nothing
+                        // survived, the check is more likely wrong than the sources.
+                        .ifEmpty { playable }
+                } else {
+                    playable
+                }
+                if (token != generation) return@onSuccess
+
                 val ranked = rankSources(
-                    sources = playable,
+                    sources = checked,
                     preferredAudioLanguage = settings?.defaultAudioLang,
                     originalLanguage = resolved.media.originalLanguage,
                 )
+                resolvedCandidates = ranked
                 when {
-                    playable.isEmpty() -> phase = PlaybackPhase.Failed(
+                    ranked.isEmpty() -> phase = PlaybackPhase.Failed(
                         "No sources found. A fresh profile has no provider addons — " +
                             "add one in Settings before playing anything.",
                     )
@@ -166,7 +203,7 @@ class PlaybackSession(
                     // the point of that entry point is to see what is on offer.
                     forcePicker -> phase = PlaybackPhase.Choosing(ranked)
                     // One candidate is not a choice; skip the picker entirely.
-                    playable.size == 1 -> startPlayback(ranked.single(), token)
+                    ranked.size == 1 -> startPlayback(ranked.single(), token)
                     autoSelectStream() -> startPlayback(ranked.first(), token)
                     else -> phase = PlaybackPhase.Choosing(ranked)
                 }
@@ -210,6 +247,21 @@ class PlaybackSession(
 
     /** Called from the source picker, and to switch source mid-session. */
     fun choose(source: StreamSource) = startPlayback(source, generation)
+
+    /**
+     * Steps to the next candidate after the current one failed.
+     *
+     * Failed sources are remembered so a list is walked rather than cycled, and
+     * the walk stops rather than looping: if everything has been tried, saying so
+     * is more use than starting again at the top.
+     */
+    fun failoverToNextSource(): Boolean {
+        val playing = phase as? PlaybackPhase.Playing ?: return false
+        failedSources += playing.source.identityKey()
+        val next = resolvedCandidates.firstOrNull { it.identityKey() !in failedSources } ?: return false
+        startPlayback(next, generation)
+        return true
+    }
 
     fun retry() {
         val current = request ?: return
@@ -280,11 +332,38 @@ class PlaybackSession(
             val resumeFrom = if (settings?.rememberPosition != false) resumePosition(current) else 0.0
             if (token != generation) return@launch
 
+            // Applied before load: mpv chooses tracks while opening the file, so
+            // a preference set afterwards would only take effect next time.
+            settings?.let { player.applyPreferences(it.playbackPreferences(current.media.originalLanguage)) }
             // AppSettings.defaultVolume is a 0..1 fraction; mpv's volume property is
             // 0..100. Passing it through unscaled is near-silent audio.
             settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
+            resumedFrom = resumeFrom.takeIf { it > 0.0 }
             player.load(url, resumeFrom)
             startProgressTicker(token)
+
+            // After load, so mpv attaches them to the file that is open. They then
+            // appear alongside the embedded tracks in the subtitle menu.
+            if (settings?.subtitlesEnabled != false) {
+                val domainType = current.media.type.toDomainType()
+                if (domainType != null) {
+                    val external = graph.playback.subtitles(
+                        tmdbId = current.media.tmdbId,
+                        type = domainType,
+                        season = current.season,
+                        episode = current.episode,
+                    )
+                    if (token == generation) {
+                        external.take(MAX_EXTERNAL_SUBTITLES).forEach { subtitle ->
+                            player.addSubtitle(
+                                url = subtitle.url,
+                                title = subtitle.displayName,
+                                language = subtitle.lang,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -386,20 +465,11 @@ class PlaybackSession(
             return PlaybackRequest(media, lastSeason, lastEpisode)
         }
 
-        val episodesInSeason = media.seasons
-            .firstOrNull { it.number == lastSeason }
-            ?.episodeCount
-            ?: 0
-        val nextSeason = media.seasons
-            .map { it.number }
-            .filter { it > lastSeason }
-            .minOrNull()
-
-        return when {
-            episodesInSeason > lastEpisode -> PlaybackRequest(media, lastSeason, lastEpisode + 1)
-            nextSeason != null -> PlaybackRequest(media, nextSeason, 1)
-            else -> PlaybackRequest(media, lastSeason, lastEpisode)
-        }
+        // Nothing after it means the finished episode is the best available
+        // answer; replaying beats refusing to play anything.
+        val next = nextEpisodeAfter(media.seasons, lastSeason, lastEpisode)
+            ?: return PlaybackRequest(media, lastSeason, lastEpisode)
+        return PlaybackRequest(media, next.first, next.second)
     }
 
     // Same signal the episode browser ticks off.
@@ -417,6 +487,9 @@ class PlaybackSession(
     }
 
     private companion object {
+        // Addons can return dozens; each is a fetch and a track in the menu, and
+        // nobody scrolls past the first handful of a language.
+        const val MAX_EXTERNAL_SUBTITLES = 12
         const val PROGRESS_SAVE_INTERVAL_MILLIS = 10_000L
         const val COMPLETED_FRACTION = 0.9
         const val RESUME_TAIL_SECONDS = 15.0
@@ -430,3 +503,9 @@ fun rememberPlaybackSession(): PlaybackSession {
     val scope = rememberCoroutineScope()
     return remember(graph, host) { PlaybackSession(graph, scope, host) }
 }
+
+/** Identifies a candidate across retries; position in the list is not stable. */
+internal fun StreamSource.identityKey(): String =
+    url?.takeIf { it.isNotBlank() }
+        ?: infoHash?.takeIf { it.isNotBlank() }
+        ?: "${name.orEmpty()}|${title.orEmpty()}"

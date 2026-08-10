@@ -115,6 +115,11 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
         season: MediaSeason,
         episode: MediaEpisode,
     ) -> Unit = { _, _, _ -> },
+    onEpisodeChooseSource: (
+        media: Media,
+        season: MediaSeason,
+        episode: MediaEpisode,
+    ) -> Unit = { _, _, _ -> },
     onEpisodeWatchedChange: (
         media: Media,
         season: MediaSeason,
@@ -342,6 +347,13 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                                 episode,
                             )
                         },
+                        onEpisodeChooseSource = { season, episode ->
+                            onEpisodeChooseSource(
+                                currentMedia,
+                                season,
+                                episode,
+                            )
+                        },
                         onEpisodeWatchedChange = { season, episode, watched ->
                             onEpisodeWatchedChange(
                                 currentMedia,
@@ -476,6 +488,7 @@ private fun MediaDetailsHeroContent(
     onMediaSelected: (Media) -> Unit,
     onLoadEpisodes: suspend (MediaSeason) -> List<MediaEpisode>,
     onEpisodeSelected: (MediaSeason, MediaEpisode) -> Unit,
+    onEpisodeChooseSource: (MediaSeason, MediaEpisode) -> Unit,
     onEpisodeWatchedChange: (
         MediaSeason,
         MediaEpisode,
@@ -650,6 +663,7 @@ private fun MediaDetailsHeroContent(
                     modifier = Modifier.padding(top = 30.dp),
                     onLoadEpisodes = onLoadEpisodes,
                     onEpisodeSelected = onEpisodeSelected,
+                    onEpisodeChooseSource = onEpisodeChooseSource,
                     onEpisodeWatchedChange = onEpisodeWatchedChange,
                 )
             }

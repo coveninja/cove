@@ -57,6 +57,10 @@ data class PlaybackStatus(
     val fileLoaded: Boolean = false,
     /** Whatever the player last reported; the only detail available while opening. */
     val statusMessage: String = "",
+    /** Playback ran to the end, as opposed to being paused near it. */
+    val endReached: Boolean = false,
+    /** 1.0 is normal speed. */
+    val speed: Double = 1.0,
     val audioTracks: List<MediaTrack> = emptyList(),
     val subtitleTracks: List<MediaTrack> = emptyList(),
     /** Null when subtitles are switched off. */
@@ -96,6 +100,14 @@ interface VideoPlayerHost {
     fun selectAudioTrack(id: Int)
 
     fun setScaling(scaling: VideoScaling)
+
+    fun setSpeed(speed: Double)
+
+    /** Applied before loading, so the player picks the right tracks first time. */
+    fun applyPreferences(preferences: PlaybackPreferences)
+
+    /** Adds an external subtitle; it then appears in [PlaybackStatus.subtitleTracks]. */
+    fun addSubtitle(url: String, title: String, language: String)
 
     /** Null switches subtitles off. */
     fun selectSubtitleTrack(id: Int?)

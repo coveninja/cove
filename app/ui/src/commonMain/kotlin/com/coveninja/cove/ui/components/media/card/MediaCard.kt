@@ -1,14 +1,21 @@
 package com.coveninja.cove.ui.components.media.card
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,6 +30,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +42,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +67,7 @@ import coil3.compose.AsyncImage
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -76,6 +86,9 @@ fun MediaCard(
     onClick: () -> Unit = {},
     myListCategory: MyListCategory? = null,
     isWatched: Boolean = false,
+    /** 0f..1f resume position, or null to draw no progress bar. */
+    watchFraction: Float? = null,
+    hasNewEpisodes: Boolean = false,
     onSetMyListCategory: (MyListCategory) -> Unit = {},
     onRemoveFromMyList: () -> Unit = {},
     onMarkAsWatched: () -> Unit = {},
@@ -304,6 +317,15 @@ fun MediaCard(
             }
         }
 
+        // Drawn after the hover overlay so library state stays readable while the
+        // gradient and title are on screen.
+        MediaCardDecorations(
+            category = myListCategory,
+            watchFraction = watchFraction,
+            hasNewEpisodes = hasNewEpisodes,
+            modifier = Modifier.fillMaxSize(),
+        )
+
         Box(
             modifier = Modifier
                 .offset {
@@ -467,6 +489,100 @@ internal fun MediaContextMenu(
     }
 }
 
+
+/**
+ * The library's opinion of a title, drawn over its poster: which list it is in, how far
+ * through it the viewer is, and whether episodes have aired since they last watched.
+ *
+ * Deliberately non-interactive — no clickable, no hoverable. Anything that captured
+ * pointer events here would punch holes in the card's own hover state.
+ */
+@Composable
+private fun MediaCardDecorations(
+    category: MyListCategory?,
+    watchFraction: Float?,
+    hasNewEpisodes: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier) {
+        AnimatedVisibility(
+            visible = category != null,
+            modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
+            enter = fadeIn() + scaleIn(initialScale = 0.4f),
+            exit = fadeOut() + scaleOut(targetScale = 0.4f),
+        ) {
+            // AnimatedContent so re-categorising swaps the colour with a beat of its own
+            // rather than cutting; the dot is small enough that a cut reads as a glitch.
+            AnimatedContent(
+                targetState = category,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+                label = "MediaCardCategoryDot",
+            ) { current ->
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(2.dp)
+                        .clip(CircleShape)
+                        .background(
+                            current?.accentColor ?: MaterialTheme.colorScheme.tertiary,
+                        ),
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = hasNewEpisodes,
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            enter = fadeIn() + scaleIn(
+                initialScale = 0.6f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium,
+                ),
+            ),
+            exit = fadeOut() + scaleOut(targetScale = 0.6f),
+        ) {
+            MediaBadge(
+                text = "NEW",
+                containerColor = MaterialTheme.colorScheme.tertiary,
+                contentColor = MaterialTheme.colorScheme.onTertiary,
+            )
+        }
+
+        if (watchFraction != null) {
+            val accent = category?.accentColor ?: MaterialTheme.colorScheme.tertiary
+            val grown = remember { Animatable(0f) }
+            LaunchedEffect(watchFraction) {
+                grown.animateTo(
+                    targetValue = watchFraction.coerceIn(0f, 1f),
+                    animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing),
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(Color.Black.copy(alpha = 0.45f)),
+            ) {
+                // scaleX on a full-width bar rather than a width animation: no relayout
+                // per frame, and it matches how the details sheet draws its scroll bar.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            transformOrigin = TransformOrigin(pivotFractionX = 0f, pivotFractionY = 0.5f)
+                            scaleX = grown.value
+                        }
+                        .background(accent),
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun MediaBadge(

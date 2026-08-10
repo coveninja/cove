@@ -12,6 +12,8 @@ import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.backend.calendar.CalendarService
+import com.coveninja.cove.backend.calendar.LocalCalendarRepository
+import com.coveninja.cove.shared.data.CalendarRepository
 import com.coveninja.cove.backend.trakt.TraktService
 import com.coveninja.cove.backend.platform.DeviceSettingsService
 import com.coveninja.cove.backend.discovery.DiscoveryService
@@ -56,6 +58,7 @@ class LocalBackendRuntime private constructor(
     content: LocalContentRepository,
     playback: PlaybackRepository,
     addonRepository: AddonRepository,
+    calendarRepository: CalendarRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
@@ -63,6 +66,7 @@ class LocalBackendRuntime private constructor(
         settings = stores.settings,
         playback = playback,
         addons = addonRepository,
+        calendar = calendarRepository,
         onClose = ::close,
     )
 
@@ -217,9 +221,17 @@ class LocalBackendRuntime private constructor(
                     ?: UnavailablePlaybackRepository
                 val addonRepository = loopback?.let { LiveAddonRepository(it, scope) }
                     ?: UnavailableAddonRepository
+                // In-process, not over loopback: the calendar has no per-request registry
+                // to go through, and the HTTP host is optional here.
+                val calendarRepository = LocalCalendarRepository(
+                    service = calendar,
+                    database = stores.databaseHandle,
+                    session = stores.profileSession,
+                    library = stores.library,
+                )
                 return LocalBackendRuntime(
                     stores, client, untrustedClient, scope, httpHost, media, content,
-                    playback, addonRepository,
+                    playback, addonRepository, calendarRepository,
                 )
             } catch (error: Throwable) {
                 scope.cancel()

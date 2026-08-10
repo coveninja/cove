@@ -62,6 +62,7 @@ fun SeriesEpisodeBrowser(
     initiallyExpanded: Boolean = false,
     onLoadEpisodes: suspend (MediaSeason) -> List<MediaEpisode> = { it.episodes },
     onEpisodeSelected: (MediaSeason, MediaEpisode) -> Unit = { _, _ -> },
+    onEpisodeChooseSource: (MediaSeason, MediaEpisode) -> Unit = { _, _ -> },
     onEpisodeWatchedChange: (
         season: MediaSeason,
         episode: MediaEpisode,
@@ -313,6 +314,12 @@ fun SeriesEpisodeBrowser(
                                 compact = useCompactCards,
                                 onClick = {
                                     onEpisodeSelected(
+                                        selectedSeason,
+                                        episode,
+                                    )
+                                },
+                                onChooseSource = {
+                                    onEpisodeChooseSource(
                                         selectedSeason,
                                         episode,
                                     )

@@ -24,7 +24,27 @@ class LibraryIndex(val entries: List<LibraryEntry>) {
     fun entryOf(mediaId: String): LibraryEntry? = byUiId[mediaId]
 
     fun categoryOf(mediaId: String): MyListCategory? = categories[mediaId]
+
+    fun hasUnwatchedAired(mediaId: String): Boolean = byUiId[mediaId]?.hasUnwatchedAired() == true
 }
+
+/**
+ * Whether episodes have aired since the viewer last watched one.
+ *
+ * Compared as (season, episode) pairs so a new season counts even though its episode
+ * number restarts at 1. A title with nothing watched yet is not "new": it is unstarted,
+ * which the card already says by having no progress.
+ */
+fun LibraryEntry.hasUnwatchedAired(): Boolean {
+    val airedSeason = lastAiredSeason ?: return false
+    val airedEpisode = lastAiredEpisode ?: return false
+    val watchedSeason = lastWatchedSeason ?: return false
+    val watchedEpisode = lastWatchedEpisode ?: return false
+    return (airedSeason to airedEpisode) > (watchedSeason to watchedEpisode)
+}
+
+private operator fun Pair<Int, Int>.compareTo(other: Pair<Int, Int>): Int =
+    compareValuesBy(this, other, { it.first }, { it.second })
 
 @Composable
 fun rememberLibraryIndex(): LibraryIndex {

@@ -71,7 +71,7 @@ import kotlin.math.roundToLong
  * others, and the layer above needs to know that *something* is open so it does
  * not hide the controls out from under it.
  */
-private enum class PlayerMenu { Subtitles, Audio, Scaling, Episodes }
+private enum class PlayerMenu { Subtitles, Audio, Scaling, Episodes, Speed }
 
 /** Fixed so every gap looks identical regardless of how long the segment is. */
 private val SEGMENT_GAP = 1.5.dp
@@ -95,6 +95,7 @@ fun PlayerControls(
     onSelectSubtitle: (Int?) -> Unit,
     scaling: VideoScaling,
     onSelectScaling: (VideoScaling) -> Unit,
+    onSelectSpeed: (Double) -> Unit,
     canChangeSource: Boolean,
     onChangeSource: () -> Unit,
     /** Null for a film, which has no episodes to pick between. */
@@ -175,6 +176,13 @@ fun PlayerControls(
                     onSelect = { id -> id?.let(onSelectAudio) },
                 )
             }
+            SpeedMenuButton(
+                speed = status.speed,
+                expanded = openMenu == PlayerMenu.Speed,
+                onExpandedChange = { openMenu = if (it) PlayerMenu.Speed else null },
+                onSelect = onSelectSpeed,
+            )
+
             ScalingMenuButton(
                 selected = scaling,
                 expanded = openMenu == PlayerMenu.Scaling,
@@ -583,6 +591,53 @@ private fun LanguageHeader(label: String) {
         fontWeight = FontWeight.Bold,
     )
 }
+
+/**
+ * Playback rate. mpv corrects pitch by default, so speech stays intelligible
+ * rather than turning into a chipmunk.
+ */
+@Composable
+private fun SpeedMenuButton(
+    speed: Double,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (Double) -> Unit,
+) {
+    val normal = speed in 0.99..1.01
+
+    Box {
+        ControlButton(
+            icon = "lucide:gauge",
+            active = !normal,
+            onClick = { onExpandedChange(true) },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            SPEED_STEPS.forEach { step ->
+                val selected = speed in (step - 0.01)..(step + 0.01)
+                CMenuItem(
+                    text = if (step == 1.0) "Normal" else "${formatSpeed(step)}×",
+                    iconName = if (selected) "lucide:check" else "lucide:gauge",
+                    accent = selected,
+                    onClick = {
+                        onSelect(step)
+                        onExpandedChange(false)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Trims the trailing zero so 1.5 reads as "1.5" and 2.0 as "2". */
+private fun formatSpeed(value: Double): String =
+    if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
+
+private val SPEED_STEPS = listOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
 
 /** How the picture fills the window. Fit is the default and shows everything. */
 @Composable

@@ -28,6 +28,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
 
+            // api, not implementation: the calendar's day grouping and month
+            // arithmetic live in :ui, which reaches this only through :shared.
+            api(libs.kotlinx.datetime)
+
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)

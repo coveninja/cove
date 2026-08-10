@@ -13,12 +13,17 @@ import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.model.UpcomingEpisode
 import com.coveninja.cove.shared.network.SearchResultsDto
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneOffset
 import kotlinx.coroutines.test.runTest
+import kotlinx.datetime.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.time.Clock
+import kotlin.time.Instant
+
+/** kotlin.time has no fixed-clock factory, and the schedule has to be tested at a known day. */
+private class FixedClock(private val instant: Instant) : Clock {
+    override fun now(): Instant = instant
+}
 
 class CalendarServiceTest {
     @Test
@@ -43,8 +48,8 @@ class CalendarServiceTest {
                 handle.database,
                 ActiveProfileSession(handle.database),
                 FakeCalendarCatalog(),
-                Clock.fixed(Instant.parse("2026-08-08T12:00:00Z"), ZoneOffset.UTC),
-                ZoneOffset.UTC,
+                FixedClock(Instant.parse("2026-08-08T12:00:00Z")),
+                TimeZone.UTC,
             )
 
             val items = service.calendar()

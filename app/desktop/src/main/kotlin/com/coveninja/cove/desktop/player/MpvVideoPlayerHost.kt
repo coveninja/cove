@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import com.coveninja.cove.shared.network.CoveJson
 import com.coveninja.cove.ui.state.MediaTrack
+import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
 import com.coveninja.cove.ui.state.VideoScaling
@@ -63,6 +64,7 @@ class MpvVideoPlayerHost(
     private var pendingLoad: PendingLoad? = null
     private var pendingVolume: Double? = null
     private var pendingScaling: VideoScaling? = null
+    private var pendingPreferences: PlaybackPreferences? = null
 
     // Produced on mpv's render thread and consumed by the composition; a flow is
     // the defined handoff, where a raw snapshot write from a foreign thread would
@@ -106,6 +108,19 @@ class MpvVideoPlayerHost(
     override fun setScaling(scaling: VideoScaling) {
         pendingScaling = scaling
         player?.applyScaling(scaling)
+    }
+
+    override fun setSpeed(speed: Double) {
+        player?.setOption("speed", speed.coerceIn(0.25, 4.0).toString())
+    }
+
+    override fun applyPreferences(preferences: PlaybackPreferences) {
+        pendingPreferences = preferences
+        player?.applyPreferences(preferences)
+    }
+
+    override fun addSubtitle(url: String, title: String, language: String) {
+        player?.addSubtitle(url, title, language)
     }
 
     override fun selectAudioTrack(id: Int) {
@@ -190,6 +205,9 @@ class MpvVideoPlayerHost(
         // Re-applied on attach: mpv resets these with the handle, so a mode
         // chosen before the surface existed would otherwise be forgotten.
         pendingScaling?.let(active::applyScaling)
+        // Track and subtitle options must be in place before loadfile, or mpv
+        // picks its own defaults and the preference only takes effect next time.
+        pendingPreferences?.let(active::applyPreferences)
         pendingLoad?.let { active.load(it.url, it.startPositionSeconds) }
         pendingLoad = null
     }
@@ -236,6 +254,32 @@ private fun parseTracks(json: String): List<MediaTrack> {
     }.getOrDefault(emptyList())
 }
 
+/**
+ * The one place preferences become mpv options.
+ *
+ * alang/slang take an ordered list and mpv falls back to its own choice when
+ * nothing matches, which is what an empty preference should do. sid=no is the
+ * only way to say "no subtitles" — an empty slang would just mean "no preference".
+ */
+private fun DesktopPlayer.applyPreferences(preferences: PlaybackPreferences) {
+    if (preferences.audioLanguages.isNotEmpty()) {
+        setOption("alang", preferences.audioLanguages.joinToString(","))
+    }
+    if (preferences.subtitleLanguages.isNotEmpty()) {
+        setOption("slang", preferences.subtitleLanguages.joinToString(","))
+    }
+    setOption("sid", if (preferences.subtitlesEnabled) "auto" else "no")
+    setOption("mute", if (preferences.startMuted) "yes" else "no")
+    setOption("sub-scale", preferences.subtitleScale.toString())
+    setOption("sub-pos", preferences.subtitlePosition.toString())
+    // opaque-box draws the shaded panel behind the text; the default outline
+    // style has no background at all.
+    setOption(
+        "sub-border-style",
+        if (preferences.subtitleBackground) "opaque-box" else "outline-and-shadow",
+    )
+}
+
 /** The one place the display modes become mpv's three knobs. */
 private fun DesktopPlayer.applyScaling(scaling: VideoScaling) = when (scaling) {
     VideoScaling.Fit -> setScaling(keepAspect = true, panscan = 0.0, zoom = 0.0)
@@ -264,6 +308,8 @@ private fun PlayerSnapshot.playbackStatus(
     waitingForData = pausedForCache,
     fileLoaded = fileLoaded,
     statusMessage = lastMessage,
+    endReached = endReached,
+    speed = speed,
     audioTracks = audio,
     subtitleTracks = subtitles,
     selectedAudioId = audio.firstOrNull { it.selected }?.id,

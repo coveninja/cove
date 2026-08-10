@@ -175,6 +175,18 @@ CREATE TABLE trakt_sessions (
     last_sync_at TEXT NOT NULL DEFAULT ''
 );
 
+-- One row per profile holding the whole release calendar as serialized JSON. It is a
+-- cache of remote metadata, not a record of anything the viewer did, so it is stored
+-- whole rather than normalized: it is always read and written in full.
+CREATE TABLE calendar_cache (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    items TEXT NOT NULL DEFAULT '[]',
+    refreshed_at TEXT NOT NULL DEFAULT '',
+    -- The library the snapshot was built from; a mismatch means it is stale
+    -- regardless of age.
+    signature TEXT NOT NULL DEFAULT ''
+);
+
 selectMigrationMetadata:
 SELECT value FROM migration_metadata WHERE key = ?;
 
@@ -471,3 +483,13 @@ DELETE FROM trakt_sessions WHERE profile_id = ?;
 
 deleteTraktSessions:
 DELETE FROM trakt_sessions;
+
+selectCalendarCache:
+SELECT * FROM calendar_cache WHERE profile_id = ?;
+
+upsertCalendarCache:
+INSERT OR REPLACE INTO calendar_cache(profile_id, items, refreshed_at, signature)
+VALUES (?, ?, ?, ?);
+
+deleteCalendarCache:
+DELETE FROM calendar_cache;

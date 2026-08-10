@@ -131,6 +131,13 @@ class MpvOpenGlPlayer(
 
     // set, not set-property: mpv accepts "no" for sid, which the typed property
     // setters cannot express.
+    override fun setOption(name: String, value: String) = command("set", name, value)
+
+    // "auto" selects the track immediately if nothing else is selected, which is
+    // what a viewer adding a subtitle expects; flags and title are positional.
+    override fun addSubtitle(url: String, title: String, language: String) =
+        command("sub-add", url, "auto", title, language)
+
     override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
         command("set", "keepaspect", if (keepAspect) "yes" else "no")
         command("set", "panscan", panscan.toString())
@@ -261,6 +268,8 @@ class MpvOpenGlPlayer(
             val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
             val tracks   = if (idle) "" else getString(library, target, "track-list").orEmpty()
             val buffering = getDouble(library, target, "cache-buffering-state") ?: 0.0
+            val ended    = getFlag(library, target, "eof-reached") ?: false
+            val rate     = getDouble(library, target, "speed") ?: 1.0
             val forCache  = getFlag(library, target, "paused-for-cache") ?: false
 
             _snapshot.value = _snapshot.value.copy(
@@ -276,6 +285,8 @@ class MpvOpenGlPlayer(
                 renderBackend   = "OpenGL",
                 trackListJson   = tracks,
                 cacheBufferingPercent = buffering.finiteOrZero().toInt().coerceIn(0, 100),
+                endReached      = ended,
+                speed           = rate,
                 pausedForCache  = forCache,
                 error           = null,
             )

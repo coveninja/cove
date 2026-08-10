@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -63,6 +64,7 @@ fun EpisodeCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {},
     onWatchedChange: (Boolean) -> Unit = {},
+    onChooseSource: () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     val interactionSource = remember { MutableInteractionSource() }
@@ -133,6 +135,9 @@ fun EpisodeCard(
                 color = borderColor,
             ),
         ) {
+            // Wrapped so the source action can sit in one place for both layouts
+            // rather than being repeated in each branch.
+            Box {
             if (compact) {
                 Column {
                     EpisodeArtwork(
@@ -165,6 +170,13 @@ fun EpisodeCard(
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                     )
                 }
+            }
+
+            ChooseEpisodeSourceButton(
+                onClick = onChooseSource,
+                cardHovered = isHovered,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            )
             }
         }
 
@@ -308,5 +320,64 @@ private fun EpisodeCopy(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+    }
+}
+
+/**
+ * Opens the source picker for this episode instead of letting the card's own
+ * click resolve one.
+ *
+ * Always present rather than hover-only: :ui also builds for Android, where
+ * there is no hover and a control that only appears on one would be unreachable.
+ * It merely gets quieter when the card is not under the pointer.
+ */
+@Composable
+private fun ChooseEpisodeSourceButton(
+    onClick: () -> Unit,
+    cardHovered: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.9f else if (hovered) 1.08f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "ChooseEpisodeSourceScale",
+    )
+    val container by animateColorAsState(
+        targetValue = when {
+            hovered -> colors.tertiary.copy(alpha = 0.9f)
+            cardHovered -> colors.surface.copy(alpha = 0.85f)
+            else -> colors.surface.copy(alpha = 0.45f)
+        },
+        animationSpec = tween(140),
+        label = "ChooseEpisodeSourceContainer",
+    )
+
+    Box(
+        modifier = modifier
+            .size(30.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(container)
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        IconifyIcon(
+            icon = "lucide:list-video",
+            modifier = Modifier.size(15.dp),
+            tint = if (hovered) colors.onTertiary else colors.onSurfaceVariant,
+        )
     }
 }

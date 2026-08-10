@@ -9,6 +9,7 @@ class AppGraph(
     val settings: SettingsRepository,
     val playback: PlaybackRepository,
     val addons: AddonRepository,
+    val calendar: CalendarRepository = UnavailableCalendarRepository,
     private val onClose: () -> Unit = {},
 ) : AutoCloseable {
     override fun close() = onClose()

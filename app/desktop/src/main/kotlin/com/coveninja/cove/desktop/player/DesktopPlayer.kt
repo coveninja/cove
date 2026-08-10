@@ -13,6 +13,16 @@ interface DesktopPlayer : AutoCloseable {
     fun setVolume(volume: Double)
 
     /**
+     * Sets an mpv option by name. Deliberately untyped: the caller is translating
+     * user preferences into mpv's own vocabulary, and a typed method per option
+     * would hide that without making it safer.
+     */
+    fun setOption(name: String, value: String)
+
+    /** Loads an external subtitle file or URL alongside the current media. */
+    fun addSubtitle(url: String, title: String, language: String)
+
+    /**
      * mpv's keepaspect/panscan/video-zoom, which crop and scale properly rather
      * than letting the surface stretch a finished frame.
      */

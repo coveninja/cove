@@ -65,6 +65,7 @@ import com.coveninja.cove.ui.state.rememberMediaActions
 import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
 import com.coveninja.cove.ui.state.rememberPlaybackSession
+import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import com.coveninja.cove.ui.state.toUiCategory
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -75,6 +76,8 @@ private fun SharedTransitionScope.SharedMediaCard(
     media: Media,
     selectedMedia: Media?,
     listCategory: MyListCategory?,
+    watchFraction: Float?,
+    hasNewEpisodes: Boolean,
     onOpen: () -> Unit,
     onSetListCategory: (MyListCategory) -> Unit,
     onRemoveFromList: () -> Unit,
@@ -126,6 +129,8 @@ private fun SharedTransitionScope.SharedMediaCard(
                     ),
                     myListCategory = listCategory,
                     isWatched = listCategory == MyListCategory.Finished,
+                    watchFraction = watchFraction,
+                    hasNewEpisodes = hasNewEpisodes,
                     onClick = onOpen,
                     onSetMyListCategory = onSetListCategory,
                     onRemoveFromMyList = onRemoveFromList,
@@ -167,6 +172,7 @@ private fun CoveAppContent() {
 
     val catalog = rememberMediaCatalog()
     val index = rememberLibraryIndex()
+    val watchProgress = rememberWatchProgressIndex()
     val actions = rememberMediaActions(index)
     val detailsState = rememberMediaDetailsState(catalog)
     val drag = rememberDragSession()
@@ -195,6 +201,8 @@ private fun CoveAppContent() {
                         media = media,
                         selectedMedia = detailsState.selected,
                         listCategory = index.categoryOf(media.id),
+                        watchFraction = watchProgress.fractionFor(media.id),
+                        hasNewEpisodes = index.hasUnwatchedAired(media.id),
                         onOpen = { detailsState.open(media) },
                         onSetListCategory = { actions.setListCategory(media, it) },
                         onRemoveFromList = { actions.removeFromList(media) },
@@ -232,6 +240,16 @@ private fun CoveAppContent() {
                     NavDestination.MyList -> MyListPage(
                         mediaCard = pageMediaCard,
                         onExplore = { selectedDestination = NavDestination.Explore },
+                        onOpenMedia = { detailsState.open(it) },
+                        onPlayMedia = { playback.open(it) },
+                        onPlayEpisode = { media, season, episode, title ->
+                            playback.open(
+                                media = media,
+                                season = season,
+                                episode = episode,
+                                episodeTitle = title,
+                            )
+                        },
                     )
 
                     NavDestination.Explore -> ExplorePage(
@@ -297,31 +315,37 @@ private fun CoveAppContent() {
             val overlayEntry = detailsState.overlayMedia?.let { index.entryOf(it.id) }
             MediaDetailsSharedOverlay(
                 media = detailsState.overlayMedia,
-                visible = detailsState.selected != null,
+                // Hidden, not dismissed, while playback is up: the selection
+                // survives, so closing the player brings the same sheet back
+                // without refetching anything.
+                visible = detailsState.selected != null && !playback.active,
                 onDismiss = { detailsState.dismiss() },
                 currentListCategory = overlayEntry?.status?.toUiCategory(),
                 currentRating = overlayEntry?.rating?.roundToInt(),
-                onWatch = { media ->
-                    // Dismiss first: the player takes the whole window, and leaving
-                    // the overlay open behind it means returning to a stale details
-                    // sheet on close.
-                    detailsState.dismiss()
-                    playback.open(media)
-                },
-                onChooseSource = { media ->
-                    detailsState.dismiss()
-                    playback.open(media, forcePicker = true)
-                },
+                // The details sheet deliberately stays open underneath. Playback
+                // covers it completely, and leaving it in place means closing the
+                // player returns you to the title you were looking at — ready to
+                // pick a different source rather than having to find it again.
+                onWatch = { media -> playback.open(media) },
+                onChooseSource = { media -> playback.open(media, forcePicker = true) },
                 onListCategorySelected = actions::setListCategory,
                 onRatingSelected = actions::setRating,
                 onMediaSelected = { detailsState.open(it) },
                 onEpisodeSelected = { media, season, episode ->
-                    detailsState.dismiss()
                     playback.open(
                         media = media,
                         season = season.number,
                         episode = episode.number,
                         episodeTitle = episode.title,
+                    )
+                },
+                onEpisodeChooseSource = { media, season, episode ->
+                    playback.open(
+                        media = media,
+                        season = season.number,
+                        episode = episode.number,
+                        episodeTitle = episode.title,
+                        forcePicker = true,
                     )
                 },
                 onLoadEpisodes = { season ->

@@ -3,6 +3,8 @@ package com.coveninja.cove.shared.data
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.SubtitleSource
+import com.coveninja.cove.shared.model.TorrentProgress
 import com.coveninja.cove.shared.network.CoveApi
 
 /**
@@ -13,6 +15,12 @@ import com.coveninja.cove.shared.network.CoveApi
  */
 class LivePlaybackRepository(private val api: CoveApi) : PlaybackRepository {
 
+    private companion object {
+        /** The backend rejects more than ten in one request. */
+        const val MAX_PROBED = 10
+    }
+
+
     override suspend fun streams(
         tmdbId: Int,
         type: MediaType,
@@ -22,6 +30,33 @@ class LivePlaybackRepository(private val api: CoveApi) : PlaybackRepository {
 
     override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
         runCatching { api.timestamps(tmdbId, season, episode) }.getOrDefault(MediaTimestamps.None)
+
+    override suspend fun subtitles(
+        tmdbId: Int,
+        type: MediaType,
+        season: Int?,
+        episode: Int?,
+    ): List<SubtitleSource> = runCatching {
+        api.subtitles(tmdbId, type, season, episode)
+            .filter { it.url.isNotBlank() }
+            // Rewritten here so nothing downstream has to remember that a raw
+            // addon URL must not be handed to the player.
+            .map { it.copy(url = api.subtitleProxyUrl(it.url)) }
+    }.getOrDefault(emptyList())
+
+    override suspend fun aliveUrls(urls: List<String>): Set<String> {
+        if (urls.isEmpty()) return emptySet()
+        return runCatching {
+            api.probeStreams(urls.take(MAX_PROBED))
+                .results
+                .filter { it.alive }
+                .map { it.url }
+                .toSet()
+        }.getOrElse { urls.toSet() }
+    }
+
+    override suspend fun torrentProgress(hash: String): TorrentProgress? =
+        runCatching { api.torrentProgress(hash) }.getOrNull()
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String {
         // A direct url wins over a torrent hash: an addon that supplies both is
@@ -60,6 +95,17 @@ object UnavailablePlaybackRepository : PlaybackRepository {
 
     override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
         MediaTimestamps.None
+
+    override suspend fun subtitles(
+        tmdbId: Int,
+        type: MediaType,
+        season: Int?,
+        episode: Int?,
+    ): List<SubtitleSource> = emptyList()
+
+    override suspend fun aliveUrls(urls: List<String>): Set<String> = urls.toSet()
+
+    override suspend fun torrentProgress(hash: String): TorrentProgress? = null
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         throw IllegalStateException(REASON)

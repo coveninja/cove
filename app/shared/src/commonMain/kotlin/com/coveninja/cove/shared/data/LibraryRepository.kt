@@ -50,6 +50,16 @@ interface LibraryRepository {
     ): WatchProgress?
 
     /**
+     * Every resume point for the active profile, newest first.
+     *
+     * Exists because decorating a whole grid with resume bars is impossible through
+     * [progress], which answers for one title at a time. Implementations that cannot
+     * report them in bulk return an empty list rather than fanning out one request
+     * per title; the caller then simply draws no resume state.
+     */
+    suspend fun progressSnapshot(): List<WatchProgress>
+
+    /**
      * Upserts the resume point. Called repeatedly during playback, so implementations
      * must treat it as cheap and idempotent.
      */

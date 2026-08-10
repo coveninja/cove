@@ -27,12 +27,14 @@ fun createLiveAppGraph(
     val api = CoveApi(client, config, tokenProvider, deviceTokenProvider)
     // SupervisorJob so a single failing coroutine doesn't cancel all siblings.
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val library = LiveLibraryRepository(api, scope)
     return AppGraph(
         content  = LiveContentRepository(api, scope),
-        library  = LiveLibraryRepository(api, scope),
+        library  = library,
         settings = LiveSettingsRepository(api, scope),
         playback = LivePlaybackRepository(api),
         addons   = LiveAddonRepository(api, scope),
+        calendar = LiveCalendarRepository(api, library),
         onClose  = {
             scope.cancel()
             client.close()

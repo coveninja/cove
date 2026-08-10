@@ -19,6 +19,8 @@ import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.SubtitleSource
+import com.coveninja.cove.shared.model.TorrentProgress
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.WatchProgressRequest
@@ -87,6 +89,8 @@ private class FakeLibrary : LibraryRepository {
         episode: Int?,
     ): WatchProgress? = storedProgress
 
+    override suspend fun progressSnapshot(): List<WatchProgress> = listOfNotNull(storedProgress)
+
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress {
         recorded += request
         return WatchProgress(
@@ -121,6 +125,26 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
         season: Int?,
         episode: Int?,
     ): MediaTimestamps = MediaTimestamps.None
+
+    var offeredSubtitles: List<SubtitleSource> = emptyList()
+
+    /** Null means "probe answered with everything alive". */
+    var deadUrls: Set<String> = emptySet()
+    var probedUrls: List<String>? = null
+
+    override suspend fun aliveUrls(urls: List<String>): Set<String> {
+        probedUrls = urls
+        return urls.toSet() - deadUrls
+    }
+
+    override suspend fun torrentProgress(hash: String): TorrentProgress? = null
+
+    override suspend fun subtitles(
+        tmdbId: Int,
+        type: DomainMediaType,
+        season: Int?,
+        episode: Int?,
+    ): List<SubtitleSource> = offeredSubtitles
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         "http://127.0.0.1:6969/api/play?url=${source.url}"
@@ -165,6 +189,16 @@ private class FakeHost : VideoPlayerHost {
     override fun seek(seconds: Double) = Unit
     override fun setVolume(volume: Double) { volumeSet = volume }
     override fun setScaling(scaling: VideoScaling) = Unit
+    var speedSet: Double? = null
+    override fun setSpeed(speed: Double) { speedSet = speed }
+    var appliedPreferences: PlaybackPreferences? = null
+    val addedSubtitles = mutableListOf<String>()
+    override fun applyPreferences(preferences: PlaybackPreferences) {
+        appliedPreferences = preferences
+    }
+    override fun addSubtitle(url: String, title: String, language: String) {
+        addedSubtitles += url
+    }
     override fun selectAudioTrack(id: Int) = Unit
     override fun selectSubtitleTrack(id: Int?) = Unit
     override fun stop() = Unit
@@ -602,6 +636,83 @@ class PlaybackSessionTest {
 
         assertEquals(2, h.playback.requestedSeason)
         assertEquals(4, h.playback.requestedEpisode)
+    }
+
+    // A probe that rejects everything is far more likely to be wrong than every
+    // source being dead at once, so the list
+    // survives it.
+    // Mutation applied to verify: removed the ifEmpty fallback → test failed with
+    // "no sources found" despite three perfectly good candidates.
+    @Test
+    fun `a probe that kills every source is not believed`() = playbackTest(
+        settings = AppSettings(probeStreams = true),
+        sources = listOf(
+            StreamSource(name = "A", url = "https://example.com/a.mkv"),
+            StreamSource(name = "B", url = "https://example.com/b.mkv"),
+        ),
+    ) { h ->
+        h.playback.deadUrls = setOf("https://example.com/a.mkv", "https://example.com/b.mkv")
+
+        h.session.open(movie())
+        runCurrent()
+
+        // Asserting the phase alone is not enough: without the fallback the
+        // picker still opens, just with nothing in it.
+        val phase = h.session.phase
+        assertTrue(phase is PlaybackPhase.Choosing, "was: $phase")
+        assertEquals(2, phase.sources.size, "every source should have survived")
+    }
+
+    // probeStreams defaults to true, so the setting has to be turned off
+    // explicitly here — an earlier version of this test used the default harness
+    // settings and asserted the probe had not run, which was simply wrong.
+    // Mutation applied to verify: probed regardless of the setting → test failed,
+    // the probe ran with probeStreams off.
+    @Test
+    fun `probing only happens when it is switched on`() =
+        playbackTest(settings = AppSettings(probeStreams = false)) { h ->
+            h.session.open(movie())
+            runCurrent()
+
+            assertEquals(null, h.playback.probedUrls, "probe ran with the setting off")
+        }
+
+    // Mutation applied to verify: let failover pick any candidate rather than
+    // skipping tried ones → test failed, it handed back the source that had just
+    // failed and the walk never advanced.
+    @Test
+    fun `failover walks past sources that already failed`() = playbackTest(
+        sources = listOf(
+            StreamSource(name = "A", url = "https://example.com/a.mkv", sizeBytes = 300),
+            StreamSource(name = "B", url = "https://example.com/b.mkv", sizeBytes = 200),
+            StreamSource(name = "C", url = "https://example.com/c.mkv", sizeBytes = 100),
+        ),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.first())
+        runCurrent()
+
+        val played = mutableListOf<String>()
+        played += (h.session.phase as PlaybackPhase.Playing).source.name.orEmpty()
+        repeat(2) {
+            assertTrue(h.session.failoverToNextSource(), "expected another source")
+            runCurrent()
+            played += (h.session.phase as PlaybackPhase.Playing).source.name.orEmpty()
+        }
+
+        assertEquals(listOf("A", "B", "C"), played)
+    }
+
+    // Mutation applied to verify: cycled back to the start when the list ran out
+    // → test failed, failover reported success forever.
+    @Test
+    fun `failover stops when every source has been tried`() = playbackTest { h ->
+        h.session.open(movie())
+        runCurrent()
+        assertTrue(h.session.phase is PlaybackPhase.Playing, "setup: ${h.session.phase}")
+
+        assertTrue(!h.session.failoverToNextSource(), "only one source exists")
     }
 
     // Mutation applied to verify: dropped the generation check before applying the

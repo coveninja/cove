@@ -9,6 +9,7 @@ compose-hot-reload    = "1.1.1"
 compose-material3     = "1.9.0"
 coroutines            = "1.11.0"
 serialization-json    = "1.11.0"
+datetime              = "0.7.1"
 # Runtime dependency versions shared by the desktop and Android targets.
 ktor                  = "3.5.1"
 coil3                 = "3.5.0"
@@ -23,6 +24,9 @@ androidx-activity     = "1.13.0"
 kotlinx-coroutines-core  = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core",  version.ref = "coroutines" }
 kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization-json" }
+# Calendar day/month arithmetic. Exposed as an api() dependency of :shared so the
+# UI and backend modules share one LocalDate type across the calendar boundary.
+kotlinx-datetime           = { module = "org.jetbrains.kotlinx:kotlinx-datetime",           version.ref = "datetime" }
 
 # Networking and persistence
 ktor-client-core                  = { module = "io.ktor:ktor-client-core",                   version.ref = "ktor" }

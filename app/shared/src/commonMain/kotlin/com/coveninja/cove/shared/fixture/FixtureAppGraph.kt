@@ -5,6 +5,12 @@ import com.coveninja.cove.shared.model.*
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.plus
+import kotlinx.datetime.todayIn
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.days
 
 // Six movies and four TV titles that the app renders before any network code
 // is wired up. Values are plausible but obviously fake.
@@ -24,17 +30,171 @@ private val fixtureTv = listOf(
     Media(id = 1399, name = "Game of Thrones",     mediaType = MediaType.Tv, voteAverage = 8.4, firstAirDate = "2011-04-17", posterPath = "/u3bZgnGQ9T01sWNhyveQz0wH0Hl.jpg"),
 )
 
+// Dates are generated relative to the day the app runs, not hardcoded: My List sorts by
+// them and the calendar groups by them, so a fixed 2026 date would leave both looking
+// broken forever after that week passes.
+private fun daysAgo(days: Int): String =
+    (Clock.System.now() - days.days).toString()
+
+private fun dayOffset(days: Int): String =
+    Clock.System.todayIn(TimeZone.currentSystemDefault()).plus(days, DateTimeUnit.DAY).toString()
+
+private fun posterOf(tmdbId: Int): String =
+    (fixtureMovies + fixtureTv).firstOrNull { it.id == tmdbId }?.posterPath.orEmpty()
+
+private fun fixtureEntry(
+    index: Int,
+    tmdbId: Int,
+    mediaType: MediaType,
+    title: String,
+    status: LibraryStatus,
+    voteAverage: Double,
+    addedDaysAgo: Int,
+    watchedDaysAgo: Int? = null,
+    rating: Double? = null,
+    lastWatchedSeason: Int? = null,
+    lastWatchedEpisode: Int? = null,
+    lastAiredSeason: Int? = null,
+    lastAiredEpisode: Int? = null,
+): LibraryEntry = LibraryEntry(
+    id = "00000000-0000-0000-0000-${index.toString().padStart(12, '0')}",
+    tmdbId = tmdbId,
+    mediaType = mediaType,
+    title = title,
+    posterPath = posterOf(tmdbId),
+    status = status,
+    rating = rating,
+    voteAverage = voteAverage,
+    lastWatchedAt = watchedDaysAgo?.let { daysAgo(it) },
+    lastWatchedSeason = lastWatchedSeason,
+    lastWatchedEpisode = lastWatchedEpisode,
+    lastAiredSeason = lastAiredSeason,
+    lastAiredEpisode = lastAiredEpisode,
+    addedAt = daysAgo(addedDaysAgo),
+    updatedAt = daysAgo(watchedDaysAgo ?: addedDaysAgo),
+)
+
 private val fixtureEntries = listOf(
-    LibraryEntry(
-        id = "00000000-0000-0000-0000-000000000001",
-        tmdbId = 550, mediaType = MediaType.Movie, title = "Fight Club",
-        status = LibraryStatus.Finished, voteAverage = 8.8,
+    fixtureEntry(
+        1, 550, MediaType.Movie, "Fight Club", LibraryStatus.Finished, 8.8,
+        addedDaysAgo = 40, watchedDaysAgo = 30, rating = 9.0,
     ),
-    LibraryEntry(
-        id = "00000000-0000-0000-0000-000000000002",
-        tmdbId = 1396, mediaType = MediaType.Tv, title = "Breaking Bad",
-        status = LibraryStatus.Watching, voteAverage = 8.9,
+    // Two aired episodes ahead of where the viewer stopped: this is the entry that
+    // exercises the "new episodes" badge.
+    fixtureEntry(
+        2, 1396, MediaType.Tv, "Breaking Bad", LibraryStatus.Watching, 8.9,
+        addedDaysAgo = 20, watchedDaysAgo = 2,
         lastWatchedSeason = 3, lastWatchedEpisode = 7,
+        lastAiredSeason = 3, lastAiredEpisode = 9,
+    ),
+    fixtureEntry(
+        3, 60625, MediaType.Tv, "Rick and Morty", LibraryStatus.Watching, 8.7,
+        addedDaysAgo = 12, watchedDaysAgo = 1,
+        lastWatchedSeason = 8, lastWatchedEpisode = 3,
+        lastAiredSeason = 8, lastAiredEpisode = 3,
+    ),
+    fixtureEntry(
+        4, 66732, MediaType.Tv, "Stranger Things", LibraryStatus.WatchLater, 8.6,
+        addedDaysAgo = 5,
+    ),
+    fixtureEntry(
+        5, 1399, MediaType.Tv, "Game of Thrones", LibraryStatus.Dropped, 8.4,
+        addedDaysAgo = 60, watchedDaysAgo = 50, rating = 6.0,
+        lastWatchedSeason = 5, lastWatchedEpisode = 2,
+        lastAiredSeason = 8, lastAiredEpisode = 6,
+    ),
+    fixtureEntry(
+        6, 278, MediaType.Movie, "The Shawshank Redemption", LibraryStatus.WatchLater, 8.7,
+        addedDaysAgo = 3,
+    ),
+    fixtureEntry(
+        7, 238, MediaType.Movie, "The Godfather", LibraryStatus.Watching, 8.7,
+        addedDaysAgo = 8, watchedDaysAgo = 4,
+    ),
+    fixtureEntry(
+        8, 424, MediaType.Movie, "Schindler's List", LibraryStatus.WatchLater, 8.6,
+        addedDaysAgo = 15,
+    ),
+    fixtureEntry(
+        9, 680, MediaType.Movie, "Pulp Fiction", LibraryStatus.Finished, 8.5,
+        addedDaysAgo = 70, watchedDaysAgo = 65, rating = 8.0,
+    ),
+    fixtureEntry(
+        10, 13, MediaType.Movie, "Forrest Gump", LibraryStatus.Dropped, 8.5,
+        addedDaysAgo = 25, watchedDaysAgo = 22,
+    ),
+)
+
+// Two mid-watch resume points and one finished episode, so resume bars, the
+// continue-watching hero, and the "already finished" path all have something to show.
+private val fixtureProgress = listOf(
+    WatchProgress(
+        id = "fixture-progress-movie-238",
+        libraryEntryId = "00000000-0000-0000-0000-000000000007",
+        tmdbId = 238, mediaType = MediaType.Movie,
+        positionSeconds = 3120.0, durationSeconds = 10500.0,
+        watchedAt = daysAgo(4),
+    ),
+    WatchProgress(
+        id = "fixture-progress-tv-1396-3-7",
+        libraryEntryId = "00000000-0000-0000-0000-000000000002",
+        tmdbId = 1396, mediaType = MediaType.Tv, season = 3, episode = 7,
+        positionSeconds = 1400.0, durationSeconds = 2820.0,
+        watchedAt = daysAgo(2),
+    ),
+    WatchProgress(
+        id = "fixture-progress-tv-60625-8-3",
+        libraryEntryId = "00000000-0000-0000-0000-000000000003",
+        tmdbId = 60625, mediaType = MediaType.Tv, season = 8, episode = 3,
+        positionSeconds = 1300.0, durationSeconds = 1320.0, completed = true,
+        watchedAt = daysAgo(1),
+    ),
+)
+
+// Spread either side of today so the backlog strip, "airs today" and "coming up" all
+// render. Kinds mirror what CalendarService emits: "available" is watchable now.
+private val fixtureCalendar = listOf(
+    CalendarItem(
+        date = dayOffset(-6), kind = CalendarItem.KIND_AVAILABLE,
+        tmdbId = 1396, mediaType = MediaType.Tv.wireName, title = "Breaking Bad",
+        posterPath = posterOf(1396),
+        seasonNumber = 3, episodeNumber = 8, episodeName = "Fly", waitingCount = 2,
+    ),
+    CalendarItem(
+        date = dayOffset(-1), kind = CalendarItem.KIND_AVAILABLE,
+        tmdbId = 60625, mediaType = MediaType.Tv.wireName, title = "Rick and Morty",
+        posterPath = posterOf(60625),
+        seasonNumber = 8, episodeNumber = 4, episodeName = "Cronenberg Redux",
+        waitingCount = 1,
+    ),
+    CalendarItem(
+        date = dayOffset(0), kind = CalendarItem.KIND_EPISODE,
+        tmdbId = 66732, mediaType = MediaType.Tv.wireName, title = "Stranger Things",
+        posterPath = posterOf(66732),
+        seasonNumber = 5, episodeNumber = 1, episodeName = "The Crawl",
+    ),
+    CalendarItem(
+        date = dayOffset(1), kind = CalendarItem.KIND_EPISODE,
+        tmdbId = 1396, mediaType = MediaType.Tv.wireName, title = "Breaking Bad",
+        posterPath = posterOf(1396),
+        seasonNumber = 3, episodeNumber = 10, episodeName = "Fly",
+    ),
+    CalendarItem(
+        date = dayOffset(7), kind = CalendarItem.KIND_EPISODE,
+        tmdbId = 66732, mediaType = MediaType.Tv.wireName, title = "Stranger Things",
+        posterPath = posterOf(66732),
+        seasonNumber = 5, episodeNumber = 2, episodeName = "The Vanishing Point",
+    ),
+    CalendarItem(
+        date = dayOffset(12), kind = CalendarItem.KIND_MOVIE,
+        tmdbId = 278, mediaType = MediaType.Movie.wireName,
+        title = "The Shawshank Redemption", posterPath = posterOf(278),
+    ),
+    CalendarItem(
+        date = dayOffset(34), kind = CalendarItem.KIND_EPISODE,
+        tmdbId = 60625, mediaType = MediaType.Tv.wireName, title = "Rick and Morty",
+        posterPath = posterOf(60625),
+        seasonNumber = 8, episodeNumber = 5, episodeName = "Morty's Menagerie",
     ),
 )
 
@@ -140,7 +300,9 @@ private class FixtureLibraryRepository : LibraryRepository {
     private val _entries = MutableStateFlow<LibraryState>(LibraryState.Ready(fixtureEntries))
     override val entries: StateFlow<LibraryState> = _entries
     private val watchedEpisodes = mutableMapOf<Triple<Int, Int, Int>, Boolean>()
-    private val savedProgress = mutableMapOf<String, WatchProgress>()
+    private val savedProgress = fixtureProgress.associateBy {
+        progressKey(it.tmdbId, it.mediaType, it.season, it.episode)
+    }.toMutableMap()
 
     private fun readyEntries(): List<LibraryEntry> =
         (_entries.value as? LibraryState.Ready)?.entries.orEmpty()
@@ -238,6 +400,9 @@ private class FixtureLibraryRepository : LibraryRepository {
         episode: Int?,
     ): WatchProgress? = savedProgress[progressKey(tmdbId, mediaType, season, episode)]
 
+    override suspend fun progressSnapshot(): List<WatchProgress> =
+        savedProgress.values.sortedByDescending { it.watchedAt }
+
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress {
         val key = progressKey(request.tmdbId, request.mediaType, request.season, request.episode)
         val progress = WatchProgress(
@@ -303,6 +468,17 @@ private class FixturePlaybackRepository : PlaybackRepository {
     // A plausible intro so the seek bar's segments are visible without a backend.
     override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
         MediaTimestamps(intro = listOf(TimestampSegment(startMs = 65_000, endMs = 152_000)))
+
+    override suspend fun subtitles(
+        tmdbId: Int,
+        type: MediaType,
+        season: Int?,
+        episode: Int?,
+    ): List<SubtitleSource> = emptyList()
+
+    override suspend fun aliveUrls(urls: List<String>): Set<String> = urls.toSet()
+
+    override suspend fun torrentProgress(hash: String): TorrentProgress? = null
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         source.url ?: "http://127.0.0.1:6969/api/play?hash=${source.infoHash}"
@@ -389,10 +565,21 @@ private class FixtureAddonRepository : AddonRepository {
 
 // ── Public factory ───────────────────────────────────────────────────────────
 
+// Serves the canned schedule directly rather than extending BaseCalendarRepository:
+// there is no metadata to fan out over here, and the point of the fixture is to be
+// instantly Ready so the calendar has something to draw.
+private class FixtureCalendarRepository : CalendarRepository {
+    override val calendar: StateFlow<CalendarState> =
+        MutableStateFlow(CalendarState.Ready(fixtureCalendar, Clock.System.now().toString()))
+
+    override suspend fun refresh(force: Boolean) = Unit
+}
+
 fun FixtureAppGraph(): AppGraph = AppGraph(
     content  = FixtureContentRepository(),
     library  = FixtureLibraryRepository(),
     settings = FixtureSettingsRepository(),
     playback = FixturePlaybackRepository(),
     addons   = FixtureAddonRepository(),
+    calendar = FixtureCalendarRepository(),
 )

@@ -9,6 +9,8 @@ data class PlayerSnapshot(
     val positionSeconds: Double  = 0.0,
     val durationSeconds: Double  = 0.0,
     val volume:          Double  = 100.0,
+    /** 1.0 is normal; mpv keeps pitch corrected by default. */
+    val speed:           Double  = 1.0,
     val title:           String  = "",
     val videoCodec:      String  = "",
     /** Value of mpv's hwdec-current property; blank or "no" means software decode. */
@@ -32,6 +34,12 @@ data class PlayerSnapshot(
     val fileLoaded:      Boolean = false,
     /** Last line mpv logged, which is all it reports while opening a file. */
     val lastMessage:     String  = "",
+    /**
+     * mpv's eof-reached. With keep-open=yes the player parks at the last frame
+     * rather than closing, so this is the only signal that the episode finished
+     * rather than merely being paused near the end.
+     */
+    val endReached:      Boolean = false,
     val error:           String? = null,
 ) {
     val usingHardwareDecoding: Boolean

@@ -60,9 +60,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.TorrentProgress
 import com.coveninja.cove.shared.model.labelled
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
+import com.coveninja.cove.ui.state.identity
+import com.coveninja.cove.ui.state.nextEpisodeAfter
+import com.coveninja.cove.ui.state.segmentAt
+import com.coveninja.cove.ui.state.showUpNext
+import com.coveninja.cove.ui.state.skipLabel
+import com.coveninja.cove.ui.state.skipTarget
+import com.coveninja.cove.ui.state.skipsAutomatically
 import com.coveninja.cove.ui.state.LocalFullscreenController
 import com.coveninja.cove.ui.state.PlaybackPhase
 import com.coveninja.cove.ui.state.PlaybackRequest
@@ -113,6 +123,24 @@ fun PlayerLayer(
     // layer's handler, so without this the controls time out from under an open
     // menu while it is being read.
     var controlsHeld by remember { mutableStateOf(false) }
+
+    val settings = (LocalAppGraph.current.settings.settings.value as? SettingsState.Ready)?.settings
+    val segments = session.timestamps.labelled()
+    val currentSegment = segmentAt(status.positionSeconds, segments)
+
+    // Skipped segments are remembered for the episode so a viewer who seeks back
+    // into an intro on purpose is not immediately thrown out of it again.
+    val skipped = remember(request.season, request.episode, request.media.id) {
+        mutableSetOf<String>()
+    }
+    LaunchedEffect(currentSegment, status.positionSeconds, settings) {
+        val segment = currentSegment ?: return@LaunchedEffect
+        val preferences = settings ?: return@LaunchedEffect
+        if (!preferences.skipsAutomatically(segment.kind)) return@LaunchedEffect
+        if (!skipped.add(segment.identity())) return@LaunchedEffect
+        skipTarget(segment, status.positionSeconds, status.durationSeconds)
+            ?.let { host?.seek(it) }
+    }
     LaunchedEffect(activityPulse, phase, controlsHeld) {
         controlsVisible = true
         if (phase is PlaybackPhase.Playing && !controlsHeld) {
@@ -269,6 +297,7 @@ fun PlayerLayer(
                                 text = "Nothing to play",
                                 modifier = Modifier.padding(top = 14.dp),
                                 style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
@@ -304,6 +333,7 @@ fun PlayerLayer(
                             title = request.label,
                             source = phase.source,
                             status = status,
+                            torrent = rememberTorrentProgress(session, phase.source),
                             onRetry = session::reopenSources,
                             onCancel = session::close,
                         )
@@ -311,20 +341,12 @@ fun PlayerLayer(
                 }
 
                 status.error?.takeIf { status.hasMedia }?.let { error ->
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 24.dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.errorContainer,
-                    ) {
-                        Text(
-                            text = error,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
+                    PlaybackErrorBanner(
+                        message = error,
+                        onTryNextSource = { session.failoverToNextSource() },
+                        onPickSource = session::reopenSources,
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 78.dp),
+                    )
                 }
 
                 // Title block and window actions ride with the controls: they are
@@ -357,6 +379,83 @@ fun PlayerLayer(
                     }
                 }
 
+                session.resumedFrom?.let { resumed ->
+                    ResumeNotice(
+                        seconds = resumed,
+                        onStartOver = {
+                            session.acknowledgeResume()
+                            host?.seek(0.0)
+                        },
+                        onDismiss = session::acknowledgeResume,
+                        modifier = Modifier.align(Alignment.BottomStart)
+                            .padding(start = 30.dp, bottom = 118.dp),
+                    )
+                }
+
+                // At the end of an episode, what comes next. Shown whether or not
+                // autoplay is on: with it off this is the way to continue, with
+                // it on it is the way to stop it happening.
+                val atEnd = showUpNext(
+                    positionSeconds = status.positionSeconds,
+                    durationSeconds = status.durationSeconds,
+                    segments = segments,
+                    endReached = status.endReached,
+                )
+                val upNext = remember(atEnd, request.season, request.episode, request.media.id) {
+                    if (!atEnd) null
+                    else request.season?.let { season ->
+                        request.episode?.let { number ->
+                            nextEpisodeAfter(request.media.seasons, season, number)
+                        }
+                    }
+                }
+                upNext?.let { (nextSeason, nextEpisode) ->
+                    UpNextCard(
+                        season = nextSeason,
+                        episode = nextEpisode,
+                        autoAdvance = settings?.autoPlay == true,
+                        onPlay = {
+                            session.open(
+                                media = request.media,
+                                season = nextSeason,
+                                episode = nextEpisode,
+                            )
+                        },
+                        onDismiss = session::close,
+                        modifier = Modifier.align(Alignment.BottomEnd)
+                            .padding(end = 30.dp, bottom = 118.dp),
+                    )
+                }
+
+                // Offered only where auto-skip is off: with it on the segment is
+                // already gone, and a button for it would never be reachable.
+                val manualSkip = currentSegment?.takeIf { segment ->
+                    settings?.skipsAutomatically(segment.kind) != true &&
+                        skipTarget(segment, status.positionSeconds, status.durationSeconds) != null
+                }
+                AnimatedVisibility(
+                    visible = manualSkip != null,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 30.dp, bottom = 118.dp),
+                    enter = fadeIn(tween(160)) + slideInVertically { it / 2 },
+                    exit = fadeOut(tween(160)) + slideOutVertically { it / 2 },
+                ) {
+                    manualSkip?.let { segment ->
+                        SkipSegmentButton(
+                            label = segment.kind.skipLabel(),
+                            onClick = {
+                                skipped.add(segment.identity())
+                                skipTarget(
+                                    segment,
+                                    status.positionSeconds,
+                                    status.durationSeconds,
+                                )?.let { host?.seek(it) }
+                            },
+                        )
+                    }
+                }
+
                 AnimatedVisibility(
                     visible = controlsVisible,
                     modifier = Modifier.align(Alignment.BottomCenter),
@@ -366,7 +465,7 @@ fun PlayerLayer(
                     PlayerControls(
                         title = request.label,
                         status = status,
-                        segments = session.timestamps.labelled(),
+                        segments = segments,
                         onTogglePause = { host?.togglePause() },
                         onSeek = { host?.seek(it) },
                         onSetVolume = { host?.setVolume(it) },
@@ -377,6 +476,7 @@ fun PlayerLayer(
                             scaling = it
                             host?.setScaling(it)
                         },
+                        onSelectSpeed = { host?.setSpeed(it) },
                         canChangeSource = true,
                         onChangeSource = session::reopenSources,
                         episodeBrowser = request.episodeBrowser(
@@ -606,6 +706,10 @@ private fun TextAction(label: String, onClick: () -> Unit) {
 private const val CONTROLS_HIDE_DELAY_MILLIS = 3_000L
 private const val SEEK_STEP_SECONDS = 10.0
 private const val VOLUME_STEP = 5.0
+// Long enough to read the card and stop it, short enough not to feel stuck.
+private const val AUTOPLAY_COUNTDOWN_SECONDS = 8
+private const val TORRENT_POLL_MILLIS = 1500L
+private const val RESUME_NOTICE_MILLIS = 7000L
 // A remote mkv with many tracks routinely needs ten seconds of probing
 // before mpv reports anything, so patience here is normal, not a fault.
 private const val STALLED_SECONDS = 45
@@ -625,6 +729,7 @@ private fun StartingStage(
     title: String,
     source: StreamSource,
     status: PlaybackStatus,
+    torrent: TorrentProgress?,
     onRetry: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -640,18 +745,32 @@ private fun StartingStage(
     val buffering = status.bufferingPercent
     val headline = when {
         status.error != null -> "This source is not responding"
+        torrent != null && torrent.peers == 0 -> "Looking for peers"
         status.waitingForData -> "Waiting for data"
-        buffering > 0 -> "Buffering"
+        buffering > 0 || torrent != null -> "Buffering"
         else -> "Opening the file"
     }
 
     // Only a real buffer reading drives the determinate bar. mpv reports no
     // buffering figure at all until its demuxer is up — the property is simply
     // unavailable — so anything else here would be an invented number.
-    val progress = if (buffering > 0) buffering / 100f else null
+    val progress = when {
+        torrent != null && torrent.totalBytes > 0 ->
+            (torrent.downloadedBytes.toDouble() / torrent.totalBytes).toFloat()
+
+        buffering > 0 -> buffering / 100f
+        else -> null
+    }
 
     val detail = buildString {
         when {
+            // A torrent knows far more about itself than mpv does at this point:
+            // peers and rate say whether anything is coming at all, where mpv's
+            // buffer figure is simply unavailable until its demuxer is up.
+            torrent != null -> {
+                append("${torrent.peers} peers · ${formatBytes(torrent.downloadRate.toLong())}/s")
+            }
+
             buffering > 0 -> append("Buffered $buffering%")
             // mpv's own log is the only running commentary during an open.
             status.statusMessage.isNotBlank() -> append(status.statusMessage.take(90))
@@ -675,8 +794,10 @@ private fun StartingStage(
             source.addonName?.takeIf { it.isNotBlank() }?.let(::add)
         },
         problem = status.error
-            ?: "Still no data. A dead link or a torrent with no seeders can sit here forever."
-                .takeIf { elapsed >= STALLED_SECONDS },
+            ?: "No peers have any of this file. It is unlikely to start."
+                .takeIf { torrent != null && torrent.peers == 0 && elapsed >= STALLED_SECONDS }
+            ?: "Still no data. A dead link can sit here forever."
+                .takeIf { torrent == null && elapsed >= STALLED_SECONDS },
         onRetry = onRetry,
     )
 }
@@ -765,4 +886,238 @@ private fun PlaybackRequest.episodeBrowser(
             )
         },
     )
+}
+
+/**
+ * The "skip intro" affordance, shown while inside a segment the viewer has not
+ * asked to skip automatically. Sits above the control bar so it stays reachable
+ * whether or not the controls are showing.
+ */
+@Composable
+private fun SkipSegmentButton(label: String, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.95f else if (hovered) 1.04f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "SkipButtonScale",
+    )
+
+    Row(
+        modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black.copy(alpha = if (hovered) 0.88f else 0.72f))
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 18.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        IconifyIcon(
+            icon = "lucide:skip-forward",
+            modifier = Modifier.size(15.dp),
+            tint = Color.White,
+        )
+    }
+}
+
+/**
+ * What plays next, offered when an episode finishes.
+ *
+ * The countdown only runs when autoplay is on. With it off the card is a button
+ * and nothing more — an episode that ends should not start another one because
+ * a card happened to appear.
+ */
+@Composable
+private fun UpNextCard(
+    season: Int,
+    episode: Int,
+    autoAdvance: Boolean,
+    onPlay: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var remaining by remember(season, episode, autoAdvance) {
+        mutableStateOf(if (autoAdvance) AUTOPLAY_COUNTDOWN_SECONDS else 0)
+    }
+    var cancelled by remember(season, episode) { mutableStateOf(false) }
+
+    LaunchedEffect(season, episode, autoAdvance, cancelled) {
+        if (!autoAdvance || cancelled) return@LaunchedEffect
+        while (remaining > 0) {
+            delay(1000)
+            remaining--
+        }
+        onPlay()
+    }
+
+    Surface(
+        modifier = modifier.widthIn(max = 320.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
+        shadowElevation = 16.dp,
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Up next",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "S${season}E$episode",
+                modifier = Modifier.padding(top = 3.dp),
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Row(
+                modifier = Modifier.padding(top = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                TextAction(
+                    label = if (autoAdvance && !cancelled && remaining > 0) {
+                        "Play now · $remaining"
+                    } else {
+                        "Play"
+                    },
+                    onClick = onPlay,
+                )
+                TextAction(
+                    label = if (autoAdvance && !cancelled) "Stop" else "Close",
+                    onClick = {
+                        if (autoAdvance && !cancelled) cancelled = true else onDismiss()
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Polls torrent progress while a torrent source is starting.
+ *
+ * Only for torrents, and only until the file opens: a direct link has nothing to
+ * report, and once mpv is playing its own position is the better signal.
+ */
+@Composable
+private fun rememberTorrentProgress(
+    session: PlaybackSession,
+    source: StreamSource,
+): TorrentProgress? {
+    val hash = source.infoHash?.takeIf { it.isNotBlank() && source.url.isNullOrBlank() }
+        ?: return null
+    val graph = LocalAppGraph.current
+    var progress by remember(hash) { mutableStateOf<TorrentProgress?>(null) }
+
+    LaunchedEffect(hash) {
+        while (true) {
+            progress = graph.playback.torrentProgress(hash)
+            delay(TORRENT_POLL_MILLIS)
+        }
+    }
+    return progress
+}
+
+/**
+ * A source failing mid-playback used to be a dead end: the error appeared and
+ * the only way on was to close and start again. The other candidates are still
+ * in hand, so stepping to the next one is one button.
+ */
+@Composable
+private fun PlaybackErrorBanner(
+    message: String,
+    onTryNextSource: () -> Boolean,
+    onPickSource: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Latched: once the walk runs out there is nothing left to offer, and a
+    // button that silently does nothing is worse than no button.
+    var exhausted by remember(message) { mutableStateOf(false) }
+
+    Surface(
+        modifier = modifier.widthIn(max = 460.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.96f),
+        shadowElevation = 12.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            IconifyIcon(
+                icon = "lucide:triangle-alert",
+                modifier = Modifier.size(17.dp),
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                text = if (exhausted) "$message · no other source worked" else message,
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            TextAction(
+                label = if (exhausted) "Choose" else "Try next",
+                onClick = {
+                    if (exhausted) onPickSource() else if (!onTryNextSource()) exhausted = true
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Says where playback picked up, because resuming silently looks like the file
+ * started in the wrong place.
+ */
+@Composable
+private fun ResumeNotice(
+    seconds: Double,
+    onStartOver: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Long enough to read and act on, then out of the way on its own.
+    LaunchedEffect(seconds) {
+        delay(RESUME_NOTICE_MILLIS)
+        onDismiss()
+    }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
+        shadowElevation = 10.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Resumed from ${formatDuration(seconds)}",
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            TextAction(label = "Start over", onClick = onStartOver)
+        }
+    }
 }

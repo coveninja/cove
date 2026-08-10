@@ -157,6 +157,48 @@ class CoveApi(
             episode?.let { parameter("episode", it) }
         }.requireSuccess().body()
 
+    suspend fun subtitles(
+        id: Int,
+        type: MediaType,
+        season: Int? = null,
+        episode: Int? = null,
+    ): List<SubtitleSource> =
+        httpClient.get("${config.baseUrl}/api/subtitles") {
+            applyAuthHeaders()
+            parameter("id", id)
+            parameter("type", type.wireName)
+            season?.let { parameter("season", it) }
+            episode?.let { parameter("episode", it) }
+        }.requireSuccess().body()
+
+    /**
+     * Pure URL builder. The proxy converts SRT to VTT and validates the upstream
+     * against the addon URL policy, so subtitles are fetched through it rather
+     * than handed to the player directly.
+     */
+    fun subtitleProxyUrl(url: String): String =
+        "${config.baseUrl}/api/subtitle-proxy?url=${url.encodeURLParameter()}"
+
+    /**
+     * Checks whether stream URLs still answer. The backend accepts at most ten
+     * and caps the per-stream timeout itself.
+     */
+    suspend fun probeStreams(urls: List<String>, timeoutMs: Int = 700): StreamProbeResponse =
+        httpClient.post("${config.baseUrl}/api/streams/probe") {
+            applyAuthHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(StreamProbeBody(urls.map(::StreamProbeRequest), timeoutMs))
+        }.requireSuccess().body()
+
+    /** Null when the torrent is not active, which the backend reports as a 404. */
+    suspend fun torrentProgress(hash: String): TorrentProgress? {
+        val response = httpClient.get("${config.baseUrl}/api/progress") {
+            applyAuthHeaders()
+            parameter("hash", hash)
+        }
+        return if (response.status.isSuccess()) response.body() else null
+    }
+
     // ── Addons ──────────────────────────────────────────────────────────────
 
     suspend fun addons(): List<Addon> =
@@ -238,6 +280,12 @@ class CoveApi(
         httpClient.get("${config.baseUrl}/api/library") {
             applyAuthHeaders()
             status?.let { parameter("status", it.wireName) }
+        }.requireSuccess().body()
+
+    /** The backend builds this from TMDB, so it is slow by nature — cache the result. */
+    suspend fun libraryCalendar(): List<CalendarItem> =
+        httpClient.get("${config.baseUrl}/api/library/calendar") {
+            applyAuthHeaders()
         }.requireSuccess().body()
 
     suspend fun addToLibrary(

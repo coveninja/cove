@@ -4,33 +4,41 @@ import com.coveninja.cove.backend.content.MediaCatalog
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.db.Library_entries
 import com.coveninja.cove.backend.store.ActiveProfileSession
+import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaDetails
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.TvSeason
-import java.time.Clock
-import java.time.LocalDate
-import java.time.ZoneId
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.plus
+import kotlinx.datetime.todayIn
+import kotlin.time.Clock
 
-/** Builds the profile release calendar directly from SQLite and TMDB. */
+/**
+ * Builds the profile release calendar directly from SQLite and TMDB.
+ *
+ * Dates come from kotlinx-datetime rather than `java.time` so this can live in
+ * commonMain: Android needs the same calendar the desktop has, and the only thing that
+ * kept this desktop-only was the date library.
+ */
 class CalendarService(
     private val database: CoveDatabase,
     private val session: ActiveProfileSession,
     private val catalog: MediaCatalog,
-    private val clock: Clock = Clock.systemUTC(),
-    private val zoneId: ZoneId = ZoneId.systemDefault(),
+    private val clock: Clock = Clock.System,
+    private val timeZone: TimeZone = TimeZone.currentSystemDefault(),
 ) {
     suspend fun calendar(): List<CalendarItem> = coroutineScope {
         val profileId = session.profileId.value
-        val today = LocalDate.now(clock.withZone(zoneId))
-        val cutoff = today.plusDays(90)
+        val today = clock.todayIn(timeZone)
+        val cutoff = today.plus(CALENDAR_HORIZON_DAYS, DateTimeUnit.DAY)
         val completedMovies = mutableSetOf<Int>()
         val completedEpisodes = mutableMapOf<Int, MutableSet<Pair<Int, Int>>>()
         database.coveQueries.selectWatchProgress(profileId).executeAsList()
@@ -223,19 +231,9 @@ class CalendarService(
 
     private fun String.toDateOrNull(): LocalDate? =
         takeIf(String::isNotBlank)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-}
 
-@Serializable
-data class CalendarItem(
-    val date: String,
-    val kind: String,
-    @SerialName("tmdb_id") val tmdbId: Int,
-    @SerialName("media_type") val mediaType: String,
-    val title: String,
-    @SerialName("poster_path") val posterPath: String,
-    @SerialName("season_number") val seasonNumber: Int? = null,
-    @SerialName("episode_number") val episodeNumber: Int? = null,
-    @SerialName("episode_name") val episodeName: String = "",
-    @SerialName("still_path") val stillPath: String = "",
-    @SerialName("waiting_count") val waitingCount: Int = 0,
-)
+    private companion object {
+        /** How far ahead the schedule reaches; beyond this TMDB dates are mostly guesses. */
+        const val CALENDAR_HORIZON_DAYS = 90
+    }
+}

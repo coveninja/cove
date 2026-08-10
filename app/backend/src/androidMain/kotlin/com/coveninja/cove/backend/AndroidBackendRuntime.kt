@@ -1,9 +1,12 @@
 package com.coveninja.cove.backend
 
 import android.content.Context
+import com.coveninja.cove.backend.calendar.CalendarService
+import com.coveninja.cove.backend.calendar.LocalCalendarRepository
 import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.shared.data.AppGraph
+import com.coveninja.cove.shared.data.CalendarRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailableAddonRepository
 import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
@@ -24,6 +27,7 @@ class AndroidBackendRuntime private constructor(
     private val client: HttpClient,
     private val scope: CoroutineScope,
     content: LocalContentRepository,
+    calendar: CalendarRepository,
 ) : AutoCloseable {
     private var closed = false
 
@@ -35,6 +39,8 @@ class AndroidBackendRuntime private constructor(
         // resolve streams against yet. Fails with the reason if anything asks.
         playback = UnavailablePlaybackRepository,
         addons = UnavailableAddonRepository,
+        // The calendar needs only the database and TMDB, both of which Android has.
+        calendar = calendar,
         onClose = ::close,
     )
 
@@ -67,7 +73,17 @@ class AndroidBackendRuntime private constructor(
                     },
                 )
                 val content = LocalContentRepository(catalog, scope)
-                return AndroidBackendRuntime(stores, client, scope, content)
+                val calendar = LocalCalendarRepository(
+                    service = CalendarService(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        catalog = catalog,
+                    ),
+                    database = stores.databaseHandle,
+                    session = stores.repositories.profileSession,
+                    library = stores.repositories.library,
+                )
+                return AndroidBackendRuntime(stores, client, scope, content, calendar)
             } catch (error: Throwable) {
                 scope.cancel()
                 client.close()

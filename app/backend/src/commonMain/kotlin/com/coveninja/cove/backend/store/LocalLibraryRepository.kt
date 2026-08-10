@@ -191,6 +191,13 @@ class LocalLibraryRepository(
             ?.toModel()
     }
 
+    // selectWatchProgress is already ordered newest-first, so the contract's ordering
+    // costs nothing here.
+    override suspend fun progressSnapshot(): List<WatchProgress> =
+        database.coveQueries.selectWatchProgress(session.profileId.value)
+            .executeAsList()
+            .map(Watch_progress::toModel)
+
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress = mutate {
         require(request.tmdbId > 0) { "tmdb id must be positive" }
         require(request.positionSeconds >= 0 && request.durationSeconds >= 0) {
