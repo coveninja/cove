@@ -15,6 +15,23 @@ data class PlayerSnapshot(
     val hwdecCurrent:    String  = "",
     val renderBackend:   String  = "",
     val trackListJson:   String  = "",
+    /**
+     * mpv's cache-buffering-state: how full the demuxer cache is, 0-100, while it
+     * is filling. This is the only honest answer to "is anything happening yet",
+     * and it covers both the torrent and direct-HTTP paths because mpv reads
+     * everything through the same /api/play endpoint.
+     */
+    val cacheBufferingPercent: Int = 0,
+    /** mpv is stalled waiting for more data rather than decoding. */
+    val pausedForCache:  Boolean = false,
+    /**
+     * Set on MPV_EVENT_FILE_LOADED. idle-active is not a usable substitute: it
+     * goes false the moment loadfile is accepted, long before the demuxer has
+     * read anything, so it cannot tell "open in progress" from "playing".
+     */
+    val fileLoaded:      Boolean = false,
+    /** Last line mpv logged, which is all it reports while opening a file. */
+    val lastMessage:     String  = "",
     val error:           String? = null,
 ) {
     val usingHardwareDecoding: Boolean

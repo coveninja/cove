@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.AppSettings
+import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
 import com.coveninja.cove.ui.state.SettingsEditor
 
 /**
@@ -24,8 +25,7 @@ enum class SettingsCategory(
         label = "Addons",
         icon = "lucide:blocks",
         headline = "Addons",
-        blurb = "Where streams come from. Cove ships with none, so this is the " +
-            "first thing to set up.",
+        blurb = "Where streams come from and how they are configured",
     ),
     Playback(
         label = "Playback",
@@ -79,6 +79,13 @@ private val LANGUAGES = listOf(
     "tr" to "Türkçe",
     "ja" to "日本語",
 )
+
+/**
+ * Original means "whatever the title was made in", resolved per title from its
+ * TMDB original language rather than pinned to one code. It leads the list
+ * because it is the option most people actually want.
+ */
+private val SPOKEN_LANGUAGES = listOf(AUDIO_LANGUAGE_ORIGINAL to "Original") + LANGUAGES
 
 /**
  * Renders one category.
@@ -245,7 +252,7 @@ fun SettingsCategoryContent(
                         {
                             SettingChoice(
                                 title = "Subtitle language",
-                                options = LANGUAGES,
+                                options = SPOKEN_LANGUAGES,
                                 selected = settings.defaultSubtitleLang,
                                 onSelect = { editor.edit { copy(defaultSubtitleLang = it) } },
                             )
@@ -253,7 +260,7 @@ fun SettingsCategoryContent(
                         {
                             SettingChoice(
                                 title = "Audio language",
-                                options = LANGUAGES,
+                                options = SPOKEN_LANGUAGES,
                                 selected = settings.defaultAudioLang,
                                 onSelect = { editor.edit { copy(defaultAudioLang = it) } },
                             )

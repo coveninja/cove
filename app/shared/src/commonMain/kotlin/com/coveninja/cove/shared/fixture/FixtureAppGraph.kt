@@ -300,6 +300,10 @@ private class FixturePlaybackRepository : PlaybackRepository {
         ),
     )
 
+    // A plausible intro so the seek bar's segments are visible without a backend.
+    override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
+        MediaTimestamps(intro = listOf(TimestampSegment(startMs = 65_000, endMs = 152_000)))
+
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         source.url ?: "http://127.0.0.1:6969/api/play?hash=${source.infoHash}"
 }

@@ -11,7 +11,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import com.coveninja.cove.shared.network.CoveJson
+import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.TrackKind
+import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import java.awt.image.BufferedImage
 import kotlinx.coroutines.CoroutineScope
@@ -23,6 +28,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Bridges libmpv to the shared [VideoPlayerHost] contract that :ui codes against.
@@ -51,6 +62,7 @@ class MpvVideoPlayerHost(
 
     private var pendingLoad: PendingLoad? = null
     private var pendingVolume: Double? = null
+    private var pendingScaling: VideoScaling? = null
 
     // Produced on mpv's render thread and consumed by the composition; a flow is
     // the defined handoff, where a raw snapshot write from a foreign thread would
@@ -89,6 +101,19 @@ class MpvVideoPlayerHost(
             // keeps the volume slider from snapping back under the pointer.
             _status.value = _status.value.copy(volume = clamped)
         }
+    }
+
+    override fun setScaling(scaling: VideoScaling) {
+        pendingScaling = scaling
+        player?.applyScaling(scaling)
+    }
+
+    override fun selectAudioTrack(id: Int) {
+        player?.selectAudioTrack(id)
+    }
+
+    override fun selectSubtitleTrack(id: Int?) {
+        player?.selectSubtitleTrack(id)
     }
 
     override fun stop() {
@@ -142,6 +167,13 @@ class MpvVideoPlayerHost(
                     bitmap = it.toComposeImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
+                    // FillBounds, not the default Fit: mpv has already composed
+                    // the picture into a buffer the size of this surface, aspect
+                    // and cropping included. Fit would apply a second aspect
+                    // policy on top and add bars mpv never intended — bars no
+                    // scaling mode could then remove, because they are added
+                    // after mpv is done.
+                    contentScale = ContentScale.FillBounds,
                 )
             }
         }
@@ -155,6 +187,9 @@ class MpvVideoPlayerHost(
         }
         pendingVolume?.let { active.setVolume(it) }
         pendingVolume = null
+        // Re-applied on attach: mpv resets these with the handle, so a mode
+        // chosen before the surface existed would otherwise be forgotten.
+        pendingScaling?.let(active::applyScaling)
         pendingLoad?.let { active.load(it.url, it.startPositionSeconds) }
         pendingLoad = null
     }
@@ -174,11 +209,64 @@ class MpvVideoPlayerHost(
     private data class PendingLoad(val url: String, val startPositionSeconds: Double)
 }
 
-private fun PlayerSnapshot.toPlaybackStatus() = PlaybackStatus(
-    hasMedia = hasMedia,
+/**
+ * mpv publishes its tracks as a JSON string on the track-list property, so this
+ * is where that string becomes typed data. Parsed defensively: an unreadable
+ * track list must cost the track menus, not playback.
+ */
+private fun parseTracks(json: String): List<MediaTrack> {
+    if (json.isBlank()) return emptyList()
+    return runCatching {
+        CoveJson.parseToJsonElement(json).jsonArray.mapNotNull { element ->
+            val track = element.jsonObject
+            val kind = when (track["type"]?.jsonPrimitive?.contentOrNull) {
+                "audio" -> TrackKind.Audio
+                "sub" -> TrackKind.Subtitle
+                else -> return@mapNotNull null
+            }
+            val id = track["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
+            MediaTrack(
+                id = id,
+                kind = kind,
+                title = track["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                language = track["lang"]?.jsonPrimitive?.contentOrNull,
+                selected = track["selected"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+        }
+    }.getOrDefault(emptyList())
+}
+
+/** The one place the display modes become mpv's three knobs. */
+private fun DesktopPlayer.applyScaling(scaling: VideoScaling) = when (scaling) {
+    VideoScaling.Fit -> setScaling(keepAspect = true, panscan = 0.0, zoom = 0.0)
+    VideoScaling.Fill -> setScaling(keepAspect = true, panscan = 1.0, zoom = 0.0)
+    VideoScaling.Zoom -> setScaling(keepAspect = true, panscan = 0.0, zoom = 0.2)
+    VideoScaling.Stretch -> setScaling(keepAspect = false, panscan = 0.0, zoom = 0.0)
+}
+
+private fun PlayerSnapshot.toPlaybackStatus(): PlaybackStatus {
+    val tracks = parseTracks(trackListJson)
+    val audio = tracks.filter { it.kind == TrackKind.Audio }
+    val subtitles = tracks.filter { it.kind == TrackKind.Subtitle }
+    return playbackStatus(audio, subtitles)
+}
+
+private fun PlayerSnapshot.playbackStatus(
+    audio: List<MediaTrack>,
+    subtitles: List<MediaTrack>,
+) = PlaybackStatus(
+    hasMedia = hasMedia && fileLoaded,
     paused = paused,
     positionSeconds = positionSeconds,
     durationSeconds = durationSeconds,
     volume = volume,
+    bufferingPercent = cacheBufferingPercent,
+    waitingForData = pausedForCache,
+    fileLoaded = fileLoaded,
+    statusMessage = lastMessage,
+    audioTracks = audio,
+    subtitleTracks = subtitles,
+    selectedAudioId = audio.firstOrNull { it.selected }?.id,
+    selectedSubtitleId = subtitles.firstOrNull { it.selected }?.id,
     error = error,
 )

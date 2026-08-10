@@ -1,5 +1,6 @@
 package com.coveninja.cove.shared.data
 
+import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.StreamSource
 
@@ -32,6 +33,16 @@ interface PlaybackRepository {
         season: Int? = null,
         episode: Int? = null,
     ): String
+
+    /**
+     * Intro/recap/credits ranges for the seek bar. Never throws — timestamps are
+     * decoration, and a title without them is the normal case, not a failure.
+     */
+    suspend fun timestamps(
+        tmdbId: Int,
+        season: Int? = null,
+        episode: Int? = null,
+    ): MediaTimestamps
 }
 
 /** Thrown when a source list comes back but nothing in it can actually be played. */

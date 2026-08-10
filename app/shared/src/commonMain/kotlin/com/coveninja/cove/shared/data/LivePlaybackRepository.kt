@@ -1,5 +1,6 @@
 package com.coveninja.cove.shared.data
 
+import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.network.CoveApi
@@ -18,6 +19,9 @@ class LivePlaybackRepository(private val api: CoveApi) : PlaybackRepository {
         season: Int?,
         episode: Int?,
     ): List<StreamSource> = api.streams(tmdbId, type, season, episode)
+
+    override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
+        runCatching { api.timestamps(tmdbId, season, episode) }.getOrDefault(MediaTimestamps.None)
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String {
         // A direct url wins over a torrent hash: an addon that supplies both is
@@ -53,6 +57,9 @@ object UnavailablePlaybackRepository : PlaybackRepository {
         season: Int?,
         episode: Int?,
     ): List<StreamSource> = throw IllegalStateException(REASON)
+
+    override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
+        MediaTimestamps.None
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         throw IllegalStateException(REASON)

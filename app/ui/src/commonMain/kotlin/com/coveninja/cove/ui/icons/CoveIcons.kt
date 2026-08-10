@@ -161,6 +161,17 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:audio-lines" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M2 10v3m4-7v11m4-14v18m4-13v7m4-10v13m4-8v3",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:badge-check" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M3.85 8.62a4 4 0 0 1 4.78-4.77a4 4 0 0 1 6.74 0a4 4 0 0 1 4.78 4.78a4 4 0 0 1 0 6.74a4 4 0 0 1-4.77 4.78a4 4 0 0 1-6.75 0a4 4 0 0 1-4.78-4.77a4 4 0 0 1 0-6.76",
@@ -587,9 +598,31 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:maximize" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:message-circle" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092a10 10 0 1 0-4.777-4.719",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:minimize" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3m8 0v-3a2 2 0 0 1 2-2h3",
             fill        = null,
             stroke      = "currentColor",
             strokeWidth = 2f,
@@ -681,6 +714,26 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
         ),
         IconPath(
             pathData    = "M8 16H3v5",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:scaling" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M14 15H9v-5m7-7h5v5m0-5L9 15",
             fill        = null,
             stroke      = "currentColor",
             strokeWidth = 2f,

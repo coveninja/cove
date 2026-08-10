@@ -118,7 +118,7 @@ fun ChoicePill(
     )
     val contentColor by animateColorAsState(
         targetValue = if (selected) {
-            Color.White
+            MaterialTheme.colorScheme.onTertiary
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
         },

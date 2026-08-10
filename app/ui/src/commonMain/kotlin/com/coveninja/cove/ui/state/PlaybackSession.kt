@@ -11,11 +11,14 @@ import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.LibraryEntry
+import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.model.toDomainType
+import com.coveninja.cove.ui.model.toUiEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -67,6 +70,18 @@ class PlaybackSession(
     var phase by mutableStateOf<PlaybackPhase?>(null)
         private set
 
+    /** Intro/recap/credits ranges for the seek bar; empty until they arrive. */
+    var timestamps by mutableStateOf(MediaTimestamps.None)
+        private set
+
+    /** Season the episode picker is showing, which need not be the one playing. */
+    var browsingSeason by mutableStateOf<Int?>(null)
+        private set
+
+    /** Episodes of [browsingSeason]; empty while they load or for a film. */
+    var browsingEpisodes by mutableStateOf<List<MediaEpisode>>(emptyList())
+        private set
+
     /** Not named isActive: inside a coroutine that would collide with CoroutineScope.isActive. */
     val active: Boolean get() = request != null
 
@@ -99,6 +114,9 @@ class PlaybackSession(
 
         val token = ++generation
         stopProgressTicker()
+        timestamps = MediaTimestamps.None
+        browsingSeason = null
+        browsingEpisodes = emptyList()
         request = PlaybackRequest(media, season, episode, episodeTitle)
         phase = PlaybackPhase.Resolving
 
@@ -130,7 +148,15 @@ class PlaybackSession(
                 val playable = candidates.filter {
                     !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank()
                 }
-                val ranked = rankSources(playable)
+                // Audio preference decides ranking before size does: a viewer
+                // who asked for original audio should not be handed a dub just
+                // because the dub is a bigger file.
+                val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
+                val ranked = rankSources(
+                    sources = playable,
+                    preferredAudioLanguage = settings?.defaultAudioLang,
+                    originalLanguage = resolved.media.originalLanguage,
+                )
                 when {
                     playable.isEmpty() -> phase = PlaybackPhase.Failed(
                         "No sources found. A fresh profile has no provider addons — " +
@@ -145,6 +171,40 @@ class PlaybackSession(
                     else -> phase = PlaybackPhase.Choosing(ranked)
                 }
             }
+        }
+    }
+
+    /**
+     * Points the episode picker at a season. Independent of what is playing, so
+     * looking ahead at the next season does not interrupt the current episode.
+     */
+    fun browseSeason(season: Int) {
+        val current = request ?: return
+        val token = generation
+        browsingSeason = season
+        browsingEpisodes = emptyList()
+        scope.launch {
+            val domainType = current.media.type.toDomainType()
+            // Watch state lives in the library, not with the episode metadata, so
+            // the picker has to merge the two to know what has been seen.
+            val watched = if (domainType == null) {
+                emptyMap()
+            } else {
+                runCatching {
+                    graph.library.episodeWatchStates(current.media.tmdbId, domainType)
+                }.getOrDefault(emptyMap())
+            }
+            val loaded = runCatching {
+                graph.content.episodes(current.media.tmdbId, season)
+                    .map { episode ->
+                        episode.toUiEpisode(current.media.id, season).copy(
+                            watched = watched[season to episode.episodeNumber] == true,
+                        )
+                    }
+            }.getOrDefault(emptyList())
+            // Guarded like every other async result here: a slow season fetch
+            // must not repopulate the picker for a title that has been closed.
+            if (token == generation && browsingSeason == season) browsingEpisodes = loaded
         }
     }
 
@@ -200,6 +260,20 @@ class PlaybackSession(
         }
 
         phase = PlaybackPhase.Playing(source, url)
+
+        // The picker opens on whatever is playing, and is free to be pointed
+        // elsewhere afterwards without disturbing playback.
+        current.season?.let(::browseSeason)
+
+        // Decoration, so it is fetched alongside playback rather than gating it.
+        scope.launch {
+            val fetched = graph.playback.timestamps(
+                tmdbId = current.media.tmdbId,
+                season = current.season,
+                episode = current.episode,
+            )
+            if (token == generation) timestamps = fetched
+        }
 
         scope.launch {
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
@@ -348,17 +422,6 @@ class PlaybackSession(
         const val RESUME_TAIL_SECONDS = 15.0
     }
 }
-
-/**
- * Ranks candidates so the picker's first row is the one most likely to just work:
- * already-cached debrid links first, then bigger files, which in practice track
- * higher bitrates.
- */
-internal fun rankSources(sources: List<StreamSource>): List<StreamSource> =
-    sources.sortedWith(
-        compareByDescending<StreamSource> { it.cached }
-            .thenByDescending { it.sizeBytes },
-    )
 
 @Composable
 fun rememberPlaybackSession(): PlaybackSession {

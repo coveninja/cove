@@ -327,7 +327,7 @@ private fun CategoryListRow(category: SettingsCategory, onClick: () -> Unit) {
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 18.dp, vertical = 14.dp),
+            .padding(horizontal = 18.dp, vertical = 32.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -442,7 +442,7 @@ private fun CategoryHeading(category: SettingsCategory) {
 private fun InsightsTab(modifier: Modifier = Modifier) {
     SettingsCard(modifier = modifier) {
         Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 44.dp),
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 44.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(

@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.audioHints
 import kotlinx.coroutines.delay
 
 /**
@@ -231,6 +232,12 @@ private fun SourceRow(
                 source.addonName?.takeIf { it.isNotBlank() }?.let { MetaTag(it) }
                 if (source.sizeBytes > 0) MetaTag(formatBytes(source.sizeBytes))
                 if (source.cached) MetaTag("Cached", accent = true)
+                // Audio read out of the release name — the stream list carries no
+                // track data, so this is a hint, and absent when the name says
+                // nothing rather than guessed at.
+                val audio = source.audioHints()
+                if (audio.multi) MetaTag("Dual audio", accent = true)
+                audio.languages.take(3).forEach { MetaTag(it.uppercase()) }
                 // Nothing else distinguishes a torrent from a direct link, and the
                 // two behave very differently on first play.
                 if (source.url.isNullOrBlank()) MetaTag("Torrent")

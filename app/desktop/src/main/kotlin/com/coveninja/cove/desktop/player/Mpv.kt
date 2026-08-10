@@ -14,8 +14,12 @@ internal object Mpv {
     const val FORMAT_DOUBLE = 5
 
     // mpv_event_id enum values from client.h
-    const val EVENT_NONE     = 0
-    const val EVENT_SHUTDOWN = 1
+    const val EVENT_NONE        = 0
+    const val EVENT_SHUTDOWN    = 1
+    const val EVENT_LOG_MESSAGE = 2
+    const val EVENT_START_FILE  = 6
+    const val EVENT_END_FILE    = 7
+    const val EVENT_FILE_LOADED = 8
 
     // mpv_render_param_type enum values from render.h
     const val RENDER_PARAM_API_TYPE            = 1
@@ -117,6 +121,9 @@ internal interface MpvLibrary : Library {
     fun mpv_set_property(handle: Pointer, name: String, format: Int, data: Pointer): Int
     fun mpv_get_property_string(handle: Pointer, name: String): Pointer?
     fun mpv_wait_event(handle: Pointer, timeout: Double): Pointer
+
+    /** Opts the handle into MPV_EVENT_LOG_MESSAGE at [minLevel] and above. */
+    fun mpv_request_log_messages(handle: Pointer, minLevel: String): Int
     fun mpv_wakeup(handle: Pointer)
     fun mpv_terminate_destroy(handle: Pointer)
     fun mpv_free(data: Pointer?)
@@ -195,6 +202,25 @@ internal open class MpvEvent(pointer: Pointer) : Structure(pointer) {
     init { read() }
 }
 
+/**
+ * Mirrors mpv_event_log_message from client.h, which arrives as the data pointer
+ * of an MPV_EVENT_LOG_MESSAGE. This is the only running commentary mpv offers
+ * while it is opening a file — no property reports progress before the demuxer
+ * is up.
+ */
+@Structure.FieldOrder("prefix", "level", "text", "logLevel")
+internal open class MpvLogMessage(pointer: Pointer) : Structure(pointer) {
+    @JvmField var prefix:   Pointer? = null
+    @JvmField var level:    Pointer? = null
+    @JvmField var text:     Pointer? = null
+    @JvmField var logLevel: Int      = 0
+
+    init { read() }
+
+    fun message(): String = text?.getString(0).orEmpty().trim()
+    fun source(): String = prefix?.getString(0).orEmpty()
+}
+
 /** Allocates a contiguous JNA Structure array of [count] render params. */
 @Suppress("UNCHECKED_CAST")
 internal fun renderParamArray(count: Int): Array<MpvRenderParam> =
@@ -205,15 +231,25 @@ internal fun checkMpv(library: MpvLibrary, result: Int, operation: String) {
 }
 
 /** Build the argument array for mpv's "loadfile" command. */
-internal fun mpvLoadFileArgs(source: String, startPositionSeconds: Double): Array<String> {
-    val options = if (startPositionSeconds > 0.0) {
-        "start=${startPositionSeconds.toLong()}"
-    } else {
-        ""
-    }
-    return if (options.isEmpty()) {
-        arrayOf("loadfile", source, "replace")
-    } else {
-        arrayOf("loadfile", source, "replace", options)
-    }
-}
+/**
+ * Always the three-argument form.
+ *
+ * The resume point is **not** passed here. mpv 0.38 inserted an `<index>`
+ * parameter into loadfile between `<flags>` and `<options>`, so the old
+ * four-argument `loadfile <url> replace start=N` is now read as an index and
+ * rejected with "argument index can't be parsed" — the file never loads. Adding
+ * an index instead would fix new mpv and break old, so the start position goes
+ * through the `start` option ([mpvStartOption]), which every version accepts and
+ * which lets mpv begin demuxing at the offset rather than seeking after load.
+ */
+internal fun mpvLoadFileArgs(source: String): Array<String> =
+    arrayOf("loadfile", source, "replace")
+
+/**
+ * Value for mpv's `start` option, applied to the next file loaded.
+ *
+ * Whole seconds: mpv parses fractions, but a resume point is not worth the
+ * precision, and integers keep the value readable in logs.
+ */
+internal fun mpvStartOption(startPositionSeconds: Double): String =
+    if (startPositionSeconds > 0.0) startPositionSeconds.toLong().toString() else "0"

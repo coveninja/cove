@@ -15,8 +15,8 @@ import androidx.compose.ui.unit.sp
 // Colors are kept here so a single-file swap replaces the entire palette.
 object CoveColors {
     val background   = Color(0xFF0A0A0A)
-    val surface      = Color(0xFF1F1F1F)
-    val surfaceRaised = Color(0xFF2C2C2C)
+    val surface      = Color(0xFF101010)
+    val surfaceRaised = Color(0xFF1A1A1A)
     val accent       = Color(0xFF4ADE80)
     val text         = Color(0xFFFAFAFA)
     val muted        = Color(0xFFA3A3A3)
@@ -64,9 +64,9 @@ fun CoveTheme(content: @Composable () -> Unit) {
             background       = CoveColors.background,
             surface          = CoveColors.surface,
             surfaceContainer = CoveColors.surfaceRaised,
-            surfaceContainerLow = Color(0xFF181919),
-            surfaceContainerHigh = Color(0xFF272929),
-            surfaceContainerHighest = Color(0xFF303333),
+            surfaceContainerLow = Color(0xFF101010),
+            surfaceContainerHigh = Color(0xFF171717),
+            surfaceContainerHighest = Color(0xFF1C1C1C),
             primary          = CoveColors.accent,
             onPrimary        = CoveColors.background,
             tertiary         = CoveColors.accent,

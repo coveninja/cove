@@ -77,6 +77,8 @@ class MpvOpenGlPlayer(
             setOption(library, created, "hwdec",     "auto-safe")
 
             checkMpv(library, library.mpv_initialize(created), "initialize")
+            // The only running commentary available while a file is opening.
+            library.mpv_request_log_messages(created, "info")
             _snapshot.value = _snapshot.value.copy(initialized = true, error = null)
 
             eventExecutor.execute { drainEvents(library, created) }
@@ -126,6 +128,19 @@ class MpvOpenGlPlayer(
             library.mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, v)
         }
     }
+
+    // set, not set-property: mpv accepts "no" for sid, which the typed property
+    // setters cannot express.
+    override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
+        command("set", "keepaspect", if (keepAspect) "yes" else "no")
+        command("set", "panscan", panscan.toString())
+        command("set", "video-zoom", zoom.toString())
+    }
+
+    override fun selectAudioTrack(id: Int) = command("set", "aid", id.toString())
+
+    override fun selectSubtitleTrack(id: Int?) =
+        command("set", "sid", id?.toString() ?: "no")
 
     override fun stop() = command("stop")
 
@@ -245,6 +260,8 @@ class MpvOpenGlPlayer(
             val codec    = if (idle) "" else getString(library, target, "video-codec").orEmpty()
             val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
             val tracks   = if (idle) "" else getString(library, target, "track-list").orEmpty()
+            val buffering = getDouble(library, target, "cache-buffering-state") ?: 0.0
+            val forCache  = getFlag(library, target, "paused-for-cache") ?: false
 
             _snapshot.value = _snapshot.value.copy(
                 initialized     = true,
@@ -258,6 +275,8 @@ class MpvOpenGlPlayer(
                 hwdecCurrent    = hwdec,
                 renderBackend   = "OpenGL",
                 trackListJson   = tracks,
+                cacheBufferingPercent = buffering.finiteOrZero().toInt().coerceIn(0, 100),
+                pausedForCache  = forCache,
                 error           = null,
             )
 
@@ -277,7 +296,25 @@ class MpvOpenGlPlayer(
     private fun drainEvents(library: MpvLibrary, target: Pointer) {
         while (!closing.get()) {
             val event = MpvEvent(library.mpv_wait_event(target, 0.1))
-            if (event.eventId == Mpv.EVENT_SHUTDOWN) break
+            when (event.eventId) {
+                Mpv.EVENT_SHUTDOWN -> break
+                Mpv.EVENT_START_FILE ->
+                    _snapshot.value = _snapshot.value.copy(fileLoaded = false)
+
+                Mpv.EVENT_FILE_LOADED ->
+                    _snapshot.value = _snapshot.value.copy(fileLoaded = true)
+
+                Mpv.EVENT_END_FILE ->
+                    _snapshot.value = _snapshot.value.copy(fileLoaded = false)
+
+                Mpv.EVENT_LOG_MESSAGE -> event.data?.let { pointer ->
+                    val log = MpvLogMessage(pointer)
+                    val text = log.message()
+                    if (text.isNotBlank()) {
+                        _snapshot.value = _snapshot.value.copy(lastMessage = text)
+                    }
+                }
+            }
         }
     }
 
@@ -288,7 +325,10 @@ class MpvOpenGlPlayer(
     }
 
     private fun loadNow(source: String, startPositionSeconds: Double) {
-        command(*mpvLoadFileArgs(source, startPositionSeconds))
+        // start applies to the next file loaded, so it is set before loadfile
+        // rather than passed to it — see mpvLoadFileArgs for why.
+        command("set", "start", mpvStartOption(startPositionSeconds))
+        command(*mpvLoadFileArgs(source))
     }
 
     private fun submitCommand(op: String, call: (MpvLibrary, Pointer) -> Int) {

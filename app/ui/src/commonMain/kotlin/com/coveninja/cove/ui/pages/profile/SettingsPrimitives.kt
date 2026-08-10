@@ -53,7 +53,7 @@ import com.coveninja.cove.ui.pages.common.ChoicePillRow
  * instead of a stack of unrelated widgets.
  */
 private val CardShape = RoundedCornerShape(18.dp)
-private val RowPadding = 18.dp
+private val RowPadding = 24.dp
 
 @Composable
 internal fun SettingsCard(

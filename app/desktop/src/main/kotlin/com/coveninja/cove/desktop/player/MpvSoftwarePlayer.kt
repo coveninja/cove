@@ -78,6 +78,8 @@ class MpvSoftwarePlayer(
             )
 
             checkMpv(library, library.mpv_initialize(created), "initialize")
+            // The only running commentary available while a file is opening.
+            library.mpv_request_log_messages(created, "info")
 
             val context = renderExecutor.submit<Pointer> {
                 createSoftwareRenderContext(library, created)
@@ -102,7 +104,10 @@ class MpvSoftwarePlayer(
     }
 
     override fun load(source: String, startPositionSeconds: Double) {
-        command(*mpvLoadFileArgs(source, startPositionSeconds))
+        // start applies to the next file loaded, so it is set before loadfile
+        // rather than passed to it — see mpvLoadFileArgs for why.
+        command("set", "start", mpvStartOption(startPositionSeconds))
+        command(*mpvLoadFileArgs(source))
     }
 
     override fun togglePause() = setPaused(!_snapshot.value.paused)
@@ -127,12 +132,36 @@ class MpvSoftwarePlayer(
         if (result < 0) recordError(result, "set volume")
     }
 
+    // set, not set-property: mpv accepts "no" for sid, which the typed property
+    // setters cannot express.
+    override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
+        command("set", "keepaspect", if (keepAspect) "yes" else "no")
+        command("set", "panscan", panscan.toString())
+        command("set", "video-zoom", zoom.toString())
+    }
+
+    override fun selectAudioTrack(id: Int) = command("set", "aid", id.toString())
+
+    override fun selectSubtitleTrack(id: Int?) =
+        command("set", "sid", id?.toString() ?: "no")
+
     override fun stop() = command("stop")
+
+    /** Visible for tests: the size mpv is currently asked to render at. */
+    internal val renderSize: Pair<Int, Int>
+        get() = renderWidth.get() to renderHeight.get()
 
     fun resize(width: Int, height: Int) {
         val w = width.coerceIn(1, 8192)
         val h = height.coerceIn(1, 8192)
-        if (renderWidth.getAndSet(w) != w || renderHeight.getAndSet(h) != h) requestRender()
+        // Both stores happen before the comparison on purpose. Folding them into
+        // a single `||` short-circuits: when the width changes, the height is
+        // never written, and mpv keeps rendering at the old height. That leaves it
+        // composing the picture into a target of the wrong shape, which is where
+        // the stray letterboxing on a resized or fullscreened window came from.
+        val widthChanged = renderWidth.getAndSet(w) != w
+        val heightChanged = renderHeight.getAndSet(h) != h
+        if (widthChanged || heightChanged) requestRender()
     }
 
     override fun close() {
@@ -223,7 +252,25 @@ class MpvSoftwarePlayer(
     private fun drainEvents(library: MpvLibrary, target: Pointer) {
         while (!closing.get()) {
             val event = MpvEvent(library.mpv_wait_event(target, 0.1))
-            if (event.eventId == Mpv.EVENT_SHUTDOWN) break
+            when (event.eventId) {
+                Mpv.EVENT_SHUTDOWN -> break
+                Mpv.EVENT_START_FILE ->
+                    _snapshot.value = _snapshot.value.copy(fileLoaded = false)
+
+                Mpv.EVENT_FILE_LOADED ->
+                    _snapshot.value = _snapshot.value.copy(fileLoaded = true)
+
+                Mpv.EVENT_END_FILE ->
+                    _snapshot.value = _snapshot.value.copy(fileLoaded = false)
+
+                Mpv.EVENT_LOG_MESSAGE -> event.data?.let { pointer ->
+                    val log = MpvLogMessage(pointer)
+                    val text = log.message()
+                    if (text.isNotBlank()) {
+                        _snapshot.value = _snapshot.value.copy(lastMessage = text)
+                    }
+                }
+            }
         }
     }
 
@@ -238,6 +285,8 @@ class MpvSoftwarePlayer(
             val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
             val codec    = if (idle) "" else getString(library, target, "video-codec").orEmpty()
             val tracks   = if (idle) "" else getString(library, target, "track-list").orEmpty()
+            val buffering = getDouble(library, target, "cache-buffering-state") ?: 0.0
+            val forCache  = getFlag(library, target, "paused-for-cache") ?: false
             val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
 
             _snapshot.value = _snapshot.value.copy(
@@ -254,6 +303,8 @@ class MpvSoftwarePlayer(
                 hwdecCurrent    = hwdec,
                 renderBackend   = "Software",
                 trackListJson   = tracks,
+                cacheBufferingPercent = buffering.finiteOrZero().toInt().coerceIn(0, 100),
+                pausedForCache  = forCache,
                 error           = null,
             )
         } catch (error: Throwable) {

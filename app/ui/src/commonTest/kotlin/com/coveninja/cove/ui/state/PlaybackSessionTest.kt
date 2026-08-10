@@ -17,6 +17,7 @@ import com.coveninja.cove.shared.fixture.FixtureAppGraph
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
+import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.WatchProgress
@@ -115,6 +116,12 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
         return sources
     }
 
+    override suspend fun timestamps(
+        tmdbId: Int,
+        season: Int?,
+        episode: Int?,
+    ): MediaTimestamps = MediaTimestamps.None
+
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         "http://127.0.0.1:6969/api/play?url=${source.url}"
 }
@@ -157,6 +164,9 @@ private class FakeHost : VideoPlayerHost {
     override fun togglePause() = Unit
     override fun seek(seconds: Double) = Unit
     override fun setVolume(volume: Double) { volumeSet = volume }
+    override fun setScaling(scaling: VideoScaling) = Unit
+    override fun selectAudioTrack(id: Int) = Unit
+    override fun selectSubtitleTrack(id: Int?) = Unit
     override fun stop() = Unit
 
     @Composable

@@ -11,6 +11,37 @@ import kotlinx.coroutines.flow.StateFlow
  * decoded. Mirrors the desktop PlayerSnapshot; :ui is a Kotlin Multiplatform
  * module and cannot see :desktop, where libmpv lives.
  */
+/**
+ * How the picture is mapped onto the window.
+ *
+ * [Fit] is the default and the only one that shows the whole frame: the others
+ * either crop or distort, which is a choice the viewer makes, never one made for
+ * them.
+ */
+enum class VideoScaling(val label: String, val description: String) {
+    Fit("Fit", "Whole picture, bars if the shapes differ"),
+    Fill("Fill", "Fills the window, crops the overflow"),
+    Zoom("Zoom", "Slightly enlarged"),
+    Stretch("Stretch", "Fills the window, distorts the picture"),
+}
+
+/** One selectable audio or subtitle track reported by the player. */
+data class MediaTrack(
+    val id: Int,
+    val kind: TrackKind,
+    val title: String,
+    val language: String?,
+    val selected: Boolean,
+) {
+    val label: String
+        get() = listOfNotNull(
+            title.takeIf { it.isNotBlank() },
+            language?.uppercase()?.takeIf { it.isNotBlank() },
+        ).joinToString(" · ").ifBlank { "Track $id" }
+}
+
+enum class TrackKind { Audio, Subtitle }
+
 data class PlaybackStatus(
     val hasMedia: Boolean = false,
     val paused: Boolean = true,
@@ -18,6 +49,19 @@ data class PlaybackStatus(
     val durationSeconds: Double = 0.0,
     /** 0..100, matching mpv. Not the 0..1 scale AppSettings.defaultVolume uses. */
     val volume: Double = 100.0,
+    /** How full the player's read-ahead buffer is, 0-100, while it is filling. */
+    val bufferingPercent: Int = 0,
+    /** The player has data to decode but is stalled waiting for more. */
+    val waitingForData: Boolean = false,
+    /** The file is open and its duration is known — not merely accepted for loading. */
+    val fileLoaded: Boolean = false,
+    /** Whatever the player last reported; the only detail available while opening. */
+    val statusMessage: String = "",
+    val audioTracks: List<MediaTrack> = emptyList(),
+    val subtitleTracks: List<MediaTrack> = emptyList(),
+    /** Null when subtitles are switched off. */
+    val selectedSubtitleId: Int? = null,
+    val selectedAudioId: Int? = null,
     val error: String? = null,
 ) {
     val progressFraction: Float
@@ -48,6 +92,13 @@ interface VideoPlayerHost {
 
     /** [volume] is 0..100, matching mpv. */
     fun setVolume(volume: Double)
+
+    fun selectAudioTrack(id: Int)
+
+    fun setScaling(scaling: VideoScaling)
+
+    /** Null switches subtitles off. */
+    fun selectSubtitleTrack(id: Int?)
     fun stop()
 
     @Composable
@@ -60,3 +111,16 @@ interface VideoPlayerHost {
  * :mobile keeps building against the same :ui module.
  */
 val LocalVideoPlayerHost = staticCompositionLocalOf<VideoPlayerHost?> { null }
+
+/**
+ * Window-level fullscreen, which only a desktop window has. Null everywhere
+ * else — mobile players are already fullscreen, so the control is simply absent
+ * rather than present and inert.
+ */
+@Stable
+interface FullscreenController {
+    val isFullscreen: StateFlow<Boolean>
+    fun toggle()
+}
+
+val LocalFullscreenController = staticCompositionLocalOf<FullscreenController?> { null }

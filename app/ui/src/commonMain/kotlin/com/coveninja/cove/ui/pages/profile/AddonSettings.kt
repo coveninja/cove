@@ -70,16 +70,15 @@ fun AddonSettings(modifier: Modifier = Modifier) {
         SettingsCard(
             title = "Provider addons",
             iconName = "lucide:blocks",
-            description = "Stremio-compatible addons that supply streams.",
+            description = "Addons that supply streams.",
         ) {
             Column(
                 modifier = Modifier.padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingLabels(
-                    title = "Add a Stremio addon",
-                    description = "Paste a manifest URL. Cove ships with none, so " +
-                        "streams stay empty until at least one provider is added.",
+                    title = "Add an addon",
+                    description = "Paste a manifest URL"
                 )
                 UrlInput(
                     placeholder = "https://…/manifest.json",
@@ -125,7 +124,7 @@ fun AddonSettings(modifier: Modifier = Modifier) {
         SettingsCard(
             title = "Nuvio scrapers",
             iconName = "lucide:triangle-alert",
-            description = "Optional community scrapers, off unless you add one.",
+            description = "Community JS Scrapers",
             modifier = Modifier.padding(top = 14.dp),
         ) {
             Column(
@@ -435,8 +434,6 @@ private fun UrlInput(placeholder: String, onSubmit: (String) -> Unit) {
         val buttonInteraction = remember { MutableInteractionSource() }
         val buttonHovered by buttonInteraction.collectIsHoveredAsState()
         val buttonPressed by buttonInteraction.collectIsPressedAsState()
-        // Nothing about a URL field says "this is submittable"; the button growing
-        // under the pointer and dipping on press is the whole affordance.
         val buttonScale by animateFloatAsState(
             targetValue = when {
                 buttonPressed -> 0.95f

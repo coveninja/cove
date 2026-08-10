@@ -70,6 +70,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.swing)
     // Core coroutines used by the backend supervisor package.
     implementation(libs.kotlinx.coroutines.core)
+    // mpv reports its track list as a JSON string property; parsing it is the
+    // only place this module needs serialization.
+    implementation(libs.kotlinx.serialization.json)
     // In-process libmpv via JNA.
     implementation(libs.jna)
     // JOGL for the OpenGL render path — GLJPanel composites as Swing pixels so

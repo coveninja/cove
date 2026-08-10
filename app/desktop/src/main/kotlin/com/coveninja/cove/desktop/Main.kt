@@ -16,6 +16,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowState
+import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.window.application
 import com.coveninja.cove.desktop.backend.SingleInstanceLock
 import com.coveninja.cove.desktop.player.DesktopPlayer
@@ -31,6 +34,10 @@ import com.coveninja.cove.shared.fixture.FixtureAppGraph
 import com.coveninja.cove.shared.network.CoveApiConfig
 import com.coveninja.cove.ui.CoveApp
 import com.coveninja.cove.ui.CoveTheme
+import com.coveninja.cove.ui.state.FullscreenController
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
 import kotlin.system.exitProcess
 
@@ -96,9 +103,22 @@ fun main(args: Array<String>) {
                 androidx.compose.runtime.DisposableEffect(playerHost) {
                     onDispose { playerHost.dispose() }
                 }
-                Window(onCloseRequest = ::exitApplication, title = "Cove") {
+                val windowState = rememberWindowState()
+                // Window placement is the desktop window's business, so the
+                // controller is built here and handed to :ui rather than :ui
+                // reaching for a window it cannot see.
+                val fullscreen = remember(windowState) { WindowFullscreenController(windowState) }
+                Window(
+                    onCloseRequest = ::exitApplication,
+                    state = windowState,
+                    title = "Cove",
+                ) {
                     CoveTheme {
-                        CoveApp(graph, videoPlayerHost = playerHost)
+                        CoveApp(
+                            graph,
+                            videoPlayerHost = playerHost,
+                            fullscreenController = fullscreen,
+                        )
                     }
                 }
             }
@@ -191,5 +211,29 @@ private fun OpenGlPlayerSurface(file: String, fallbackToSoftware: Boolean) {
         snap.error?.let { err ->
             Text(err, modifier = Modifier.align(Alignment.BottomCenter))
         }
+    }
+}
+
+/**
+ * Fullscreen backed by the Compose window's placement.
+ *
+ * Keeps its own flow rather than reading WindowState directly: :ui observes a
+ * StateFlow, and WindowState.placement is Compose snapshot state that only a
+ * composition can read.
+ */
+private class WindowFullscreenController(
+    private val windowState: WindowState,
+) : FullscreenController {
+    private val _isFullscreen = MutableStateFlow(windowState.placement == WindowPlacement.Fullscreen)
+    override val isFullscreen: StateFlow<Boolean> = _isFullscreen.asStateFlow()
+
+    override fun toggle() {
+        val next = if (windowState.placement == WindowPlacement.Fullscreen) {
+            WindowPlacement.Floating
+        } else {
+            WindowPlacement.Fullscreen
+        }
+        windowState.placement = next
+        _isFullscreen.value = next == WindowPlacement.Fullscreen
     }
 }

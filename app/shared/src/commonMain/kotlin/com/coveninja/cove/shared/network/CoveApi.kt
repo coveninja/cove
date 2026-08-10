@@ -148,6 +148,15 @@ class CoveApi(
         return "${config.baseUrl}/api/play?${parameters.joinToString("&")}"
     }
 
+    // Intro/recap/credits ranges. season and episode are omitted for films.
+    suspend fun timestamps(id: Int, season: Int? = null, episode: Int? = null): MediaTimestamps =
+        httpClient.get("${config.baseUrl}/api/timestamps") {
+            applyAuthHeaders()
+            parameter("id", id)
+            season?.let { parameter("season", it) }
+            episode?.let { parameter("episode", it) }
+        }.requireSuccess().body()
+
     // ── Addons ──────────────────────────────────────────────────────────────
 
     suspend fun addons(): List<Addon> =

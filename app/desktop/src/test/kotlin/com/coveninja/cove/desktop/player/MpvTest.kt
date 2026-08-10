@@ -137,29 +137,46 @@ class MpvTest {
         assertFailsWith<IllegalArgumentException> { bgr0ToBufferedImage(buf, 2, 2) }
     }
 
-    // ---- mpvLoadFileArgs ----
+    // ---- mpvLoadFileArgs / mpvStartOption ----
 
+    /**
+     * The previous version of this test asserted a four-element array carrying
+     * `start=N`, and passed — because it only ever checked the shape of the array,
+     * never that mpv accepts it. mpv 0.38 turned that fourth argument into an
+     * `<index>`, so every resumed playback failed with "argument index can't be
+     * parsed" while the test stayed green. Hence the size assertion below is
+     * exact: three arguments, whatever the resume point.
+     */
+    // Mutation applied to verify: appended the start option again → test failed
+    // on the argument count.
     @Test
-    fun `mpvLoadFileArgs without start position produces three-element array`() {
-        val args = mpvLoadFileArgs("file.mkv", 0.0)
-        // Mutation: returning fewer elements makes the size check fail.
-        assertEquals(3, args.size)
-        assertEquals("loadfile", args[0])
-        assertEquals("file.mkv", args[1])
-        assertEquals("replace",  args[2])
+    fun `loadfile is always three arguments`() {
+        assertEquals(3, mpvLoadFileArgs("file.mkv").size)
+        assertEquals(
+            listOf("loadfile", "file.mkv", "replace"),
+            mpvLoadFileArgs("file.mkv").toList(),
+        )
     }
 
+    // Mutation applied to verify: returned "0" unconditionally → test failed,
+    // the resume point was dropped.
     @Test
-    fun `mpvLoadFileArgs with positive start position appends start option`() {
-        val args = mpvLoadFileArgs("file.mkv", 90.0)
-        // Mutation: not appending the option makes size == 3 and fails the size check.
-        assertEquals(4, args.size)
-        assertEquals("start=90", args[3])
+    fun `a resume point becomes the start option`() {
+        assertEquals("90", mpvStartOption(90.0))
     }
 
+    // Mutation applied to verify: dropped the `> 0.0` guard so negatives passed
+    // through → test failed with "-5" instead of "0".
     @Test
-    fun `mpvLoadFileArgs with zero start position does not append options`() {
-        // Mutation: always appending makes size == 4 and fails the size check.
-        assertEquals(3, mpvLoadFileArgs("file.mkv", 0.0).size)
+    fun `no resume point starts at the beginning`() {
+        assertEquals("0", mpvStartOption(0.0))
+        assertEquals("0", mpvStartOption(-5.0))
+    }
+
+    // Mutation applied to verify: switched toLong() to the raw double → test
+    // failed with "90.7".
+    @Test
+    fun `fractional resume points truncate to whole seconds`() {
+        assertEquals("90", mpvStartOption(90.7))
     }
 }

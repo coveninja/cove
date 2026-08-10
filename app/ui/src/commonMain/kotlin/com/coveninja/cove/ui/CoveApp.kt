@@ -54,7 +54,9 @@ import com.coveninja.cove.ui.pages.home.HomePage
 import com.coveninja.cove.ui.pages.mylist.MyListPage
 import com.coveninja.cove.ui.pages.profile.ProfilePage
 import com.coveninja.cove.ui.pages.search.SearchPage
+import com.coveninja.cove.ui.state.FullscreenController
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LocalFullscreenController
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberDragSession
@@ -145,10 +147,13 @@ fun CoveApp(
     // Null on any target without a player (currently everything but desktop); the
     // Watch button then reports that playback is unavailable instead of crashing.
     videoPlayerHost: VideoPlayerHost? = null,
+    // Absent on mobile, where the player is already fullscreen.
+    fullscreenController: FullscreenController? = null,
 ) {
     CompositionLocalProvider(
         LocalAppGraph provides graph,
         LocalVideoPlayerHost provides videoPlayerHost,
+        LocalFullscreenController provides fullscreenController,
     ) {
         CoveAppContent()
     }
