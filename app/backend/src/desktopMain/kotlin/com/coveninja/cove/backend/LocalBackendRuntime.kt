@@ -1,8 +1,11 @@
 package com.coveninja.cove.backend
 
 import com.coveninja.cove.backend.addons.AddonManager
+import com.coveninja.cove.backend.addons.AddonSyncPayload
 import com.coveninja.cove.backend.addons.DesktopAddonUrlPolicy
 import com.coveninja.cove.backend.activity.ActivityService
+import com.coveninja.cove.backend.activity.ActivitySyncPayload
+import com.coveninja.cove.backend.nuvio.NuvioSyncPayload
 import com.coveninja.cove.backend.auth.AuthService
 import com.coveninja.cove.backend.auth.AuthSessionStore
 import com.coveninja.cove.backend.auth.ClientSessionStore
@@ -28,7 +31,14 @@ import com.coveninja.cove.backend.torrent.JlibtorrentPlaybackEngine
 import com.coveninja.cove.backend.platform.DesktopBackendEnvironment
 import com.coveninja.cove.backend.platform.DesktopConfigPaths
 import com.coveninja.cove.shared.data.AppGraph
+import com.coveninja.cove.shared.data.AccountRepository
 import com.coveninja.cove.shared.data.AddonRepository
+import com.coveninja.cove.shared.data.DeviceRepository
+import com.coveninja.cove.shared.data.TraktRepository
+import com.coveninja.cove.shared.data.UnavailableAccountRepository
+import com.coveninja.cove.backend.auth.LocalAccountRepository
+import com.coveninja.cove.backend.platform.LocalDeviceRepository
+import com.coveninja.cove.backend.trakt.LocalTraktRepository
 import com.coveninja.cove.shared.data.LiveAddonRepository
 import com.coveninja.cove.shared.data.LivePlaybackRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
@@ -62,6 +72,9 @@ class LocalBackendRuntime private constructor(
     addonRepository: AddonRepository,
     calendarRepository: CalendarRepository,
     discoveryRepository: DiscoveryRepository,
+    accountRepository: AccountRepository,
+    traktRepository: TraktRepository,
+    deviceRepository: DeviceRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
@@ -71,6 +84,10 @@ class LocalBackendRuntime private constructor(
         addons = addonRepository,
         calendar = calendarRepository,
         discovery = discoveryRepository,
+        account = accountRepository,
+        profiles = stores.profiles,
+        trakt = traktRepository,
+        device = deviceRepository,
         onClose = ::close,
     )
 
@@ -174,6 +191,7 @@ class LocalBackendRuntime private constructor(
                     httpClient = client,
                     scope = scope,
                 )
+                val deviceSettings = DeviceSettingsService(dataDirectory)
                 val clientSessions = ClientSessionStore(stores.databaseHandle, stores.now)
                 val auth = DesktopBackendEnvironment.supabaseConfig()?.let { config ->
                     val supabase = SupabaseClient(config, client)
@@ -188,10 +206,14 @@ class LocalBackendRuntime private constructor(
                             profiles = stores.profiles,
                             library = stores.library,
                             settings = stores.settings,
-                            addons = addons,
                             now = stores.now,
-                            nuvio = nuvio,
-                            activity = activity,
+                            // The desktop owns all three subsystems, so all three
+                            // merge properly instead of being passed through.
+                            payloads = listOf(
+                                AddonSyncPayload(addons),
+                                NuvioSyncPayload(nuvio),
+                                ActivitySyncPayload(activity),
+                            ),
                         ),
                     )
                 }
@@ -205,7 +227,7 @@ class LocalBackendRuntime private constructor(
                     activity,
                     calendar,
                     trakt,
-                    DeviceSettingsService(dataDirectory),
+                    deviceSettings,
                     discovery,
                     quality,
                     UpdateService(DesktopBackendEnvironment.appVersion()),
@@ -237,9 +259,23 @@ class LocalBackendRuntime private constructor(
                 // has no per-request registry living behind a route, and the HTTP host is
                 // optional here.
                 val discoveryRepository = LocalDiscoveryRepository(catalog, discovery)
+                // Without Supabase credentials there is no account to sign in to,
+                // and the settings page says exactly that rather than offering a
+                // form that could not work.
+                val accountRepository = auth?.let {
+                    LocalAccountRepository(
+                        auth = it,
+                        settings = stores.settings,
+                        library = stores.library,
+                        scope = scope,
+                    )
+                } ?: UnavailableAccountRepository
                 return LocalBackendRuntime(
                     stores, client, untrustedClient, scope, httpHost, media, content,
                     playback, addonRepository, calendarRepository, discoveryRepository,
+                    accountRepository,
+                    LocalTraktRepository(trakt, scope),
+                    LocalDeviceRepository(deviceSettings, DesktopBackendEnvironment.appVersion()),
                 )
             } catch (error: Throwable) {
                 scope.cancel()

@@ -688,6 +688,140 @@ private class FixtureCalendarRepository : CalendarRepository {
     override suspend fun refresh(force: Boolean) = Unit
 }
 
+/**
+ * A signed-out account that accepts anything.
+ *
+ * Sign-in has no server to refuse it, so this exists to make the signed-in half
+ * of the settings page reachable in fixtures mode — the state changes, the sync
+ * status stamps a time, and signing out puts it back.
+ */
+private class FixtureAccountRepository : AccountRepository {
+    private val _account = MutableStateFlow<AccountState>(AccountState.SignedOut)
+    override val account: StateFlow<AccountState> = _account
+
+    private val _syncStatus = MutableStateFlow(SyncStatus())
+    override val syncStatus: StateFlow<SyncStatus> = _syncStatus
+
+    override suspend fun signIn(email: String, password: String): AuthOutcome {
+        if (email.isBlank() || password.isBlank()) {
+            return AuthOutcome.Failure("Enter an email address and a password.")
+        }
+        _account.value = AccountState.SignedIn(email = email.trim(), userId = "fixture-user")
+        syncNow()
+        return AuthOutcome.Success
+    }
+
+    override suspend fun register(email: String, password: String, profileName: String) =
+        signIn(email, password)
+
+    override suspend fun confirmRegistration(
+        email: String,
+        token: String,
+        password: String,
+        profileName: String,
+    ) = signIn(email, password)
+
+    override suspend fun sendOtp(email: String): AuthOutcome =
+        if (email.isBlank()) AuthOutcome.Failure("Enter an email address.") else AuthOutcome.Success
+
+    override suspend fun verifyOtp(email: String, token: String): AuthOutcome =
+        if (token.isBlank()) AuthOutcome.Failure("Enter the code from your email.") else {
+            _account.value = AccountState.SignedIn(email.trim(), "fixture-user")
+            syncNow()
+            AuthOutcome.Success
+        }
+
+    override suspend fun signOut() {
+        _account.value = AccountState.SignedOut
+        _syncStatus.value = SyncStatus()
+    }
+
+    override suspend fun syncNow() {
+        _syncStatus.value = SyncStatus(lastSyncedAt = Clock.System.now())
+    }
+}
+
+private class FixtureProfileRepository : ProfileRepository {
+    private var counter = 0
+    private val _profiles = MutableStateFlow<ProfilesState>(
+        ProfilesState.Ready(
+            profiles = listOf(
+                Profile(id = "fixture-primary", name = "Cove", isPrimary = true),
+                Profile(id = "fixture-guest", name = "Guest"),
+            ),
+            activeProfileId = "fixture-primary",
+        ),
+    )
+    override val profiles: StateFlow<ProfilesState> = _profiles
+
+    override suspend fun create(name: String): Profile {
+        val profile = Profile(id = "fixture-${++counter}", name = name)
+        edit { it.copy(profiles = it.profiles + profile) }
+        return profile
+    }
+
+    override suspend fun rename(id: String, name: String) = edit { state ->
+        state.copy(profiles = state.profiles.map { if (it.id == id) it.copy(name = name) else it })
+    }
+
+    override suspend fun activate(id: String) = edit { it.copy(activeProfileId = id) }
+
+    override suspend fun delete(id: String) = edit { state ->
+        val remaining = state.profiles.filterNot { it.id == id }
+        // The last profile is not deletable — there would be nothing to be active.
+        if (remaining.isEmpty()) {
+            state
+        } else {
+            state.copy(
+                profiles = remaining,
+                activeProfileId = remaining.firstOrNull { it.id == state.activeProfileId }?.id
+                    ?: remaining.first().id,
+            )
+        }
+    }
+
+    private fun edit(transform: (ProfilesState.Ready) -> ProfilesState.Ready) {
+        val current = _profiles.value as? ProfilesState.Ready ?: return
+        _profiles.value = transform(current)
+    }
+}
+
+/** Walks the device flow without Trakt: connecting shows a code, then links. */
+private class FixtureTraktRepository : TraktRepository {
+    private val _state = MutableStateFlow<TraktState>(TraktState.Unlinked())
+    override val state: StateFlow<TraktState> = _state
+
+    override suspend fun startLink() {
+        _state.value = TraktState.Pending(
+            userCode = "COVE-1234",
+            verificationUrl = "https://trakt.tv/activate",
+        )
+    }
+
+    override suspend fun cancelLink() {
+        _state.value = TraktState.Unlinked()
+    }
+
+    override suspend fun unlink() {
+        _state.value = TraktState.Unlinked()
+    }
+
+    override suspend fun syncNow() = Unit
+}
+
+private class FixtureDeviceRepository : DeviceRepository {
+    override val available: Boolean = true
+    override val appVersion: String = "fixtures"
+
+    private var config = "# mpv configuration\nhwdec=auto-copy\n"
+
+    override suspend fun readMpvConfig(): String = config
+
+    override suspend fun writeMpvConfig(content: String) {
+        config = content
+    }
+}
+
 fun FixtureAppGraph(): AppGraph = AppGraph(
     content   = FixtureContentRepository(),
     library   = FixtureLibraryRepository(),
@@ -696,4 +830,8 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     addons    = FixtureAddonRepository(),
     calendar  = FixtureCalendarRepository(),
     discovery = FixtureDiscoveryRepository(),
+    account   = FixtureAccountRepository(),
+    profiles  = FixtureProfileRepository(),
+    trakt     = FixtureTraktRepository(),
+    device    = FixtureDeviceRepository(),
 )

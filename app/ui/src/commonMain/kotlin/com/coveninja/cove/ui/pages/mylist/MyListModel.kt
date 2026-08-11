@@ -1,9 +1,11 @@
 package com.coveninja.cove.ui.pages.mylist
 
 import com.coveninja.cove.shared.model.LibraryEntry
+import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.state.neverPlayed
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.number
@@ -47,8 +49,21 @@ data class MyListRow(
     val category: MyListCategory,
     val watchFraction: Float? = null,
     val hasNewEpisodes: Boolean = false,
+    /** The resume point, kept whole so [hasSomethingToPlay] can tell "finished" from "never
+     *  started" — [watchFraction] collapses both to null. */
+    val progress: WatchProgress? = null,
 ) {
     val id: String get() = media.id
+
+    /**
+     * Whether there is genuinely something to play right now.
+     *
+     * Three ways for that to be true, and the library's status is none of them: `Watching`
+     * is an intention set once that nothing ever clears, so it survives the last episode and
+     * cannot stand in for "unfinished".
+     */
+    val hasSomethingToPlay: Boolean
+        get() = watchFraction != null || hasNewEpisodes || entry.neverPlayed(progress)
 
     val displayTitle: String
         get() = media.title?.takeIf { it.isNotBlank() }
@@ -65,6 +80,23 @@ data class MyListRow(
 
     internal val sortTitle: String get() = displayTitle.lowercase()
 }
+
+/**
+ * The title the hero offers to carry on with: whatever was watched most recently and still
+ * has something left to play.
+ *
+ * The second half is not optional. Selecting on the `Watching` category alone put finished
+ * titles under a "Continue watching" heading with a Resume button and the episode marker of
+ * an episode already watched — see [MyListRow.hasSomethingToPlay]. Null when nothing
+ * qualifies, which is the honest answer: no hero at all beats a hero pointing at something
+ * that is over.
+ *
+ * Unlike Home's carry-on rail this *does* count a show with episodes waiting, because My List
+ * has no separate backlog rail for one to belong to instead.
+ */
+fun continueWatching(rows: List<MyListRow>): MyListRow? =
+    rows.filter { it.category == MyListCategory.Watching && it.hasSomethingToPlay }
+        .maxByOrNull { it.entry.lastWatchedAt ?: it.entry.updatedAt }
 
 /** Counts per category over the *unfiltered* list, so the pills do not count themselves. */
 fun categoryCounts(rows: List<MyListRow>): Map<MyListCategory, Int> =

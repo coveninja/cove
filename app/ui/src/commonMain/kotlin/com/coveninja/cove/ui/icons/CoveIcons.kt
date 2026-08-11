@@ -540,6 +540,26 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:copy" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M 10 8 H 20 A 2 2 0 0 1 22 10 V 20 A 2 2 0 0 1 20 22 H 10 A 2 2 0 0 1 8 20 V 10 A 2 2 0 0 1 10 8 Z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:dices" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M 4 10 H 12 A 2 2 0 0 1 14 12 V 20 A 2 2 0 0 1 12 22 H 4 A 2 2 0 0 1 2 20 V 12 A 2 2 0 0 1 4 10 Z",
@@ -552,6 +572,26 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
         ),
         IconPath(
             pathData    = "m17.92 14l3.5-3.5a2.24 2.24 0 0 0 0-3l-5-4.92a2.24 2.24 0 0 0-3 0L10 6M6 18h.01M10 14h.01M15 6h.01M18 9h.01",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:eye" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M2.062 12.348a1 1 0 0 1 0-.696a10.75 10.75 0 0 1 19.876 0a1 1 0 0 1 0 .696a10.75 10.75 0 0 1-19.876 0",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M 9 12 A 3 3 0 1 0 15 12 A 3 3 0 1 0 9 12 Z",
             fill        = null,
             stroke      = "currentColor",
             strokeWidth = 2f,

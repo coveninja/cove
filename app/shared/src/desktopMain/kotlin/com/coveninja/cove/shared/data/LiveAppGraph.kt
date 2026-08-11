@@ -36,6 +36,12 @@ fun createLiveAppGraph(
         addons   = LiveAddonRepository(api, scope),
         calendar = LiveCalendarRepository(api, library),
         discovery = LiveDiscoveryRepository(api),
+        account  = LiveAccountRepository(api, scope),
+        profiles = LiveProfileRepository(api, scope),
+        // Trakt linking and the mpv config file belong to the machine running the
+        // backend, not to whoever is pointed at it over the network.
+        trakt    = UnavailableTraktRepository,
+        device   = UnavailableDeviceRepository,
         onClose  = {
             scope.cancel()
             client.close()

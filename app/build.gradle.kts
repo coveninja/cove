@@ -13,12 +13,16 @@ plugins {
 }
 
 // Convenience: `./gradlew test` from the app root covers the shared KMP
-// targets, desktop JVM suite, and mobile host logic.
+// targets, presentation logic, desktop JVM suite, and mobile host logic.
 tasks.register("test") {
     group = "verification"
     dependsOn(
         ":shared:allTests",
         ":backend:allTests",
+        // Every presentation-logic suite lives here — the My List, calendar, explore, home
+        // and playback models. Omitting it meant `make test` passed without running any of
+        // them, which is the opposite of what a green run is supposed to mean.
+        ":ui:allTests",
         ":desktop:test",
         ":mobile:testDebugUnitTest",
     )

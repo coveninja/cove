@@ -38,7 +38,6 @@ import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
-import com.coveninja.cove.ui.model.uiMediaId
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageHeader
@@ -54,6 +53,7 @@ import com.coveninja.cove.ui.pages.mylist.calendar.itemsInMonth
 import com.coveninja.cove.ui.pages.mylist.calendar.rememberCalendarSections
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.mediaFor
 import com.coveninja.cove.ui.state.MediaActions
 import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberMediaActions
@@ -101,6 +101,7 @@ fun MyListPage(
                         category = category,
                         watchFraction = progress.fractionFor(media.id),
                         hasNewEpisodes = index.hasUnwatchedAired(media.id),
+                        progress = progress.progressFor(media.id),
                     )
                 }
             }
@@ -450,13 +451,6 @@ private fun CalendarView(
     }
 }
 
-/**
- * A calendar item names a title by TMDB id; the app navigates by [Media]. The library is
- * the bridge, and it always has the entry — nothing reaches the calendar that is not saved.
- */
-private fun LibraryIndex.mediaFor(item: CalendarItem): Media? =
-    entryOf(uiMediaId(item.tmdbId, item.type))?.toUiMedia()
-
 private fun playCalendarItem(
     item: CalendarItem,
     index: LibraryIndex,
@@ -504,11 +498,6 @@ private fun EmptyLibrary(
 
 /** Under this the title and the view switch stop fitting on one line. */
 private val COMPACT_HEADER_WIDTH = 560.dp
-
-/** The title the viewer is most likely to want next: whatever they watched most recently. */
-private fun continueWatching(rows: List<MyListRow>): MyListRow? =
-    rows.filter { it.category == MyListCategory.Watching }
-        .maxByOrNull { it.entry.lastWatchedAt ?: it.entry.updatedAt }
 
 private fun summaryLine(rows: List<MyListRow>): String {
     val counts = categoryCounts(rows)

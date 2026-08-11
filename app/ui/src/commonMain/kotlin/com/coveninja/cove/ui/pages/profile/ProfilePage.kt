@@ -50,6 +50,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.shared.data.AccountState
+import com.coveninja.cove.shared.data.ProfilesState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.pages.common.ChoicePill
@@ -63,6 +65,13 @@ enum class ProfileTab(val label: String, val icon: String) {
     Insights("Insights", "lucide:chart-line"),
     Settings("Settings", "lucide:settings"),
 }
+
+/** Categories that draw themselves from their own repositories, without AppSettings. */
+private val SelfContainedCategories = setOf(
+    SettingsCategory.Account,
+    SettingsCategory.Addons,
+    SettingsCategory.Advanced,
+)
 
 /** Below this the rail would leave too little room for the settings themselves. */
 private val RailBreakpoint = 900.dp
@@ -101,7 +110,7 @@ fun ProfilePage(
         )
 
         ProfileIdentityCard(
-            profileName = profileName,
+            fallbackName = profileName,
             modifier = PageBlock.padding(top = 20.dp),
         )
 
@@ -164,9 +173,9 @@ private fun SettingsTab(
         val wide = maxWidth >= RailBreakpoint
         val category = opened ?: SettingsCategory.entries.first()
 
-        // Addons owns its own repository and stays usable while preferences are
-        // still loading, so it is routed directly rather than through the settings
-        // content. It must never be handed a SettingsEditor built over a default
+        // These own their own repositories and stay usable while preferences are
+        // still loading, so they are routed directly rather than through the settings
+        // content. None must ever be handed a SettingsEditor built over a default
         // AppSettings either — writing through one of those would replace the whole
         // stored object with defaults.
         // Takes the category as a parameter rather than closing over the selected
@@ -174,8 +183,18 @@ private fun SettingsTab(
         // value, and a captured variable would make it render the incoming content
         // instead — an animation between two identical panes.
         val body: @Composable (SettingsCategory, Modifier) -> Unit = { shown, bodyModifier ->
-            if (shown == SettingsCategory.Addons) {
-                AddonSettings(modifier = bodyModifier)
+            if (shown in SelfContainedCategories) {
+                when (shown) {
+                    SettingsCategory.Addons -> AddonSettings(modifier = bodyModifier)
+                    SettingsCategory.Advanced -> AdvancedSettings(modifier = bodyModifier)
+                    else -> Column(
+                        modifier = bodyModifier,
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        AccountSettings()
+                        ProfilesSettings()
+                    }
+                }
             } else {
                 when (val state = settingsState) {
                     is SettingsState.Ready -> SettingsCategoryContent(
@@ -483,8 +502,24 @@ private fun InsightsTab(modifier: Modifier = Modifier) {
 
 // ── Identity ─────────────────────────────────────────────────────────────────
 
+/**
+ * Who is signed in and which profile is active — the two facts the page used to
+ * assert without checking either of them.
+ *
+ * [fallbackName] is only reached before the profile store answers; once it does,
+ * the active profile's real name is shown.
+ */
 @Composable
-private fun ProfileIdentityCard(profileName: String, modifier: Modifier = Modifier) {
+private fun ProfileIdentityCard(fallbackName: String, modifier: Modifier = Modifier) {
+    val graph = LocalAppGraph.current
+    val profilesState by graph.profiles.profiles.collectAsState()
+    val account by graph.account.account.collectAsState()
+
+    val profileName = (profilesState as? ProfilesState.Ready)
+        ?.let { state -> state.profiles.firstOrNull { it.id == state.activeProfileId }?.name }
+        ?: fallbackName
+    val signedIn = account as? AccountState.SignedIn
+
     SettingsCard(modifier = modifier) {
         Row(
             modifier = Modifier.padding(18.dp),
@@ -512,9 +547,12 @@ private fun ProfileIdentityCard(profileName: String, modifier: Modifier = Modifi
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "Local profile",
+                    text = signedIn?.email?.takeIf(String::isNotBlank)
+                        ?: if (signedIn != null) "Signed in" else "On this device only",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Box(
@@ -526,7 +564,7 @@ private fun ProfileIdentityCard(profileName: String, modifier: Modifier = Modifi
                     .padding(horizontal = 11.dp, vertical = 6.dp),
             ) {
                 Text(
-                    text = "ACTIVE",
+                    text = if (signedIn != null) "SYNCED" else "LOCAL",
                     color = MaterialTheme.colorScheme.tertiary,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,

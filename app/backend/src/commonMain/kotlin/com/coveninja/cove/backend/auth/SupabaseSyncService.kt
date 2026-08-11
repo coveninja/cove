@@ -1,8 +1,5 @@
 package com.coveninja.cove.backend.auth
 
-import com.coveninja.cove.backend.addons.AddonEntry
-import com.coveninja.cove.backend.addons.AddonManager
-import com.coveninja.cove.backend.activity.ActivityService
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.store.LibrarySyncSnapshot
 import com.coveninja.cove.backend.store.LocalLibraryRepository
@@ -10,13 +7,13 @@ import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.backend.store.LocalSettingsRepository
 import com.coveninja.cove.backend.store.SyncDismissal
 import com.coveninja.cove.backend.store.SyncRemoval
-import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.http.encodeURLParameter
-import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -37,6 +34,13 @@ data class SyncResult(
 /**
  * Cross-device synchronization using only the publishable key and the user's
  * access token. All writes therefore remain subject to Supabase RLS.
+ *
+ * Everything beyond the library, settings and profile row travels as an opaque
+ * per-profile JSON blob in `profile_<kind>`. A host that owns the subsystem
+ * supplies a [SyncPayload] and gets a typed merge; a host that does not — Android
+ * runs no addon manager and no Nuvio sandbox — round-trips the blob through
+ * `legacy_payloads` untouched. That passthrough is what keeps a phone from
+ * pushing an empty addon list over the desktop's configured addons.
  */
 class SupabaseSyncService(
     private val client: SupabaseClient,
@@ -44,38 +48,33 @@ class SupabaseSyncService(
     private val profiles: LocalProfileRepository,
     private val library: LocalLibraryRepository,
     private val settings: LocalSettingsRepository,
-    private val addons: AddonManager,
     private val now: () -> String,
-    private val nuvio: NuvioManager? = null,
-    private val activity: ActivityService? = null,
+    private val payloads: List<SyncPayload> = emptyList(),
 ) {
-    private val generation = AtomicLong()
+    private var generation = 0L
 
-    suspend fun reconcileAndSync(userId: String, accessToken: String): SyncResult {
+    // Two callers can now ask for a sync at once — the UI's account repository on
+    // its timer and POST /api/auth/sync from a compatibility client. Overlapping
+    // runs would interleave pull-then-push against the same tables.
+    private val running = Mutex()
+
+    suspend fun reconcileAndSync(userId: String, accessToken: String): SyncResult = running.withLock {
         val profileId = reconcileProfile(userId, accessToken)
         val pulled = pull(accessToken, profileId)
 
         library.mergeFromRemote(pulled.library)
         pulled.settings?.let { settings.mergeFromRemote(it) }
-        pulled.addons?.let { addons.mergeFromRemote(it.entries, it.updatedAt) }
-        pulled.nuvio?.let { remote ->
-            if (nuvio != null) {
-                nuvio.mergeFromRemote(
-                    CoveJson.encodeToString(JsonElement.serializer(), remote.data),
-                    remote.updatedAt,
-                )
+        pulled.payloads.forEach { (kind, remote) ->
+            val participant = payloads.firstOrNull { it.kind == kind }
+            if (participant == null) {
+                persistOpaque(profileId, kind, remote)
             } else {
-                persistOpaque(profileId, "nuvio", remote)
-            }
-        }
-        pulled.activity?.let { remote ->
-            if (activity != null) {
-                activity.mergeFromJson(
-                    CoveJson.encodeToString(JsonElement.serializer(), remote.data),
-                    profileId,
+                participant.merge(
+                    SyncSnapshot(
+                        json = CoveJson.encodeToString(JsonElement.serializer(), remote.data),
+                        updatedAt = remote.updatedAt,
+                    ),
                 )
-            } else {
-                persistOpaque(profileId, "activity", remote)
             }
         }
         profiles.linkSupabase(profileId, userId)
@@ -86,36 +85,12 @@ class SupabaseSyncService(
         }
         push("library") { pushLibrary(accessToken, profileId) }
         push("settings") { pushSettings(accessToken, profileId) }
-        push("addons") { pushAddons(accessToken, profileId) }
-        push("nuvio") {
-            if (nuvio == null) pushOpaque(accessToken, profileId, "nuvio", "profile_nuvio")
-            else {
-                val snapshot = nuvio.snapshotForSync()
-                client.upsert(accessToken, "profile_nuvio", buildJsonArray {
-                    add(buildJsonObject {
-                        put("profile_id", profileId)
-                        put("data", CoveJson.encodeToJsonElement(snapshot))
-                        put("updated_at", snapshot.updatedAt.ifBlank(now))
-                    })
-                })
-            }
-        }
-        push("activity") {
-            if (activity == null) {
-                pushOpaque(accessToken, profileId, "activity", "profile_activity")
-            } else {
-                client.upsert(accessToken, "profile_activity", buildJsonArray {
-                    add(buildJsonObject {
-                        put("profile_id", profileId)
-                        put("data", CoveJson.parseToJsonElement(activity.snapshotJson(profileId)))
-                        put("updated_at", now())
-                    })
-                })
-            }
+        SYNCED_PAYLOAD_KINDS.forEach { kind ->
+            push(kind) { pushPayload(accessToken, profileId, kind) }
         }
         push("profile") { ensureProfile(accessToken, userId) }
 
-        return SyncResult(generation.incrementAndGet(), pushErrors.joinToString("; "))
+        SyncResult(++generation, pushErrors.joinToString("; "))
     }
 
     suspend fun registerProfile(userId: String, accessToken: String, requestedName: String) {
@@ -199,17 +174,13 @@ class SupabaseSyncService(
             "profile_settings",
             "$filter&order=updated_at.desc&limit=1",
         ).firstOrNull()?.let { CoveJson.decodeFromJsonElement<RemoteSettings>(it).data }
-        val addonRow = client.select(token, "profile_addons", filter).firstOrNull()?.let {
-            CoveJson.decodeFromJsonElement<RemoteAddons>(it)
+        val pulledPayloads = SYNCED_PAYLOAD_KINDS.mapNotNull { kind ->
+            pullOpaque(token, tableFor(kind), filter)?.let { kind to it }
         }
-        val nuvio = pullOpaque(token, "profile_nuvio", filter)
-        val activity = pullOpaque(token, "profile_activity", filter)
         return PulledData(
             LibrarySyncSnapshot(entries, progress, dismissals, removals),
             settingsRow,
-            addonRow,
-            nuvio,
-            activity,
+            pulledPayloads,
         )
     }
 
@@ -271,12 +242,22 @@ class SupabaseSyncService(
         })
     }
 
-    private suspend fun pushAddons(token: String, profileId: String) {
-        val snapshot = addons.snapshotForSync()
-        client.upsert(token, "profile_addons", buildJsonArray {
+    /**
+     * Pushes one payload kind, from the participant that owns it when there is
+     * one and from the stored blob otherwise. A host with neither pushes nothing
+     * at all rather than an empty value — an empty push would look like a
+     * deliberate "I have no addons" to every other device.
+     */
+    private suspend fun pushPayload(token: String, profileId: String, kind: String) {
+        val snapshot = payloads.firstOrNull { it.kind == kind }?.snapshot()
+            ?: database.coveQueries.selectLegacyPayloadRecord(profileId, kind)
+                .executeAsOneOrNull()
+                ?.let { SyncSnapshot(it.json, it.updated_at) }
+            ?: return
+        client.upsert(token, tableFor(kind), buildJsonArray {
             add(buildJsonObject {
                 put("profile_id", profileId)
-                put("data", JsonArray(snapshot.entries.map(CoveJson::encodeToJsonElement)))
+                put("data", CoveJson.parseToJsonElement(snapshot.json))
                 put("updated_at", snapshot.updatedAt.ifBlank(now))
             })
         })
@@ -303,24 +284,10 @@ class SupabaseSyncService(
         }
     }
 
-    private suspend fun pushOpaque(token: String, profileId: String, kind: String, table: String) {
-        val local = database.coveQueries.selectLegacyPayloadRecord(profileId, kind).executeAsOneOrNull()
-            ?: return
-        client.upsert(token, table, buildJsonArray {
-            add(buildJsonObject {
-                put("profile_id", profileId)
-                put("data", CoveJson.parseToJsonElement(local.json))
-                put("updated_at", local.updated_at.ifBlank(now))
-            })
-        })
-    }
-
     private data class PulledData(
         val library: LibrarySyncSnapshot,
         val settings: AppSettings?,
-        val addons: RemoteAddons?,
-        val nuvio: RemoteOpaque?,
-        val activity: RemoteOpaque?,
+        val payloads: List<Pair<String, RemoteOpaque>>,
     )
 
     private data class RemoteOpaque(val data: JsonElement, val updatedAt: String)
@@ -351,11 +318,33 @@ class SupabaseSyncService(
     @Serializable
     private data class RemoteSettings(val data: AppSettings)
 
-    @Serializable
-    private data class RemoteAddons(
-        val data: List<AddonEntry> = emptyList(),
-        @SerialName("updated_at") val updatedAt: String = "",
-    ) {
-        val entries: List<AddonEntry> get() = data
+    companion object {
+        /**
+         * Everything carried as a per-profile JSON blob, in `profile_<kind>`.
+         * Listed as a constant rather than derived from [payloads]: a host must
+         * pull and re-push the kinds it does not itself own, or the first sync
+         * from that host would drop them for every other device.
+         */
+        val SYNCED_PAYLOAD_KINDS = listOf("addons", "nuvio", "activity")
+
+        private fun tableFor(kind: String) = "profile_$kind"
     }
+}
+
+/** One JSON blob a host owns and can merge, keyed by [kind]. */
+data class SyncSnapshot(val json: String, val updatedAt: String)
+
+/**
+ * A subsystem that participates in sync directly instead of having its blob
+ * round-tripped opaquely — implemented where the subsystem actually exists, so
+ * that [SupabaseSyncService] can stay in commonMain alongside the hosts that
+ * lack it.
+ */
+interface SyncPayload {
+    /** One of [SupabaseSyncService.SYNCED_PAYLOAD_KINDS]. */
+    val kind: String
+
+    suspend fun snapshot(): SyncSnapshot
+
+    suspend fun merge(snapshot: SyncSnapshot)
 }

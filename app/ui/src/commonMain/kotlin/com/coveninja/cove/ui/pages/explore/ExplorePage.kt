@@ -45,6 +45,7 @@ import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
+import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberMediaActions

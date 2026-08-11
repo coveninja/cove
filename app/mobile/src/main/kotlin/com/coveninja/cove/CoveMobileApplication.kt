@@ -11,6 +11,8 @@ class CoveMobileApplication : Application() {
         backend ?: AndroidBackendRuntime.open(
             context = this,
             tmdbApiKey = BuildConfig.TMDB_API_KEY,
+            supabaseUrl = BuildConfig.SUPABASE_URL,
+            supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
         ).also { backend = it }
     }
 

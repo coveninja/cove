@@ -27,7 +27,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,9 +65,9 @@ import com.coveninja.cove.ui.state.rememberMediaActions
 import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
 import com.coveninja.cove.ui.state.rememberPlaybackSession
+import com.coveninja.cove.ui.state.rememberSearchSession
 import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import com.coveninja.cove.ui.state.toUiCategory
-import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -168,9 +167,6 @@ fun CoveApp(
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun CoveAppContent() {
-    val scope = rememberCoroutineScope()
-    val graph = LocalAppGraph.current
-
     val catalog = rememberMediaCatalog()
     val index = rememberLibraryIndex()
     val watchProgress = rememberWatchProgressIndex()
@@ -178,11 +174,24 @@ private fun CoveAppContent() {
     val detailsState = rememberMediaDetailsState(catalog)
     val drag = rememberDragSession()
     val playback = rememberPlaybackSession()
+    val search = rememberSearchSession()
 
     var selectedDestination by remember { mutableStateOf(NavDestination.Home) }
     var searchMode by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
-    var submittedQuery by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * Opening a title, plus the one thing that has to happen alongside it on Search.
+     *
+     * A query that was typed rather than submitted is only known to be the one the viewer
+     * meant once they act on its results — see [SearchSession]. This is where that is
+     * observed, because every route into a details sheet passes through here.
+     */
+    val openMedia: (Media) -> Unit = { media ->
+        if (selectedDestination == NavDestination.Search) {
+            search.submitted?.let(search::rememberQuery)
+        }
+        detailsState.open(media)
+    }
 
     val underlyingNavAlpha by animateFloatAsState(
         targetValue = if (detailsState.selected == null) 1f else 0f,
@@ -204,7 +213,7 @@ private fun CoveAppContent() {
                         listCategory = index.categoryOf(media.id),
                         watchFraction = watchProgress.fractionFor(media.id),
                         hasNewEpisodes = index.hasUnwatchedAired(media.id),
-                        onOpen = { detailsState.open(media) },
+                        onOpen = { openMedia(media) },
                         onSetListCategory = { actions.setListCategory(media, it) },
                         onRemoveFromList = { actions.removeFromList(media) },
                         onToggleWatched = { actions.toggleWatched(media) },
@@ -239,14 +248,18 @@ private fun CoveAppContent() {
                 when (selectedDestination) {
                     NavDestination.Home -> HomePage(
                         mediaCard = pageMediaCard,
-                        onOpenMedia = { detailsState.open(it) },
+                        onOpenMedia = openMedia,
+                        // Home's resume goes straight to playback rather than via the details
+                        // sheet: the whole claim of "carry on watching" is that it is one press.
+                        onPlayMedia = { playback.open(it) },
                         onExplore = { selectedDestination = NavDestination.Explore },
+                        onOpenMyList = { selectedDestination = NavDestination.MyList },
                     )
 
                     NavDestination.MyList -> MyListPage(
                         mediaCard = pageMediaCard,
                         onExplore = { selectedDestination = NavDestination.Explore },
-                        onOpenMedia = { detailsState.open(it) },
+                        onOpenMedia = openMedia,
                         onPlayMedia = { playback.open(it) },
                         onPlayEpisode = { media, season, episode, title ->
                             playback.open(
@@ -260,13 +273,14 @@ private fun CoveAppContent() {
 
                     NavDestination.Explore -> ExplorePage(
                         mediaCard = pageMediaCard,
-                        onOpenMedia = { detailsState.open(it) },
+                        onOpenMedia = openMedia,
                     )
 
                     NavDestination.Search -> SearchPage(
-                        query = submittedQuery,
+                        session = search,
                         mediaCard = pageMediaCard,
-                        onOpenSearch = { searchMode = true },
+                        onOpenMedia = openMedia,
+                        onPlayMedia = { playback.open(it) },
                     )
 
                     NavDestination.Account -> ProfilePage()
@@ -279,19 +293,28 @@ private fun CoveAppContent() {
                 searchMode = searchMode,
                 listCategoryMode = drag.draggedPayload != null,
                 hoveredListCategory = drag.hoveredCategory,
-                searchQuery = searchQuery,
-                onSearchQueryChange = { searchQuery = it },
-                onOpenSearch = { searchMode = true },
+                searchQuery = search.query,
+                // Deliberately draft-only: the overlay can be typed into from any page, and
+                // debouncing here would spend upstream requests filling a page nobody has
+                // navigated to. The page's own field is the one that searches as you type.
+                onSearchQueryChange = search::setDraft,
+                // Already on Search, the overlay would be a second field over the top of the
+                // page's own. Hand focus to that one instead.
+                onOpenSearch = {
+                    if (selectedDestination == NavDestination.Search) {
+                        search.requestFocus()
+                    } else {
+                        searchMode = true
+                    }
+                },
                 onCloseSearch = {
                     searchMode = false
-                    searchQuery = submittedQuery.orEmpty()
+                    search.setDraft(search.submitted.orEmpty())
                 },
                 onSubmitSearch = { query ->
-                    submittedQuery = query
-                    searchQuery = query
                     searchMode = false
                     selectedDestination = NavDestination.Search
-                    scope.launch { graph.content.search(query) }
+                    search.submit(query)
                 },
                 onDestinationSelected = { destination ->
                     searchMode = false
@@ -423,7 +446,7 @@ private fun CoveAppContent() {
                         searchMode = false,
                         listCategoryMode = true,
                         hoveredListCategory = drag.hoveredCategory,
-                        searchQuery = searchQuery,
+                        searchQuery = search.query,
                         onSearchQueryChange = {},
                         onOpenSearch = {},
                         onCloseSearch = {},

@@ -11,6 +11,13 @@ class AppGraph(
     val addons: AddonRepository,
     val calendar: CalendarRepository = UnavailableCalendarRepository,
     val discovery: DiscoveryRepository = UnavailableDiscoveryRepository,
+    // Defaulted to the Unavailable objects so a host that cannot offer one — a
+    // remote backend over --api-base, a phone with no mpv — is a rendering
+    // decision in the settings page rather than a compile error here.
+    val account: AccountRepository = UnavailableAccountRepository,
+    val profiles: ProfileRepository = UnavailableProfileRepository,
+    val trakt: TraktRepository = UnavailableTraktRepository,
+    val device: DeviceRepository = UnavailableDeviceRepository,
     private val onClose: () -> Unit = {},
 ) : AutoCloseable {
     override fun close() = onClose()

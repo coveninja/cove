@@ -31,6 +31,19 @@ class CoveApi(
         return this
     }
 
+    /**
+     * Like [requireSuccess], but surfaces the host's `{"error": "…"}` body when
+     * there is one. Anything a user typed — credentials, a profile name — gets
+     * refused with a reason worth reading, and a bare "HTTP 400" hides it.
+     */
+    private suspend fun HttpResponse.requireSuccessWithReason(): HttpResponse {
+        if (status.isSuccess()) return this
+        val reason = runCatching { body<ErrorResponseDto>().error }.getOrNull()
+        throw RuntimeException(
+            reason?.takeIf(String::isNotBlank) ?: "HTTP ${status.value}: ${status.description}",
+        )
+    }
+
     // ── Ping ────────────────────────────────────────────────────────────────
 
     suspend fun ping(): Boolean =
@@ -448,12 +461,98 @@ class CoveApi(
             setBody(settings)
         }.requireSuccess().body()
 
+    // ── Auth ────────────────────────────────────────────────────────────────
+    // These report the host's own message rather than the bare status line: what
+    // comes back is usually Supabase explaining why a sign-in was refused, and
+    // that is the text the form has to show.
+
+    suspend fun authMe(): AuthMeResponse =
+        httpClient.get("${config.baseUrl}/api/auth/me") {
+            applyAuthHeaders()
+        }.requireSuccessWithReason().body()
+
+    suspend fun login(email: String, password: String): LoginResponse =
+        authPost("login", LoginRequest(email, password))
+
+    suspend fun register(email: String, password: String, profileName: String): RegisterResponse =
+        authPost("register", RegisterRequest(email, password, profileName))
+
+    suspend fun confirmRegistration(
+        email: String,
+        token: String,
+        password: String,
+        profileName: String,
+    ): AuthSessionResponse =
+        authPost("register/confirm", ConfirmRegistrationRequest(email, token, password, profileName))
+
+    suspend fun sendOtp(email: String) {
+        httpClient.post("${config.baseUrl}/api/auth/otp") {
+            applyAuthHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(EmailRequest(email))
+        }.requireSuccessWithReason()
+    }
+
+    suspend fun verifyOtp(email: String, token: String): LoginResponse =
+        authPost("verify-otp", VerifyOtpRequest(email, token))
+
+    /** Exchanges the host's stored refresh token for a usable access token. */
+    suspend fun refreshSession(): LoginResponse =
+        httpClient.post("${config.baseUrl}/api/auth/refresh") {
+            applyAuthHeaders()
+        }.requireSuccessWithReason().body()
+
+    suspend fun logout() {
+        httpClient.post("${config.baseUrl}/api/auth/logout") { applyAuthHeaders() }.requireSuccess()
+    }
+
+    /** The access token is the credential here, so it is passed explicitly. */
+    suspend fun syncAccount(accessToken: String): SyncResponse =
+        httpClient.post("${config.baseUrl}/api/auth/sync") {
+            applyAuthHeaders()
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+        }.requireSuccessWithReason().body()
+
+    private suspend inline fun <reified Request : Any, reified Response> authPost(
+        path: String,
+        request: Request,
+    ): Response = httpClient.post("${config.baseUrl}/api/auth/$path") {
+        applyAuthHeaders()
+        contentType(ContentType.Application.Json)
+        setBody(request)
+    }.requireSuccessWithReason().body()
+
     // ── Profiles ────────────────────────────────────────────────────────────
 
     suspend fun profiles(): ProfilesResponseDto =
         httpClient.get("${config.baseUrl}/api/profiles") {
             applyAuthHeaders()
         }.requireSuccess().body()
+
+    suspend fun createProfile(name: String): Profile =
+        httpClient.post("${config.baseUrl}/api/profiles") {
+            applyAuthHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(ProfileNameRequest(name))
+        }.requireSuccessWithReason().body()
+
+    suspend fun renameProfile(id: String, name: String): Profile =
+        httpClient.patch("${config.baseUrl}/api/profiles/$id") {
+            applyAuthHeaders()
+            contentType(ContentType.Application.Json)
+            setBody(ProfileNameRequest(name))
+        }.requireSuccessWithReason().body()
+
+    suspend fun activateProfile(id: String): Profile =
+        httpClient.post("${config.baseUrl}/api/profiles/$id/activate") {
+            applyAuthHeaders()
+        }.requireSuccessWithReason().body()
+
+    suspend fun deleteProfile(id: String) {
+        httpClient.delete("${config.baseUrl}/api/profiles/$id") {
+            applyAuthHeaders()
+        }.requireSuccessWithReason()
+    }
 
     // ── Updater ─────────────────────────────────────────────────────────────
 

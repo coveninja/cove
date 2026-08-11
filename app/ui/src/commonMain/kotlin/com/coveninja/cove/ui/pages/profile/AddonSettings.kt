@@ -7,7 +7,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -18,13 +17,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -38,10 +33,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AddonRepository
@@ -216,8 +209,8 @@ private fun AddonRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        IconAction(icon = "lucide:refresh-cw", onClick = onRefresh)
-        IconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
+        SettingsIconAction(icon = "lucide:refresh-cw", onClick = onRefresh)
+        SettingsIconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
         Switch(checked = addon.enabled, onCheckedChange = onToggle)
     }
 }
@@ -258,7 +251,7 @@ private fun NuvioRepoRow(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            IconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
+            SettingsIconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
             Switch(checked = repo.enabled, onCheckedChange = onToggleRepo)
         }
 
@@ -322,49 +315,6 @@ private fun KindBadge(kind: AddonKind) {
     }
 }
 
-@Composable
-private fun IconAction(icon: String, onClick: () -> Unit, danger: Boolean = false) {
-    val colors = MaterialTheme.colorScheme
-    val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    val pressed by interactionSource.collectIsPressedAsState()
-
-    val accent = if (danger) colors.error else colors.onSurface
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.9f else if (hovered) 1.06f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "IconActionScale",
-    )
-    val container by animateColorAsState(
-        targetValue = accent.copy(alpha = if (hovered) 0.14f else 0.06f),
-        animationSpec = tween(140),
-        label = "IconActionContainer",
-    )
-
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .background(container, RoundedCornerShape(9.dp))
-            .hoverable(interactionSource)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        IconifyIcon(
-            icon = icon,
-            modifier = Modifier.size(15.dp),
-            tint = if (hovered) accent else colors.onSurfaceVariant,
-        )
-    }
-}
-
 /** Clears itself on submit so the next URL starts from empty. */
 @Composable
 private fun UrlInput(placeholder: String, onSubmit: (String) -> Unit) {
@@ -382,98 +332,14 @@ private fun UrlInput(placeholder: String, onSubmit: (String) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        var focused by remember { mutableStateOf(false) }
-        val fieldBorder by animateColorAsState(
-            targetValue = if (focused) {
-                MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-            },
-            animationSpec = tween(160),
-            label = "UrlFieldBorder",
+        SettingsTextField(
+            value = value,
+            onValueChange = { value = it },
+            placeholder = placeholder,
+            modifier = Modifier.weight(1f),
+            keyboardType = KeyboardType.Uri,
+            onSubmit = submit,
         )
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(42.dp)
-                .background(
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
-                    RoundedCornerShape(11.dp),
-                )
-                .border(1.dp, fieldBorder, RoundedCornerShape(11.dp))
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            BasicTextField(
-                value = value,
-                onValueChange = { value = it },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { submit() }),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onFocusChanged { focused = it.isFocused },
-                decorationBox = { inner ->
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    inner()
-                },
-            )
-        }
-
-        val buttonInteraction = remember { MutableInteractionSource() }
-        val buttonHovered by buttonInteraction.collectIsHoveredAsState()
-        val buttonPressed by buttonInteraction.collectIsPressedAsState()
-        val buttonScale by animateFloatAsState(
-            targetValue = when {
-                buttonPressed -> 0.95f
-                buttonHovered && value.isNotBlank() -> 1.04f
-                else -> 1f
-            },
-            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-            label = "AddButtonScale",
-        )
-        // Dimmed until there is something to submit.
-        val buttonColor by animateColorAsState(
-            targetValue = MaterialTheme.colorScheme.tertiary.copy(
-                alpha = if (value.isBlank()) 0.45f else 1f,
-            ),
-            animationSpec = tween(160),
-            label = "AddButtonColor",
-        )
-
-        Box(
-            modifier = Modifier
-                .height(42.dp)
-                .graphicsLayer {
-                    scaleX = buttonScale
-                    scaleY = buttonScale
-                }
-                .background(buttonColor, RoundedCornerShape(11.dp))
-                .hoverable(buttonInteraction)
-                .clickable(
-                    interactionSource = buttonInteraction,
-                    indication = null,
-                    onClick = submit,
-                )
-                .padding(horizontal = 18.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "Add",
-                color = MaterialTheme.colorScheme.onTertiary,
-                style = MaterialTheme.typography.labelLarge,
-            )
-        }
+        PrimaryButton(label = "Add", onClick = submit, enabled = value.isNotBlank())
     }
 }

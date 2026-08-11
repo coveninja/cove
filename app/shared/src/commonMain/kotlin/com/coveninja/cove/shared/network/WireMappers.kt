@@ -30,6 +30,90 @@ data class ProfilesResponseDto(
     @SerialName("active_profile_id") val activeProfileId: String = "",
 )
 
+// ── Auth ────────────────────────────────────────────────────────────────────
+// Defined here rather than beside the backend's AuthService so the embedded host
+// and the HTTP client that talks to it cannot drift apart.
+
+/** Every error body the embedded host returns has this shape. */
+@Serializable
+data class ErrorResponseDto(val error: String = "")
+
+@Serializable
+data class RegisterRequest(
+    val email: String = "",
+    val password: String = "",
+    @SerialName("profile_name") val profileName: String = "",
+)
+
+@Serializable
+data class ConfirmRegistrationRequest(
+    val email: String = "",
+    val token: String = "",
+    val password: String = "",
+    @SerialName("profile_name") val profileName: String = "",
+)
+
+@Serializable
+data class LoginRequest(val email: String = "", val password: String = "")
+
+@Serializable
+data class EmailRequest(val email: String = "")
+
+@Serializable
+data class VerifyOtpRequest(val email: String = "", val token: String = "")
+
+@Serializable
+data class ProfileNameRequest(val name: String = "")
+
+// /api/auth/me
+@Serializable
+data class AuthMeResponse(
+    // Null only while the profile store is still loading or has failed.
+    val profile: Profile? = null,
+    val linked: Boolean = false,
+    val authenticated: Boolean = false,
+    val email: String = "",
+    @SerialName("user_id") val userId: String = "",
+)
+
+// /api/auth/login, /api/auth/verify-otp
+@Serializable
+data class LoginResponse(
+    @SerialName("access_token") val accessToken: String = "",
+    @SerialName("refresh_token") val refreshToken: String = "",
+    val profiles: List<Profile> = emptyList(),
+    val active: Profile? = null,
+    @SerialName("onboarding_done") val onboardingDone: Boolean = false,
+)
+
+// /api/auth/register/confirm, and the completed branch of /api/auth/register.
+@Serializable
+data class AuthSessionResponse(
+    @SerialName("access_token") val accessToken: String = "",
+    @SerialName("refresh_token") val refreshToken: String = "",
+    val profile: Profile? = null,
+)
+
+/**
+ * /api/auth/register answers with one of two shapes — a session, or a bare
+ * `confirmation_required` flag — so the client reads a union of both and decides
+ * on the flag.
+ */
+@Serializable
+data class RegisterResponse(
+    @SerialName("confirmation_required") val confirmationRequired: Boolean = false,
+    @SerialName("access_token") val accessToken: String = "",
+    val profile: Profile? = null,
+)
+
+// /api/auth/sync
+@Serializable
+data class SyncResponse(
+    val status: String = "",
+    @SerialName("library_generation") val libraryGeneration: Long = 0,
+    @SerialName("push_error") val pushError: String = "",
+)
+
 // /api/discover/genres, /people, /keywords — a ranked taste entry. The score is the raw
 // profile weight and is deliberately not shown to anyone; it only fixes the order.
 @Serializable

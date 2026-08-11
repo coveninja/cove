@@ -2,6 +2,7 @@ package com.coveninja.cove.ui.pages.mylist
 
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
+import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.model.MediaType as DomainMediaType
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.model.Media
@@ -25,6 +26,9 @@ class MyListModelTest {
         firstAirDate: String? = null,
         lastWatchedSeason: Int? = null,
         lastWatchedEpisode: Int? = null,
+        watchFraction: Float? = null,
+        progress: WatchProgress? = null,
+        hasNewEpisodes: Boolean = false,
     ): MyListRow {
         val tmdbId = title.hashCode() and 0x7fffffff
         return MyListRow(
@@ -63,10 +67,100 @@ class MyListModelTest {
                 updatedAt = updatedAt,
             ),
             category = category,
+            watchFraction = watchFraction,
+            progress = progress,
+            hasNewEpisodes = hasNewEpisodes,
+        )
+    }
+
+    /** A completed resume point, as `setEpisodeWatched` writes one. */
+    private fun watched(title: String): WatchProgress {
+        val tmdbId = title.hashCode() and 0x7fffffff
+        return WatchProgress(
+            id = "progress-$tmdbId",
+            libraryEntryId = "entry-$tmdbId",
+            tmdbId = tmdbId,
+            mediaType = DomainMediaType.Tv,
+            positionSeconds = 1_400.0,
+            durationSeconds = 1_400.0,
+            completed = true,
         )
     }
 
     private fun titles(rows: List<MyListRow>) = rows.map { it.displayTitle }
+
+    // ── continueWatching ────────────────────────────────────────────────────
+
+    // The reported bug: marking an episode watched writes a *completed* progress row, which
+    // leaves no resume fraction, so the hero fell back to the `Watching` category alone —
+    // offering Resume on an episode already finished.
+    // Mutation applied to verify: dropped the `hasSomethingToPlay` term → test failed, the
+    // finished show became the hero again.
+    @Test
+    fun `the hero skips a title whose last episode is finished`() {
+        val rows = listOf(
+            row(
+                "Caught Up",
+                lastWatchedAt = "2026-08-10T00:00:00Z",
+                lastWatchedSeason = 1,
+                lastWatchedEpisode = 6,
+                progress = watched("Caught Up"),
+            ),
+            row("Half Done", lastWatchedAt = "2026-08-01T00:00:00Z", watchFraction = 0.4f),
+        )
+
+        assertEquals("Half Done", continueWatching(rows)?.displayTitle)
+    }
+
+    // No hero beats a hero pointing at something that is over.
+    // Mutation applied to verify: returned the most recent row regardless → test failed, the
+    // finished show was offered with nothing left to play.
+    @Test
+    fun `there is no hero when everything is finished`() {
+        val rows = listOf(
+            row(
+                "Caught Up",
+                lastWatchedSeason = 2,
+                lastWatchedEpisode = 4,
+                progress = watched("Caught Up"),
+            ),
+        )
+
+        assertNull(continueWatching(rows))
+    }
+
+    // A title marked Watching that has never been played is a legitimate offer — the hero
+    // says Play rather than Resume.
+    // Mutation applied to verify: required a non-null `watchFraction` → test failed, the
+    // untouched title was skipped and the hero disappeared.
+    @Test
+    fun `the hero offers a title that has never been started`() {
+        assertEquals("Fresh", continueWatching(listOf(row("Fresh")))?.displayTitle)
+    }
+
+    // Mutation applied to verify: dropped the category filter → test failed, a part-watched
+    // Watch Later title displaced the show actually being watched.
+    @Test
+    fun `the hero only considers the watching category`() {
+        val rows = listOf(
+            row("Saved", category = MyListCategory.WatchLater, watchFraction = 0.5f,
+                lastWatchedAt = "2026-08-10T00:00:00Z"),
+            row("Watching Now", watchFraction = 0.2f, lastWatchedAt = "2026-08-01T00:00:00Z"),
+        )
+
+        assertEquals("Watching Now", continueWatching(rows)?.displayTitle)
+    }
+
+    // Mutation applied to verify: used `minByOrNull` → test failed, the stalest title led.
+    @Test
+    fun `the hero picks the most recently watched of the candidates`() {
+        val rows = listOf(
+            row("Stale", watchFraction = 0.3f, lastWatchedAt = "2026-01-01T00:00:00Z"),
+            row("Fresh", watchFraction = 0.3f, lastWatchedAt = "2026-08-10T00:00:00Z"),
+        )
+
+        assertEquals("Fresh", continueWatching(rows)?.displayTitle)
+    }
 
     // Mutation applied to verify: dropped the `descending` branch so the comparator was
     // always ascending → test failed, the oldest title came first.

@@ -33,8 +33,8 @@ stream-source preference permits them.
 | Module | Responsibility |
 |---|---|
 | `app/shared` | Domain models, repository interfaces, app graph, HTTP compatibility client |
-| `app/backend` common | TMDB client, addon manager, profile/settings/library repositories |
-| `app/backend` desktop | SQLite, migration, Ktor, media/torrent, Nuvio sandbox, auth/sync, Trakt, discovery, prefetch |
+| `app/backend` common | TMDB client, addon manager, profile/settings/library repositories, Supabase auth and cross-device sync |
+| `app/backend` desktop | SQLite, migration, Ktor, media/torrent, Nuvio sandbox, Trakt, discovery, prefetch |
 | `app/backend` Android | Android SQLite driver, upgrade migration, OkHttp, and mobile runtime composition |
 | `app/ui` | Shared desktop/mobile Compose presentation and platform interaction seams |
 | `app/desktop` | Desktop composition root, lifecycle, packaging, and mpv surfaces |

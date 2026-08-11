@@ -71,6 +71,7 @@ private val settingsJson = """
   "allowLanStreamSources": true,
   "traktScrobbleEnabled": false,
   "traktSyncEnabled": true,
+  "autoSyncEnabled": false,
   "updatedAt": "2026-08-05T01:02:03Z"
 }
 """.trimIndent()
@@ -151,6 +152,10 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,  sent.allowLanStreamSources, "allowLanStreamSources")
         assertEquals(false, sent.traktScrobbleEnabled,  "traktScrobbleEnabled")
         assertEquals(true,  sent.traktSyncEnabled,      "traktSyncEnabled")
+        // Non-default on purpose: autoSyncEnabled defaults to true, so a value of
+        // false is what proves the stored preference survived the round trip
+        // rather than being re-derived from the Kotlin default.
+        assertEquals(false, sent.autoSyncEnabled,       "autoSyncEnabled")
 
         // The general invariant behind all the assertions above: whatever keys
         // the server sent us must come back. Any field the model does not know

@@ -13,7 +13,8 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.content.TextContent
 import io.ktor.http.isSuccess
-import java.util.Base64
+import kotlin.io.encoding.Base64
+import kotlin.time.Clock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -60,13 +61,21 @@ data class SignUpResult(
 class SupabaseException(
     val statusCode: Int,
     message: String,
+    /**
+     * Supabase's own wording, without the operation prefix — "Invalid login
+     * credentials" rather than "Supabase auth (400): Invalid login credentials".
+     * This is what a sign-in form shows the user.
+     */
+    val detail: String = message,
 ) : RuntimeException(message)
+
+private val JwtPayloadBase64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
 
 /** Minimal public Supabase Auth and PostgREST client; RLS remains the boundary. */
 class SupabaseClient(
     private val config: SupabaseConfig,
     private val httpClient: HttpClient,
-    private val epochSeconds: () -> Long = { System.currentTimeMillis() / 1_000 },
+    private val epochSeconds: () -> Long = { Clock.System.now().epochSeconds },
 ) {
     suspend fun signUp(email: String, password: String): SignUpResult {
         val response = authPost("/signup", buildJsonObject {
@@ -191,7 +200,7 @@ class SupabaseClient(
             listOf("error_description", "error", "msg", "message")
                 .firstNotNullOfOrNull { body[it]?.jsonPrimitive?.contentOrNull }
         }.getOrNull().orEmpty().ifBlank { text.ifBlank { status.description } }
-        throw SupabaseException(status.value, "$context (${status.value}): $message")
+        throw SupabaseException(status.value, "$context (${status.value}): $message", message)
     }
 
     private fun jsonBody(value: JsonElement) = TextContent(
@@ -199,9 +208,12 @@ class SupabaseClient(
         ContentType.Application.Json,
     )
 
+    // JWT segments are base64url with the padding stripped, which the strict
+    // decoder rejects outright — hence the explicit optional-padding decoder
+    // rather than Base64.UrlSafe on its own.
     private fun subFromJwt(token: String): String = runCatching {
         val payload = token.split('.').takeIf { it.size == 3 }?.get(1) ?: return@runCatching ""
-        val decoded = String(Base64.getUrlDecoder().decode(payload))
+        val decoded = JwtPayloadBase64.decode(payload).decodeToString()
         CoveJson.parseToJsonElement(decoded).jsonObject["sub"]?.jsonPrimitive?.content.orEmpty()
     }.getOrDefault("")
 

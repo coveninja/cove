@@ -6,10 +6,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import com.coveninja.cove.shared.data.LibraryState
+import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
+import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.ui.components.media.MyListCategory
+import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
+import com.coveninja.cove.ui.model.uiMediaId
 
 @Stable
 class LibraryIndex(val entries: List<LibraryEntry>) {
@@ -27,6 +31,29 @@ class LibraryIndex(val entries: List<LibraryEntry>) {
 
     fun hasUnwatchedAired(mediaId: String): Boolean = byUiId[mediaId]?.hasUnwatchedAired() == true
 }
+
+/**
+ * A calendar item names a title by TMDB id; the app navigates by [com.coveninja.cove.ui.model.Media].
+ * The library is the bridge, and it always has the entry — nothing reaches the calendar that
+ * is not saved.
+ */
+fun LibraryIndex.mediaFor(item: CalendarItem): Media? =
+    entryOf(uiMediaId(item.tmdbId, item.type))?.toUiMedia()
+
+/**
+ * Whether this title has never been played at all.
+ *
+ * Both halves matter. [progress] covers anything that reached the player; the watched
+ * counters cover episodes ticked off by hand, which write a completed progress row but are
+ * still "watched" as far as the viewer is concerned.
+ *
+ * Exists because a library *status* answers a different question. `Watching` is an intention
+ * the viewer sets once and which nothing ever clears, so it stays set long after the last
+ * episode is finished — anything offering a title to play has to ask this instead, or it ends
+ * up advertising something already watched.
+ */
+fun LibraryEntry.neverPlayed(progress: WatchProgress?): Boolean =
+    progress == null && lastWatchedSeason == null && lastWatchedEpisode == null
 
 /**
  * Whether episodes have aired since the viewer last watched one.

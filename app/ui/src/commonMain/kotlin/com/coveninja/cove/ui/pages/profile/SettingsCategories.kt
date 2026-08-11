@@ -21,6 +21,12 @@ enum class SettingsCategory(
     val headline: String,
     val blurb: String,
 ) {
+    Account(
+        label = "Account",
+        icon = "iconamoon:profile-circle",
+        headline = "Account and sync",
+        blurb = "Signing in, keeping devices in step, and who is watching.",
+    ),
     Addons(
         label = "Addons",
         icon = "lucide:blocks",
@@ -69,6 +75,12 @@ enum class SettingsCategory(
         headline = "Trakt",
         blurb = "Scrobbling and library sync.",
     ),
+    Advanced(
+        label = "Advanced",
+        icon = "lucide:settings",
+        headline = "Advanced",
+        blurb = "The player's own configuration, and which build this is.",
+    ),
 }
 
 private val LANGUAGES = listOf(
@@ -110,7 +122,14 @@ fun SettingsCategoryContent(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         when (category) {
+            SettingsCategory.Account -> {
+                AccountSettings()
+                ProfilesSettings()
+            }
+
             SettingsCategory.Addons -> AddonSettings()
+
+            SettingsCategory.Advanced -> AdvancedSettings()
 
             SettingsCategory.Playback -> {
                 SettingsCard {
@@ -373,12 +392,28 @@ fun SettingsCategoryContent(
                                     "smart" to "Smart",
                                     "trending" to "Trending",
                                     "similar" to "More like what I watch",
+                                    "custom" to "Custom",
                                 ),
                                 selected = settings.discoveryAlgorithm,
                                 onSelect = { editor.edit { copy(discoveryAlgorithm = it) } },
                             )
                         },
                     )
+                }
+
+                // Only meaningful under the custom algorithm, and the backend
+                // ignores it otherwise — so it appears with the option that uses it.
+                if (settings.discoveryAlgorithm == "custom") {
+                    SettingsCard(title = "Custom algorithm", iconName = "lucide:sparkles") {
+                        SettingTextRow(
+                            title = "Scoring endpoint",
+                            description = "Cove posts your taste profile and the candidate " +
+                                "titles here, and orders the feed by the scores it returns.",
+                            value = settings.customAlgorithmUrl,
+                            placeholder = "https://example.com/score",
+                            onCommit = { editor.edit { copy(customAlgorithmUrl = it) } },
+                        )
+                    }
                 }
             }
 
@@ -394,18 +429,42 @@ fun SettingsCategoryContent(
                 }
 
                 SettingsCard(title = "Remote access", iconName = "lucide:globe-2") {
-                    SettingToggle(
-                        title = "Reachable from other devices",
-                        description = "Lets paired devices on your network reach this " +
-                            "instance. Your existing pairing token is kept.",
-                        checked = settings.remoteAccessEnabled,
-                        onCheckedChange = { editor.edit { copy(remoteAccessEnabled = it) } },
+                    SettingRows(
+                        {
+                            SettingToggle(
+                                title = "Reachable from other devices",
+                                description = "Lets paired devices on your network reach this " +
+                                    "instance. Your existing pairing token is kept.",
+                                checked = settings.remoteAccessEnabled,
+                                onCheckedChange = { editor.edit { copy(remoteAccessEnabled = it) } },
+                            )
+                        },
+                        {
+                            // Read-only on purpose: the token is what already-paired
+                            // devices authenticate with, so regenerating it here
+                            // would silently lock every one of them out.
+                            SecretRow(
+                                title = "Pairing token",
+                                description = "Another device needs this to connect. " +
+                                    "Treat it like a password.",
+                                secret = settings.remoteAccessToken,
+                                emptyLabel = "Generated when remote access is first enabled.",
+                            )
+                        },
                     )
                 }
             }
 
             SettingsCategory.Trakt -> {
-                SettingsCard {
+                TraktConnectCard()
+
+                SettingsCard(
+                    title = "What Cove sends",
+                    iconName = "lucide:upload",
+                    // Said plainly because both switches look live whether or not
+                    // an account is connected, and neither does anything until one is.
+                    description = "Both apply once a Trakt account is connected above.",
+                ) {
                     SettingRows(
                         {
                             SettingToggle(

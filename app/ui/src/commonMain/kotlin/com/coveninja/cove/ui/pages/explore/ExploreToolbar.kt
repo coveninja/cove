@@ -12,10 +12,6 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,14 +23,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,13 +42,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.MediaGenre
-import com.coveninja.cove.ui.components.menu.CMenuItem
-import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.pages.common.ChoicePill
+import com.coveninja.cove.ui.pages.common.MenuPicker
 import com.coveninja.cove.ui.pages.common.SegmentedControl
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 
@@ -243,68 +234,13 @@ private fun SortPicker(
     sort: ExploreSort,
     onSelect: (ExploreSort) -> Unit,
     modifier: Modifier = Modifier,
-) {
-    var open by remember { mutableStateOf(false) }
-    val colors = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-
-    Box(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .height(36.dp)
-                .clip(CircleShape)
-                .background(
-                    if (hovered) colors.onSurface.copy(alpha = 0.10f) else colors.surfaceContainer,
-                )
-                .hoverable(interaction)
-                .clickable(interactionSource = interaction, indication = null) { open = true }
-                .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconifyIcon(
-                icon = "lucide:arrow-up-down",
-                modifier = Modifier.size(15.dp),
-                tint = colors.onSurfaceVariant,
-            )
-            Text(
-                text = sort.label,
-                color = colors.onSurfaceVariant,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
-            IconifyIcon(
-                icon = "lucide:chevron-down",
-                modifier = Modifier.size(14.dp),
-                tint = colors.onSurfaceVariant,
-            )
-        }
-
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            modifier = Modifier.width(230.dp),
-            shape = RoundedCornerShape(16.dp),
-            containerColor = colors.surfaceContainerHigh,
-            tonalElevation = 0.dp,
-            shadowElevation = 18.dp,
-        ) {
-            ExploreSort.entries.forEach { option ->
-                CMenuItem(
-                    text = if (option == sort) "${option.label}  •  Current" else option.label,
-                    iconName = if (option == sort) "lucide:check" else "lucide:arrow-up-down",
-                    accent = option == sort,
-                    onClick = {
-                        open = false
-                        onSelect(option)
-                    },
-                )
-            }
-        }
-    }
-}
+) = MenuPicker(
+    options = ExploreSort.entries,
+    selected = sort,
+    label = { it.label },
+    onSelect = onSelect,
+    modifier = modifier,
+)
 
 /**
  * Rolls the dice on whatever is currently on screen.

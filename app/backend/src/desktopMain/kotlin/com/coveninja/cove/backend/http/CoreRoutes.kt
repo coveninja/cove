@@ -34,10 +34,17 @@ import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.network.AddLibraryRequest
+import com.coveninja.cove.shared.network.ConfirmRegistrationRequest
 import com.coveninja.cove.shared.network.DismissLibraryRequest
+import com.coveninja.cove.shared.network.EmailRequest
+import com.coveninja.cove.shared.network.LoginRequest
 import com.coveninja.cove.shared.network.PatchRatingRequest
 import com.coveninja.cove.shared.network.PatchStatusRequest
+import com.coveninja.cove.shared.network.ProfileNameRequest
 import com.coveninja.cove.shared.network.ProfilesResponseDto
+import com.coveninja.cove.shared.network.RegisterRequest
+import com.coveninja.cove.shared.network.SyncResponse
+import com.coveninja.cove.shared.network.VerifyOtpRequest
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -906,7 +913,7 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
     }
     post("/profiles") {
         call.markLegacy(legacy)
-        call.respond(HttpStatusCode.Created, services.profiles.create(call.receiveJson<CreateProfileRequest>().name))
+        call.respond(HttpStatusCode.Created, services.profiles.create(call.receiveJson<ProfileNameRequest>().name))
     }
     post("/profiles/{id}/activate") {
         call.markLegacy(legacy)
@@ -917,7 +924,7 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
     patch("/profiles/{id}") {
         call.markLegacy(legacy)
         val id = requireNotNull(call.parameters["id"])
-        services.profiles.rename(id, call.receiveJson<RenameProfileRequest>().name)
+        services.profiles.rename(id, call.receiveJson<ProfileNameRequest>().name)
         call.respond(services.profiles.response().profiles.first { it.id == id })
     }
     delete("/profiles/{id}") {
@@ -1112,47 +1119,11 @@ private fun String?.toMediaType(default: MediaType? = null): MediaType =
 private data class ErrorResponse(val error: String)
 
 @Serializable
-private data class CreateProfileRequest(val name: String)
-
-@Serializable
-private data class RenameProfileRequest(val name: String)
-
-@Serializable
 private data class AddAddonRequest(val url: String)
 
 @Serializable
 private data class ToggleAddonRequest(val enabled: Boolean)
 
 @Serializable
-private data class RegisterRequest(
-    val email: String = "",
-    val password: String = "",
-    @kotlinx.serialization.SerialName("profile_name") val profileName: String = "",
-)
-
-@Serializable
-private data class ConfirmRegistrationRequest(
-    val email: String = "",
-    val token: String = "",
-    val password: String = "",
-    @kotlinx.serialization.SerialName("profile_name") val profileName: String = "",
-)
-
-@Serializable
-private data class LoginRequest(val email: String = "", val password: String = "")
-
-@Serializable
-private data class EmailRequest(val email: String = "")
-
-@Serializable
-private data class VerifyOtpRequest(val email: String = "", val token: String = "")
-
-@Serializable
 private data class AddNuvioRepoRequest(val url: String)
 
-@Serializable
-private data class SyncResponse(
-    val status: String,
-    @kotlinx.serialization.SerialName("library_generation") val libraryGeneration: Long,
-    @kotlinx.serialization.SerialName("push_error") val pushError: String,
-)

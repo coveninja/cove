@@ -42,14 +42,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
-import androidx.compose.material3.TooltipAnchorPosition
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,13 +62,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import com.coveninja.cove.ui.components.common.CoveTooltip
 import com.coveninja.cove.ui.components.media.MyListCategory
 
 /**
@@ -179,7 +173,6 @@ private fun MyListCategoryContent(
 }
 
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NavBarButton(
     label: String,
@@ -192,21 +185,6 @@ fun NavBarButton(
 
     val isHovered by interactionSource.collectIsHoveredAsState()
     val isPressed by interactionSource.collectIsPressedAsState()
-
-    val tooltipState = rememberTooltipState()
-
-    val tooltipPositionProvider =
-        TooltipDefaults.rememberTooltipPositionProvider(
-            positioning = TooltipAnchorPosition.Below,
-            spacingBetweenTooltipAndAnchor = 2.dp,
-        )
-
-    val tooltipCaret = TooltipDefaults.caretShape(
-        caretSize = DpSize(
-            width = 18.dp,
-            height = 8.dp,
-        )
-    )
 
     val backgroundColor by animateColorAsState(
         targetValue = when {
@@ -262,24 +240,7 @@ fun NavBarButton(
         label = "NavItemIconOffset",
     )
 
-    TooltipBox(
-        positionProvider = tooltipPositionProvider,
-        tooltip = {
-            PlainTooltip(
-                caretShape = tooltipCaret,
-                shape = RoundedCornerShape(10.dp),
-                containerColor = MaterialTheme.colorScheme.inverseSurface,
-                contentColor = MaterialTheme.colorScheme.inverseOnSurface,
-                shadowElevation = 6.dp,
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-        },
-        state = tooltipState,
-    ) {
+    CoveTooltip(label = label) {
         Box(
             modifier = modifier
                 .width(48.dp)

@@ -50,6 +50,10 @@ data class AppSettings(
     val allowLanStreamSources: Boolean = false,
     val traktScrobbleEnabled: Boolean = true,
     val traktSyncEnabled: Boolean = false,
+    // Off means Cove only syncs when asked. On, it also syncs at launch, on a
+    // timer, and once local changes settle — background work the user must be
+    // able to decline.
+    val autoSyncEnabled: Boolean = true,
     // Server-stamped on every write; the backend ignores whatever a client
     // sends. Carried as an opaque string purely so a round-trip is lossless.
     val updatedAt: String? = null,
