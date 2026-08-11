@@ -1,6 +1,9 @@
 package com.coveninja.cove.ui.pages.profile
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
@@ -555,20 +558,45 @@ private fun ProfileIdentityCard(fallbackName: String, modifier: Modifier = Modif
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Box(
-                modifier = Modifier
-                    .background(
-                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
-                        CircleShape,
+            // Signing in changes what this profile *is*, so the badge swaps
+            // rather than recolouring in place — and it carries the icon that
+            // says which, for the same reason the sync card does.
+            val badgeTint by animateColorAsState(
+                targetValue = if (signedIn != null) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                animationSpec = tween(320),
+                label = "IdentityBadgeTint",
+            )
+            AnimatedContent(
+                targetState = signedIn != null,
+                transitionSpec = {
+                    (fadeIn(tween(220)) + scaleIn(initialScale = 0.8f, animationSpec = tween(220)))
+                        .togetherWith(fadeOut(tween(140)) + scaleOut(targetScale = 0.8f))
+                },
+                label = "IdentityBadge",
+            ) { synced ->
+                Row(
+                    modifier = Modifier
+                        .background(badgeTint.copy(alpha = 0.14f), CircleShape)
+                        .padding(horizontal = 11.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconifyIcon(
+                        icon = if (synced) "lucide:cloud-check" else "lucide:cloud-off",
+                        modifier = Modifier.size(12.dp),
+                        tint = badgeTint,
                     )
-                    .padding(horizontal = 11.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    text = if (signedIn != null) "SYNCED" else "LOCAL",
-                    color = MaterialTheme.colorScheme.tertiary,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                )
+                    Text(
+                        text = if (synced) "SYNCED" else "LOCAL",
+                        color = badgeTint,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }

@@ -97,6 +97,28 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "iconamoon:player-pause" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M5 7a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2zm9 0a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "butt",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "iconamoon:player-play" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M19 10.268c1.333.77 1.333 2.694 0 3.464l-9 5.196c-1.333.77-3-.192-3-1.732V6.804c0-1.54 1.667-2.502 3-1.732z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "butt",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "iconamoon:profile-circle" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M21 12a8.96 8.96 0 0 1-1.526 5.016A8.99 8.99 0 0 1 12 21a8.99 8.99 0 0 1-7.474-3.984A9 9 0 1 1 21 12Z",
@@ -520,6 +542,48 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:cloud" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:cloud-check" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "m17 15l-5.5 5.5L9 18",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M5.516 16.07A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 3.501 7.327",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:cloud-off" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M10.94 5.274A7 7 0 0 1 15.71 10h1.79a4.5 4.5 0 0 1 4.222 6.057m-2.926 2.753A4.5 4.5 0 0 1 17.5 19H9A7 7 0 0 1 5.79 5.78M2 2l20 20",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:compass" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M 2 12 A 10 10 0 1 0 22 12 A 10 10 0 1 0 2 12 Z",
@@ -764,6 +828,26 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:key" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "m15.5 7.5l2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4m2-2l-9.6 9.6",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M 2 15.5000 A 5.50000 5.50000 0 1 0 13 15.5000 A 5.50000 5.50000 0 1 0 2 15.5000 Z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:languages" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "m5 8l6 6m-7 0l6-6l2-3M2 5h12M7 2h1m14 20l-5-10l-5 10m2-4h6",
@@ -846,6 +930,46 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:lock" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M 5 11 H 19 A 2 2 0 0 1 21 13 V 20 A 2 2 0 0 1 19 22 H 5 A 2 2 0 0 1 3 20 V 13 A 2 2 0 0 1 5 11 Z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M7 11V7a5 5 0 0 1 10 0v4",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:mail" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "m22 7l-8.991 5.727a2 2 0 0 1-2.009 0L2 7",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M 4 4 H 20 A 2 2 0 0 1 22 6 V 18 A 2 2 0 0 1 20 20 H 4 A 2 2 0 0 1 2 18 V 6 A 2 2 0 0 1 4 4 Z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:maximize" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3",
@@ -871,26 +995,6 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
     "lucide:minimize" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3m8 0v-3a2 2 0 0 1 2-2h3",
-            fill        = null,
-            stroke      = "currentColor",
-            strokeWidth = 2f,
-            strokeCap   = "round",
-            strokeJoin  = "round",
-            fillEvenOdd = false,
-        ),
-    )),
-    "lucide:pause" to IconSpec(24f, 24f, listOf(
-        IconPath(
-            pathData    = "M 15 3 H 18 A 1 1 0 0 1 19 4 V 20 A 1 1 0 0 1 18 21 H 15 A 1 1 0 0 1 14 20 V 4 A 1 1 0 0 1 15 3 Z",
-            fill        = null,
-            stroke      = "currentColor",
-            strokeWidth = 2f,
-            strokeCap   = "round",
-            strokeJoin  = "round",
-            fillEvenOdd = false,
-        ),
-        IconPath(
-            pathData    = "M 6 3 H 9 A 1 1 0 0 1 10 4 V 20 A 1 1 0 0 1 9 21 H 6 A 1 1 0 0 1 5 20 V 4 A 1 1 0 0 1 6 3 Z",
             fill        = null,
             stroke      = "currentColor",
             strokeWidth = 2f,
@@ -1197,6 +1301,26 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
     "lucide:upload" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M12 3v12m5-7l-5-5l-5 5m14 7v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
+    "lucide:user-round" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M 7 8 A 5 5 0 1 0 17 8 A 5 5 0 1 0 7 8 Z",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+        IconPath(
+            pathData    = "M20 21a8 8 0 0 0-16 0",
             fill        = null,
             stroke      = "currentColor",
             strokeWidth = 2f,

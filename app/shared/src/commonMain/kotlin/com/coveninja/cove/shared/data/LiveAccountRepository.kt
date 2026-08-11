@@ -111,6 +111,7 @@ class LiveAccountRepository(
                 _syncStatus.value = _syncStatus.value.copy(
                     running = false,
                     lastError = error.message ?: "Sync failed.",
+                    failed = true,
                 )
             }
         }

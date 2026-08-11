@@ -1,6 +1,23 @@
 package com.coveninja.cove.ui.pages.profile
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.animateValue
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -345,63 +362,172 @@ internal fun SettingsTextField(
     enabled: Boolean = true,
     keyboardType: KeyboardType = KeyboardType.Text,
     imeAction: ImeAction = ImeAction.Done,
+    leadingIcon: String? = null,
+    trailing: (@Composable () -> Unit)? = null,
     onSubmit: (() -> Unit)? = null,
 ) {
+    val colors = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
+
+    // Focus lights the whole field rather than only its outline: border, fill and
+    // the leading glyph move together, which is what makes a flat field feel
+    // like it woke up rather than merely changed colour.
     val border by animateColorAsState(
-        targetValue = if (focused) {
-            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
-        } else {
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+        targetValue = when {
+            focused -> colors.tertiary.copy(alpha = 0.75f)
+            else -> colors.outlineVariant.copy(alpha = 0.35f)
         },
-        animationSpec = tween(160),
+        animationSpec = tween(180),
         label = "SettingsFieldBorder",
+    )
+    val fill by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.onSurface.copy(alpha = 0.03f)
+            focused -> colors.onSurface.copy(alpha = 0.09f)
+            else -> colors.onSurface.copy(alpha = 0.06f)
+        },
+        animationSpec = tween(180),
+        label = "SettingsFieldFill",
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (focused) colors.tertiary else colors.onSurfaceVariant,
+        animationSpec = tween(180),
+        label = "SettingsFieldIcon",
+    )
+
+    Row(
+        modifier = modifier
+            .height(44.dp)
+            .background(fill, RoundedCornerShape(12.dp))
+            .border(1.dp, border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leadingIcon?.let {
+            IconifyIcon(icon = it, modifier = Modifier.size(16.dp), tint = iconTint)
+        }
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                enabled = enabled,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.onSurface),
+                cursorBrush = SolidColor(colors.tertiary),
+                visualTransformation = if (masked) {
+                    PasswordVisualTransformation()
+                } else {
+                    VisualTransformation.None
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
+                keyboardActions = KeyboardActions(
+                    onDone = { onSubmit?.invoke() },
+                    onGo = { onSubmit?.invoke() },
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused },
+                decorationBox = { inner ->
+                    if (value.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            color = colors.onSurfaceVariant.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    inner()
+                },
+            )
+        }
+        trailing?.invoke()
+    }
+}
+
+/** Reveals a masked field. Sized to sit inside one without changing its height. */
+@Composable
+internal fun FieldIconToggle(icon: String, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val tint by animateColorAsState(
+        targetValue = if (hovered) {
+            MaterialTheme.colorScheme.onSurface
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(140),
+        label = "FieldIconToggleTint",
     )
 
     Box(
-        modifier = modifier
-            .height(42.dp)
-            .background(
-                MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 0.06f else 0.03f),
-                RoundedCornerShape(11.dp),
-            )
-            .border(1.dp, border, RoundedCornerShape(11.dp))
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.CenterStart,
+        modifier = Modifier
+            .size(26.dp)
+            .hoverable(interactionSource)
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            enabled = enabled,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.tertiary),
-            visualTransformation = if (masked) {
-                PasswordVisualTransformation()
-            } else {
-                VisualTransformation.None
-            },
-            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
-            keyboardActions = KeyboardActions(
-                onDone = { onSubmit?.invoke() },
-                onGo = { onSubmit?.invoke() },
-            ),
+        // Crossfades between the two eye states so the toggle reads as one control
+        // changing rather than two icons swapping.
+        AnimatedContent(
+            targetState = icon,
+            transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(120)) },
+            label = "FieldIconToggle",
+        ) { current ->
+            IconifyIcon(icon = current, modifier = Modifier.size(15.dp), tint = tint)
+        }
+    }
+}
+
+/** The indeterminate spinner used wherever something is in flight. */
+@Composable
+internal fun Spinner(size: Dp, color: Color = MaterialTheme.colorScheme.onTertiary) {
+    CircularProgressIndicator(
+        modifier = Modifier.size(size),
+        color = color,
+        strokeWidth = 2.dp,
+        strokeCap = StrokeCap.Round,
+    )
+}
+
+/**
+ * A hairline that sweeps while something is running.
+ *
+ * Sits on the edge of a card rather than in its content, so an operation can
+ * show it is alive without the layout moving underneath the reader.
+ */
+@Composable
+internal fun ProgressHairline(active: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = active,
+        enter = fadeIn(tween(160)),
+        exit = fadeOut(tween(240)),
+        modifier = modifier,
+    ) {
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
-                .onFocusChanged { focused = it.isFocused },
-            decorationBox = { inner ->
-                if (value.isEmpty()) {
-                    Text(
-                        text = placeholder,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                inner()
-            },
-        )
+                .height(2.dp)
+                .background(MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)),
+        ) {
+            val width = maxWidth
+            val sweep = rememberInfiniteTransition(label = "ProgressSweep")
+            val offset by sweep.animateValue(
+                initialValue = -width / 3,
+                targetValue = width,
+                typeConverter = Dp.VectorConverter,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1_100, easing = LinearEasing),
+                ),
+                label = "ProgressSweepOffset",
+            )
+            Box(
+                modifier = Modifier
+                    .offset(x = offset)
+                    .width(width / 3)
+                    .height(2.dp)
+                    .background(MaterialTheme.colorScheme.tertiary),
+            )
+        }
     }
 }
 
@@ -411,6 +537,13 @@ internal fun SettingsTextField(
  * Dims rather than disappears when there is nothing to submit, so the form does
  * not reflow as fields are filled in.
  */
+/**
+ * The filled action button.
+ *
+ * It reports its own progress: the label gives way to a spinner while the work
+ * runs, then to a tick when it lands. That the button itself carries the outcome
+ * is the point — the alternative is a toast somewhere else, or nothing at all.
+ */
 @Composable
 internal fun PrimaryButton(
     label: String,
@@ -418,6 +551,8 @@ internal fun PrimaryButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     busy: Boolean = false,
+    done: Boolean = false,
+    doneLabel: String = label,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -454,16 +589,54 @@ internal fun PrimaryButton(
                 indication = null,
                 onClick = onClick,
             )
+            // animateContentSize so a shorter "done" label reflows smoothly rather
+            // than snapping the button to a new width mid-transition.
+            .animateContentSize(spring(stiffness = Spring.StiffnessMediumLow))
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = if (busy) "…" else label,
-            color = MaterialTheme.colorScheme.onTertiary,
-            style = MaterialTheme.typography.labelLarge,
-        )
+        val phase = when {
+            busy -> ButtonPhase.Busy
+            done -> ButtonPhase.Done
+            else -> ButtonPhase.Idle
+        }
+        AnimatedContent(
+            targetState = phase,
+            transitionSpec = {
+                (fadeIn(tween(160)) + scaleIn(initialScale = 0.8f, animationSpec = tween(160)))
+                    .togetherWith(fadeOut(tween(120)) + scaleOut(targetScale = 0.8f))
+            },
+            label = "PrimaryButtonPhase",
+        ) { current ->
+            when (current) {
+                ButtonPhase.Busy -> Spinner(size = 16.dp)
+                ButtonPhase.Done -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconifyIcon(
+                        icon = "lucide:check",
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onTertiary,
+                    )
+                    Text(
+                        text = doneLabel,
+                        color = MaterialTheme.colorScheme.onTertiary,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+
+                ButtonPhase.Idle -> Text(
+                    text = label,
+                    color = MaterialTheme.colorScheme.onTertiary,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
     }
 }
+
+private enum class ButtonPhase { Idle, Busy, Done }
 
 /** A quieter button for the secondary action beside a [PrimaryButton]. */
 @Composable

@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonArray
@@ -26,9 +27,20 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
+/**
+ * Rows in a bulk upsert must all carry the same keys — PostgREST refuses the
+ * whole batch with "All object keys must match" otherwise. [CoveJson] omits null
+ * fields, so a library where one title has a rating and another does not produces
+ * two different shapes and the entire library push fails. Here nulls are spelled
+ * out instead, which is also the truthful value for a column that has one.
+ */
+private val SyncRowJson = Json(CoveJson) { explicitNulls = true }
+
 data class SyncResult(
     val libraryGeneration: Long,
     val pushError: String = "",
+    /** Remote rows this build could not read, and therefore did not merge. */
+    val pullWarning: String = "",
 )
 
 /**
@@ -64,17 +76,27 @@ class SupabaseSyncService(
 
         library.mergeFromRemote(pulled.library)
         pulled.settings?.let { settings.mergeFromRemote(it) }
+
+        val pullWarnings = mutableListOf<String>()
+        if (pulled.warning.isNotBlank()) pullWarnings += pulled.warning
         pulled.payloads.forEach { (kind, remote) ->
             val participant = payloads.firstOrNull { it.kind == kind }
             if (participant == null) {
                 persistOpaque(profileId, kind, remote)
             } else {
-                participant.merge(
-                    SyncSnapshot(
-                        json = CoveJson.encodeToString(JsonElement.serializer(), remote.data),
-                        updatedAt = remote.updatedAt,
-                    ),
-                )
+                // A blob this build cannot read costs that blob, not the sync.
+                // These carry shapes written by several generations of the app,
+                // and one unreadable field in the addon list used to mean nothing
+                // synced at all — library, settings and progress included. The
+                // local copy stands, and the push below then heals the remote.
+                runCatching {
+                    participant.merge(
+                        SyncSnapshot(
+                            json = CoveJson.encodeToString(JsonElement.serializer(), remote.data),
+                            updatedAt = remote.updatedAt,
+                        ),
+                    )
+                }.onFailure { pullWarnings += "$kind not merged: ${it.message}" }
             }
         }
         profiles.linkSupabase(profileId, userId)
@@ -90,7 +112,7 @@ class SupabaseSyncService(
         }
         push("profile") { ensureProfile(accessToken, userId) }
 
-        SyncResult(++generation, pushErrors.joinToString("; "))
+        SyncResult(++generation, pushErrors.joinToString("; "), pullWarnings.joinToString("; "))
     }
 
     suspend fun registerProfile(userId: String, accessToken: String, requestedName: String) {
@@ -155,25 +177,37 @@ class SupabaseSyncService(
 
     private suspend fun pull(token: String, profileId: String): PulledData {
         val filter = "profile_id=eq.${profileId.encodeURLParameter()}"
-        val entries = client.select(token, "library_entries", filter).map {
-            CoveJson.decodeFromJsonElement<LibraryEntry>(it)
-        }
-        val progress = client.select(token, "watch_progress", filter).map {
-            CoveJson.decodeFromJsonElement<WatchProgress>(it)
-        }
-        val dismissals = client.select(token, "dismissals", filter).map {
+        val skipped = mutableMapOf<String, Int>()
+
+        /**
+         * Decodes row by row, skipping the ones this build cannot read.
+         *
+         * These tables have been written by several generations of this app, and
+         * one row from an older one used to abort the entire sync — library,
+         * settings, addons and all — over a single unreadable field. Skipping is
+         * not silent: the count comes back as [SyncResult.pullWarning].
+         */
+        suspend fun <T> rows(table: String, query: String = filter, decode: (JsonElement) -> T): List<T> =
+            client.select(token, table, query).mapNotNull { row ->
+                runCatching { decode(row) }
+                    .onFailure { skipped[table] = (skipped[table] ?: 0) + 1 }
+                    .getOrNull()
+            }
+
+        val entries = rows("library_entries") { CoveJson.decodeFromJsonElement<LibraryEntry>(it) }
+        val progress = rows("watch_progress") { CoveJson.decodeFromJsonElement<WatchProgress>(it) }
+        val dismissals = rows("dismissals") {
             val row = CoveJson.decodeFromJsonElement<RemoteDismissal>(it)
             SyncDismissal(row.tmdbId, row.mediaType, row.dismissedAt)
         }
-        val removals = client.select(token, "library_removals", filter).map {
+        val removals = rows("library_removals") {
             val row = CoveJson.decodeFromJsonElement<RemoteRemoval>(it)
             SyncRemoval(row.tmdbId, row.mediaType, row.removedAt)
         }
-        val settingsRow = client.select(
-            token,
+        val settingsRow = rows(
             "profile_settings",
             "$filter&order=updated_at.desc&limit=1",
-        ).firstOrNull()?.let { CoveJson.decodeFromJsonElement<RemoteSettings>(it).data }
+        ) { CoveJson.decodeFromJsonElement<RemoteSettings>(it).data }.firstOrNull()
         val pulledPayloads = SYNCED_PAYLOAD_KINDS.mapNotNull { kind ->
             pullOpaque(token, tableFor(kind), filter)?.let { kind to it }
         }
@@ -181,6 +215,9 @@ class SupabaseSyncService(
             LibrarySyncSnapshot(entries, progress, dismissals, removals),
             settingsRow,
             pulledPayloads,
+            skipped.entries.joinToString("; ") { (table, count) ->
+                "$count unreadable row${if (count == 1) "" else "s"} in $table"
+            },
         )
     }
 
@@ -188,12 +225,31 @@ class SupabaseSyncService(
         val snapshot = library.snapshotForSync(profileId)
         if (snapshot.entries.isNotEmpty()) {
             client.upsert(token, "library_entries", JsonArray(snapshot.entries.map {
-                CoveJson.encodeToJsonElement(it.copy(profileId = profileId))
+                SyncRowJson.encodeToJsonElement(it.copy(profileId = profileId))
             }))
         }
         if (snapshot.progress.isNotEmpty()) {
-            client.upsert(token, "watch_progress", JsonArray(snapshot.progress.map {
-                CoveJson.encodeToJsonElement(it.copy(profileId = profileId))
+            // Fill in the entry id where this profile knows it. Rows migrated from
+            // the pre-SQLite files have none, and sending what we do know repairs
+            // the link for every client rather than writing the gap back out.
+            //
+            // A stored id is only sent if it points at an entry going up in the
+            // same push: upstream the column is a foreign key, and progress left
+            // over from a title that has since been removed from the library still
+            // names the entry it used to belong to. One such row fails the whole
+            // batch, so an id that cannot be vouched for becomes null — which is
+            // what "watched, but not in the library" means anyway.
+            val entryIds = snapshot.entries.associate {
+                "${it.tmdbId}:${it.mediaType.wireName}" to it.id
+            }
+            val pushedEntryIds = snapshot.entries.mapTo(mutableSetOf()) { it.id }
+            client.upsert(token, "watch_progress", JsonArray(snapshot.progress.map { progress ->
+                val linked = progress.copy(
+                    profileId = profileId,
+                    libraryEntryId = progress.libraryEntryId?.takeIf { it in pushedEntryIds }
+                        ?: entryIds["${progress.tmdbId}:${progress.mediaType.wireName}"],
+                )
+                SyncRowJson.encodeToJsonElement(linked)
             }))
         }
         if (snapshot.dismissals.isNotEmpty()) {
@@ -288,6 +344,7 @@ class SupabaseSyncService(
         val library: LibrarySyncSnapshot,
         val settings: AppSettings?,
         val payloads: List<Pair<String, RemoteOpaque>>,
+        val warning: String = "",
     )
 
     private data class RemoteOpaque(val data: JsonElement, val updatedAt: String)

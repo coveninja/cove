@@ -178,7 +178,13 @@ class LocalAccountRepository(
             _syncStatus.value = SyncStatus(
                 running = false,
                 lastSyncedAt = clock.now(),
-                lastError = result.pushError.takeIf(String::isNotBlank),
+                // A sync that finished with rows it could not push or read still
+                // synced everything else; the shortfall is reported rather than
+                // being either hidden or dressed up as a total failure.
+                lastError = listOf(result.pushError, result.pullWarning)
+                    .filter(String::isNotBlank)
+                    .joinToString("; ")
+                    .takeIf(String::isNotBlank),
             )
         } catch (cancellation: CancellationException) {
             _syncStatus.value = _syncStatus.value.copy(running = false)
@@ -187,6 +193,7 @@ class LocalAccountRepository(
             _syncStatus.value = _syncStatus.value.copy(
                 running = false,
                 lastError = error.readableMessage(),
+                failed = true,
             )
         } finally {
             wake.trySend(Unit)

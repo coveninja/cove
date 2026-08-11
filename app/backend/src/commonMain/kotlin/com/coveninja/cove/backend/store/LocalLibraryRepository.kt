@@ -296,7 +296,16 @@ class LocalLibraryRepository(
                 database.coveQueries.deleteRemoval(profileId, entry.tmdbId.toLong(), entry.mediaType.wireName)
             }
             val local = localEntries[key]
-            if (local == null || entry.updatedAt > local.updated_at) upsert(profileId, entry)
+            when {
+                local == null || entry.updatedAt > local.updated_at -> upsert(profileId, entry)
+                // Same title, two row identities. The id is identity rather than
+                // content, so the remote's wins even when our copy is newer:
+                // keeping ours means every future push is rejected outright by the
+                // (profile, tmdb, media_type) uniqueness constraint upstream, and
+                // one such row fails the whole library batch.
+                local.id != entry.id && entry.id !in localIdsElsewhere(localEntries, key) ->
+                    adoptRemoteId(profileId, local, entry.id)
+            }
         }
 
         remote.removals.forEach { removal ->
@@ -325,24 +334,61 @@ class LocalLibraryRepository(
 
         val localProgress = database.coveQueries.selectWatchProgress(profileId).executeAsList()
             .associateBy { it.progress_key }
+        // Re-read after the entries above were merged: a remote progress row with
+        // no entry id of its own is relinked to whatever this profile has now,
+        // which is how rows written before that column existed find their entry.
+        val mergedEntries by lazy {
+            database.coveQueries.selectLibraryEntries(profileId).executeAsList()
+                .associateBy { "${it.tmdb_id}:${it.media_type}" }
+        }
+        val progressIds = localProgress.values.associate { it.progress_key to it.id }
         remote.progress.forEach { progress ->
             val key = progressKey(progress.tmdbId, progress.mediaType, progress.season, progress.episode)
             val local = localProgress[key]
-            if (local == null || progress.watchedAt > local.watched_at) {
-                database.coveQueries.upsertWatchProgress(
-                    key,
-                    progress.id,
-                    profileId,
-                    progress.libraryEntryId,
-                    progress.tmdbId.toLong(),
-                    progress.mediaType.wireName,
-                    progress.season?.toLong(),
-                    progress.episode?.toLong(),
-                    progress.positionSeconds,
-                    progress.durationSeconds,
-                    if (progress.completed) 1L else 0L,
-                    progress.watchedAt,
-                )
+            val entryId = progress.libraryEntryId?.takeIf(String::isNotBlank)
+                ?: mergedEntries["${progress.tmdbId}:${progress.mediaType.wireName}"]?.id
+                ?: local?.library_entry_id
+                // The column is NOT NULL locally, and progress for a title
+                // that is not in the library is still worth keeping.
+                ?: ""
+            when {
+                local == null || progress.watchedAt > local.watched_at ->
+                    database.coveQueries.upsertWatchProgress(
+                        key,
+                        progress.id,
+                        profileId,
+                        entryId,
+                        progress.tmdbId.toLong(),
+                        progress.mediaType.wireName,
+                        progress.season?.toLong(),
+                        progress.episode?.toLong(),
+                        progress.positionSeconds,
+                        progress.durationSeconds,
+                        if (progress.completed) 1L else 0L,
+                        progress.watchedAt,
+                    )
+
+                // Our copy is the newer one, but it is filed under a different row
+                // id than the rest of the account uses for this same episode.
+                // Upstream that pair of ids collides on the natural key and the
+                // whole progress batch is refused, so the id converges here while
+                // the newer content stays.
+                local.id != progress.id &&
+                    progressIds.none { (otherKey, id) -> otherKey != key && id == progress.id } ->
+                    database.coveQueries.upsertWatchProgress(
+                        key,
+                        progress.id,
+                        profileId,
+                        entryId,
+                        local.tmdb_id,
+                        local.media_type,
+                        local.season,
+                        local.episode,
+                        local.position_seconds,
+                        local.duration_seconds,
+                        local.completed,
+                        local.watched_at,
+                    )
             }
         }
         val localDismissals = database.coveQueries.selectDismissals(profileId).executeAsList()
@@ -628,6 +674,41 @@ class LocalLibraryRepository(
             .filter { it.tmdb_id == tmdbId.toLong() && it.media_type == mediaType.wireName }
             .map(Watch_progress::toModel)
 
+    /** Ids held by *other* titles, which must never be overwritten by an adoption. */
+    private fun localIdsElsewhere(
+        localEntries: Map<String, Library_entries>,
+        exceptKey: String,
+    ): Set<String> = localEntries.filterKeys { it != exceptKey }.values.mapTo(mutableSetOf()) { it.id }
+
+    /**
+     * Re-keys a local entry to the id the rest of the account already uses for it,
+     * keeping its content and carrying its watch progress across. INSERT OR
+     * REPLACE resolves against the natural-key index, so the old row goes and one
+     * row remains.
+     */
+    private fun adoptRemoteId(profileId: String, local: Library_entries, remoteId: String) {
+        database.coveQueries.upsertLibraryEntry(
+            remoteId,
+            profileId,
+            local.tmdb_id,
+            local.media_type,
+            local.title,
+            local.poster_path,
+            local.status,
+            local.rating,
+            local.vote_average,
+            local.last_air_date,
+            local.last_watched_at,
+            local.last_watched_season,
+            local.last_watched_episode,
+            local.last_aired_season,
+            local.last_aired_episode,
+            local.added_at,
+            local.updated_at,
+        )
+        database.coveQueries.relinkWatchProgressEntry(remoteId, profileId, local.id)
+    }
+
     private fun upsert(profileId: String, entry: LibraryEntry) {
         database.coveQueries.upsertLibraryEntry(
             entry.id,
@@ -751,7 +832,11 @@ private fun Library_entries.toModel(): LibraryEntry = LibraryEntry(
 private fun Watch_progress.toModel(): WatchProgress = WatchProgress(
     id = id,
     profileId = profile_id,
-    libraryEntryId = library_entry_id,
+    // Blank becomes null, which the wire encoder then omits entirely. Most rows
+    // migrated from the pre-SQLite files have no entry id, and pushing "" would
+    // be rejected outright by a uuid-typed column upstream — one bad value in the
+    // batch fails the whole library push.
+    libraryEntryId = library_entry_id.takeIf(String::isNotBlank),
     tmdbId = tmdb_id.toInt(),
     mediaType = MediaType.entries.first { it.wireName == media_type },
     season = season?.toInt(),

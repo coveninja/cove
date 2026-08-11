@@ -282,7 +282,17 @@ class AddonManager(
         if (updatedAt <= localUpdatedAt) return
         database.transaction {
             database.coveQueries.deleteAddonsForProfile(profileId)
-            entries.forEach { persist(profileId, it, updatedAt) }
+            // Official rows from an older client arrive with no url; give them the
+            // synthetic one this build uses so every local row looks the same
+            // regardless of which client wrote it.
+            entries.forEach { entry ->
+                val normalized = if (entry.source == "official" && entry.url.isBlank()) {
+                    entry.copy(url = "official:${entry.id}")
+                } else {
+                    entry
+                }
+                persist(profileId, normalized, updatedAt)
+            }
             database.coveQueries.upsertProfileStoreVersion(profileId, "addons", updatedAt)
         }
         ensureOfficialEntries(profileId)

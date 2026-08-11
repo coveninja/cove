@@ -14,17 +14,45 @@ internal enum class AuthMode(val label: String) {
 }
 
 /**
- * The one line under "Cove account" that says whether things are in step.
+ * What the sync mark is showing.
  *
- * Pure so it can be tested without a clock or a Compose runtime: "synced 2
- * minutes ago" is the whole point of the feature and it should not be verifiable
- * only by looking at the screen.
+ * [Attention] is deliberately its own state rather than a shade of [Settled]: a
+ * sync that finished but left rows behind is neither fine nor broken, and the
+ * mark is the only thing on screen that says which.
  */
-internal fun syncSummary(status: SyncStatus, now: Instant): String = when {
+internal enum class SyncTone { Settled, Working, Attention, Idle }
+
+/**
+ * The headline of the sync card — the answer to "is this device in step?", in
+ * three words or fewer, so the card can be read at a glance rather than parsed.
+ */
+internal fun syncHeadline(status: SyncStatus): String = when {
     status.running -> "Syncing…"
-    status.lastSyncedAt == null && status.lastError != null -> "Not synced"
+    status.failed -> "Sync failed"
+    status.lastError != null -> "Partly synced"
     status.lastSyncedAt == null -> "Not synced yet"
-    else -> "Synced ${relativeTime(status.lastSyncedAt!!, now)}"
+    else -> "Up to date"
+}
+
+/**
+ * The supporting line: when it last worked, or what went wrong.
+ *
+ * The error text comes from the server and is passed through verbatim — it says
+ * which rows or which push, and inventing a friendlier sentence here would throw
+ * away the only detail worth having.
+ */
+internal fun syncDetail(status: SyncStatus, now: Instant): String = when {
+    status.lastError != null -> status.lastError!!
+    status.running -> "Checking what changed on your other devices."
+    status.lastSyncedAt == null -> "Nothing has reached your account from this device yet."
+    else -> "Last synced ${relativeTime(status.lastSyncedAt!!, now)}."
+}
+
+internal fun syncTone(status: SyncStatus): SyncTone = when {
+    status.running -> SyncTone.Working
+    status.failed || status.lastError != null -> SyncTone.Attention
+    status.lastSyncedAt != null -> SyncTone.Settled
+    else -> SyncTone.Idle
 }
 
 /**

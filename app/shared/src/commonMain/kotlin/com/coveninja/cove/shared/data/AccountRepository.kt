@@ -31,6 +31,13 @@ data class SyncStatus(
     val lastSyncedAt: Instant? = null,
     /** A failed sync, or the partial-push report of one that otherwise finished. */
     val lastError: String? = null,
+    /**
+     * True when the last attempt did not complete at all, as opposed to finishing
+     * with rows it could not carry. Worth separating: one means nothing moved,
+     * the other means almost everything did, and telling the user they are the
+     * same thing is how a working sync gets mistaken for a broken one.
+     */
+    val failed: Boolean = false,
 )
 
 /**

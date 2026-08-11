@@ -225,7 +225,8 @@ class AndroidLegacyMigration(
                 progress_key = key,
                 id = progress.id,
                 profile_id = profileId,
-                library_entry_id = progress.libraryEntryId,
+                // NOT NULL locally; a legacy file may carry no entry id at all.
+                library_entry_id = progress.libraryEntryId.orEmpty(),
                 tmdb_id = progress.tmdbId.toLong(),
                 media_type = progress.mediaType.wireName,
                 season = progress.season?.toLong(),

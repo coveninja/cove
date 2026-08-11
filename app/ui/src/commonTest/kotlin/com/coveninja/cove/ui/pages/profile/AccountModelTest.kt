@@ -12,32 +12,62 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
 /**
- * The sync line and the sign-in button — the only two things on the account page
- * that decide anything, and the only two testable without a renderer.
+ * The sync card's words and the sign-in button's enabled state — the two things
+ * on the account screen that decide anything, and the only two testable without
+ * a renderer.
  */
 class AccountModelTest {
     private val now = Instant.parse("2026-08-11T12:00:00Z")
 
-    // Mutation applied to verify: returned the "Synced …" branch before checking
-    // `running` → this failed with "Synced just now" while a sync was still in
-    // flight, which claims success the moment one starts.
+    // Mutation applied to verify: checked `failed` before `running` → this failed,
+    // reporting a sync in flight as already broken because the previous attempt
+    // had been.
     @Test
-    fun `a running sync says so rather than reporting the previous one`() {
+    fun `a running sync says so whatever the last one did`() {
+        assertEquals("Syncing…", syncHeadline(SyncStatus(running = true)))
         assertEquals(
             "Syncing…",
-            syncSummary(SyncStatus(running = true, lastSyncedAt = now - 2.minutes), now),
+            syncHeadline(SyncStatus(running = true, failed = true, lastError = "offline")),
         )
+        assertEquals(SyncTone.Working, syncTone(SyncStatus(running = true, failed = true)))
     }
 
-    // Mutation applied to verify: made a null lastSyncedAt fall through to the
-    // relative-time branch → this failed, since a device that has never synced
-    // would otherwise claim to have synced at the epoch.
+    // Mutation applied to verify: made the headline treat any lastError as a
+    // failure → this failed on the partial case, which tells someone whose
+    // library did sync that nothing did.
     @Test
-    fun `never having synced is not the same as having just synced`() {
-        assertEquals("Not synced yet", syncSummary(SyncStatus(), now))
+    fun `a sync that finished with problems is not the same as one that failed`() {
+        val partial = SyncStatus(lastSyncedAt = now - 1.minutes, lastError = "addons not merged")
+        val failed = SyncStatus(lastSyncedAt = now - 1.minutes, lastError = "offline", failed = true)
+
+        assertEquals("Partly synced", syncHeadline(partial))
+        assertEquals("Sync failed", syncHeadline(failed))
+        // Both want attention; only one of them lost everything.
+        assertEquals(SyncTone.Attention, syncTone(partial))
+        assertEquals(SyncTone.Attention, syncTone(failed))
+    }
+
+    // Mutation applied to verify: dropped the null-lastSyncedAt branch so it fell
+    // through to "Up to date" → this failed; a device that has never synced would
+    // claim to be current.
+    @Test
+    fun `never having synced is not being up to date`() {
+        assertEquals("Not synced yet", syncHeadline(SyncStatus()))
+        assertEquals(SyncTone.Idle, syncTone(SyncStatus()))
+        assertEquals("Up to date", syncHeadline(SyncStatus(lastSyncedAt = now)))
+        assertEquals(SyncTone.Settled, syncTone(SyncStatus(lastSyncedAt = now)))
+    }
+
+    // Mutation applied to verify: had the detail line prefer the timestamp over
+    // the error → this failed, hiding the only text that says what went wrong.
+    @Test
+    fun `the detail line carries the error when there is one`() {
         assertEquals(
-            "Not synced",
-            syncSummary(SyncStatus(lastError = "Network unreachable"), now),
+            "library: 409 duplicate key",
+            syncDetail(
+                SyncStatus(lastSyncedAt = now - 2.minutes, lastError = "library: 409 duplicate key"),
+                now,
+            ),
         )
     }
 
@@ -46,20 +76,20 @@ class AccountModelTest {
     // between "up to date" and "stale" for someone deciding whether to press Sync.
     @Test
     fun `elapsed time is reported at the coarsest useful unit`() {
-        assertEquals("Synced just now", syncSummary(synced(now - 20.seconds), now))
-        assertEquals("Synced a minute ago", syncSummary(synced(now - 70.seconds), now))
-        assertEquals("Synced 5 minutes ago", syncSummary(synced(now - 5.minutes), now))
-        assertEquals("Synced an hour ago", syncSummary(synced(now - 65.minutes), now))
-        assertEquals("Synced 3 hours ago", syncSummary(synced(now - 3.hours), now))
-        assertEquals("Synced yesterday", syncSummary(synced(now - 30.hours), now))
-        assertEquals("Synced 4 days ago", syncSummary(synced(now - 4.days), now))
+        assertEquals("Last synced just now.", detail(now - 20.seconds))
+        assertEquals("Last synced a minute ago.", detail(now - 70.seconds))
+        assertEquals("Last synced 5 minutes ago.", detail(now - 5.minutes))
+        assertEquals("Last synced an hour ago.", detail(now - 65.minutes))
+        assertEquals("Last synced 3 hours ago.", detail(now - 3.hours))
+        assertEquals("Last synced yesterday.", detail(now - 30.hours))
+        assertEquals("Last synced 4 days ago.", detail(now - 4.days))
     }
 
     // Mutation applied to verify: removed the `minutes < 1` guard → this failed
-    // with "Synced -1 minutes ago" for a clock a little ahead of the server's.
+    // with "-1 minutes ago" for a clock a little ahead of the server's.
     @Test
     fun `a timestamp slightly in the future reads as just now`() {
-        assertEquals("Synced just now", syncSummary(synced(now + 10.seconds), now))
+        assertEquals("Last synced just now.", detail(now + 10.seconds))
     }
 
     // Mutation applied to verify: dropped the awaitingToken branch → this failed,
@@ -116,7 +146,7 @@ class AccountModelTest {
         }
     }
 
-    private fun synced(at: Instant) = SyncStatus(lastSyncedAt = at)
+    private fun detail(at: Instant) = syncDetail(SyncStatus(lastSyncedAt = at), now)
 
     private fun canSubmit(
         mode: AuthMode,

@@ -34,7 +34,11 @@ data class AddonCatalogExtra(
 @Serializable
 data class AddonEntry(
     val id: String,
-    val url: String,
+    // Blank for the two built-in integrations, which are dispatched by id and
+    // have no manifest to fetch. This build writes them as "official:<id>", but
+    // rows synced from an older one carry no url field at all — and a missing
+    // value here used to fail the decode, which aborted the entire sync.
+    val url: String = "",
     val manifest: AddonManifest,
     val kind: AddonKind,
     val source: String = "stremio",

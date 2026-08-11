@@ -293,6 +293,12 @@ DELETE FROM library_entries WHERE profile_id = ? AND tmdb_id = ? AND media_type 
 deleteLibraryEntries:
 DELETE FROM library_entries;
 
+-- Used when a library entry adopts the id another device already uses for the
+-- same title, so its progress rows keep pointing at it.
+relinkWatchProgressEntry:
+UPDATE watch_progress SET library_entry_id = ?
+WHERE profile_id = ? AND library_entry_id = ?;
+
 upsertWatchProgress:
 INSERT OR REPLACE INTO watch_progress(
     progress_key, id, profile_id, library_entry_id, tmdb_id, media_type, season,
