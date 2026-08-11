@@ -1,8 +1,14 @@
 package com.coveninja.cove.desktop.player
 
 import java.awt.image.BufferedImage
+import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.imageio.ImageIO
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -14,6 +20,70 @@ import kotlin.test.assertTrue
 // Skips rather than fails when libmpv or the sample file is unavailable, so the
 // suite still runs on machines without them. COVE_MPV_SAMPLE points at a video.
 class SoftwareFrameSmokeTest {
+
+    @Test
+    fun `software render params survive resize and GC pressure`() {
+        val sample = Files.createTempFile("cove-mpv-resize-", ".png")
+        ImageIO.write(BufferedImage(32, 18, BufferedImage.TYPE_INT_RGB), "png", sample.toFile())
+
+        val frames = AtomicInteger()
+        val firstFrame = CountDownLatch(1)
+        val player = MpvSoftwarePlayer(hardwareDecoding = false) {
+            frames.incrementAndGet()
+            firstFrame.countDown()
+        }
+
+        try {
+            player.start()
+            if (!player.snapshot.value.initialized) {
+                println("SKIP: libmpv not loadable: ${player.snapshot.value.error}")
+                return
+            }
+            player.load(sample.toAbsolutePath().toString())
+            assertTrue(firstFrame.await(5, TimeUnit.SECONDS), "software renderer produced no frame")
+
+            val collecting = AtomicBoolean(true)
+            val collector = thread(name = "cove-mpv-test-gc", isDaemon = true) {
+                while (collecting.get()) {
+                    System.gc()
+                    Thread.yield()
+                }
+            }
+            val before = frames.get()
+            val sizes = listOf(
+                1791 to 1015, // dimensions from the reported native crash
+                1280 to 720,
+                1537 to 863,
+                1920 to 1080,
+            )
+            try {
+                val targetFrames = 12
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+                var index = 0
+                while (frames.get() - before < targetFrames && System.nanoTime() < deadline) {
+                    val (width, height) = sizes[index % sizes.size]
+                    player.resize(width, height)
+                    index++
+                    Thread.sleep(20)
+                }
+            } finally {
+                collecting.set(false)
+                collector.join(5_000)
+                assertTrue(!collector.isAlive, "GC pressure thread did not stop")
+            }
+
+            val renderedDuringStress = frames.get() - before
+            println("software resize/GC stress produced $renderedDuringStress frames")
+            assertTrue(renderedDuringStress >= 12, "resize stress rendered too few frames")
+            assertTrue(
+                player.snapshot.value.error == null,
+                "player reported: ${player.snapshot.value.error}",
+            )
+        } finally {
+            player.close()
+            Files.deleteIfExists(sample)
+        }
+    }
 
     @Test
     fun `software path decodes frames from a real file`() {

@@ -7,6 +7,7 @@ import com.sun.jna.StringArray
 import com.sun.jna.ptr.PointerByReference
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
+import java.lang.ref.Reference
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
@@ -53,6 +54,7 @@ class MpvSoftwarePlayer(
     private val updateCallback = MpvRenderUpdateCallback { requestRender() }
 
     @Volatile private var renderBuffer: ByteBuffer? = null
+    @Volatile private var renderParameters: SoftwareRenderParameters? = null
 
     @Synchronized
     override fun start() {
@@ -197,6 +199,8 @@ class MpvSoftwarePlayer(
                 renderExecutor.submit {
                     renderContext.getAndSet(null)
                         ?.let(Mpv.library()::mpv_render_context_free)
+                    renderParameters?.close()
+                    renderParameters = null
                 }.get(3, TimeUnit.SECONDS)
             }
         }
@@ -237,29 +241,27 @@ class MpvSoftwarePlayer(
             ?: ByteBuffer.allocateDirect(bytes).order(ByteOrder.LITTLE_ENDIAN)
                 .also { renderBuffer = it }
 
-        val size = Memory(2L * Int.SIZE_BYTES).apply {
-            setInt(0, width)
-            setInt(Int.SIZE_BYTES.toLong(), height)
-        }
-        val format = Memory(5).apply { setString(0, "bgr0") }
-        val stride = Memory(Native.SIZE_T_SIZE.toLong()).apply {
-            if (Native.SIZE_T_SIZE == Long.SIZE_BYTES) setLong(0, width.toLong() * Int.SIZE_BYTES)
-            else                                       setInt(0,  width          * Int.SIZE_BYTES)
-        }
+        // mpv receives raw pointers nested inside the render-param array. JNA
+        // cannot see those pointees while the native call is in progress, so a
+        // local Memory can become unreachable and its Cleaner can free it before
+        // mpv returns. Keep one owner for the context lifetime and fence both it
+        // and the direct pixel buffer across the native boundary.
+        val parameters = renderParameters
+            ?: SoftwareRenderParameters().also { renderParameters = it }
+        parameters.configure(width, height, target)
 
-        val params = renderParamArray(5)
-        params[0].type = Mpv.RENDER_PARAM_SW_SIZE;    params[0].data = size
-        params[1].type = Mpv.RENDER_PARAM_SW_FORMAT;  params[1].data = format
-        params[2].type = Mpv.RENDER_PARAM_SW_STRIDE;  params[2].data = stride
-        params[3].type = Mpv.RENDER_PARAM_SW_POINTER; params[3].data = Native.getDirectBufferPointer(target)
-        params.forEach(MpvRenderParam::write)
-
-        Mpv.library().mpv_render_context_update(context)
-        checkMpv(
-            Mpv.library(),
-            Mpv.library().mpv_render_context_render(context, params[0].pointer),
-            "sw render frame",
-        )
+        val library = Mpv.library()
+        library.mpv_render_context_update(context)
+        try {
+            checkMpv(
+                library,
+                library.mpv_render_context_render(context, parameters.pointer),
+                "sw render frame",
+            )
+        } finally {
+            parameters.keepAlive()
+            Reference.reachabilityFence(target)
+        }
         frameConsumer(bgr0ToBufferedImage(target, width, height))
     }
 
@@ -351,11 +353,18 @@ class MpvSoftwarePlayer(
         params.forEach(MpvRenderParam::write)
 
         val result = PointerByReference()
-        checkMpv(
-            library,
-            library.mpv_render_context_create(result, target, params[0].pointer),
-            "create software render context",
-        )
+        try {
+            checkMpv(
+                library,
+                library.mpv_render_context_create(result, target, params[0].pointer),
+                "create software render context",
+            )
+        } finally {
+            // params contains only the native addresses. Keep their Java owners
+            // reachable until mpv has finished reading the array.
+            Reference.reachabilityFence(api)
+            Reference.reachabilityFence(params)
+        }
         return checkNotNull(result.value) { "mpv returned null render context" }
     }
 
@@ -378,6 +387,50 @@ class MpvSoftwarePlayer(
     private fun getString(library: MpvLibrary, target: Pointer, name: String): String? {
         val ptr = library.mpv_get_property_string(target, name) ?: return null
         return try { ptr.getString(0) } finally { library.mpv_free(ptr) }
+    }
+}
+
+/** Owns every allocation referenced indirectly by mpv's software render params. */
+private class SoftwareRenderParameters : AutoCloseable {
+    private val dimensions = Memory(2L * Int.SIZE_BYTES)
+    private val format = Memory(5).apply { setString(0, "bgr0") }
+    private val stride = Memory(Native.SIZE_T_SIZE.toLong())
+    private val params = renderParamArray(5).apply {
+        this[0].type = Mpv.RENDER_PARAM_SW_SIZE
+        this[0].data = dimensions
+        this[1].type = Mpv.RENDER_PARAM_SW_FORMAT
+        this[1].data = format
+        this[2].type = Mpv.RENDER_PARAM_SW_STRIDE
+        this[2].data = stride
+        this[3].type = Mpv.RENDER_PARAM_SW_POINTER
+    }
+
+    val pointer: Pointer
+        get() = params[0].pointer
+
+    fun configure(width: Int, height: Int, target: ByteBuffer) {
+        dimensions.setInt(0, width)
+        dimensions.setInt(Int.SIZE_BYTES.toLong(), height)
+        if (Native.SIZE_T_SIZE == Long.SIZE_BYTES) {
+            stride.setLong(0, width.toLong() * Int.SIZE_BYTES)
+        } else {
+            stride.setInt(0, width * Int.SIZE_BYTES)
+        }
+        params[3].data = Native.getDirectBufferPointer(target)
+        params.forEach(MpvRenderParam::write)
+    }
+
+    fun keepAlive() {
+        Reference.reachabilityFence(dimensions)
+        Reference.reachabilityFence(format)
+        Reference.reachabilityFence(stride)
+        Reference.reachabilityFence(params)
+    }
+
+    override fun close() {
+        dimensions.close()
+        format.close()
+        stride.close()
     }
 }
 

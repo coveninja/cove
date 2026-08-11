@@ -4,6 +4,7 @@ import com.sun.jna.Memory
 import com.sun.jna.Pointer
 import com.sun.jna.StringArray
 import com.sun.jna.ptr.PointerByReference
+import java.lang.ref.Reference
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -186,11 +187,18 @@ class MpvOpenGlPlayer(
             params.forEach(MpvRenderParam::write)
 
             val result = PointerByReference()
-            checkMpv(
-                library,
-                library.mpv_render_context_create(result, target, params[0].pointer),
-                "create OpenGL render context",
-            )
+            try {
+                checkMpv(
+                    library,
+                    library.mpv_render_context_create(result, target, params[0].pointer),
+                    "create OpenGL render context",
+                )
+            } finally {
+                Reference.reachabilityFence(api)
+                Reference.reachabilityFence(init)
+                Reference.reachabilityFence(adv)
+                Reference.reachabilityFence(params)
+            }
             val ctx = checkNotNull(result.value) { "mpv returned null render context" }
             renderContext.set(ctx)
             library.mpv_render_context_set_update_callback(ctx, updateCallback, null)
@@ -221,11 +229,17 @@ class MpvOpenGlPlayer(
         params[0].type = Mpv.RENDER_PARAM_OPENGL_FBO; params[0].data = fbo.pointer
         params.forEach(MpvRenderParam::write)
 
-        checkMpv(
-            library,
-            library.mpv_render_context_render(ctx, params[0].pointer),
-            "render OpenGL frame",
-        )
+        try {
+            checkMpv(
+                library,
+                library.mpv_render_context_render(ctx, params[0].pointer),
+                "render OpenGL frame",
+            )
+        } finally {
+            // The native call receives only raw pointers to these objects.
+            Reference.reachabilityFence(fbo)
+            Reference.reachabilityFence(params)
+        }
         // Trap 2: mpv_render_context_render leaves framebuffer 0 bound.
         // Rebinding is done in MpvOpenGlPanel after this call returns so
         // GLJPanel's readback pass finds the correct FBO.
