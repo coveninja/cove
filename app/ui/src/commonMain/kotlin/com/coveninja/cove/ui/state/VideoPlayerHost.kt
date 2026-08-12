@@ -116,8 +116,8 @@ data class PlaybackStatus(
 }
 
 /**
- * A video surface plus transport controls, implemented per platform. The desktop
- * implementation wraps libmpv; there is no Android implementation yet.
+ * A video surface plus transport controls, implemented per platform. Desktop and
+ * Android both wrap libmpv behind their platform-native surface hosts.
  *
  * [Surface] is a composable rather than a plain view handle because the desktop
  * OpenGL path has to be hosted in a SwingPanel, which only exists inside a
@@ -217,9 +217,9 @@ interface VideoPlayerHost {
 }
 
 /**
- * Null wherever no player is available — currently every target except desktop.
- * The Watch button reports that playback is unavailable rather than crashing, so
- * :mobile keeps building against the same :ui module.
+ * Null wherever a host does not provide a player. The Watch button reports that
+ * playback is unavailable rather than crashing, so previews and future targets
+ * can keep building against the same :ui module.
  */
 val LocalVideoPlayerHost = staticCompositionLocalOf<VideoPlayerHost?> { null }
 

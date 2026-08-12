@@ -11,9 +11,9 @@ class AppGraph(
     val addons: AddonRepository,
     val calendar: CalendarRepository = UnavailableCalendarRepository,
     val discovery: DiscoveryRepository = UnavailableDiscoveryRepository,
-    // Defaulted to the Unavailable objects so a host that cannot offer one — a
-    // remote backend over --api-base, a phone with no mpv — is a rendering
-    // decision in the settings page rather than a compile error here.
+    // Defaulted to the Unavailable objects so a host that cannot offer one — for
+    // example a remote backend over --api-base — is a rendering decision in the
+    // settings page rather than a compile error here.
     val account: AccountRepository = UnavailableAccountRepository,
     val profiles: ProfileRepository = UnavailableProfileRepository,
     val trakt: TraktRepository = UnavailableTraktRepository,

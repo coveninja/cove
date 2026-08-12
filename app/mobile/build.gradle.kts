@@ -122,6 +122,9 @@ dependencies {
     implementation(project(":ui"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.mpv.android)
 
     testImplementation(libs.kotlin.test)
     testImplementation("junit:junit:4.13.2")

@@ -160,8 +160,8 @@ private fun SharedTransitionScope.SharedMediaCard(
 @Composable
 fun CoveApp(
     graph: AppGraph,
-    // Null on any target without a player (currently everything but desktop); the
-    // Watch button then reports that playback is unavailable instead of crashing.
+    // Null on any target without a player; the Watch button then reports that
+    // playback is unavailable instead of crashing.
     videoPlayerHost: VideoPlayerHost? = null,
     // Absent on mobile, where the player is already fullscreen.
     fullscreenController: FullscreenController? = null,
@@ -171,6 +171,9 @@ fun CoveApp(
     // The Android host uses this to enter immersive mode while a details sheet owns
     // the screen. Desktop and other hosts can ignore it.
     onDetailsOverlayVisibilityChanged: (Boolean) -> Unit = {},
+    // Android combines this with the details callback to manage immersive mode
+    // and keep-awake state. Desktop does not need a window callback here.
+    onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
 ) {
     CompositionLocalProvider(
         LocalAppGraph provides graph,
@@ -182,7 +185,11 @@ fun CoveApp(
             24.dp
         },
     ) {
-        CoveAppContent(navBarPlacement, onDetailsOverlayVisibilityChanged)
+        CoveAppContent(
+            navBarPlacement,
+            onDetailsOverlayVisibilityChanged,
+            onFullscreenPlaybackVisibilityChanged,
+        )
     }
 }
 
@@ -191,6 +198,7 @@ fun CoveApp(
 private fun CoveAppContent(
     navBarPlacement: NavBarPlacement,
     onDetailsOverlayVisibilityChanged: (Boolean) -> Unit,
+    onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit,
 ) {
     val catalog = rememberMediaCatalog()
     val index = rememberLibraryIndex()
@@ -213,6 +221,17 @@ private fun CoveAppContent(
     }
     DisposableEffect(Unit) {
         onDispose { currentOverlayVisibilityCallback.value(false) }
+    }
+    val currentPlaybackVisibilityCallback = rememberUpdatedState(
+        onFullscreenPlaybackVisibilityChanged,
+    )
+    val fullscreenPlaybackVisible = playback.active &&
+        playback.presentation == PlaybackPresentation.Fullscreen
+    LaunchedEffect(fullscreenPlaybackVisible) {
+        currentPlaybackVisibilityCallback.value(fullscreenPlaybackVisible)
+    }
+    DisposableEffect(Unit) {
+        onDispose { currentPlaybackVisibilityCallback.value(false) }
     }
 
     var selectedDestination by remember { mutableStateOf(NavDestination.Home) }

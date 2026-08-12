@@ -55,6 +55,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.test)
             implementation(compose.runtime)
         }
+
+        androidMain.dependencies {
+            implementation(libs.androidx.activity.compose)
+        }
     }
 }
 

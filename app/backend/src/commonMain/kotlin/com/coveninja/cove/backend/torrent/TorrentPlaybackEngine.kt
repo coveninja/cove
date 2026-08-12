@@ -59,4 +59,5 @@ internal fun selectTorrentFile(
 }
 
 private fun TorrentFile.isVideo(): Boolean =
-    path.substringAfterLast('.', "").lowercase() in setOf("mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "m2ts")
+    path.substringAfterLast('.', "").lowercase() in
+        setOf("mkv", "mp4", "m4v", "avi", "mov", "webm", "ts", "m2ts")

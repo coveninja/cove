@@ -95,6 +95,7 @@ import com.coveninja.cove.ui.state.PlaybackRequest
 import com.coveninja.cove.ui.state.PlaybackSession
 import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.VideoScaling
+import com.coveninja.cove.ui.platform.PlaybackBackHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.math.abs
@@ -128,6 +129,10 @@ fun PlayerLayer(
     // which is a property of the composition local, not of this code.
     val statusFlow = remember(host) { host?.status ?: MutableStateFlow(PlaybackStatus()) }
     val status by statusFlow.collectAsState()
+
+    PlaybackBackHandler(enabled = true) {
+        if (request.extra != null) session.collapseToInline() else session.close()
+    }
 
     val focusRequester = remember { FocusRequester() }
     // Re-requested on every phase change, not once on mount. The layer composes while
@@ -314,7 +319,13 @@ fun PlayerLayer(
                         val event = awaitPointerEvent()
                         // Any press hands the keyboard back to the player, whatever
                         // had it before.
-                        if (event.type == PointerEventType.Press) takeFocus()
+                        if (event.type == PointerEventType.Press) {
+                            takeFocus()
+                            // A phone has no hover movement to wake hidden controls.
+                            // Treat the touch itself as activity before the tap is
+                            // interpreted as pause, seek, or another player action.
+                            activityPulse++
+                        }
                         when (event.type) {
                             PointerEventType.Move -> {
                                 // Only real movement counts — see pointerMovedEnough.

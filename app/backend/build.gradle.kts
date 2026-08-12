@@ -11,6 +11,7 @@ kotlin {
         namespace = "com.coveninja.cove.backend"
         compileSdk = 36
         minSdk = 28
+        withHostTest {}
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         }
@@ -58,10 +59,22 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.sqldelight.android.driver)
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.ktor.server.core)
+            implementation(libs.ktor.server.cio)
+            implementation(libs.ktor.server.status.pages)
+            implementation(libs.jlibtorrent)
+            val torrentVersion = libs.versions.jlibtorrent.get()
+            implementation("com.frostwire:jlibtorrent-android-arm:$torrentVersion")
+            implementation("com.frostwire:jlibtorrent-android-arm64:$torrentVersion")
+            implementation("com.frostwire:jlibtorrent-android-x86:$torrentVersion")
+            implementation("com.frostwire:jlibtorrent-android-x86_64:$torrentVersion")
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
+        }
+        getByName("androidHostTest").dependencies {
+            implementation(libs.kotlin.test)
         }
         val desktopTest by getting {
             dependencies {

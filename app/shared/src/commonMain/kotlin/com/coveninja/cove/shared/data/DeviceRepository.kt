@@ -10,7 +10,7 @@ package com.coveninja.cove.shared.data
  * control here would only ever tell the user what they already see.
  */
 interface DeviceRepository {
-    /** False on hosts with no mpv and no local files — Android, remote backends. */
+    /** False on hosts without editable local device settings, such as Android and remote backends. */
     val available: Boolean
 
     /** Build version string, or "dev" for a local build. */

@@ -17,6 +17,9 @@ import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
+import com.coveninja.cove.backend.playback.AndroidPlaybackMediaHost
+import com.coveninja.cove.backend.playback.AndroidPlaybackRepository
+import com.coveninja.cove.backend.torrent.AndroidJlibtorrentPlaybackEngine
 import com.coveninja.cove.shared.data.AccountRepository
 import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.AppGraph
@@ -25,8 +28,8 @@ import com.coveninja.cove.shared.data.DiscoveryRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.shared.data.UnavailableDeviceRepository
-import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
 import com.coveninja.cove.shared.data.UnavailableTraktRepository
+import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
@@ -45,7 +48,9 @@ class AndroidBackendRuntime private constructor(
     private val client: HttpClient,
     private val untrustedClient: HttpClient,
     private val scope: CoroutineScope,
+    private val media: AndroidPlaybackMediaHost,
     content: LocalContentRepository,
+    playback: PlaybackRepository,
     addons: AddonRepository,
     calendar: CalendarRepository,
     discovery: DiscoveryRepository,
@@ -57,9 +62,7 @@ class AndroidBackendRuntime private constructor(
         content = content,
         library = stores.repositories.library,
         settings = stores.repositories.settings,
-        // Android still has no player or media proxy, so playback remains a separate
-        // platform boundary. Addon management itself is fully in-process below.
-        playback = UnavailablePlaybackRepository,
+        playback = playback,
         addons = addons,
         // The calendar needs only the database and TMDB, both of which Android has.
         calendar = calendar,
@@ -81,6 +84,7 @@ class AndroidBackendRuntime private constructor(
         if (closed) return
         closed = true
         scope.cancel()
+        media.close()
         untrustedClient.close()
         client.close()
         stores.close()
@@ -123,6 +127,7 @@ class AndroidBackendRuntime private constructor(
                 install(HttpTimeout) { requestTimeoutMillis = 25_000 }
             }
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            var openedMedia: AndroidPlaybackMediaHost? = null
             try {
                 val catalog = TmdbClient(
                     httpClient = client,
@@ -151,6 +156,19 @@ class AndroidBackendRuntime private constructor(
                     activeProfileIds = stores.repositories.profileSession.profileId,
                     scope = scope,
                 )
+                val media = AndroidPlaybackMediaHost.start(
+                    httpClient = untrustedClient,
+                    publicUrlPolicy = AndroidAddonUrlPolicy,
+                    allowLanStreamSources = {
+                        (stores.repositories.settings.settings.value as? SettingsState.Ready)
+                            ?.settings
+                            ?.allowLanStreamSources == true
+                    },
+                    torrentEngine = AndroidJlibtorrentPlaybackEngine(
+                        context.filesDir.resolve("torrents").toPath(),
+                    ),
+                ).also { openedMedia = it }
+                val playback = AndroidPlaybackRepository(catalog, addonManager, media)
                 val calendar = LocalCalendarRepository(
                     service = CalendarService(
                         database = stores.databaseHandle,
@@ -203,11 +221,12 @@ class AndroidBackendRuntime private constructor(
                     )
                 } ?: UnavailableAccountRepository
                 return AndroidBackendRuntime(
-                    stores, client, untrustedClient, scope, content, addons,
+                    stores, client, untrustedClient, scope, media, content, playback, addons,
                     calendar, discovery, account,
                 )
             } catch (error: Throwable) {
                 scope.cancel()
+                openedMedia?.close()
                 untrustedClient.close()
                 client.close()
                 stores.close()
