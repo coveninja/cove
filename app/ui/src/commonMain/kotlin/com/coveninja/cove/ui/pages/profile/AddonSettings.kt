@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -114,54 +115,56 @@ fun AddonSettings(modifier: Modifier = Modifier) {
             }
         }
 
-        SettingsCard(
-            title = "Nuvio scrapers",
-            iconName = "lucide:triangle-alert",
-            description = "Community JS Scrapers",
-            modifier = Modifier.padding(top = 14.dp),
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+        if (repository.supportsNuvio) {
+            SettingsCard(
+                title = "Nuvio scrapers",
+                iconName = "lucide:triangle-alert",
+                description = "Community JS Scrapers",
+                modifier = Modifier.padding(top = 14.dp),
             ) {
-                // Not boilerplate: these scrapers are community JavaScript executed
-                // in-process. Saying so plainly is the point of this block.
-                Text(
-                    text = "Scrapers are community-written JavaScript that Cove runs " +
-                        "on your machine in a sandbox. Only add repositories you trust.",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                SettingLabels(
-                    title = "Add a scraper repository",
-                    description = "A GitHub repository URL.",
-                )
-                UrlInput(
-                    placeholder = "https://github.com/owner/repo",
-                    onSubmit = { url -> scope.launch { repository.addNuvioRepo(url) } },
-                )
-            }
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    // Not boilerplate: these scrapers are community JavaScript executed
+                    // in-process. Saying so plainly is the point of this block.
+                    Text(
+                        text = "Scrapers are community-written JavaScript that Cove runs " +
+                            "on your machine in a sandbox. Only add repositories you trust.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    SettingLabels(
+                        title = "Add a scraper repository",
+                        description = "A GitHub repository URL.",
+                    )
+                    UrlInput(
+                        placeholder = "https://github.com/owner/repo",
+                        onSubmit = { url -> scope.launch { repository.addNuvioRepo(url) } },
+                    )
+                }
 
-            Column(modifier = Modifier.animateContentSize()) {
-                val ready = state as? AddonsState.Ready
-                if (ready == null || ready.nuvioRepos.isEmpty()) {
-                    SettingsNotice("No scraper repositories.")
-                } else {
-                    ready.nuvioRepos.forEach { repo ->
-                        key(repo.id) {
-                            SettingDivider()
-                            NuvioRepoRow(
-                                repo = repo,
-                                onToggleRepo = { enabled ->
-                                    scope.launch { repository.setNuvioRepoEnabled(repo.id, enabled) }
-                                },
-                                onRemove = { scope.launch { repository.removeNuvioRepo(repo.id) } },
-                                onToggleScraper = { scraperId, enabled ->
-                                    scope.launch {
-                                        repository.setNuvioScraperEnabled(repo.id, scraperId, enabled)
-                                    }
-                                },
-                            )
+                Column(modifier = Modifier.animateContentSize()) {
+                    val ready = state as? AddonsState.Ready
+                    if (ready == null || ready.nuvioRepos.isEmpty()) {
+                        SettingsNotice("No scraper repositories.")
+                    } else {
+                        ready.nuvioRepos.forEach { repo ->
+                            key(repo.id) {
+                                SettingDivider()
+                                NuvioRepoRow(
+                                    repo = repo,
+                                    onToggleRepo = { enabled ->
+                                        scope.launch { repository.setNuvioRepoEnabled(repo.id, enabled) }
+                                    },
+                                    onRemove = { scope.launch { repository.removeNuvioRepo(repo.id) } },
+                                    onToggleScraper = { scraperId, enabled ->
+                                        scope.launch {
+                                            repository.setNuvioScraperEnabled(repo.id, scraperId, enabled)
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -177,41 +180,85 @@ private fun AddonRow(
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(18.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (maxWidth < 520.dp) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = addon.displayName,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = addon.enabled, onCheckedChange = onToggle)
+                }
+                KindBadge(addon.kind)
                 Text(
-                    text = addon.displayName,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
+                    text = addon.manifest.description.ifBlank { addon.url },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
-                KindBadge(addon.kind)
+                if (addon.source == "stremio") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                    ) {
+                        SettingsIconAction(icon = "lucide:refresh-cw", onClick = onRefresh)
+                        SettingsIconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
+                    }
+                }
             }
-            Text(
-                text = addon.manifest.description.ifBlank { addon.url },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = addon.displayName,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        KindBadge(addon.kind)
+                    }
+                    Text(
+                        text = addon.manifest.description.ifBlank { addon.url },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (addon.source == "stremio") {
+                    SettingsIconAction(icon = "lucide:refresh-cw", onClick = onRefresh)
+                    SettingsIconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
+                }
+                Switch(checked = addon.enabled, onCheckedChange = onToggle)
+            }
         }
-        SettingsIconAction(icon = "lucide:refresh-cw", onClick = onRefresh)
-        SettingsIconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
-        Switch(checked = addon.enabled, onCheckedChange = onToggle)
     }
 }
 
@@ -311,6 +358,8 @@ private fun KindBadge(kind: AddonKind) {
             text = label,
             color = MaterialTheme.colorScheme.tertiary,
             style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

@@ -528,9 +528,9 @@ class SupabaseSyncServiceTest {
     }
 
     /**
-     * The guarantee that makes syncing from Android safe.
+     * The guarantee that makes syncing from a reduced-capability host safe.
      *
-     * That host runs no addon manager, so it has no view of the addon list at
+     * Such a host runs no addon manager, so it has no view of the addon list at
      * all. If a sync from there pushed what it knows — nothing — the desktop's
      * configured providers would be wiped on its next pull, and playback would
      * quietly stop finding sources everywhere.
@@ -618,8 +618,8 @@ class SupabaseSyncServiceTest {
 
     private suspend fun fixture(
         remote: (HttpRequestData, String) -> String,
-        // False models a host that runs no addon manager — Android — where the
-        // addon blob has to survive a sync untouched rather than being replaced.
+        // False models a host that runs no addon manager, where the addon blob
+        // has to survive a sync untouched rather than being replaced.
         withAddonParticipant: Boolean = true,
         test: suspend (TestGraph) -> Unit,
     ) {

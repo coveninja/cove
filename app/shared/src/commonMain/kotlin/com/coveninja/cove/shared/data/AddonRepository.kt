@@ -17,16 +17,19 @@ sealed interface AddonsState {
 /**
  * Provider addons and Nuvio scraper repositories.
  *
- * Nothing is seeded: a fresh profile has no addons at all, which is why stream
- * resolution comes back empty until something here is added. Mutations report
- * failure through [lastError] rather than by throwing, since a bad manifest URL
- * is ordinary user input, not an exceptional condition.
+ * Built-in metadata integrations may be seeded, but a fresh profile has no
+ * third-party stream provider. Mutations report failure through [lastError]
+ * rather than by throwing, since a bad manifest URL is ordinary user input,
+ * not an exceptional condition.
  */
 interface AddonRepository {
     val state: StateFlow<AddonsState>
 
     /** Set when a mutation fails, cleared when the next one is attempted. */
     val lastError: StateFlow<String?>
+
+    /** Whether this host can install and execute Nuvio JavaScript scrapers. */
+    val supportsNuvio: Boolean get() = false
 
     suspend fun reload()
 

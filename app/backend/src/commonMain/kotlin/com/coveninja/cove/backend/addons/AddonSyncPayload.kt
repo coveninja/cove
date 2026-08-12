@@ -7,13 +7,16 @@ import kotlinx.serialization.builtins.ListSerializer
 
 /**
  * Lets the addon store take part in Supabase sync without [AddonManager] being
- * visible to the sync service. Hosts that run no addon manager — Android today —
- * simply do not supply this, and their addon blob is round-tripped untouched.
+ * visible to the sync service. Hosts that run no addon manager simply do not
+ * supply this, and their addon blob is round-tripped untouched.
  *
  * The wire shape is a bare JSON array of entries, which is what the
  * `profile_addons.data` column has always held.
  */
-class AddonSyncPayload(private val addons: AddonManager) : SyncPayload {
+class AddonSyncPayload(
+    private val addons: AddonManager,
+    private val onMerged: suspend () -> Unit = {},
+) : SyncPayload {
     override val kind: String = "addons"
 
     override suspend fun snapshot(): SyncSnapshot {
@@ -30,5 +33,6 @@ class AddonSyncPayload(private val addons: AddonManager) : SyncPayload {
             snapshot.json,
         )
         addons.mergeFromRemote(entries, snapshot.updatedAt)
+        onMerged()
     }
 }

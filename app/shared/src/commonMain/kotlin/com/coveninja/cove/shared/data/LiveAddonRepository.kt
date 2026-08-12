@@ -12,6 +12,8 @@ class LiveAddonRepository(
     scope: CoroutineScope,
 ) : AddonRepository {
 
+    override val supportsNuvio: Boolean = true
+
     private val _state = MutableStateFlow<AddonsState>(AddonsState.Loading)
     override val state: StateFlow<AddonsState> = _state.asStateFlow()
 

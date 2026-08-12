@@ -3,9 +3,11 @@ package com.coveninja.cove.backend
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.addons.AddonSyncPayload
 import com.coveninja.cove.backend.addons.DesktopAddonUrlPolicy
+import com.coveninja.cove.backend.addons.LocalAddonRepository
 import com.coveninja.cove.backend.activity.ActivityService
 import com.coveninja.cove.backend.activity.ActivitySyncPayload
 import com.coveninja.cove.backend.nuvio.NuvioSyncPayload
+import com.coveninja.cove.backend.nuvio.DesktopNuvioAddonService
 import com.coveninja.cove.backend.auth.AuthService
 import com.coveninja.cove.backend.auth.AuthSessionStore
 import com.coveninja.cove.backend.auth.ClientSessionStore
@@ -39,11 +41,9 @@ import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.backend.auth.LocalAccountRepository
 import com.coveninja.cove.backend.platform.LocalDeviceRepository
 import com.coveninja.cove.backend.trakt.LocalTraktRepository
-import com.coveninja.cove.shared.data.LiveAddonRepository
 import com.coveninja.cove.shared.data.LivePlaybackRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
-import com.coveninja.cove.shared.data.UnavailableAddonRepository
 import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
 import com.coveninja.cove.shared.network.CoveApi
 import com.coveninja.cove.shared.network.CoveApiConfig
@@ -172,6 +172,12 @@ class LocalBackendRuntime private constructor(
                     httpClient = untrustedClient,
                     now = stores.now,
                 )
+                val addonRepository = LocalAddonRepository(
+                    addons = addons,
+                    activeProfileIds = stores.profileSession.profileId,
+                    scope = scope,
+                    nuvio = DesktopNuvioAddonService(nuvio),
+                )
                 val prefetch = PrefetchService(
                     stores.databaseHandle,
                     stores.profileSession,
@@ -210,7 +216,7 @@ class LocalBackendRuntime private constructor(
                             // The desktop owns all three subsystems, so all three
                             // merge properly instead of being passed through.
                             payloads = listOf(
-                                AddonSyncPayload(addons),
+                                AddonSyncPayload(addons, addonRepository::reload),
                                 NuvioSyncPayload(nuvio),
                                 ActivitySyncPayload(activity),
                             ),
@@ -245,8 +251,6 @@ class LocalBackendRuntime private constructor(
                 val loopback = httpHost?.let { CoveApi(client, CoveApiConfig("http://$host:$port")) }
                 val playback = loopback?.let(::LivePlaybackRepository)
                     ?: UnavailablePlaybackRepository
-                val addonRepository = loopback?.let { LiveAddonRepository(it, scope) }
-                    ?: UnavailableAddonRepository
                 // In-process, not over loopback: the calendar has no per-request registry
                 // to go through, and the HTTP host is optional here.
                 val calendarRepository = LocalCalendarRepository(

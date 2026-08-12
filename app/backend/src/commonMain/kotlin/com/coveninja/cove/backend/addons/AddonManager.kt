@@ -20,7 +20,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -407,18 +409,43 @@ class AddonManager(
         val marker = "addons_structured_import:$profileId"
         if (database.coveQueries.selectMigrationMetadata(marker).executeAsOneOrNull() != null) return
         database.transaction {
-            val payload = database.coveQueries.selectLegacyPayload(profileId, "addons").executeAsOneOrNull()
+            val payload = database.coveQueries
+                .selectLegacyPayloadRecord(profileId, "addons")
+                .executeAsOneOrNull()
             if (payload != null) {
-                val legacy = CoveJson.decodeFromString<LegacyAddonStore>(payload)
-                val importedAt = legacy.updatedAt.ifBlank(now)
-                legacy.stremioAddons.forEach { persist(profileId, it, importedAt) }
-                officialAddons.forEach { official ->
-                    persist(
-                        profileId,
-                        official.copy(enabled = legacy.officialEnabled[official.id] ?: true),
-                        importedAt,
-                        updateVersion = false,
-                    )
+                when (CoveJson.parseToJsonElement(payload.json)) {
+                    is JsonArray -> {
+                        // A host that did not own addons stored Supabase's wire payload
+                        // untouched. That shape is a bare array rather than the legacy
+                        // on-disk object's { stremioAddons, officialEnabled } wrapper.
+                        val importedAt = payload.updated_at.ifBlank(now)
+                        CoveJson.decodeFromString(
+                            ListSerializer(AddonEntry.serializer()),
+                            payload.json,
+                        ).forEach { entry ->
+                            val normalized = if (entry.source == "official" && entry.url.isBlank()) {
+                                entry.copy(url = "official:${entry.id}")
+                            } else {
+                                entry
+                            }
+                            persist(profileId, normalized, importedAt)
+                        }
+                    }
+                    else -> {
+                        val legacy = CoveJson.decodeFromString<LegacyAddonStore>(payload.json)
+                        val importedAt = legacy.updatedAt
+                            .ifBlank { payload.updated_at }
+                            .ifBlank(now)
+                        legacy.stremioAddons.forEach { persist(profileId, it, importedAt) }
+                        officialAddons.forEach { official ->
+                            persist(
+                                profileId,
+                                official.copy(enabled = legacy.officialEnabled[official.id] ?: true),
+                                importedAt,
+                                updateVersion = false,
+                            )
+                        }
+                    }
                 }
             }
             database.coveQueries.upsertMigrationMetadata(marker, "1")

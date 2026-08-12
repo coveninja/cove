@@ -49,10 +49,10 @@ data class SyncResult(
  *
  * Everything beyond the library, settings and profile row travels as an opaque
  * per-profile JSON blob in `profile_<kind>`. A host that owns the subsystem
- * supplies a [SyncPayload] and gets a typed merge; a host that does not — Android
- * runs no addon manager and no Nuvio sandbox — round-trips the blob through
- * `legacy_payloads` untouched. That passthrough is what keeps a phone from
- * pushing an empty addon list over the desktop's configured addons.
+ * supplies a [SyncPayload] and gets a typed merge; a host that does not own a
+ * subsystem round-trips its blob through `legacy_payloads` untouched. Android,
+ * for example, owns addons but still passes Nuvio and activity through. That
+ * passthrough keeps one host from overwriting another host's configured data.
  */
 class SupabaseSyncService(
     private val client: SupabaseClient,

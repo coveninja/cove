@@ -684,6 +684,8 @@ private class FixturePlaybackRepository : PlaybackRepository {
 
 /** In-memory, so the addon screens are usable with no backend running. */
 private class FixtureAddonRepository : AddonRepository {
+    override val supportsNuvio: Boolean = true
+
     private val addons = mutableListOf(
         Addon(
             id = "fixture.provider",

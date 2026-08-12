@@ -19,6 +19,7 @@ class AndroidStoreGraph private constructor(
     private val scope: CoroutineScope,
     val repositories: LocalRepositoryGraph,
     val migrationResult: AndroidMigrationResult,
+    internal val now: () -> String,
 ) : AutoCloseable {
     internal val databaseHandle get() = database.database
 
@@ -50,7 +51,7 @@ class AndroidStoreGraph private constructor(
                             .joinToString("") { byte -> "%02x".format(byte) }
                     },
                 )
-                return AndroidStoreGraph(database, scope, repositories, migration)
+                return AndroidStoreGraph(database, scope, repositories, migration, now)
             } catch (error: Throwable) {
                 database.close()
                 throw error

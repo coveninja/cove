@@ -9,10 +9,9 @@ itself is in [API.md](API.md); this is the client side of it.
 Fetching is **not** a UI concern. Repositories own it:
 
 ```
-CoveApi          one method per HTTP endpoint, no state
-  ↓
-Live*Repository  owns a MutableStateFlow, fetches into it, never throws at the UI
-  ↓
+CoveApi → Live*Repository       external or HTTP-bound data
+backend services → Local*Repo  embedded desktop/Android data
+                  ↓
 AppGraph         bundled: .content, .library, .settings, .playback, .addons
   ↓
 LocalAppGraph    CompositionLocal — every page reads the graph from here
@@ -231,17 +230,23 @@ reports that playback is unavailable rather than crashing.
 
 ### Add an addon
 
-Nothing is seeded, so this is the step that makes every other stream call work.
+Built-in metadata integrations are seeded, but no third-party stream provider is,
+so this is the step that makes provider stream calls work.
 
 ```kotlin
 graph.addons.addAddon("https://…/manifest.json")   // reloads the list itself
 graph.addons.setAddonEnabled(addon.id, false)
 ```
 
-Mutations do not throw on rejection — a bad manifest URL is ordinary user input,
-so it lands in `graph.addons.lastError` for display next to the field. Nuvio
-scraper repositories use the same repository, and each scraper is enabled
-individually: enabling only the repository runs nothing.
+Embedded desktop and Android hosts use `LocalAddonRepository`, which calls the
+shared `AddonManager` directly; addon management does not depend on the loopback
+HTTP host. Mutations do not throw on rejection — a bad manifest URL is ordinary
+user input, so it lands in `graph.addons.lastError` for display next to the field.
+
+Nuvio scraper repositories use the same repository only on hosts where
+`supportsNuvio` is true. Each scraper is enabled individually: enabling only the
+repository runs nothing. Android currently hides this section because the GraalJS
+sandbox is a desktop process boundary, not Android-compatible code.
 
 ### Search
 
@@ -415,6 +420,6 @@ Shared state holders live in `app/ui/.../ui/state/`:
 - **`/api/streams` must run before `/api/play`.** The play route only serves URLs a prior streams call registered, and the registry entry expires after 30 minutes.
 - **`/api/streams` requires season and episode for TV** and rejects the request without them, so Watch on a series must resolve an episode first.
 - **`AppSettings.defaultVolume` is 0..1; mpv's volume is 0..100.** Passing it through unscaled is near-silent audio, with nothing in the logs to say so.
-- **No provider addons ship by default.** A fresh profile resolves zero sources, so playback cannot be exercised end-to-end until one is added — Profile → Settings → Provider addons is where they go in.
+- **No third-party stream provider ships by default.** A fresh profile resolves zero playable sources, so playback cannot be exercised end-to-end until one is added — Profile → Settings → Provider addons is where they go in.
 - **Compose cannot draw over a `SwingPanel` except on Direct3D and Metal.** Interop blending is unsupported on an OpenGL render API, so anything composed over an embedded video panel is invisible on Linux. The in-app player reads frames back and draws them itself for this reason.
 - **Fixtures are a real backend substitute.** `FixtureAppGraph` implements every repository, so `--backend-mode fixtures` exercises these paths with no server. If a recipe here does not work against fixtures, the fixture is missing a case.
