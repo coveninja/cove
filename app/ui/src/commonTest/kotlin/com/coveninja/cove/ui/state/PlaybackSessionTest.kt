@@ -176,6 +176,7 @@ private class FakeSettings(settings: AppSettings) : SettingsRepository {
 private class FakeHost : VideoPlayerHost {
     private val _status = MutableStateFlow(PlaybackStatus())
     override val status: StateFlow<PlaybackStatus> = _status
+    override var videoCodecCapabilities: VideoCodecCapabilities = VideoCodecCapabilities()
 
     var loadedUrl: String? = null
     var loadedFrom: Double? = null
@@ -298,10 +299,12 @@ private class Harness(
     scheduler: TestCoroutineScheduler,
     settings: AppSettings,
     sources: List<StreamSource>,
+    capabilities: VideoCodecCapabilities,
 ) {
     val library = FakeLibrary()
     val playback = FakePlayback(sources)
     val host = FakeHost()
+        .also { it.videoCodecCapabilities = capabilities }
     // The addon repository plays no part in playback resolution; the fixture one
     // satisfies the graph without adding a second thing to keep in sync.
     val graph = AppGraph(
@@ -326,9 +329,10 @@ private class Harness(
 private fun playbackTest(
     settings: AppSettings = AppSettings(),
     sources: List<StreamSource> = oneSource,
+    capabilities: VideoCodecCapabilities = VideoCodecCapabilities(),
     body: suspend TestScope.(Harness) -> Unit,
 ) = runTest {
-    val harness = Harness(testScheduler, settings, sources)
+    val harness = Harness(testScheduler, settings, sources, capabilities)
     try {
         body(harness)
     } finally {
@@ -565,7 +569,7 @@ class PlaybackSessionTest {
         val phase = h.session.phase
         assertTrue(phase is PlaybackPhase.Choosing, "was: $phase")
         // Ranked, so the larger file leads.
-        assertEquals("B", phase.sources.first().name)
+        assertEquals("B", phase.sources.first().source.name)
     }
 
     // Mutation applied to verify: kept sources with neither url nor hash
@@ -626,6 +630,91 @@ class PlaybackSessionTest {
         assertTrue(phase is PlaybackPhase.Playing, "was: $phase")
         // Ranked first, so the larger file is the one that plays.
         assertEquals("B", phase.source.name)
+    }
+
+    @Test
+    fun `auto selection prefers hardware decoding over a higher ranked software source`() =
+        playbackTest(
+            settings = AppSettings(autoSelectStream = true),
+            sources = listOf(
+                StreamSource(
+                    name = "AV1 4K",
+                    title = "Movie.2160p.AV1",
+                    url = "https://example.com/av1.mkv",
+                    sizeBytes = 900,
+                ),
+                StreamSource(
+                    name = "H264 720p",
+                    title = "Movie.720p.x264",
+                    url = "https://example.com/h264.mkv",
+                    sizeBytes = 100,
+                ),
+            ),
+            capabilities = VideoCodecCapabilities(
+                av1 = VideoDecoderSupport.SoftwareOnly,
+                h264 = VideoDecoderSupport.Hardware,
+            ),
+        ) { h ->
+            h.session.open(movie())
+            runCurrent()
+
+            val phase = h.session.phase
+            assertTrue(phase is PlaybackPhase.Playing, "was: $phase")
+            assertEquals("H264 720p", phase.source.name)
+        }
+
+    @Test
+    fun `a lone software-only source opens the picker and remains manually selectable`() =
+        playbackTest(
+            settings = AppSettings(autoSelectStream = true),
+            sources = listOf(
+                StreamSource(
+                    name = "AV1",
+                    title = "Movie.1080p.AV1",
+                    url = "https://example.com/av1.mkv",
+                ),
+            ),
+            capabilities = VideoCodecCapabilities(av1 = VideoDecoderSupport.SoftwareOnly),
+        ) { h ->
+            h.session.open(movie())
+            runCurrent()
+
+            val choosing = h.session.phase
+            assertTrue(choosing is PlaybackPhase.Choosing, "was: $choosing")
+            assertEquals(VideoDecoderSupport.SoftwareOnly, choosing.sources.single().compatibility.support)
+            assertEquals(null, h.host.loadedUrl)
+
+            h.session.choose(choosing.sources.single())
+            runCurrent()
+
+            assertTrue(h.session.phase is PlaybackPhase.Playing, "was: ${h.session.phase}")
+        }
+
+    @Test
+    fun `an unsupported source is displayed but cannot be chosen`() = playbackTest(
+        settings = AppSettings(autoSelectStream = true),
+        sources = listOf(
+            StreamSource(
+                name = "AV1",
+                title = "Movie.1080p.AV1",
+                url = "https://example.com/av1.mkv",
+            ),
+        ),
+        capabilities = VideoCodecCapabilities(av1 = VideoDecoderSupport.Unsupported),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+
+        val choosing = h.session.phase
+        assertTrue(choosing is PlaybackPhase.Choosing, "was: $choosing")
+        val choice = choosing.sources.single()
+        assertTrue(!choice.compatibility.selectable)
+
+        h.session.choose(choice)
+        runCurrent()
+
+        assertTrue(h.session.phase is PlaybackPhase.Choosing, "was: ${h.session.phase}")
+        assertEquals(null, h.host.loadedUrl)
     }
 
     // autoSelectStream must not override an explicit request to choose.
@@ -738,6 +827,53 @@ class PlaybackSessionTest {
         }
 
         assertEquals(listOf("A", "B", "C"), played)
+    }
+
+    @Test
+    fun `automatic failover skips software-only and unsupported sources`() = playbackTest(
+        sources = listOf(
+            StreamSource(
+                name = "Hardware A",
+                title = "Movie.1080p.x264",
+                url = "https://example.com/a.mkv",
+                sizeBytes = 400,
+            ),
+            StreamSource(
+                name = "Software",
+                title = "Movie.1080p.AV1",
+                url = "https://example.com/software.mkv",
+                sizeBytes = 300,
+            ),
+            StreamSource(
+                name = "Unsupported",
+                title = "Movie.1080p.VP9",
+                url = "https://example.com/unsupported.mkv",
+                sizeBytes = 200,
+            ),
+            StreamSource(
+                name = "Hardware B",
+                title = "Movie.720p.x264",
+                url = "https://example.com/b.mkv",
+                sizeBytes = 100,
+            ),
+        ),
+        capabilities = VideoCodecCapabilities(
+            h264 = VideoDecoderSupport.Hardware,
+            av1 = VideoDecoderSupport.SoftwareOnly,
+            vp9 = VideoDecoderSupport.Unsupported,
+        ),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        val choosing = h.session.phase as PlaybackPhase.Choosing
+        h.session.choose(choosing.sources.first())
+        runCurrent()
+
+        assertTrue(h.session.failoverToNextSource())
+        runCurrent()
+
+        assertEquals("Hardware B", (h.session.phase as PlaybackPhase.Playing).source.name)
+        assertTrue(!h.session.failoverToNextSource())
     }
 
     // Mutation applied to verify: cycled back to the start when the list ran out

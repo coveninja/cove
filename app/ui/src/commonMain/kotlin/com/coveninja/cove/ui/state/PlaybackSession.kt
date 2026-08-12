@@ -65,7 +65,7 @@ sealed interface PlaybackPhase {
     data object Resolving : PlaybackPhase
 
     /** More than one candidate came back; the user picks. */
-    data class Choosing(val sources: List<StreamSource>) : PlaybackPhase
+    data class Choosing(val sources: List<StreamChoice>) : PlaybackPhase
 
     data class Playing(val source: StreamSource, val url: String) : PlaybackPhase
 
@@ -138,7 +138,7 @@ class PlaybackSession(
 
     // Kept so a source that dies can be stepped over without resolving again.
     // Named apart from the lambda parameter it would otherwise shadow.
-    private var resolvedCandidates: List<StreamSource> = emptyList()
+    private var resolvedCandidates: List<StreamChoice> = emptyList()
     private var failedSources = mutableSetOf<String>()
 
     /**
@@ -237,19 +237,35 @@ class PlaybackSession(
                     preferredAudioLanguage = settings?.defaultAudioLang,
                     originalLanguage = resolved.media.originalLanguage,
                 )
-                resolvedCandidates = ranked
+                // Keep the source-ranking order within each compatibility tier,
+                // but never put a software-only or impossible stream ahead of a
+                // source Android can hardware-decode (or whose codec is unknown).
+                val choices = ranked
+                    .map { source ->
+                        StreamChoice(
+                            source = source,
+                            compatibility = source.compatibilityWith(playerCodecCapabilities()),
+                        )
+                    }
+                    .sortedBy { choice -> choice.compatibility.selectionPriority() }
+                resolvedCandidates = choices
+                val automaticCandidates = choices.filter { it.compatibility.automaticallyEligible }
                 when {
-                    ranked.isEmpty() -> phase = PlaybackPhase.Failed(
+                    choices.isEmpty() -> phase = PlaybackPhase.Failed(
                         "No sources found. A fresh profile has no provider addons — " +
                             "add one in Settings before playing anything.",
                     )
                     // An explicit "choose a source" always asks, even for one result:
                     // the point of that entry point is to see what is on offer.
-                    forcePicker -> phase = PlaybackPhase.Choosing(ranked)
-                    // One candidate is not a choice; skip the picker entirely.
-                    ranked.size == 1 -> startPlayback(ranked.single(), token)
-                    autoSelectStream() -> startPlayback(ranked.first(), token)
-                    else -> phase = PlaybackPhase.Choosing(ranked)
+                    forcePicker -> phase = PlaybackPhase.Choosing(choices)
+                    // A lone compatible candidate is not a choice. A lone
+                    // software-only or unsupported one must still be explained
+                    // in the picker rather than silently started.
+                    automaticCandidates.size == 1 && choices.size == 1 ->
+                        startPlayback(automaticCandidates.single().source, token)
+                    autoSelectStream() && automaticCandidates.isNotEmpty() ->
+                        startPlayback(automaticCandidates.first().source, token)
+                    else -> phase = PlaybackPhase.Choosing(choices)
                 }
             }
         }
@@ -378,7 +394,10 @@ class PlaybackSession(
     }
 
     /** Called from the source picker, and to switch source mid-session. */
-    fun choose(source: StreamSource) = startPlayback(source, generation)
+    fun choose(choice: StreamChoice) {
+        if (!choice.compatibility.selectable) return
+        startPlayback(choice.source, generation)
+    }
 
     /**
      * Steps to the next candidate after the current one failed.
@@ -390,8 +409,10 @@ class PlaybackSession(
     fun failoverToNextSource(): Boolean {
         val playing = phase as? PlaybackPhase.Playing ?: return false
         failedSources += playing.source.identityKey()
-        val next = resolvedCandidates.firstOrNull { it.identityKey() !in failedSources } ?: return false
-        startPlayback(next, generation)
+        val next = resolvedCandidates.firstOrNull {
+            it.compatibility.automaticallyEligible && it.source.identityKey() !in failedSources
+        } ?: return false
+        startPlayback(next.source, generation)
         return true
     }
 
@@ -424,6 +445,9 @@ class PlaybackSession(
     // safer of the two, since it never silently plays the wrong thing.
     private fun autoSelectStream(): Boolean =
         (graph.settings.settings.value as? SettingsState.Ready)?.settings?.autoSelectStream == true
+
+    private fun playerCodecCapabilities(): VideoCodecCapabilities =
+        host?.videoCodecCapabilities ?: VideoCodecCapabilities()
 
     fun close() {
         generation++

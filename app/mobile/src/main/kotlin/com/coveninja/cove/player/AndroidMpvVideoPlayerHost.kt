@@ -4,8 +4,12 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaCodecInfo
+import android.media.MediaCodecList
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -18,6 +22,8 @@ import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
+import com.coveninja.cove.ui.state.VideoCodecCapabilities
+import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.VideoScaling
 import com.yausername.youtubedl_android.YoutubeDL
@@ -67,6 +73,7 @@ class AndroidMpvVideoPlayerHost(
     private val _status = MutableStateFlow(PlaybackStatus())
     override val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
     override val playsWebVideos: Boolean = true
+    override val videoCodecCapabilities: VideoCodecCapabilities = probeVideoCodecCapabilities()
 
     private var initialized = false
     private var destroyed = false
@@ -586,6 +593,106 @@ class AndroidMpvVideoPlayerHost(
         )
     }
 }
+
+private data class DecoderAvailability(
+    var hardware: Boolean = false,
+    var software: Boolean = false,
+    var uncertain: Boolean = false,
+) {
+    fun record(isHardware: Boolean) {
+        if (isHardware) hardware = true else software = true
+    }
+
+    fun support(): VideoDecoderSupport = when {
+        hardware -> VideoDecoderSupport.Hardware
+        software -> VideoDecoderSupport.SoftwareOnly
+        uncertain -> VideoDecoderSupport.Unknown
+        else -> VideoDecoderSupport.Unsupported
+    }
+}
+
+private fun probeVideoCodecCapabilities(): VideoCodecCapabilities {
+    val h264 = DecoderAvailability()
+    val h264High10 = DecoderAvailability()
+    val hevc = DecoderAvailability()
+    val hevcMain10 = DecoderAvailability()
+    val av1 = DecoderAvailability()
+    val vp9 = DecoderAvailability()
+    val dolbyVision = DecoderAvailability()
+
+    return runCatching {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .asSequence()
+            .filterNot(MediaCodecInfo::isEncoder)
+            .forEach { info ->
+                val hardware = info.isHardwareDecoder()
+                info.supportedTypes.forEach { advertisedType ->
+                    when (advertisedType.lowercase(Locale.US)) {
+                        "video/avc" -> {
+                            h264.record(hardware)
+                            info.recordProfileSupport(
+                                type = advertisedType,
+                                profiles = setOf(MediaCodecInfo.CodecProfileLevel.AVCProfileHigh10),
+                                hardware = hardware,
+                                availability = h264High10,
+                            )
+                        }
+                        "video/hevc" -> {
+                            hevc.record(hardware)
+                            info.recordProfileSupport(
+                                type = advertisedType,
+                                profiles = setOf(
+                                    MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
+                                    MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10,
+                                    MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus,
+                                ),
+                                hardware = hardware,
+                                availability = hevcMain10,
+                            )
+                        }
+                        "video/av01" -> av1.record(hardware)
+                        "video/x-vnd.on2.vp9" -> vp9.record(hardware)
+                        "video/dolby-vision" -> dolbyVision.record(hardware)
+                    }
+                }
+            }
+
+        VideoCodecCapabilities(
+            h264 = h264.support(),
+            h264High10 = h264High10.support(),
+            hevc = hevc.support(),
+            hevcMain10 = hevcMain10.support(),
+            av1 = av1.support(),
+            vp9 = vp9.support(),
+            dolbyVision = dolbyVision.support(),
+        )
+    }.getOrElse { error ->
+        Log.w("CoveMpv", "Video codec capability probe failed", error)
+        VideoCodecCapabilities()
+    }
+}
+
+private fun MediaCodecInfo.recordProfileSupport(
+    type: String,
+    profiles: Set<Int>,
+    hardware: Boolean,
+    availability: DecoderAvailability,
+) {
+    runCatching { getCapabilitiesForType(type).profileLevels }
+        .onSuccess { levels ->
+            if (levels.any { it.profile in profiles }) availability.record(hardware)
+        }
+        .onFailure { availability.uncertain = true }
+}
+
+/** API 29 exposes the authoritative flag; API 28 needs the standard codec-name fallback. */
+private fun MediaCodecInfo.isHardwareDecoder(): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        isHardwareAccelerated
+    } else {
+        !name.startsWith("OMX.google.", ignoreCase = true) &&
+            !name.startsWith("c2.android.", ignoreCase = true)
+    }
 
 private fun String.isWebVideoPage(): Boolean = runCatching {
     val host = java.net.URI(this).host?.lowercase().orEmpty()

@@ -128,6 +128,14 @@ interface VideoPlayerHost {
     val status: StateFlow<PlaybackStatus>
 
     /**
+     * Video decoders exposed by the host. Android fills this from MediaCodecList;
+     * other hosts deliberately leave it unknown so codec heuristics never hide a
+     * source on platforms that have not supplied a trustworthy capability probe.
+     */
+    val videoCodecCapabilities: VideoCodecCapabilities
+        get() = VideoCodecCapabilities()
+
+    /**
      * Whether [load] accepts a web page — a YouTube watch link — as well as a
      * direct media URL. TMDB's extras are only ever page links, so a host that
      * says no has them opened in the system browser instead.

@@ -46,23 +46,27 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.StreamChoice
+import com.coveninja.cove.ui.state.StreamCompatibility
+import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.audioHints
 import kotlinx.coroutines.delay
 
 /**
- * Shown when more than one source comes back. Rows arrive pre-ranked, so the
- * first is the recommended pick and is labelled as such.
+ * Shown when the viewer needs to choose. Rows arrive ranked within their codec
+ * compatibility tier; the first automatically eligible row is recommended.
  */
 @Composable
 fun StreamSourcePicker(
-    sources: List<StreamSource>,
-    onSelect: (StreamSource) -> Unit,
+    sources: List<StreamChoice>,
+    onSelect: (StreamChoice) -> Unit,
     modifier: Modifier = Modifier,
     title: String? = null,
 ) {
     // Rows animate in once each. LazyColumn disposes what scrolls away, so
     // without this the entrance would replay every time a row came back.
     val entered = remember(sources) { mutableSetOf<String>() }
+    val recommendedIndex = sources.indexOfFirst { it.compatibility.automaticallyEligible }
 
     Surface(
         modifier = modifier.widthIn(max = 660.dp),
@@ -108,20 +112,22 @@ fun StreamSourcePicker(
                 modifier = Modifier.padding(top = 16.dp).heightIn(max = 400.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                itemsIndexed(sources, key = { _, source -> source.rowKey() }) { index, source ->
+                itemsIndexed(sources, key = { _, choice -> choice.source.rowKey() }) { index, choice ->
                     // Evaluated once per row instance rather than on every
                     // recomposition, so scrolling a row back into view does not
                     // replay its entrance — and so the set is not mutated from
                     // inside composition itself.
-                    val animateIn = remember(source.rowKey()) { entered.add(source.rowKey()) }
+                    val animateIn = remember(choice.source.rowKey()) {
+                        entered.add(choice.source.rowKey())
+                    }
                     SourceRow(
-                        source = source,
-                        recommended = index == 0,
+                        choice = choice,
+                        recommended = index == recommendedIndex,
                         animateIn = animateIn,
                         // Capped, so a fifty-source list does not cascade for
                         // two seconds before the last row lands.
                         entranceDelayMillis = (index * 35L).coerceAtMost(280L),
-                        onClick = { onSelect(source) },
+                        onClick = { onSelect(choice) },
                     )
                 }
             }
@@ -131,12 +137,15 @@ fun StreamSourcePicker(
 
 @Composable
 private fun SourceRow(
-    source: StreamSource,
+    choice: StreamChoice,
     recommended: Boolean,
     animateIn: Boolean,
     entranceDelayMillis: Long,
     onClick: () -> Unit,
 ) {
+    val source = choice.source
+    val compatibility = choice.compatibility
+    val enabled = compatibility.selectable
     val colors = MaterialTheme.colorScheme
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -155,30 +164,34 @@ private fun SourceRow(
 
     val scale by animateFloatAsState(
         targetValue = when {
-            pressed -> 0.985f
-            hovered -> 1.012f
+            enabled && pressed -> 0.985f
+            enabled && hovered -> 1.012f
             else -> 1f
         },
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "SourceRowScale",
     )
     val container by animateColorAsState(
-        targetValue = if (hovered) {
-            colors.surfaceContainerHighest.copy(alpha = 1f)
-        } else {
-            colors.surfaceContainerHighest.copy(alpha = 0.6f)
+        targetValue = when {
+            !enabled -> colors.surfaceContainerHighest.copy(alpha = 0.32f)
+            hovered -> colors.surfaceContainerHighest.copy(alpha = 1f)
+            else -> colors.surfaceContainerHighest.copy(alpha = 0.6f)
         },
         animationSpec = tween(140),
         label = "SourceRowContainer",
     )
     val outline by animateColorAsState(
-        targetValue = if (hovered) colors.tertiary.copy(alpha = 0.55f) else Color.Transparent,
+        targetValue = if (enabled && hovered) {
+            colors.tertiary.copy(alpha = 0.55f)
+        } else {
+            Color.Transparent
+        },
         animationSpec = tween(140),
         label = "SourceRowOutline",
     )
     // The play affordance slides out from under the row edge on hover.
     val playSize by animateDpAsState(
-        targetValue = if (hovered) 30.dp else 0.dp,
+        targetValue = if (enabled && hovered) 30.dp else 0.dp,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "SourceRowPlay",
     )
@@ -189,23 +202,24 @@ private fun SourceRow(
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-                alpha = entrance
+                alpha = entrance * if (enabled) 1f else 0.58f
                 translationY = (1f - entrance) * 14f
             }
             .clip(RoundedCornerShape(13.dp))
             .background(container)
             .border(1.dp, outline, RoundedCornerShape(13.dp))
-            .hoverable(interactionSource)
+            .hoverable(interactionSource, enabled = enabled)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                enabled = enabled,
                 onClick = onClick,
             )
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        QualityBadge(source.qualityLabel(), highlighted = hovered || recommended)
+        QualityBadge(source.qualityLabel(), highlighted = enabled && (hovered || recommended))
 
         Column(modifier = Modifier.weight(1f)) {
             Row(
@@ -219,7 +233,11 @@ private fun SourceRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = if (enabled) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
                 if (recommended) BestMatchTag()
             }
@@ -232,6 +250,7 @@ private fun SourceRow(
                 source.addonName?.takeIf { it.isNotBlank() }?.let { MetaTag(it) }
                 if (source.sizeBytes > 0) MetaTag(formatBytes(source.sizeBytes))
                 if (source.cached) MetaTag("Cached", accent = true)
+                compatibility.codecLabel?.let { MetaTag(it) }
                 // Audio read out of the release name — the stream list carries no
                 // track data, so this is a hint, and absent when the name says
                 // nothing rather than guessed at.
@@ -242,20 +261,43 @@ private fun SourceRow(
                 // two behave very differently on first play.
                 if (source.url.isNullOrBlank()) MetaTag("Torrent")
             }
+            compatibility.warningLabel()?.let { warning ->
+                Text(
+                    text = warning,
+                    modifier = Modifier.padding(top = 5.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
-        Box(
-            modifier = Modifier
-                .size(playSize)
-                .clip(CircleShape)
-                .background(colors.tertiary),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (playSize > 14.dp) {
+        if (enabled) {
+            Box(
+                modifier = Modifier
+                    .size(playSize)
+                    .clip(CircleShape)
+                    .background(colors.tertiary),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (playSize > 14.dp) {
+                    IconifyIcon(
+                        icon = "lucide:play",
+                        modifier = Modifier.size(13.dp),
+                        tint = colors.onTertiary,
+                    )
+                }
+            }
+        } else {
+            Box(
+                modifier = Modifier.size(30.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 IconifyIcon(
-                    icon = "lucide:play",
-                    modifier = Modifier.size(13.dp),
-                    tint = colors.onTertiary,
+                    icon = "lucide:lock",
+                    modifier = Modifier.size(15.dp),
+                    tint = colors.onSurfaceVariant,
                 )
             }
         }
@@ -319,17 +361,25 @@ private fun BestMatchTag() {
 }
 
 @Composable
-private fun MetaTag(text: String, accent: Boolean = false) {
+private fun MetaTag(
+    text: String,
+    accent: Boolean = false,
+) {
     Text(
         text = text,
-        color = if (accent) {
-            MaterialTheme.colorScheme.tertiary
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
+        color = when {
+            accent -> MaterialTheme.colorScheme.tertiary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
         },
         style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
     )
+}
+
+private fun StreamCompatibility.warningLabel(): String? = when (support) {
+    VideoDecoderSupport.SoftwareOnly -> "Software decoding only · playback may stutter"
+    VideoDecoderSupport.Unsupported -> "Unsupported video codec on this device"
+    else -> null
 }
 
 // ── Source presentation ──────────────────────────────────────────────────────
