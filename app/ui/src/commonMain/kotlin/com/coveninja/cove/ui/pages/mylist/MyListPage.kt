@@ -55,12 +55,11 @@ import com.coveninja.cove.ui.pages.mylist.calendar.rememberCalendarSections
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
-import com.coveninja.cove.ui.state.mediaFor
 import com.coveninja.cove.ui.state.MediaActions
-import com.coveninja.cove.ui.state.rememberLibraryIndex
+import com.coveninja.cove.ui.state.MediaCatalog
+import com.coveninja.cove.ui.state.WatchProgressIndex
+import com.coveninja.cove.ui.state.mediaFor
 import com.coveninja.cove.ui.state.rememberMediaActions
-import com.coveninja.cove.ui.state.rememberMediaCatalog
-import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import kotlinx.coroutines.launch
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.minusMonth
@@ -71,6 +70,10 @@ import kotlin.time.Clock
 
 @Composable
 fun MyListPage(
+    libraryState: LibraryState,
+    index: LibraryIndex,
+    progress: WatchProgressIndex,
+    catalog: MediaCatalog,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onExplore: () -> Unit,
     onOpenMedia: (Media) -> Unit,
@@ -78,16 +81,10 @@ fun MyListPage(
     onPlayEpisode: (Media, Int, Int, String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val graph = LocalAppGraph.current
-    val libraryState by graph.library.entries.collectAsState()
-
     when (val state = libraryState) {
         LibraryState.Loading -> PageLoading("Loading your list…")
         is LibraryState.Failed -> PageError("My List could not load", state.message)
         is LibraryState.Ready -> {
-            val catalog = rememberMediaCatalog()
-            val index = rememberLibraryIndex()
-            val progress = rememberWatchProgressIndex()
             val actions = rememberMediaActions(index)
 
             // Enrich each library entry with the fuller domain object from the

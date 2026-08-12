@@ -26,4 +26,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "cove"
-include(":shared", ":backend", ":ui", ":desktop", ":mobile")
+include(":shared", ":backend", ":ui", ":desktop", ":mobile", ":benchmark")

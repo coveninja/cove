@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 val coveVersion = rootProject.file("../VERSION").readText().trim().removePrefix("v")
@@ -61,6 +62,7 @@ android {
         versionName = coveVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        buildConfigField("boolean", "BENCHMARK_FIXTURE", "false")
         buildConfigField("String", "TMDB_API_KEY", quotedBuildConfig(deploymentValue("TMDB_API_KEY")))
         buildConfigField("String", "SUPABASE_URL", quotedBuildConfig(deploymentValue("SUPABASE_URL")))
         buildConfigField(
@@ -88,7 +90,20 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release")
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+        create("benchmarkRelease") {
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "BENCHMARK_FIXTURE", "true")
+        }
+        create("nonMinifiedRelease") {
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "BENCHMARK_FIXTURE", "true")
         }
     }
 
@@ -112,6 +127,11 @@ android {
     sourceSets.getByName("main").assets.srcDir("../backend/src/desktopMain/resources")
 }
 
+baselineProfile {
+    automaticGenerationDuringBuild = false
+    saveInSrc = true
+}
+
 kotlin {
     jvmToolchain(21)
     compilerOptions {
@@ -125,10 +145,12 @@ dependencies {
     implementation(project(":ui"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.mpv.android)
     implementation(libs.youtubedl.android)
+    baselineProfile(project(":benchmark"))
 
     testImplementation(libs.kotlin.test)
     testImplementation("junit:junit:4.13.2")

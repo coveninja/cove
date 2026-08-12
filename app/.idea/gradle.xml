@@ -10,6 +10,7 @@
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/backend" />
+            <option value="$PROJECT_DIR$/benchmark" />
             <option value="$PROJECT_DIR$/desktop" />
             <option value="$PROJECT_DIR$/mobile" />
             <option value="$PROJECT_DIR$/shared" />

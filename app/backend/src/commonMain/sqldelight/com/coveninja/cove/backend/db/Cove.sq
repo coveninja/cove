@@ -308,6 +308,14 @@ INSERT OR REPLACE INTO watch_progress(
 selectWatchProgress:
 SELECT * FROM watch_progress WHERE profile_id = ? ORDER BY watched_at DESC, progress_key;
 
+selectWatchProgressByKey:
+SELECT * FROM watch_progress WHERE profile_id = ? AND progress_key = ?;
+
+selectWatchProgressForTitle:
+SELECT * FROM watch_progress
+WHERE profile_id = ? AND tmdb_id = ? AND media_type = ?
+ORDER BY watched_at DESC, progress_key;
+
 deleteWatchProgress:
 DELETE FROM watch_progress;
 

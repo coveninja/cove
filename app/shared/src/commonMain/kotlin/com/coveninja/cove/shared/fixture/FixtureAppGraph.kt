@@ -501,6 +501,10 @@ private class FixtureLibraryRepository : LibraryRepository {
     private val savedProgress = fixtureProgress.associateBy {
         progressKey(it.tmdbId, it.mediaType, it.season, it.episode)
     }.toMutableMap()
+    private val _watchProgress = MutableStateFlow(
+        savedProgress.values.sortedByDescending { it.watchedAt },
+    )
+    override val watchProgress: StateFlow<List<WatchProgress>> = _watchProgress
 
     private fun readyEntries(): List<LibraryEntry> =
         (_entries.value as? LibraryState.Ready)?.entries.orEmpty()
@@ -598,9 +602,6 @@ private class FixtureLibraryRepository : LibraryRepository {
         episode: Int?,
     ): WatchProgress? = savedProgress[progressKey(tmdbId, mediaType, season, episode)]
 
-    override suspend fun progressSnapshot(): List<WatchProgress> =
-        savedProgress.values.sortedByDescending { it.watchedAt }
-
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress {
         val key = progressKey(request.tmdbId, request.mediaType, request.season, request.episode)
         val progress = WatchProgress(
@@ -615,6 +616,7 @@ private class FixtureLibraryRepository : LibraryRepository {
             completed = request.completed,
         )
         savedProgress[key] = progress
+        _watchProgress.value = savedProgress.values.sortedByDescending { it.watchedAt }
         return progress
     }
 

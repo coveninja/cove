@@ -2,14 +2,9 @@ package com.coveninja.cove.ui.state
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
-import com.coveninja.cove.shared.data.LibraryState
+import androidx.compose.runtime.remember
 import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.ui.model.uiMediaId
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * Where the viewer got to in every title they have played, keyed by UI media id.
@@ -66,26 +61,8 @@ fun watchProgressByUiId(progress: List<WatchProgress>): Map<String, WatchProgres
         }
 
 @Composable
-fun rememberWatchProgressIndex(): WatchProgressIndex {
-    val graph = LocalAppGraph.current
-    val libraryState by graph.library.entries.collectAsState()
-
-    // Keyed on the library state rather than loaded once: recording progress goes through
-    // the same store and republishes entries, so this reloads when playback ends without
-    // any explicit invalidation.
-    //
-    // Off the composition dispatcher, because that same republishing happens on every
-    // progress tick while something is playing, and the local store answers this by
-    // reading its whole progress table synchronously.
-    val index by produceState(WatchProgressIndex.Empty, libraryState) {
-        if (libraryState !is LibraryState.Ready) return@produceState
-        value = withContext(Dispatchers.Default) {
-            val rows = runCatching { graph.library.progressSnapshot() }.getOrDefault(emptyList())
-            WatchProgressIndex(watchProgressByUiId(rows))
-        }
-    }
-    return index
-}
+fun rememberWatchProgressIndex(progress: List<WatchProgress>): WatchProgressIndex =
+    remember(progress) { WatchProgressIndex(watchProgressByUiId(progress)) }
 
 private const val MIN_MEANINGFUL_FRACTION = 0.02f
 private const val MAX_MEANINGFUL_FRACTION = 0.98f

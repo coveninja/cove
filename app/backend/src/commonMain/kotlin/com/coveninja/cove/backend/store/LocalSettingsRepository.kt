@@ -27,8 +27,16 @@ class LocalSettingsRepository(
     override val settings: StateFlow<SettingsState> = _settings.asStateFlow()
 
     init {
-        reload(session.profileId.value)
-        scope.launch { session.profileId.collectLatest { reload(it) } }
+        var loadedProfileId = session.profileId.value
+        reload(loadedProfileId)
+        scope.launch {
+            session.profileId.collectLatest { profileId ->
+                if (profileId != loadedProfileId) {
+                    loadedProfileId = profileId
+                    reload(profileId)
+                }
+            }
+        }
     }
 
     override suspend fun update(settings: AppSettings) = mutation.withLock {

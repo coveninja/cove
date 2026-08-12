@@ -92,7 +92,11 @@ fun MyListGrid(
             }
         }
 
-        itemsIndexed(rows, key = { _, row -> row.id }) { index, row ->
+        itemsIndexed(
+            items = rows,
+            key = { _, row -> row.id },
+            contentType = { _, _ -> "my-list-grid-item" },
+        ) { index, row ->
             // animateItem is what makes sorting and filtering reflow instead of snapping.
             Box(modifier = Modifier.animateItem()) {
                 StaggeredAppear(index = index) {
@@ -132,7 +136,11 @@ fun MyListRows(
             item(key = "header") { content() }
         }
 
-        items(rows, key = { it.id }) { row ->
+        items(
+            items = rows,
+            key = { it.id },
+            contentType = { "my-list-row" },
+        ) { row ->
             Box(modifier = Modifier.animateItem()) {
                 MyListDetailRow(
                     row = row,
@@ -349,5 +357,4 @@ private fun SelectionLayer(
 
 /** Cards are 2:3; the overlay has to be too, or it would cover the gap below them. */
 private fun Modifier.matchCardBounds(): Modifier = fillMaxWidth().aspectRatio(2f / 3f)
-
 

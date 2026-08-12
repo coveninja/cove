@@ -82,14 +82,26 @@ fun <T> MediaRail(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val rowHover = remember { MutableInteractionSource() }
-    val hovered by rowHover.collectIsHoveredAsState()
+    val hovered = if (hasPointerHover) {
+        rowHover.collectIsHoveredAsState().value
+    } else {
+        false
+    }
 
     // A touch rail is swipe-first. Pinning desktop arrows over the cards hid artwork and
     // competed with the floating navigation; edge fades already communicate that more exists.
     val controlsVisible = hovered && hasPointerHover
 
     Column(
-        modifier = modifier.fillMaxWidth().hoverable(rowHover),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (hasPointerHover) {
+                    Modifier.hoverable(rowHover)
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         RailHeader(
             title = title,
@@ -113,7 +125,11 @@ fun <T> MediaRail(
                 contentPadding = PaddingValues(horizontal = horizontalPadding),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                itemsIndexed(items, key = { _, item -> key(item) }) { index, item ->
+                itemsIndexed(
+                    items = items,
+                    key = { _, item -> key(item) },
+                    contentType = { _, _ -> "media-rail-item" },
+                ) { index, item ->
                     StaggeredAppear(index = index) {
                         itemContent(item, Modifier.width(resolvedItemWidth))
                     }

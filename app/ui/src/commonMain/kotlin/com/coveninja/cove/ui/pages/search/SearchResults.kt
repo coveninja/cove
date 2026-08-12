@@ -87,7 +87,11 @@ fun SearchResultGrid(
             item(span = { GridItemSpan(maxLineSpan) }, key = "search-grid-header") { content() }
         }
 
-        itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+        itemsIndexed(
+            items = items,
+            key = { _, item -> item.id },
+            contentType = { _, _ -> "search-grid-item" },
+        ) { index, item ->
             StaggeredAppear(
                 index = index,
                 // On the item root rather than on the card: placement animation is a property
@@ -131,7 +135,11 @@ fun SearchResultList(
             item(key = "search-list-header") { content() }
         }
 
-        itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+        itemsIndexed(
+            items = items,
+            key = { _, item -> item.id },
+            contentType = { _, _ -> "search-list-item" },
+        ) { index, item ->
             StaggeredAppear(
                 index = index,
                 modifier = Modifier.animateItem(

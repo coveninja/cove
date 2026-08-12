@@ -15,6 +15,15 @@ sealed interface LibraryState {
 
 interface LibraryRepository {
     val entries: StateFlow<LibraryState>
+
+    /**
+     * Resume points for the active profile, newest first.
+     *
+     * This is observable independently from [entries] because playback updates it
+     * repeatedly. Consumers that decorate cards must not use a library reload as a
+     * proxy invalidation signal for one changed progress row.
+     */
+    val watchProgress: StateFlow<List<WatchProgress>>
     suspend fun add(
         tmdbId: Int,
         mediaType: MediaType,
@@ -48,16 +57,6 @@ interface LibraryRepository {
         season: Int? = null,
         episode: Int? = null,
     ): WatchProgress?
-
-    /**
-     * Every resume point for the active profile, newest first.
-     *
-     * Exists because decorating a whole grid with resume bars is impossible through
-     * [progress], which answers for one title at a time. Implementations that cannot
-     * report them in bulk return an empty list rather than fanning out one request
-     * per title; the caller then simply draws no resume state.
-     */
-    suspend fun progressSnapshot(): List<WatchProgress>
 
     /**
      * Upserts the resume point. Called repeatedly during playback, so implementations

@@ -156,19 +156,26 @@ class PlaybackService : Service() {
 
 class RemoteAccessService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val runtime get() = (application as CoveMobileApplication).backendRuntime()
+    private var runtime: AndroidBackendRuntime? = null
 
     override fun onCreate() {
         super.onCreate()
         ensureChannel(REMOTE_CHANNEL, "Remote access", NotificationManager.IMPORTANCE_LOW)
         startForeground(REMOTE_NOTIFICATION_ID, notification())
-        runtime.startRemoteAccessHost()
+        serviceScope.launch {
+            (application as CoveMobileApplication).awaitBackendRuntime().also {
+                runtime = it
+                it.startRemoteAccessHost()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_DISABLE) {
             serviceScope.launch {
-                val repository = runtime.graph.settings
+                val activeRuntime = runtime
+                    ?: (application as CoveMobileApplication).awaitBackendRuntime()
+                val repository = activeRuntime.graph.settings
                 val current = (repository.settings.value as? SettingsState.Ready)?.settings
                 if (current != null) repository.update(current.copy(remoteAccessEnabled = false))
                 stopSelf()
@@ -180,7 +187,8 @@ class RemoteAccessService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        runtime.stopRemoteAccessHost()
+        runtime?.stopRemoteAccessHost()
+        runtime = null
         serviceScope.cancel()
         super.onDestroy()
     }

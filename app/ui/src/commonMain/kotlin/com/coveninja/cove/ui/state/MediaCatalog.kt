@@ -2,8 +2,6 @@ package com.coveninja.cove.ui.state
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
@@ -38,13 +36,11 @@ class MediaCatalog(private val domainItems: List<DomainMedia>) {
 // the catalog — and all its maps — from being rebuilt on every recomposition of
 // the host composable (which includes every pointer move during a drag).
 @Composable
-fun rememberMediaCatalog(): MediaCatalog {
-    val graph = LocalAppGraph.current
-    val homeState by graph.content.home.collectAsState()
-    val exploreState by graph.content.explore.collectAsState()
-    val searchState by graph.content.searchResults.collectAsState()
-
-    return remember(homeState, exploreState, searchState) {
+fun rememberMediaCatalog(
+    homeState: HomeState,
+    exploreState: ExploreState,
+    searchState: SearchState,
+): MediaCatalog = remember(homeState, exploreState, searchState) {
         val homeDomain = (homeState as? HomeState.Ready)?.items.orEmpty()
         val exploreDomain = (exploreState as? ExploreState.Ready)
             ?.let { it.movies + it.tv }
@@ -54,4 +50,3 @@ fun rememberMediaCatalog(): MediaCatalog {
             .distinctBy { it.mediaType to it.id }
         MediaCatalog(allItems)
     }
-}

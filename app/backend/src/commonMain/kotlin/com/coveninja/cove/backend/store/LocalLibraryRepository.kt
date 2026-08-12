@@ -41,10 +41,20 @@ class LocalLibraryRepository(
     private val mutation = Mutex()
     private val _entries = MutableStateFlow<LibraryState>(LibraryState.Loading)
     override val entries: StateFlow<LibraryState> = _entries.asStateFlow()
+    private val _watchProgress = MutableStateFlow<List<WatchProgress>>(emptyList())
+    override val watchProgress: StateFlow<List<WatchProgress>> = _watchProgress.asStateFlow()
 
     init {
-        reload(session.profileId.value)
-        scope.launch { session.profileId.collectLatest { reload(it) } }
+        var loadedProfileId = session.profileId.value
+        reloadAll(loadedProfileId)
+        scope.launch {
+            session.profileId.collectLatest { profileId ->
+                if (profileId != loadedProfileId) {
+                    loadedProfileId = profileId
+                    reloadAll(profileId)
+                }
+            }
+        }
     }
 
     override suspend fun add(
@@ -106,10 +116,13 @@ class LocalLibraryRepository(
         tmdbId: Int,
         mediaType: MediaType,
     ): Map<Pair<Int, Int>, Boolean> = database.coveQueries
-        .selectWatchProgress(session.profileId.value)
+        .selectWatchProgressForTitle(
+            session.profileId.value,
+            tmdbId.toLong(),
+            mediaType.wireName,
+        )
         .executeAsList()
         .asSequence()
-        .filter { it.tmdb_id == tmdbId.toLong() && it.media_type == mediaType.wireName }
         .mapNotNull { progress ->
             val season = progress.season?.toInt() ?: return@mapNotNull null
             val episode = progress.episode?.toInt() ?: return@mapNotNull null
@@ -126,7 +139,7 @@ class LocalLibraryRepository(
         episode: Int,
         runtimeMinutes: Int?,
         watched: Boolean,
-    ): Unit = mutate {
+    ): Unit = mutate(progressChanged = true) {
         require(season >= 0 && episode > 0) { "invalid season or episode" }
         val profileId = session.profileId.value
         var entry = find(profileId, tmdbId, MediaType.Tv)
@@ -157,8 +170,8 @@ class LocalLibraryRepository(
         val key = "$tmdbId:tv:$season:$episode"
         database.coveQueries.upsertWatchProgress(
             progress_key = key,
-            id = database.coveQueries.selectWatchProgress(profileId).executeAsList()
-                .firstOrNull { it.progress_key == key }?.id ?: newId(),
+            id = database.coveQueries.selectWatchProgressByKey(profileId, key)
+                .executeAsOneOrNull()?.id ?: newId(),
             profile_id = profileId,
             library_entry_id = updatedEntry.id,
             tmdb_id = tmdbId.toLong(),
@@ -195,88 +208,106 @@ class LocalLibraryRepository(
         require(season == null || season >= 0) { "season must not be negative" }
         require(episode == null || episode > 0) { "episode must be positive" }
         val key = progressKey(tmdbId, mediaType, season, episode)
-        return database.coveQueries.selectWatchProgress(session.profileId.value).executeAsList()
-            .firstOrNull { it.progress_key == key }
+        return database.coveQueries.selectWatchProgressByKey(session.profileId.value, key)
+            .executeAsOneOrNull()
             ?.toModel()
     }
 
-    // selectWatchProgress is already ordered newest-first, so the contract's ordering
-    // costs nothing here.
-    override suspend fun progressSnapshot(): List<WatchProgress> =
-        database.coveQueries.selectWatchProgress(session.profileId.value)
-            .executeAsList()
-            .map(Watch_progress::toModel)
-
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress {
-        val committed = mutate {
-            require(request.tmdbId > 0) { "tmdb id must be positive" }
-            require(request.positionSeconds >= 0 && request.durationSeconds >= 0) {
-                "position and duration must be non-negative"
+        val committed = mutation.withLock {
+            val committedRows: Pair<LibraryEntry, WatchProgress> = try {
+                database.transactionWithResult {
+                    require(request.tmdbId > 0) { "tmdb id must be positive" }
+                    require(request.positionSeconds >= 0 && request.durationSeconds >= 0) {
+                        "position and duration must be non-negative"
+                    }
+                    require(request.season?.let { it >= 0 } != false) {
+                        "season must not be negative"
+                    }
+                    require(request.episode?.let { it > 0 } != false) {
+                        "episode must be positive"
+                    }
+
+                    val profileId = session.profileId.value
+                    val timestamp = now()
+                    val existing = find(profileId, request.tmdbId, request.mediaType)
+                    val entry = (existing ?: LibraryEntry(
+                        id = newId(),
+                        profileId = profileId,
+                        tmdbId = request.tmdbId,
+                        mediaType = request.mediaType,
+                        title = request.title,
+                        posterPath = request.posterPath,
+                        status = LibraryStatus.Watching,
+                        voteAverage = request.voteAverage,
+                        addedAt = timestamp,
+                        updatedAt = timestamp,
+                    )).copy(
+                        lastAirDate = request.lastAirDate.takeIf(String::isNotBlank)
+                            ?: existing?.lastAirDate.orEmpty(),
+                        lastWatchedAt = timestamp,
+                        lastWatchedSeason = request.season ?: existing?.lastWatchedSeason,
+                        lastWatchedEpisode = request.episode ?: existing?.lastWatchedEpisode,
+                        lastAiredSeason = request.lastAiredSeason ?: existing?.lastAiredSeason,
+                        lastAiredEpisode = request.lastAiredEpisode ?: existing?.lastAiredEpisode,
+                        updatedAt = timestamp,
+                    )
+                    upsert(profileId, entry)
+                    database.coveQueries.deleteRemoval(
+                        profileId,
+                        request.tmdbId.toLong(),
+                        request.mediaType.wireName,
+                    )
+
+                    val key = progressKey(
+                        request.tmdbId,
+                        request.mediaType,
+                        request.season,
+                        request.episode,
+                    )
+                    val existingProgress = database.coveQueries
+                        .selectWatchProgressByKey(profileId, key)
+                        .executeAsOneOrNull()
+                    val progress = WatchProgress(
+                        id = existingProgress?.id ?: newId(),
+                        profileId = profileId,
+                        libraryEntryId = entry.id,
+                        tmdbId = request.tmdbId,
+                        mediaType = request.mediaType,
+                        season = request.season,
+                        episode = request.episode,
+                        positionSeconds = request.positionSeconds,
+                        durationSeconds = request.durationSeconds,
+                        completed = request.completed,
+                        watchedAt = timestamp,
+                    )
+                    database.coveQueries.upsertWatchProgress(
+                        progress_key = key,
+                        id = progress.id,
+                        profile_id = profileId,
+                        library_entry_id = entry.id,
+                        tmdb_id = request.tmdbId.toLong(),
+                        media_type = request.mediaType.wireName,
+                        season = request.season?.toLong(),
+                        episode = request.episode?.toLong(),
+                        position_seconds = request.positionSeconds,
+                        duration_seconds = request.durationSeconds,
+                        completed = if (request.completed) 1L else 0L,
+                        watched_at = timestamp,
+                    )
+                    entry to progress
+                }
+            } catch (error: Exception) {
+                _entries.value = LibraryState.Failed(error.message ?: "Unknown library error")
+                throw error
             }
-            require(request.season?.let { it >= 0 } != false) { "season must not be negative" }
-            require(request.episode?.let { it > 0 } != false) { "episode must be positive" }
+            val (entry, progress) = committedRows
 
-            val profileId = session.profileId.value
-            val timestamp = now()
-            val existing = find(profileId, request.tmdbId, request.mediaType)
-            val entry = (existing ?: LibraryEntry(
-                id = newId(),
-                profileId = profileId,
-                tmdbId = request.tmdbId,
-                mediaType = request.mediaType,
-                title = request.title,
-                posterPath = request.posterPath,
-                status = LibraryStatus.Watching,
-                voteAverage = request.voteAverage,
-                addedAt = timestamp,
-                updatedAt = timestamp,
-            )).copy(
-                lastAirDate = request.lastAirDate.takeIf(String::isNotBlank)
-                    ?: existing?.lastAirDate.orEmpty(),
-                lastWatchedAt = timestamp,
-                lastWatchedSeason = request.season ?: existing?.lastWatchedSeason,
-                lastWatchedEpisode = request.episode ?: existing?.lastWatchedEpisode,
-                lastAiredSeason = request.lastAiredSeason ?: existing?.lastAiredSeason,
-                lastAiredEpisode = request.lastAiredEpisode ?: existing?.lastAiredEpisode,
-                updatedAt = timestamp,
-            )
-            upsert(profileId, entry)
-            database.coveQueries.deleteRemoval(
-                profileId,
-                request.tmdbId.toLong(),
-                request.mediaType.wireName,
-            )
-
-            val key = progressKey(request.tmdbId, request.mediaType, request.season, request.episode)
-            val existingProgress = database.coveQueries.selectWatchProgress(profileId).executeAsList()
-                .firstOrNull { it.progress_key == key }
-            val progress = WatchProgress(
-                id = existingProgress?.id ?: newId(),
-                profileId = profileId,
-                libraryEntryId = entry.id,
-                tmdbId = request.tmdbId,
-                mediaType = request.mediaType,
-                season = request.season,
-                episode = request.episode,
-                positionSeconds = request.positionSeconds,
-                durationSeconds = request.durationSeconds,
-                completed = request.completed,
-                watchedAt = timestamp,
-            )
-            database.coveQueries.upsertWatchProgress(
-                progress_key = key,
-                id = progress.id,
-                profile_id = profileId,
-                library_entry_id = entry.id,
-                tmdb_id = request.tmdbId.toLong(),
-                media_type = request.mediaType.wireName,
-                season = request.season?.toLong(),
-                episode = request.episode?.toLong(),
-                position_seconds = request.positionSeconds,
-                duration_seconds = request.durationSeconds,
-                completed = if (request.completed) 1L else 0L,
-                watched_at = timestamp,
-            )
+            // A playback tick changes one title and one resume point. Publishing those
+            // exact rows avoids the old complete library reload followed by a complete
+            // progress-table read every ten seconds.
+            publishEntry(entry)
+            publishProgress(progress)
             progress
         }
         progressEvents.publish(committed)
@@ -295,7 +326,7 @@ class LocalLibraryRepository(
             },
         )
 
-    internal suspend fun mergeFromRemote(remote: LibrarySyncSnapshot) = mutate {
+    internal suspend fun mergeFromRemote(remote: LibrarySyncSnapshot) = mutate(progressChanged = true) {
         val profileId = session.profileId.value
         val localEntries = database.coveQueries.selectLibraryEntries(profileId).executeAsList()
             .associateBy { "${it.tmdb_id}:${it.media_type}" }
@@ -427,7 +458,7 @@ class LocalLibraryRepository(
     internal suspend fun applyExternal(
         history: List<ExternalHistoryItem>,
         watchlist: List<ExternalWatchlistItem>,
-    ) = mutate {
+    ) = mutate(progressChanged = true) {
         val profileId = session.profileId.value
         history.forEach { item ->
             val existing = find(profileId, item.tmdbId, item.mediaType)
@@ -545,7 +576,8 @@ class LocalLibraryRepository(
         )
     }
 
-    suspend fun recordProgressBulk(request: BulkProgressRequest): LibraryDetailDto = mutate {
+    suspend fun recordProgressBulk(request: BulkProgressRequest): LibraryDetailDto =
+        mutate(progressChanged = true) {
         require(request.tmdbId > 0) { "tmdb id must be positive" }
         require(request.durationSeconds >= 0) { "duration must be non-negative" }
         require(request.episodes.size <= 5_000) { "too many episodes" }
@@ -647,16 +679,26 @@ class LocalLibraryRepository(
         }
         LibraryDetailDto(
             entry = entry,
-            progress = database.coveQueries.selectWatchProgress(profileId).executeAsList()
-                .filter { it.tmdb_id == request.tmdbId.toLong() && it.media_type == request.mediaType.wireName }
+            progress = database.coveQueries
+                .selectWatchProgressForTitle(
+                    profileId,
+                    request.tmdbId.toLong(),
+                    request.mediaType.wireName,
+                )
+                .executeAsList()
                 .map { it.toModel() },
         )
     }
 
-    private suspend fun <T> mutate(block: () -> T): T = mutation.withLock {
+    private suspend fun <T> mutate(
+        progressChanged: Boolean = false,
+        block: () -> T,
+    ): T = mutation.withLock {
         try {
             val result = database.transactionWithResult { block() }
-            reload(session.profileId.value)
+            val profileId = session.profileId.value
+            reloadEntries(profileId)
+            if (progressChanged) reloadProgress(profileId)
             result
         } catch (error: Exception) {
             _entries.value = LibraryState.Failed(error.message ?: "Unknown library error")
@@ -679,7 +721,12 @@ class LocalLibraryRepository(
         database.coveQueries.selectLibraryEntry(profileId, tmdbId.toLong(), mediaType.wireName)
             .executeAsOneOrNull()?.toModel()
 
-    private fun reload(profileId: String) {
+    private fun reloadAll(profileId: String) {
+        reloadEntries(profileId)
+        reloadProgress(profileId)
+    }
+
+    private fun reloadEntries(profileId: String) {
         _entries.value = try {
             LibraryState.Ready(database.coveQueries.selectLibraryEntries(profileId).executeAsList().map { it.toModel() })
         } catch (error: Exception) {
@@ -687,9 +734,36 @@ class LocalLibraryRepository(
         }
     }
 
+    private fun reloadProgress(profileId: String) {
+        _watchProgress.value = database.coveQueries.selectWatchProgress(profileId)
+            .executeAsList()
+            .map(Watch_progress::toModel)
+    }
+
+    private fun publishEntry(entry: LibraryEntry) {
+        val current = (_entries.value as? LibraryState.Ready)?.entries
+            ?: return reloadEntries(session.profileId.value)
+        _entries.value = LibraryState.Ready(
+            (current.filterNot { it.id == entry.id } + entry).sortedWith(
+                compareByDescending<LibraryEntry> { it.updatedAt }.thenBy { it.id },
+            ),
+        )
+    }
+
+    private fun publishProgress(progress: WatchProgress) {
+        _watchProgress.value = (_watchProgress.value.filterNot {
+            it.tmdbId == progress.tmdbId && it.mediaType == progress.mediaType &&
+                it.season == progress.season && it.episode == progress.episode
+        } + progress).sortedWith(
+            compareByDescending<WatchProgress> { it.watchedAt }
+                .thenBy { progressKey(it.tmdbId, it.mediaType, it.season, it.episode) },
+        )
+    }
+
     private fun progressFor(profileId: String, tmdbId: Int, mediaType: MediaType): List<WatchProgress> =
-        database.coveQueries.selectWatchProgress(profileId).executeAsList()
-            .filter { it.tmdb_id == tmdbId.toLong() && it.media_type == mediaType.wireName }
+        database.coveQueries
+            .selectWatchProgressForTitle(profileId, tmdbId.toLong(), mediaType.wireName)
+            .executeAsList()
             .map(Watch_progress::toModel)
 
     /** Ids held by *other* titles, which must never be overwritten by an adoption. */

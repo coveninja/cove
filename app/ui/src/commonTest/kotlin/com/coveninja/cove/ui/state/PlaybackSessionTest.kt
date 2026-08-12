@@ -50,6 +50,8 @@ import com.coveninja.cove.ui.model.MediaType as UiMediaType
 private class FakeLibrary : LibraryRepository {
     val entriesList = MutableStateFlow<LibraryState>(LibraryState.Ready(emptyList()))
     override val entries: StateFlow<LibraryState> = entriesList
+    private val progressList = MutableStateFlow<List<WatchProgress>>(emptyList())
+    override val watchProgress: StateFlow<List<WatchProgress>> = progressList
 
     var episodeStates: Map<Pair<Int, Int>, Boolean> = emptyMap()
     var storedProgress: WatchProgress? = null
@@ -91,8 +93,6 @@ private class FakeLibrary : LibraryRepository {
         episode: Int?,
     ): WatchProgress? = storedProgress
 
-    override suspend fun progressSnapshot(): List<WatchProgress> = listOfNotNull(storedProgress)
-
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress {
         recorded += request
         return WatchProgress(
@@ -103,7 +103,7 @@ private class FakeLibrary : LibraryRepository {
             positionSeconds = request.positionSeconds,
             durationSeconds = request.durationSeconds,
             completed = request.completed,
-        )
+        ).also { progressList.value = listOf(it) }
     }
 }
 

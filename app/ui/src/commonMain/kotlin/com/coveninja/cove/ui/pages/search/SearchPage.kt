@@ -24,7 +24,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,9 +55,8 @@ import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
-import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.SearchSession
-import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberMediaActions
 import kotlinx.coroutines.launch
 
@@ -79,6 +77,9 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun SearchPage(
+    searchState: SearchState,
+    exploreState: ExploreState,
+    index: LibraryIndex,
     session: SearchSession,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
@@ -86,10 +87,6 @@ fun SearchPage(
     onOpenPerson: (Person) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val graph = LocalAppGraph.current
-    val searchState by graph.content.searchResults.collectAsState()
-    val exploreState by graph.content.explore.collectAsState()
-    val index = rememberLibraryIndex()
     val actions = rememberMediaActions(index)
 
     var filters by remember { mutableStateOf(SearchFilters()) }

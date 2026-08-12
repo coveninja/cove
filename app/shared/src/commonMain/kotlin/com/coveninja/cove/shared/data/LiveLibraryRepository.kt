@@ -18,6 +18,8 @@ class LiveLibraryRepository(
 
     private val _entries = MutableStateFlow<LibraryState>(LibraryState.Loading)
     override val entries: StateFlow<LibraryState> = _entries.asStateFlow()
+    private val _watchProgress = MutableStateFlow<List<WatchProgress>>(emptyList())
+    override val watchProgress: StateFlow<List<WatchProgress>> = _watchProgress.asStateFlow()
 
     init {
         scope.launch { reload() }
@@ -142,12 +144,6 @@ class LiveLibraryRepository(
         episode: Int?,
     ): WatchProgress? = api.libraryProgress(tmdbId, mediaType, season, episode)
 
-    // The HTTP API answers for one title at a time (/api/library/progress takes a
-    // tmdb_id) and has no bulk route. Fanning out one request per saved title to
-    // decorate a grid would cost more than the decoration is worth, so this path
-    // reports nothing and callers draw no resume state.
-    override suspend fun progressSnapshot(): List<WatchProgress> = emptyList()
-
     // Deliberately no reload(): this runs on a timer for the whole length of a
     // playback session, and refetching the entire library every few seconds to
     // refresh a resume point nobody is looking at yet is pure waste. The library
@@ -155,5 +151,14 @@ class LiveLibraryRepository(
     // the caller decides whether a failed save is worth interrupting playback for
     // (it is not).
     override suspend fun recordProgress(request: WatchProgressRequest): WatchProgress =
-        api.postLibraryProgress(request)
+        api.postLibraryProgress(request).also(::publishProgress)
+
+    private fun publishProgress(progress: WatchProgress) {
+        _watchProgress.value = (_watchProgress.value.filterNot { it.sameKeyAs(progress) } + progress)
+            .sortedByDescending(WatchProgress::watchedAt)
+    }
 }
+
+private fun WatchProgress.sameKeyAs(other: WatchProgress): Boolean =
+    tmdbId == other.tmdbId && mediaType == other.mediaType &&
+        season == other.season && episode == other.episode

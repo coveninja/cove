@@ -75,6 +75,7 @@ import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.media.drag.MediaDragPayload
 import com.coveninja.cove.ui.components.menu.CMenuItem
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.platform.onSecondaryClick
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -99,7 +100,11 @@ fun MediaCard(
     onDragCancel: () -> Unit = {},
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
+    val isHovered = if (hasPointerHover) {
+        interactionSource.collectIsHoveredAsState().value
+    } else {
+        false
+    }
     val isPressed by interactionSource.collectIsPressedAsState()
 
     var cardCoordinates by remember {
@@ -148,14 +153,18 @@ fun MediaCard(
         label = "MediaCardAlpha",
     )
 
-    val elevation by animateDpAsState(
-        targetValue = if (isHovered) 12.dp else 2.dp,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessMedium,
-        ),
-        label = "MediaCardElevation",
-    )
+    val elevation = if (hasPointerHover) {
+        animateDpAsState(
+            targetValue = if (isHovered) 12.dp else 2.dp,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMedium,
+            ),
+            label = "MediaCardElevation",
+        ).value
+    } else {
+        2.dp
+    }
 
     Box(
         modifier = modifier
@@ -171,7 +180,13 @@ fun MediaCard(
             )
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainer)
-            .hoverable(interactionSource)
+            .then(
+                if (hasPointerHover) {
+                    Modifier.hoverable(interactionSource)
+                } else {
+                    Modifier
+                },
+            )
             .onGloballyPositioned { coordinates ->
                 cardCoordinates = coordinates
             }

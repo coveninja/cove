@@ -29,6 +29,7 @@ import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.backend.nuvio.NuvioSyncPayload
 import com.coveninja.cove.backend.playback.AndroidPlaybackMediaHost
 import com.coveninja.cove.backend.playback.AndroidPlaybackRepository
+import com.coveninja.cove.backend.playback.LazyAndroidPlaybackMediaHost
 import com.coveninja.cove.backend.platform.AndroidDeviceRepository
 import com.coveninja.cove.backend.prefetch.PrefetchService
 import com.coveninja.cove.backend.quality.QualityService
@@ -67,7 +68,7 @@ class AndroidBackendRuntime private constructor(
     private val client: HttpClient,
     private val untrustedClient: HttpClient,
     private val scope: CoroutineScope,
-    private val media: AndroidPlaybackMediaHost,
+    private val media: LazyAndroidPlaybackMediaHost,
     private val routeServices: CoreRouteServices,
     content: LocalContentRepository,
     playback: PlaybackRepository,
@@ -162,6 +163,7 @@ class AndroidBackendRuntime private constructor(
         ): AndroidBackendRuntime {
             val stores = AndroidStoreGraph.open(context)
             val client = HttpClient(OkHttp) {
+                engine { config { fastFallback(false) } }
                 install(ContentNegotiation) { json(CoveJson) }
                 install(HttpTimeout) { requestTimeoutMillis = 20_000 }
             }
@@ -169,12 +171,13 @@ class AndroidBackendRuntime private constructor(
             // public URL's redirect into a private network; the policy validates the
             // original destination, and callers can explicitly install the final URL.
             val untrustedClient = HttpClient(OkHttp) {
+                engine { config { fastFallback(false) } }
                 followRedirects = false
                 install(ContentNegotiation) { json(CoveJson) }
                 install(HttpTimeout) { requestTimeoutMillis = 25_000 }
             }
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-            var openedMedia: AndroidPlaybackMediaHost? = null
+            var openedMedia: LazyAndroidPlaybackMediaHost? = null
             try {
                 val catalog = TmdbClient(
                     httpClient = client,
@@ -212,18 +215,20 @@ class AndroidBackendRuntime private constructor(
                     scope = scope,
                     nuvio = NuvioAddonService(nuvio),
                 )
-                val media = AndroidPlaybackMediaHost.start(
-                    httpClient = untrustedClient,
-                    publicUrlPolicy = AndroidAddonUrlPolicy,
-                    allowLanStreamSources = {
-                        (stores.repositories.settings.settings.value as? SettingsState.Ready)
-                            ?.settings
-                            ?.allowLanStreamSources == true
-                    },
-                    torrentEngine = AndroidJlibtorrentPlaybackEngine(
-                        context.filesDir.resolve("torrents").toPath(),
-                    ),
-                ).also { openedMedia = it }
+                val media = LazyAndroidPlaybackMediaHost {
+                    AndroidPlaybackMediaHost.start(
+                        httpClient = untrustedClient,
+                        publicUrlPolicy = AndroidAddonUrlPolicy,
+                        allowLanStreamSources = {
+                            (stores.repositories.settings.settings.value as? SettingsState.Ready)
+                                ?.settings
+                                ?.allowLanStreamSources == true
+                        },
+                        torrentEngine = AndroidJlibtorrentPlaybackEngine(
+                            context.filesDir.resolve("torrents").toPath(),
+                        ),
+                    )
+                }.also { openedMedia = it }
                 val playback = AndroidPlaybackRepository(catalog, addonManager, media, nuvio)
                 val calendarService = CalendarService(
                     database = stores.databaseHandle,

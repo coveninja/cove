@@ -17,7 +17,7 @@ import com.coveninja.cove.shared.model.TorrentProgress
 internal class AndroidPlaybackRepository(
     private val catalog: MediaCatalog,
     private val addons: AddonManager,
-    private val media: AndroidPlaybackMediaHost,
+    private val media: LazyAndroidPlaybackMediaHost,
     private val nuvio: NuvioManager? = null,
 ) : PlaybackRepository {
     override suspend fun streams(

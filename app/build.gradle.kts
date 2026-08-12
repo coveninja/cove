@@ -10,6 +10,8 @@ plugins {
     alias(libs.plugins.sqldelight)             apply false
     alias(libs.plugins.android.application)    apply false
     alias(libs.plugins.android.kmp.library)    apply false
+    alias(libs.plugins.android.test)           apply false
+    alias(libs.plugins.androidx.baselineprofile) apply false
 }
 
 // Convenience: `./gradlew test` from the app root covers the shared KMP

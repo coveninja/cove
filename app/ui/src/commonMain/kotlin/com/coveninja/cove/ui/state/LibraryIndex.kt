@@ -2,8 +2,6 @@ package com.coveninja.cove.ui.state
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.model.CalendarItem
@@ -74,14 +72,11 @@ private operator fun Pair<Int, Int>.compareTo(other: Pair<Int, Int>): Int =
     compareValuesBy(this, other, { it.first }, { it.second })
 
 @Composable
-fun rememberLibraryIndex(): LibraryIndex {
-    val graph = LocalAppGraph.current
-    val libraryState by graph.library.entries.collectAsState()
-    return remember(libraryState) {
+fun rememberLibraryIndex(libraryState: LibraryState): LibraryIndex =
+    remember(libraryState) {
         val entries = (libraryState as? LibraryState.Ready)?.entries.orEmpty()
         LibraryIndex(entries)
     }
-}
 
 // Internal so both CoveApp and pages can use these without exposing them as API.
 internal fun LibraryStatus.toUiCategory(): MyListCategory = when (this) {

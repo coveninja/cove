@@ -24,6 +24,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Cove"
         android:usesCleartextTraffic="false">
+        <profileable android:shell="true" />
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode"

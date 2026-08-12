@@ -14,14 +14,22 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.coveninja.cove.ui.CoveApp
 import com.coveninja.cove.ui.CoveTheme
+import com.coveninja.cove.ui.components.common.AppBootstrapFailed
+import com.coveninja.cove.ui.components.common.AppBootstrapLoading
 import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.player.AndroidMpvVideoPlayerHost
+import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.fixture.FixtureAppGraph
 
 class MainActivity : ComponentActivity() {
     private val requestNotificationPermission = registerForActivityResult(
@@ -38,20 +46,46 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         val mobileApplication = application as CoveMobileApplication
-        playerHost = mobileApplication.playerHost()
-        val graph = mobileApplication.backendRuntime().graph
+        val fixtureMode = BuildConfig.BENCHMARK_FIXTURE &&
+            intent.getBooleanExtra(BENCHMARK_FIXTURE_EXTRA, false)
+        if (!fixtureMode) mobileApplication.initializeBackend()
         setContent {
             CoveTheme {
-                CoveApp(
-                    graph = graph,
-                    videoPlayerHost = playerHost,
-                    navBarPlacement = NavBarPlacement.Bottom,
-                    onDetailsOverlayVisibilityChanged = ::setDetailsOverlayVisible,
-                    onFullscreenPlaybackVisibilityChanged = ::setFullscreenPlaybackVisible,
-                )
+                if (fixtureMode) {
+                    val graph = remember { FixtureAppGraph() }
+                    LaunchedEffect(Unit) { reportFullyDrawn() }
+                    CoveApp(
+                        graph = graph,
+                        navBarPlacement = NavBarPlacement.Bottom,
+                    )
+                } else {
+                    val runtimeState by mobileApplication.runtimeState.collectAsState()
+                    when (val state = runtimeState) {
+                        MobileRuntimeState.Loading -> AppBootstrapLoading()
+                        is MobileRuntimeState.Failed -> AppBootstrapFailed(
+                            message = state.message,
+                            onRetry = mobileApplication::initializeBackend,
+                        )
+                        is MobileRuntimeState.Ready -> {
+                            val host = remember { mobileApplication.playerHost() }
+                            playerHost = host
+                            val homeState by state.runtime.graph.content.home.collectAsState()
+                            LaunchedEffect(homeState) {
+                                if (homeState !is HomeState.Loading) reportFullyDrawn()
+                            }
+                            CoveApp(
+                                graph = state.runtime.graph,
+                                videoPlayerHost = host,
+                                navBarPlacement = NavBarPlacement.Bottom,
+                                onDetailsOverlayVisibilityChanged = ::setDetailsOverlayVisible,
+                                onFullscreenPlaybackVisibilityChanged = ::setFullscreenPlaybackVisible,
+                            )
+                        }
+                    }
+                }
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        if (!fixtureMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -117,5 +151,9 @@ class MainActivity : ComponentActivity() {
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    companion object {
+        const val BENCHMARK_FIXTURE_EXTRA = "com.coveninja.cove.BENCHMARK_FIXTURE"
     }
 }

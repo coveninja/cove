@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -211,9 +212,15 @@ private fun CoveAppContent(
     onDetailsOverlayVisibilityChanged: (Boolean) -> Unit,
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit,
 ) {
-    val catalog = rememberMediaCatalog()
-    val index = rememberLibraryIndex()
-    val watchProgress = rememberWatchProgressIndex()
+    val graph = LocalAppGraph.current
+    val libraryState by graph.library.entries.collectAsState()
+    val progressRows by graph.library.watchProgress.collectAsState()
+    val homeState by graph.content.home.collectAsState()
+    val exploreState by graph.content.explore.collectAsState()
+    val searchState by graph.content.searchResults.collectAsState()
+    val catalog = rememberMediaCatalog(homeState, exploreState, searchState)
+    val index = rememberLibraryIndex(libraryState)
+    val watchProgress = rememberWatchProgressIndex(progressRows)
     val actions = rememberMediaActions(index)
     val detailsState = rememberMediaDetailsState(catalog)
     val personState = rememberPersonDetailsState()
@@ -329,6 +336,10 @@ private fun CoveAppContent(
             Box(modifier = pageModifier) {
                 when (selectedDestination) {
                     NavDestination.Home -> HomePage(
+                        homeState = homeState,
+                        index = index,
+                        watchProgress = watchProgress,
+                        catalog = catalog,
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,
                         // Home's resume goes straight to playback rather than via the details
@@ -340,6 +351,10 @@ private fun CoveAppContent(
                     )
 
                     NavDestination.MyList -> MyListPage(
+                        libraryState = libraryState,
+                        index = index,
+                        progress = watchProgress,
+                        catalog = catalog,
                         mediaCard = pageMediaCard,
                         onExplore = { selectedDestination = NavDestination.Explore },
                         onOpenMedia = openMedia,
@@ -355,12 +370,17 @@ private fun CoveAppContent(
                     )
 
                     NavDestination.Explore -> ExplorePage(
+                        exploreState = exploreState,
+                        index = index,
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,
                         navBarPlacement = navBarPlacement,
                     )
 
                     NavDestination.Search -> SearchPage(
+                        searchState = searchState,
+                        exploreState = exploreState,
+                        index = index,
                         session = search,
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,

@@ -87,7 +87,11 @@ fun ExploreGrid(
             item(span = { GridItemSpan(maxLineSpan) }, key = "explore-grid-header") { content() }
         }
 
-        itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+        itemsIndexed(
+            items = items,
+            key = { _, item -> item.id },
+            contentType = { _, _ -> "media-grid-item" },
+        ) { index, item ->
             StaggeredAppear(
                 index = index,
                 // On the item root, not on the card: placement animation is a property of

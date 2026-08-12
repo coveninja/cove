@@ -25,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,8 +47,8 @@ import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
+import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
-import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberMediaActions
 import kotlin.random.Random
 import kotlinx.coroutines.launch
@@ -69,15 +68,15 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ExplorePage(
+    exploreState: ExploreState,
+    index: LibraryIndex,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
     navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
-    val exploreState by graph.content.explore.collectAsState()
     val controller = rememberExploreController(graph.discovery)
-    val index = rememberLibraryIndex()
     val actions = rememberMediaActions(index)
 
     var filters by remember { mutableStateOf(ExploreFilters()) }

@@ -18,6 +18,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,12 +39,12 @@ import com.coveninja.cove.ui.pages.common.RailDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.pages.mylist.calendar.availableNow
+import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.MediaCatalog
+import com.coveninja.cove.ui.state.WatchProgressIndex
 import com.coveninja.cove.ui.state.mediaFor
-import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberMediaActions
-import com.coveninja.cove.ui.state.rememberMediaCatalog
-import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
@@ -69,6 +70,10 @@ import kotlin.time.Clock
  */
 @Composable
 fun HomePage(
+    homeState: HomeState,
+    index: LibraryIndex,
+    watchProgress: WatchProgressIndex,
+    catalog: MediaCatalog,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
@@ -78,19 +83,27 @@ fun HomePage(
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
-    val homeState by graph.content.home.collectAsState()
     val calendarState by graph.calendar.calendar.collectAsState()
-
-    val index = rememberLibraryIndex()
-    val watchProgress = rememberWatchProgressIndex()
-    val catalog = rememberMediaCatalog()
     val actions = rememberMediaActions(index)
     val controller = rememberHomeController(graph.content, graph.discovery)
 
-    // Cheap by design: the repository serves its cached snapshot and only refetches when the
-    // library has actually changed or the freshness window has lapsed.
-    LaunchedEffect(Unit) { graph.calendar.refresh(force = false) }
-    LaunchedEffect(Unit) { controller.loadPersonal() }
+    val initialContentReady = homeState !is HomeState.Loading
+
+    // Let the first useful frame win the race for the main thread and network. These requests
+    // only upgrade content that is already on screen, so starting them during initial discovery
+    // makes startup slower without improving the first paint.
+    LaunchedEffect(initialContentReady) {
+        if (initialContentReady) {
+            withFrameNanos { }
+            graph.calendar.refresh(force = false)
+        }
+    }
+    LaunchedEffect(initialContentReady) {
+        if (initialContentReady) {
+            withFrameNanos { }
+            controller.loadPersonal()
+        }
+    }
 
     val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
     val greeting = remember {
@@ -122,12 +135,18 @@ fun HomePage(
     val stats = remember(index, calendarItems) { libraryStats(index.entries, calendarItems) }
     val hero = remember(continuing, backlog, trending) { heroPick(continuing, backlog, trending) }
 
-    LaunchedEffect(hero?.media?.id) {
-        hero?.let { controller.enrichHero(it.media) }
+    LaunchedEffect(initialContentReady, hero?.media?.id) {
+        if (initialContentReady) {
+            hero?.let { controller.enrichHero(it.media) }
+        }
     }
     // Safe to re-invoke on every rebuild of the rows — which playback does every few seconds
     // — because the controller skips any season it has already fetched or already failed.
-    LaunchedEffect(continuing) { controller.loadEpisodeStills(continuing) }
+    LaunchedEffect(initialContentReady, continuing) {
+        if (initialContentReady) {
+            controller.loadEpisodeStills(continuing)
+        }
+    }
 
     val rails = remember(controller.personalRails, trending) {
         buildHomeRails(

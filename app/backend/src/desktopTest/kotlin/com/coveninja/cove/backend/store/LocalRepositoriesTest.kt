@@ -109,9 +109,11 @@ class LocalRepositoriesTest {
                     durationSeconds = 100.0,
                 ),
             )
+            assertEquals(10.0, library.watchProgress.value.single().positionSeconds)
             val child = profiles.create("Child")
             profiles.activate(child.id)
             advanceUntilIdle()
+            assertEquals(emptyList(), library.watchProgress.value)
             library.recordProgress(
                 WatchProgressRequest(
                     tmdbId = 42,
@@ -123,10 +125,12 @@ class LocalRepositoriesTest {
                 ),
             )
             assertEquals(80.0, library.progress(42, MediaType.Tv, 1, 2)?.positionSeconds)
+            assertEquals(80.0, library.watchProgress.value.single().positionSeconds)
 
             profiles.activate("primary")
             advanceUntilIdle()
             assertEquals(10.0, library.progress(42, MediaType.Tv, 1, 2)?.positionSeconds)
+            assertEquals(10.0, library.watchProgress.value.single().positionSeconds)
             scope.cancel()
         }
     }
