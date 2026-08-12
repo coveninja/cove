@@ -1,0 +1,45 @@
+package com.coveninja.cove.shared.data
+
+import com.coveninja.cove.shared.model.Addon
+import com.coveninja.cove.shared.model.NuvioRepoSummary
+import kotlinx.coroutines.flow.StateFlow
+
+sealed interface AddonsState {
+    data object Loading : AddonsState
+    data class Ready(
+        val addons: List<Addon>,
+        val nuvioRepos: List<NuvioRepoSummary>,
+    ) : AddonsState
+
+    data class Failed(val message: String) : AddonsState
+}
+
+/**
+ * Provider addons and Nuvio scraper repositories.
+ *
+ * Built-in metadata integrations may be seeded, but a fresh profile has no
+ * third-party stream provider. Mutations report failure through [lastError]
+ * rather than by throwing, since a bad manifest URL is ordinary user input,
+ * not an exceptional condition.
+ */
+interface AddonRepository {
+    val state: StateFlow<AddonsState>
+
+    /** Set when a mutation fails, cleared when the next one is attempted. */
+    val lastError: StateFlow<String?>
+
+    /** Whether this host can install and execute Nuvio JavaScript scrapers. */
+    val supportsNuvio: Boolean get() = false
+
+    suspend fun reload()
+
+    suspend fun addAddon(url: String)
+    suspend fun setAddonEnabled(id: String, enabled: Boolean)
+    suspend fun removeAddon(id: String)
+    suspend fun refreshAddon(id: String)
+
+    suspend fun addNuvioRepo(url: String)
+    suspend fun setNuvioRepoEnabled(id: String, enabled: Boolean)
+    suspend fun removeNuvioRepo(id: String)
+    suspend fun setNuvioScraperEnabled(repoId: String, scraperId: String, enabled: Boolean)
+}

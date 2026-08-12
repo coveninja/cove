@@ -1,0 +1,509 @@
+CREATE TABLE migration_metadata (
+    key TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE profiles (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    supabase_uid TEXT,
+    name_updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE active_profile (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE app_settings (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE library_entries (
+    id TEXT NOT NULL PRIMARY KEY,
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    tmdb_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('movie', 'tv')),
+    title TEXT NOT NULL,
+    poster_path TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('watch_later', 'watching', 'finished', 'dropped')),
+    rating REAL,
+    vote_average REAL NOT NULL DEFAULT 0,
+    last_air_date TEXT NOT NULL DEFAULT '',
+    last_watched_at TEXT,
+    last_watched_season INTEGER,
+    last_watched_episode INTEGER,
+    last_aired_season INTEGER,
+    last_aired_episode INTEGER,
+    added_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(profile_id, tmdb_id, media_type)
+);
+
+CREATE TABLE watch_progress (
+    progress_key TEXT NOT NULL,
+    id TEXT NOT NULL UNIQUE,
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    library_entry_id TEXT NOT NULL,
+    tmdb_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('movie', 'tv')),
+    season INTEGER,
+    episode INTEGER,
+    position_seconds REAL NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0,
+    completed INTEGER NOT NULL DEFAULT 0,
+    watched_at TEXT NOT NULL,
+    PRIMARY KEY(profile_id, progress_key)
+);
+
+CREATE TABLE dismissals (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    tmdb_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('movie', 'tv')),
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY(profile_id, tmdb_id, media_type)
+);
+
+CREATE TABLE removals (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    tmdb_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL CHECK (media_type IN ('movie', 'tv')),
+    removed_at TEXT NOT NULL,
+    PRIMARY KEY(profile_id, tmdb_id, media_type)
+);
+
+-- These stores remain opaque during their feature ports. Keeping their exact
+-- payload makes the migration reversible without forcing unrelated
+-- services to share one untyped settings table.
+CREATE TABLE legacy_payloads (
+    profile_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, kind)
+);
+
+CREATE TABLE addons (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    addon_id TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('provider', 'subtitle', 'timestamps')),
+    source TEXT NOT NULL CHECK (source IN ('stremio', 'official')) DEFAULT 'stremio',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    disabled_catalogs_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, url)
+);
+
+-- The native clients own their Supabase session. Keeping it in SQLite avoids
+-- depending on WebView localStorage and gives refresh-token replacement one
+-- atomic persistence boundary.
+CREATE TABLE auth_session (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    user_id TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL DEFAULT '',
+    expires_at INTEGER,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Compatibility storage for /api/client-session consumers.
+-- It deliberately remains opaque because older frontends may add fields the
+-- Kotlin backend does not need to interpret.
+CREATE TABLE client_session (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE profile_store_versions (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, kind)
+);
+
+CREATE TABLE nuvio_state (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
+-- Watch-time accounting is normalized because progress ticks are frequent.
+-- Each tick updates two small counters instead of rewriting a profile-sized
+-- JSON document, while the max-merge representation remains sync friendly.
+CREATE TABLE activity_hours (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(profile_id, date, hour)
+);
+
+CREATE TABLE activity_titles (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    title_key TEXT NOT NULL,
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(profile_id, date, title_key)
+);
+
+CREATE TABLE activity_positions (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    progress_key TEXT NOT NULL,
+    position REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY(profile_id, progress_key)
+);
+
+CREATE TABLE activity_state (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    backfilled INTEGER NOT NULL DEFAULT 0,
+    legacy_imported INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE trakt_sessions (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL DEFAULT '',
+    expires_at INTEGER NOT NULL DEFAULT 0,
+    username TEXT NOT NULL DEFAULT '',
+    last_sync_at TEXT NOT NULL DEFAULT ''
+);
+
+-- One row per profile holding the whole release calendar as serialized JSON. It is a
+-- cache of remote metadata, not a record of anything the viewer did, so it is stored
+-- whole rather than normalized: it is always read and written in full.
+CREATE TABLE calendar_cache (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    items TEXT NOT NULL DEFAULT '[]',
+    refreshed_at TEXT NOT NULL DEFAULT '',
+    -- The library the snapshot was built from; a mismatch means it is stale
+    -- regardless of age.
+    signature TEXT NOT NULL DEFAULT ''
+);
+
+selectMigrationMetadata:
+SELECT value FROM migration_metadata WHERE key = ?;
+
+upsertMigrationMetadata:
+INSERT OR REPLACE INTO migration_metadata(key, value) VALUES (?, ?);
+
+insertProfile:
+INSERT INTO profiles(id, name, is_primary, supabase_uid, name_updated_at)
+VALUES (?, ?, ?, ?, ?);
+
+updateProfile:
+UPDATE profiles
+SET name = ?, is_primary = ?, supabase_uid = ?, name_updated_at = ?
+WHERE id = ?;
+
+selectProfiles:
+SELECT * FROM profiles ORDER BY is_primary DESC, name COLLATE NOCASE, id;
+
+selectProfileById:
+SELECT * FROM profiles WHERE id = ?;
+
+deleteProfiles:
+DELETE FROM profiles;
+
+deleteProfileById:
+DELETE FROM profiles WHERE id = ?;
+
+moveSettingsToProfile:
+UPDATE app_settings SET profile_id = ? WHERE profile_id = ?;
+
+moveLibraryEntriesToProfile:
+UPDATE library_entries SET profile_id = ? WHERE profile_id = ?;
+
+moveWatchProgressToProfile:
+UPDATE watch_progress SET profile_id = ? WHERE profile_id = ?;
+
+moveDismissalsToProfile:
+UPDATE dismissals SET profile_id = ? WHERE profile_id = ?;
+
+moveRemovalsToProfile:
+UPDATE removals SET profile_id = ? WHERE profile_id = ?;
+
+moveLegacyPayloadsToProfile:
+UPDATE legacy_payloads SET profile_id = ? WHERE profile_id = ?;
+
+moveAddonsToProfile:
+UPDATE addons SET profile_id = ? WHERE profile_id = ?;
+
+moveProfileStoreVersionsToProfile:
+UPDATE profile_store_versions SET profile_id = ? WHERE profile_id = ?;
+
+moveNuvioStateToProfile:
+UPDATE nuvio_state SET profile_id = ? WHERE profile_id = ?;
+
+moveActivityHoursToProfile:
+UPDATE activity_hours SET profile_id = ? WHERE profile_id = ?;
+
+moveActivityTitlesToProfile:
+UPDATE activity_titles SET profile_id = ? WHERE profile_id = ?;
+
+moveActivityPositionsToProfile:
+UPDATE activity_positions SET profile_id = ? WHERE profile_id = ?;
+
+moveActivityStateToProfile:
+UPDATE activity_state SET profile_id = ? WHERE profile_id = ?;
+
+moveTraktSessionToProfile:
+UPDATE trakt_sessions SET profile_id = ? WHERE profile_id = ?;
+
+setActiveProfile:
+INSERT OR REPLACE INTO active_profile(singleton, profile_id) VALUES (1, ?);
+
+selectActiveProfileId:
+SELECT profile_id FROM active_profile WHERE singleton = 1;
+
+deleteActiveProfile:
+DELETE FROM active_profile;
+
+upsertSettings:
+INSERT OR REPLACE INTO app_settings(profile_id, json, updated_at) VALUES (?, ?, ?);
+
+selectSettings:
+SELECT json FROM app_settings WHERE profile_id = ?;
+
+deleteSettings:
+DELETE FROM app_settings;
+
+upsertLibraryEntry:
+INSERT OR REPLACE INTO library_entries(
+    id, profile_id, tmdb_id, media_type, title, poster_path, status, rating,
+    vote_average, last_air_date, last_watched_at, last_watched_season,
+    last_watched_episode, last_aired_season, last_aired_episode, added_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectLibraryEntries:
+SELECT * FROM library_entries WHERE profile_id = ? ORDER BY updated_at DESC, id;
+
+selectLibraryEntry:
+SELECT * FROM library_entries WHERE profile_id = ? AND tmdb_id = ? AND media_type = ?;
+
+deleteLibraryEntry:
+DELETE FROM library_entries WHERE profile_id = ? AND tmdb_id = ? AND media_type = ?;
+
+deleteLibraryEntries:
+DELETE FROM library_entries;
+
+-- Used when a library entry adopts the id another device already uses for the
+-- same title, so its progress rows keep pointing at it.
+relinkWatchProgressEntry:
+UPDATE watch_progress SET library_entry_id = ?
+WHERE profile_id = ? AND library_entry_id = ?;
+
+upsertWatchProgress:
+INSERT OR REPLACE INTO watch_progress(
+    progress_key, id, profile_id, library_entry_id, tmdb_id, media_type, season,
+    episode, position_seconds, duration_seconds, completed, watched_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectWatchProgress:
+SELECT * FROM watch_progress WHERE profile_id = ? ORDER BY watched_at DESC, progress_key;
+
+selectWatchProgressByKey:
+SELECT * FROM watch_progress WHERE profile_id = ? AND progress_key = ?;
+
+selectWatchProgressForTitle:
+SELECT * FROM watch_progress
+WHERE profile_id = ? AND tmdb_id = ? AND media_type = ?
+ORDER BY watched_at DESC, progress_key;
+
+deleteWatchProgress:
+DELETE FROM watch_progress;
+
+upsertDismissal:
+INSERT OR REPLACE INTO dismissals(profile_id, tmdb_id, media_type, dismissed_at) VALUES (?, ?, ?, ?);
+
+selectDismissals:
+SELECT * FROM dismissals WHERE profile_id = ? ORDER BY dismissed_at DESC;
+
+deleteDismissal:
+DELETE FROM dismissals WHERE profile_id = ? AND tmdb_id = ? AND media_type = ?;
+
+deleteDismissals:
+DELETE FROM dismissals;
+
+upsertRemoval:
+INSERT OR REPLACE INTO removals(profile_id, tmdb_id, media_type, removed_at) VALUES (?, ?, ?, ?);
+
+selectRemovals:
+SELECT * FROM removals WHERE profile_id = ? ORDER BY removed_at DESC;
+
+deleteRemovals:
+DELETE FROM removals;
+
+deleteRemoval:
+DELETE FROM removals WHERE profile_id = ? AND tmdb_id = ? AND media_type = ?;
+
+upsertLegacyPayload:
+INSERT OR REPLACE INTO legacy_payloads(profile_id, kind, json, updated_at) VALUES (?, ?, ?, ?);
+
+selectLegacyPayload:
+SELECT json FROM legacy_payloads WHERE profile_id = ? AND kind = ?;
+
+selectLegacyPayloadRecord:
+SELECT * FROM legacy_payloads WHERE profile_id = ? AND kind = ?;
+
+selectLegacyPayloads:
+SELECT * FROM legacy_payloads ORDER BY profile_id, kind;
+
+deleteLegacyPayloads:
+DELETE FROM legacy_payloads;
+
+-- Insert-then-update rather than INSERT OR REPLACE, and deliberately not the
+-- ON CONFLICT DO UPDATE form: this schema is compiled against the SQLite 3.18
+-- dialect, which predates UPSERT (3.24).
+--
+-- REPLACE deletes the conflicting row and inserts a new one, handing it a fresh
+-- rowid — and selectAddons orders by rowid, so merely toggling an addon moved it
+-- to the bottom of the list. IGNORE leaves an existing row, and rowid with it,
+-- for the UPDATE below to edit in place. Callers must run both, in a transaction.
+insertAddonIfMissing:
+INSERT OR IGNORE INTO addons(
+    profile_id, url, addon_id, manifest_json, kind, source, enabled,
+    disabled_catalogs_json, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateAddon:
+UPDATE addons SET
+    addon_id = ?,
+    manifest_json = ?,
+    kind = ?,
+    source = ?,
+    enabled = ?,
+    disabled_catalogs_json = ?,
+    updated_at = ?
+WHERE profile_id = ? AND url = ?;
+
+selectAddons:
+SELECT * FROM addons WHERE profile_id = ? ORDER BY rowid;
+
+selectAddonByUrl:
+SELECT * FROM addons WHERE profile_id = ? AND url = ?;
+
+selectAddonsById:
+SELECT * FROM addons WHERE profile_id = ? AND addon_id = ? ORDER BY rowid;
+
+deleteAddonByUrl:
+DELETE FROM addons WHERE profile_id = ? AND url = ?;
+
+deleteAddonsForProfile:
+DELETE FROM addons WHERE profile_id = ?;
+
+deleteAddons:
+DELETE FROM addons;
+
+upsertAuthSession:
+INSERT OR REPLACE INTO auth_session(
+    singleton, user_id, email, access_token, refresh_token, expires_at, updated_at
+) VALUES (1, ?, ?, ?, ?, ?, ?);
+
+selectAuthSession:
+SELECT * FROM auth_session WHERE singleton = 1;
+
+deleteAuthSession:
+DELETE FROM auth_session WHERE singleton = 1;
+
+upsertClientSession:
+INSERT OR REPLACE INTO client_session(singleton, json, updated_at) VALUES (1, ?, ?);
+
+selectClientSession:
+SELECT json FROM client_session WHERE singleton = 1;
+
+deleteClientSession:
+DELETE FROM client_session WHERE singleton = 1;
+
+upsertProfileStoreVersion:
+INSERT OR REPLACE INTO profile_store_versions(profile_id, kind, updated_at) VALUES (?, ?, ?);
+
+selectProfileStoreVersion:
+SELECT updated_at FROM profile_store_versions WHERE profile_id = ? AND kind = ?;
+
+deleteProfileStoreVersions:
+DELETE FROM profile_store_versions;
+
+upsertNuvioState:
+INSERT OR REPLACE INTO nuvio_state(profile_id, json, updated_at) VALUES (?, ?, ?);
+
+selectNuvioState:
+SELECT * FROM nuvio_state WHERE profile_id = ?;
+
+deleteNuvioState:
+DELETE FROM nuvio_state;
+
+selectActivityHours:
+SELECT * FROM activity_hours WHERE profile_id = ? ORDER BY date, hour;
+
+selectActivityHour:
+SELECT seconds FROM activity_hours WHERE profile_id = ? AND date = ? AND hour = ?;
+
+upsertActivityHour:
+INSERT OR REPLACE INTO activity_hours(profile_id, date, hour, seconds) VALUES (?, ?, ?, ?);
+
+selectActivityTitles:
+SELECT * FROM activity_titles WHERE profile_id = ? ORDER BY date, title_key;
+
+selectActivityTitle:
+SELECT seconds FROM activity_titles WHERE profile_id = ? AND date = ? AND title_key = ?;
+
+upsertActivityTitle:
+INSERT OR REPLACE INTO activity_titles(profile_id, date, title_key, seconds) VALUES (?, ?, ?, ?);
+
+selectActivityPosition:
+SELECT position FROM activity_positions WHERE profile_id = ? AND progress_key = ?;
+
+selectActivityPositions:
+SELECT * FROM activity_positions WHERE profile_id = ? ORDER BY progress_key;
+
+upsertActivityPosition:
+INSERT OR REPLACE INTO activity_positions(profile_id, progress_key, position) VALUES (?, ?, ?);
+
+selectActivityState:
+SELECT * FROM activity_state WHERE profile_id = ?;
+
+upsertActivityState:
+INSERT OR REPLACE INTO activity_state(profile_id, backfilled, legacy_imported) VALUES (?, ?, ?);
+
+deleteActivityHours:
+DELETE FROM activity_hours;
+
+deleteActivityTitles:
+DELETE FROM activity_titles;
+
+deleteActivityPositions:
+DELETE FROM activity_positions;
+
+deleteActivityStates:
+DELETE FROM activity_state;
+
+selectTraktSession:
+SELECT * FROM trakt_sessions WHERE profile_id = ?;
+
+upsertTraktSession:
+INSERT OR REPLACE INTO trakt_sessions(
+    profile_id, access_token, refresh_token, expires_at, username, last_sync_at
+) VALUES (?, ?, ?, ?, ?, ?);
+
+deleteTraktSession:
+DELETE FROM trakt_sessions WHERE profile_id = ?;
+
+deleteTraktSessions:
+DELETE FROM trakt_sessions;
+
+selectCalendarCache:
+SELECT * FROM calendar_cache WHERE profile_id = ?;
+
+upsertCalendarCache:
+INSERT OR REPLACE INTO calendar_cache(profile_id, items, refreshed_at, signature)
+VALUES (?, ?, ?, ?);
+
+deleteCalendarCache:
+DELETE FROM calendar_cache;

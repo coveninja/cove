@@ -1,0 +1,5 @@
+CREATE TABLE nuvio_state (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT ''
+);

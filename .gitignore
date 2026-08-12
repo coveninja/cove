@@ -1,29 +1,23 @@
 /.env
-/web/.env
-/electron/build/
 /cove
 /cove.exe
 /library.json
-/qt/build/
 /.flatpak-builder/
 /*.flatpak
-/web/dist/
-/web/node_modules/
-/web/.eslintcache
-/web/coverage/
-/web/playwright-report/
-/web/test-results/
 /coverage-*.out
 /CLAUDE.md
+
+# Gradle build output for the Compose Desktop app is ignored by app/.gitignore;
+# only the Kotlin incremental-compile cache is missed by it.
+/app/.kotlin/
 
 # Editor / AI-tooling scratch
 /.idea/
 /.agents/
 /.codex/
 
-# Proprietary — sourced from the _private/cove-discover submodule via `make inject-private`
-/internal/discover/discover.go
-/internal/discover/discover_test.go
-/internal/discover/algorithm.go
-/internal/discover/algorithm_test.go
+# Local, reversible copy made during the Kotlin cutover. The retired sources
+# remain in Git history; only the explanatory marker is part of new checkouts.
+/legacy/go-backend/**
+!/legacy/go-backend/README.md
 /.claude/

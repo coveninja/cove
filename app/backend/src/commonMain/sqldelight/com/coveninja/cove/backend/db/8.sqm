@@ -1,0 +1,6 @@
+CREATE TABLE calendar_cache (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    items TEXT NOT NULL DEFAULT '[]',
+    refreshed_at TEXT NOT NULL DEFAULT '',
+    signature TEXT NOT NULL DEFAULT ''
+);

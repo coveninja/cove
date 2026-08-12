@@ -1,0 +1,22 @@
+PRAGMA foreign_keys = OFF;
+
+ALTER TABLE addons RENAME TO addons_v4;
+CREATE TABLE addons (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    addon_id TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('provider', 'subtitle', 'timestamps')),
+    source TEXT NOT NULL CHECK (source IN ('stremio', 'official')) DEFAULT 'stremio',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    disabled_catalogs_json TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, url)
+);
+INSERT INTO addons(profile_id, url, addon_id, manifest_json, kind, source, enabled, disabled_catalogs_json, updated_at)
+SELECT profile_id, url, addon_id, manifest_json, kind, 'stremio', enabled,
+       disabled_catalogs_json, updated_at
+FROM addons_v4;
+DROP TABLE addons_v4;
+
+PRAGMA foreign_keys = ON;

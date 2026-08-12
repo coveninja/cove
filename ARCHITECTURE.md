@@ -1,364 +1,132 @@
-# Architecture
+# Cove architecture
 
-This document explains how Cove is put together: the three cooperating
-components, how data flows through them, and the build-tag mechanism that
-separates the open-source core from proprietary functionality. It assumes
-you've read the [README](README.md) for the user-facing feature list and
-build instructions.
+## Runtime topology
 
-For an API endpoint reference, see [docs/API.md](docs/API.md). For dev setup
-and contribution conventions, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Cove has two application hosts over the same Kotlin Multiplatform graph.
+`app/desktop` owns the desktop window, mpv player, single-instance lock, and
+`LocalBackendRuntime`; `app/mobile` owns the Android activity/lifecycle and
+`AndroidBackendRuntime`. Both construct repositories in-process, pass the same
+`AppGraph` into the same `CoveApp` Compose root, and avoid serializing ordinary
+UI operations through localhost HTTP.
 
-## Three components at a glance
+The mobile artifact requires a touchscreen and has no Leanback launcher. This
+is a deliberate product boundary: phone/tablet and desktop share the adaptive
+Compose presentation, while a future Android TV host will provide a separate
+ten-foot/D-pad UI and reuse only shared domain/backend contracts.
 
-Cove is three processes cooperating over local sockets, not one monolith:
+On desktop, an embedded Ktor server still listens on loopback for boundaries
+that require a URL: mpv stream/torrent access, subtitle and image proxies,
+download progress, speed tests, diagnostics, and compatibility clients. It
+exposes the stable `/api/v1` namespace. The former `/api` namespace delegates to
+the same handlers and returns `Deprecation`, `Sunset`, and successor-version
+headers.
 
-1. **Go backend** (`main.go` + `internal/`) — an HTTP server on `:6969`
-   handling TMDB metadata, streaming, addon integration (Stremio-style
-   providers/subtitles), sandboxed community plugin execution, the local
-   library/settings/profiles stores, and personalized recommendations.
-2. **Svelte frontend** (`web/`) — a Svelte 5 + TypeScript + Vite SPA that
-   talks exclusively to the Go backend over HTTP (`web/src/lib/api.ts`). It
-   has no direct filesystem or process access of its own.
-3. **Qt shell** (`qt/`) — a native Qt Quick application that hosts the web UI
-   in a `QtWebEngine` view and renders video via libmpv, composited *behind*
-   the (transparent) web layer. It also owns process lifecycle: it spawns the
-   Go binary as a child process and serves the built frontend.
+Optional LAN access is a separate listener. It starts only when the persisted
+setting enables it and a non-empty token exists. Remote requests use a
+constant-time token check; loopback CORS is allow-listed. User-supplied addon,
+plugin, proxy, and custom-ranking URLs pass through a policy that rejects local,
+private, metadata, userinfo, and unsafe redirect targets unless the explicit LAN
+stream-source preference permits them.
 
-The Android/Android TV package replaces the Qt shell rather than adding a
-fourth desktop process. `gomobile` embeds the Go backend in `cove.aar`,
-`CoveService` owns that backend inside a foreground service, and
-`WebViewActivity` hosts the same responsive Svelte bundle in a WebView.
-`MpvBridge`/`MpvPlayerView` provide native libmpv rendering and controls. In
-remote mode the WebView and native bridge point at a paired desktop backend
-instead of starting the embedded one.
+## Gradle modules
 
-At startup, `qt/src/main.cpp` does three things in parallel: starts a small
-built-in static file server for `web/dist` (see below), spawns the Go binary
-as a `QProcess` (`startBackend()` in `qt/src/main.cpp`, stdout/stderr merged
-and forwarded to Qt's log with a `[go]` prefix), and polls `localhost:6969`
-with a raw TCP connect every 150ms (`BackendProbe::waitFor()` in
-`qt/src/main.cpp` — a connectivity check, not an HTTP health check). Once the
-backend answers, the shell loads the QML scene and points the `WebEngineView`
-at either the static server's URL or, in `--dev` mode, Vite's dev server at
-`localhost:5173`.
+| Module | Responsibility |
+|---|---|
+| `app/shared` | Domain models, repository interfaces, app graph, HTTP compatibility client |
+| `app/backend` common | TMDB client, addon manager, profile/settings/library repositories, Supabase auth and cross-device sync |
+| `app/backend` desktop | SQLite, migration, Ktor, media/torrent, Nuvio sandbox, Trakt, discovery, prefetch |
+| `app/backend` Android | Android SQLite driver, upgrade migration, OkHttp, and mobile runtime composition |
+| `app/ui` | Shared desktop/mobile Compose presentation and platform interaction seams |
+| `app/desktop` | Desktop composition root, lifecycle, packaging, and mpv surfaces |
+| `app/mobile` | Android phone/tablet composition root, manifest, lifecycle, and APK packaging |
 
-## Backend package map (`internal/*`)
+Portable code stays in `commonMain`. Desktop implementations live in
+`desktopMain`; Android drivers and lifecycle adapters live in `androidMain` or
+`app/mobile`. Pointer-only secondary-click behavior is an expect/actual seam;
+touch keeps the shared long-press and drag interactions. TV-specific focus,
+navigation, density, and screen composition must not be added as mode switches
+inside the shared touch UI.
 
-- **`tmdb`** — the TMDB API client and the largest single set of HTTP routes
-  (search, details, images, videos, providers, similar-titles, genre lists,
-  a batched quality-probe endpoint). Client/domain code lives in `tmdb.go`;
-  HTTP adapters live in `tmdb_handlers.go`. No build-tag variance; always
-  compiled the same way. See `docs/API.md` for the full route list.
-- **`library`** — the local watch history / ratings / "not interested" store,
-  persisted as `library-<profileID>.json` under the OS config dir
-  (`internal/utils.ConfigPath`). Exposes `TasteSignals()` and `Generation()`
-  — the interface the recommendation engine consumes without either package
-  importing the other.
-- **`settings`** — a single flat `Settings` struct, same persistence pattern
-  as `library` (`settings-<profileID>.json`), whole-object GET/PUT over
-  `/api/settings`. Select-style preferences (stream selection mode, discovery
-  algorithm) are plain strings with no server-side enum validation — the
-  frontend owns the allowed-value metadata.
-- **`addons`** — the Stremio-compatible provider/subtitle addon manager. Two
-  "official" addons (JustWatch availability, IntroDB timestamps) are hardcoded
-  Go integrations; anything else is a user-pasted Stremio manifest URL,
-  fetched and classified by resource type at add-time. Fan-out across
-  multiple enabled addons of the same kind runs concurrently under a shared
-  deadline, with per-addon failures swallowed (non-fatal, matching the
-  "addon failures don't break the app" principle).
-- **`player`** — owns the `anacrolix/torrent` client and streams the selected
-  file in a torrent as seekable HTTP (`http.ServeContent`, so mpv's Range
-  requests just work). Torrent/session code lives in `player.go`; HTTP
-  adapters live in `player_handlers.go`. See "Playback data flow" below —
-  there is no transcoding here.
-- **`nuvio`** — runs community-maintained JS scraper plugins in a sandboxed
-  `goja` runtime (pure Go, no CGO, no Node) to produce additional direct-HTTP
-  stream candidates alongside `addons`. Off by default: a plugin repo must be
-  added and each scraper individually enabled by the user. One fresh
-  runtime per invocation, bounded by a per-scraper timeout and an overall
-  deadline for the whole batch; per-scraper errors/timeouts are logged and
-  skipped, matching `addons`'s swallow-per-failure philosophy. Called only
-  from `player.go`'s `/api/streams` handler — deliberately excluded from
-  `tmdb.go`'s batched `/api/quality/batch` endpoint, which fans out over
-  every title in a discovery grid and can't afford a JS runtime + network
-  call per tile.
-- **`profiles`** — Netflix-style local user profiles (not to be confused with
-  content-rating). Switching the active profile reloads `library`,
-  `settings`, and `addons` in place via a callback registered in `main.go`.
-- **`updater`** — self-update via GitHub releases; skips the check entirely
-  on managed distributions (`APPIMAGE`/`FLATPAK_ID` env vars set) or dev
-  builds (non-semver version string). Applying an update exits the process
-  with code `42`, which the Qt shell interprets as "restart me" (handled in
-  the `launchBackend` lambda in `qt/src/main.cpp`).
-- **`clientsession`** — a tiny opaque JSON blob store
-  (`os.UserConfigDir()/cove/session.json`) used for client-side auth token
-  persistence, because QtWebEngine's `localStorage` isn't reliably durable
-  across restarts.
-- **`utils`** — shared infrastructure: per-OS config paths and atomic writes,
-  bounded expiring caches, debounced persistence and background schedules,
-  request parameter/method validation, JSON responses, UUID creation, media
-  validation, and local TMDB image URL rewriting. HTTP handlers use these
-  helpers instead of carrying package-local variants.
-- **`discover`** and **`supabase`** — see "The OSS/proprietary split" below;
-  these are the two packages with a compile-time swap between an open-source
-  stub and proprietary functionality.
+## Persistence
 
-**`internal/anet-patch` — vendored Android network fix.** The Go standard
-library's `net.Interfaces()` and `net.InterfaceAddrs()` fail with
-`route ip+net: netlinkrib: permission denied` on Android 11+ because NETLINK
-socket operations are now restricted for ordinary apps (see the `wlynxg/anet`
-upstream README and [golang/go#40569](https://github.com/golang/go/issues/40569)).
-The `anet` package provides replacement implementations that work within
-Android's restrictions. However, `wlynxg/anet` uses `//go:linkname` directives
-to access `net.zoneCache` and `golang.org/x/net/internal/socket.zoneCache`,
-and Go 1.23+ rejects `//go:linkname` references to symbols that have not opted
-in. Rather than pass `-checklinkname=0` globally, the codebase carries a local
-fork at `internal/anet-patch` that removes the linkname directives entirely.
-IPv6 zone-ID caching is the only functionality removed; it has no impact on
-the torrent and HTTP streaming use cases. The fork is wired in via a `replace`
-directive in `go.mod` (`replace github.com/wlynxg/anet => ./internal/anet-patch`)
-so the rest of the dependency graph sees it as the normal upstream module.
+Each host opens one SQLDelight SQLite database through its platform driver:
+SQLite JDBC on desktop and `AndroidSqliteDriver` in Android app storage. Schema
+migrations are append-only under `app/backend/src/commonMain/sqldelight`; they
+cover profiles, settings, library/progress/dismissals, sessions, addons, Nuvio
+state, activity, and Trakt state. Repositories publish `StateFlow` snapshots and keep
+profile scoping explicit.
 
-## Playback data flow
-1. The frontend requests candidate streams for a title via `GET /api/streams`
-   (the `/api/streams` handler in `internal/player/player_handlers.go`), which fans out to
-   `addons.Manager.GetAllStreams` — each enabled provider addon contributes
-   infohashes and/or direct URLs — and, if any Nuvio scrapers are enabled,
-   `nuvio.Manager.GetStreams`, which runs each one in its own sandboxed goja
-   runtime and appends whatever direct-HTTP streams they produce.
-2. `Player.svelte` picks a source (`streamSelection.ts`'s `pickBestStream`, or
-   a manual choice) and calls `Player.play(api.playUrl(src))`
-   (`web/src/lib/player/player.svelte.ts`). `playUrl` builds either
-   `/api/play?hash=<infohash>` or passes a direct URL through unchanged.
-3. The `MpvPlayer` wrapper sends that URL over a `QWebChannel` bridge to the
-   native `MpvObject`, which issues an mpv `loadfile` command
-   (`MpvObject::play()` in `qt/src/MpvObject.cpp` — deferred until the render
-   context exists, since loading before that silently drops video for that file).
-4. **mpv itself opens the URL as an HTTP client**, hitting the Go backend's
-   `GET /api/play` route directly (Qt/QML plays no part in the actual byte
-   transfer):
-   - `?url=<direct>` → `307 Temporary Redirect` straight to the origin
-     server; the Go process isn't in the data path at all (in the `/api/play`
-     handler in `internal/player/player_handlers.go`).
-   - `?hash=<infohash>` → `Player.StreamTorrent` resolves which file to stream
-     via `selectFile()` in `internal/player/player.go` (with a 45s
-     metadata-fetch timeout). For a movie, or when nothing matches, that is
-     simply the largest video file; for a TV episode it tries increasingly
-     loose filename patterns — `S01E02`, then `1x02`, then a bare episode
-     marker, then an anime-style bare number — so season-pack torrents stream
-     the right episode. The decision logic sits in `selectFileIndex()`, a pure
-     function over `(path, length)` pairs, which is what makes it unit-testable
-     (`torrent.File` has no exported constructor). It then
-     opens a responsive/16MiB-readahead reader, and calls
-     `http.ServeContent`. Range-request seeking works because
-     `http.ServeContent` handles `Range:` headers and the anacrolix reader's
-     `io.ReadSeeker` reprioritizes piece downloads around the seeked offset.
-     Every mpv seek opens a *new* HTTP request (and thus a new reader) —
-     closing the old reader on handler return matters because anacrolix
-     readers hold download priority until closed.
-5. mpv decodes and renders every codec/container it natively supports — no
-   transcoding step exists to bridge format gaps.
+Migration runs before repositories become visible. Desktop `LegacyMigration`
+parses and backs up all known JSON inputs first, then replaces/imports their
+state in one database transaction. Android's migration uses the same package ID
+and app-private `filesDir` as the former app; it imports profiles, settings,
+library/progress/dismissal state and preserves session/addon/Nuvio/Trakt/
+activity JSON as opaque payloads until mobile adapters consume it. Both record
+versioned markers. Structured legacy export is currently a desktop-only
+`--export-legacy` recovery path.
 
-**The torrent reaper.** `CleanupTorrents()` (in `internal/player/player.go`)
-runs on a 30-minute ticker (in `main.go`). A torrent is dropped and its on-disk
-pieces deleted (from `os.TempDir()/cove-torrents`) only if its reader count is
-`<= 0` **and** it hasn't been used in the last 30 minutes. The reader count is
-incremented for the duration of `StreamTorrent` and `lastUsed` is also
-refreshed by `GetProgress` (so an open progress-bar poll counts as activity)
-— together these protect a torrent that's actively being watched, or whose
-progress UI is still open, from being collected mid-watch. Without this
-reaper, downloaded pieces and open file handles would accumulate for the life
-of the process.
+## Integrations and discovery
 
-An earlier browser-video + HLS.js architecture (predating the current mpv/Qt
-shell) left behind an unused `Settings.PreferHLS` field, `api.ts`'s
-`hlsStart`/`hlsStop`/`hlsMasterUrl`/`probe`/`subtitleExtractUrl`, a
-`subtitleCues.svelte.ts` WebVTT cue-tracker with no callers, and an unused
-`player.NewServer()` helper (`main.go` built its own inline `*http.Server`).
-All of this has since been removed — mentioned here only so a future
-spelunk through git history for "HLS" doesn't look like it's chasing a
-still-live feature.
+The Android runtime currently exposes the services used by the shared UI:
+localized TMDB content plus profile-scoped settings and library persistence.
+The richer desktop service graph remains desktop-only until each service gets a
+mobile-safe adapter; preserved legacy payloads prevent those future adapters
+from losing upgrade data.
 
-## The Qt shell in detail
+- `TmdbClient` owns localized metadata. It uses the selected UI language,
+  performs English fallback for missing presentation fields, and resolves TMDB
+  and IMDb identifiers used by addons.
+- `AddonManager` handles Stremio manifests, streams, subtitles, catalogs, the
+  official watch-option/timestamp integrations, bounded caching, and explicit
+  invalidation when provider state changes.
+- `DiscoveryService` builds profile-scoped taste signals from watch recency,
+  genres, keywords, people, studios, ratings, and status. Watched/dismissed/
+  removed items and age-inappropriate results are excluded before ranking. A
+  custom HTTPS ranker is optional and uses the untrusted-network policy.
+- `AuthService` and `SupabaseSyncService` implement public account auth and
+  reconciliation. `TraktService` implements device OAuth, scrobbling, and
+  two-way synchronization.
+- `PrefetchService` observes progress changes and periodically warms bounded
+  stream caches for current and next likely titles without starting torrents.
 
-`MpvObject` (`qt/src/MpvObject.h/cpp`) subclasses `QQuickFramebufferObject`.
-Its nested `MpvRenderer` runs on the Qt Quick render thread and does the
-actual libmpv work: it creates an mpv render context configured for OpenGL
-(`MPV_RENDER_PARAM_API_TYPE = "opengl"`, with `get_proc_address` resolved
-through the *current* `QOpenGLContext`), then on every frame wraps the Quick-
-provided framebuffer object into an `mpv_opengl_fbo` and calls
-`mpv_render_context_render` — mpv draws directly into the same FBO Qt Quick
-composites from. mpv's own update callback fires on mpv's render thread, so
-it's marshalled to the GUI thread via a queued `QMetaObject::invokeMethod`
-before touching any Qt signal.
+## Nuvio isolation
 
-**"Video behind a transparent web layer"** is ordinary QML z-ordering, not a
-special video flag: `main.qml` declares the `MpvObject` first (bottom of the
-scene graph) and a `WebEngineView` with `backgroundColor: "transparent"`
-after it (on top), filling the same window. Three things in `main()` in
-`qt/src/main.cpp` make this actually render correctly:
-`Qt::AA_ShareOpenGLContexts` (mpv and Quick's renderer must share GL
-contexts), forcing Quick onto the OpenGL RHI backend to match mpv's OpenGL
-render API, and giving the window's default surface format an 8-bit alpha
-channel so the WebEngineView's transparent background has something to show
-through to.
+Community scraper code never executes in the application JVM. Each invocation
+starts a disposable child JVM with a 128 MiB heap and a parent-enforced timeout.
+GraalJS receives no host-class lookup, host IO, process/native access, or thread
+creation. The bundled compatibility resources are stored beside the sandbox in
+`app/backend/src/desktopMain/resources`. Repository and scraper activation remain
+profile-scoped and opt-in.
 
-**The `QWebChannel` bridge** is used *only* for player control/state — every
-other piece of app data (metadata, library, settings, addon config) goes over
-plain HTTP from the web layer to the Go backend, same as if the web UI were
-running in an ordinary browser. `main.qml` registers the `MpvObject` instance
-under the id `"mpv"` on a `WebChannel` attached to the `WebEngineView`, which
-causes QtWebEngine to inject `qt.webChannelTransport` into `window`. Since the
-JS-side `QWebChannel` shim class also needs to exist before app code runs,
-`main.cpp` reads Qt's own compiled-in `qwebchannel.js` resource and injects it
-via a `QWebEngineScript` at `DocumentCreation` time (`installBridgeScript()`
-in `qt/src/main.cpp`) on every page load. On the frontend,
-`web/src/lib/player/player.svelte.ts`'s `MpvPlayer` class is the sole
-consumer: if `window.qt.webChannelTransport`/`window.QWebChannel` aren't
-present (e.g. plain `npm run dev` in a browser via `make web-dev`), it stays
-in an `available: false` no-op state rather than throwing.
+## Playback and media boundary
 
-**The static file server** (the `StaticServer` class in
-`qt/src/StaticServer.h` and `qt/src/StaticServer.cpp`, a `QTcpServer`
-subclass) is a small hand-rolled HTTP/1.1 server — not a separate binary —
-that exists purely to serve `web/dist` to the
-`WebEngineView` without hitting `file://` URL CORS/fetch restrictions in
-Chromium. It parses only the request line (no Range support, no keep-alive,
-one request per connection), guards against path traversal, and falls back to
-`index.html` for extensionless paths (SPA routing). It plays no role in video
-delivery — that's exclusively the Go backend's `/api/play`, which mpv hits
-directly over its own HTTP client.
+Direct HTTP sources are probed and proxied only when headers or compatibility
+handling require it. Redirects are validated one hop at a time, and credentials
+are stripped when authority changes. Subtitle responses can be converted from
+SRT to WebVTT. Torrent requests are registered with the embedded server and
+served from jlibtorrent while SSE exposes progress. The torrent engine chooses
+the requested or largest playable video file and owns cleanup on runtime close.
 
-## Frontend structure (`web/src/`)
+Desktop mpv stays in-process through JNA. The OpenGL path retains GPU rendering
+and hardware decoding; software rendering remains the controlled fallback.
+Native Android playback and torrent/media-boundary adapters are intentionally
+separate future platform work; the shared UI does not pretend desktop JNA or
+jlibtorrent binaries are Android-compatible.
 
-`App.svelte` is the true top-level component (not `web/src/renderer/...`
-despite older references — see current tree). Routing is **not** a router:
-`currentPage` is a single reactive `$state` holding a discriminated union
-(`web/src/lib/types/types.ts`), and every page component is always mounted,
-toggled purely via `class:hidden` rather than conditional rendering — this
-preserves scroll position and component state across navigation. Pages:
-`HomePage` (personalized feed), `QueryPage` (search), `MyListPage` (library),
-`SettingsPage`, `InsightsPage` (taste/library stats), `ExplorePage`
-(genre browse, no personalization), and `OnboardingPage` (first-run wizard,
-rendered as a full-screen overlay rather than a `currentPage` value).
+## Configuration and release
 
-Media detail is a floating overlay, not a page — Netflix-style. `App.svelte`
-provides `openMediaDetail`/`watchMedia` via Svelte context; any card
-component calls `getContext("openMediaDetail")` to pop open
-`MediaExpandedModal` without prop drilling, keyed by media id so switching
-titles remounts cleanly.
+Desktop configuration precedence is environment, nearest `.env`, then bundled
+release properties. Android reads the same deployment values into `BuildConfig`
+at APK build time. Release jobs inject deployment keys into desktop resources,
+build the Compose distributables plus libmpv, and publish a separately signed
+`cove-android.apk`. CI compiles/lints/tests both hosts and launches the mobile
+artifact on a phone emulator. There is no backend sidecar, private-source
+injection, or Go toolchain in active CI/release paths.
 
-Stores (`web/src/lib/stores/`): `settings.ts` (writable wrapping the
-backend's `Settings`, optimistic save), `auth.svelte.ts` (session/profile
-state, Supabase `onAuthStateChange` wiring), `library.ts` (a trivial mutation
-counter other components react to, not a cache).
+Self-replacement is intentionally disabled. `/update/check` reports the current
+version and `/update/apply` directs users to Flatpak, AUR, or the Windows
+installer, keeping updates atomic under the platform package manager.
 
-Player-adjacent modules (`web/src/lib/player/`): `player.svelte.ts`
-(`MpvPlayer`, the `QWebChannel` bridge described above),
-`progressSaver.svelte.ts` (throttled watch-position saves),
-`torrentProgress.svelte.ts` (SSE-driven download stats), `playerCore.svelte.ts`
-(shared player lifecycle), `trackList.ts` (audio/subtitle list shaping), and
-`format.ts` (playback clock formatting). Not in this
-directory but related: `streamSelection.ts` (stream-ranking heuristics).
-
-The desktop, mobile, and TV shells intentionally keep separate markup and
-interaction layers, but share stateful data controllers under `web/src/lib`:
-`homeFeed`, `continueWatching`, `catalogPager`, `myList`, `searchController`,
-`calendarAgenda`, `streamsList`, `settingsController`, `onboarding`, and
-`insights`; `authController` likewise backs both the desktop dialog and TV
-panel, while `accountActions` owns profile/session mutations across account
-surfaces. Platform files should own presentation concerns (touch gestures,
-desktop hover/scroll behavior, and TV D-pad focus); API orchestration,
-sequencing, cache rules, and domain transforms belong in these shared modules.
-`playbackChime.ts` similarly owns the single Web Audio start sound used by all
-three shells.
-
-`web/src/lib/api.ts` is the single point of contact with the backend and
-carries three load-bearing mechanisms worth knowing about before touching it:
-a concurrency limiter (max 8 in-flight fetches — a full homepage can fire
-hundreds of metadata requests at once, and Chromium throws
-`ERR_INSUFFICIENT_RESOURCES` past its own cap), request coalescing (an
-in-flight `Map` keyed by request signature, so duplicate concurrent GETs
-share one promise instead of re-firing), and a single `BASE` URL constant
-(overridable via `VITE_API_BASE`) that every other URL-builder in the file
-routes through. The torrent progress SSE and the speed test deliberately
-bypass the concurrency limiter — they'd hold a slot open indefinitely.
-
-UI components come from **shadcn-svelte** (built on **bits-ui** primitives),
-styled with **TailwindCSS 4**. `vidstack` powers `PlayerSimple.svelte`, a
-separate lightweight browser-native player used for trailer/preview clips in
-cards, carousels, and modals — it's unrelated to the main mpv-backed content
-player (`Player.svelte`) described above.
-
-## The OSS/proprietary split
-
-Two packages ship two implementations each, selected at compile time via Go
-build tags:
-
-| Package | OSS default (`noop.go`, no tag) | Proprietary (`-tags discover`/`supabase`) |
-|---|---|---|
-| `internal/discover` | `//go:build !discover`. Personalization rows return `[]`/`{}` unless a custom algorithm URL is configured in Settings (see below); `/api/genres` still works (plain TMDB proxy). | `//go:build discover`, source lives in the `_private/cove-discover` git submodule. Real taste-profile-driven recommendations: genre/keyword/cast-crew scoring with recency decay, re-ranking, and the pluggable custom-algorithm system. |
-| `internal/supabase` | `//go:build !supabase`. Every `/api/auth/*` route returns `503`. | `//go:build supabase`, mirrored in `internal/supabase` and verified against `_private/cove-auth`. Real account creation, login, profile reconciliation, and cross-device sync. |
-
-The private sources are refreshed via `make inject-private`: `git submodule
-update --init`, then a plain `cp` of
-`_private/cove-auth/*.go` into `internal/supabase/` and
-`_private/cove-discover/*.go` into `internal/discover/`. The `Makefile`'s
-`go` target auto-detects which private files are present
-(the `_PRIVATE_TAGS` variable in the `Makefile`, checking for
-`internal/supabase/client.go` and `internal/discover/discover.go`) and adds
-the matching `-tags` automatically
-— so `make inject-private && make go` alone is enough; you don't need to
-remember the tag names. The Supabase implementation is intentionally checked
-in as a mirror so PR CI can compile and test `-tags supabase`; trusted-push
-and release CI run `scripts/check-private-sync.sh` before injection and fail
-if it differs from `_private/cove-auth`. Discovery implementation files remain
-gitignored and are available only after private-submodule injection.
-
-**Licensing note**: the main repo is AGPL-3.0. The proprietary submodule
-files—and the checked-in Supabase mirror—carry their own "All Rights
-Reserved" copyright header and are explicitly excluded from the AGPL grant
-(see each file header). Untagged Go builds select the AGPL stubs. The standard
-Make targets auto-enable any implementation files present, but auth still
-requires Supabase runtime configuration and private discovery still requires
-submodule access.
-
-## Cross-device sync flow
-
-The frontend is the sync scheduler; the backend owns reconciliation and
-persistence:
-
-1. After session restoration, desktop/web calls `POST /api/auth/sync`
-   immediately, on focus/visibility resume, and every 60 seconds while visible.
-   Calls are throttled to a 45-second minimum and coalesced while one is in
-   flight. Android triggers on process resume and debounces post-mutation syncs.
-2. The backend validates the bearer JWT, reconciles the active local profile
-   with the account's remote profile rows, pulls remote data, and merges it
-   synchronously into the local stores. Entries, progress, profile names, and
-   settings use timestamp-based last-write-wins rules; dismissals are unioned;
-   removal tombstones prevent a deleted title from being resurrected by an
-   older device.
-3. A local-to-remote push starts asynchronously after the pull. RLS/unique-key
-   conflicts repair or adopt row IDs and retry once. Independent table errors
-   are joined so one failed dataset does not suppress the others.
-4. The response returns `library_generation`, allowing clients to refresh only
-   when merged library state changed. `push_error` reports the previous
-   completed asynchronous push; clients show each distinct error once instead
-   of spamming every poll.
-
-`MergeFrom` persists synchronously because a successful sync response must not
-race a delayed disk write. Unit tests cover generation stability, LWW merges,
-tombstone behavior, and sync cleanup/error de-duplication.
-
-**Worked example — the pluggable discovery algorithm.** This split doesn't
-have to mean "OSS users get nothing": `internal/discover`'s "custom
-algorithm" feature (an HTTP endpoint the user points Settings at, which
-receives a taste profile + a pre-filtered candidate pool and returns
-relevance scores) is implemented independently in *both* builds. The
-proprietary build sends a real taste profile built from library signals; the
-OSS `noop.go` build has no taste-profile machinery at all, so it sends the
-same JSON shape with empty profile arrays and a plain TMDB-popularity
-candidate pool instead. A single third-party algorithm implementation works
-unmodified against either edition — the contract, not the personalization
-data, is what's shared.
+The retired implementation remains in Git history; a local ignored cutover copy
+may exist under `legacy/go-backend`. It is excluded from builds and packages and
+must not receive new behavior.

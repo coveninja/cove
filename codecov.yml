@@ -12,11 +12,6 @@ coverage:
         flags:
           - go-public
           - go-supabase
-      web:
-        target: auto
-        threshold: 1%
-        flags:
-          - web
     patch:
       default:
         target: auto
@@ -26,7 +21,6 @@ flag_management:
   individual_flags:
     - name: go-public
     - name: go-supabase
-    - name: web
 
 comment:
   layout: "reach, diff, flags, files"

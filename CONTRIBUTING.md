@@ -1,122 +1,76 @@
 # Contributing to Cove
 
-Thanks for taking a look. This covers dev setup beyond the
-[README](README.md)'s quick-start, what to expect around the proprietary
-submodules, and the conventions this codebase already follows.
+## Setup
 
-## Dev setup
+Install JDK 21 and libmpv, put `TMDB_API_KEY` in the repository `.env`, then:
 
-Follow the README's "Build from source" section for prerequisites and the
-first `make run`. A few things specific to iterating on the code:
+```sh
+make run
+```
 
-- `make hot` is the tightest loop: it builds the Go backend and Qt shell, then
-  runs Vite with HMR served in-window via the shell's `--dev` mode — frontend
-  changes apply live without a full rebuild. `make hot-debug` adds QtWebEngine
-  remote devtools on `:9222`.
-- `make web-dev` runs a browser-only Vite dev server with no Qt shell at all.
-  The player will show "unavailable" (no `QWebChannel`/mpv bridge exists in a
-  plain browser), but everything else — search, library, settings, addons —
-  works against the real Go backend.
-- After changing a Go struct exported to the frontend (see every package in
-  `tygo.yaml`), run `make generate` to regenerate the mirrored TypeScript
-  types in `web/src/lib/types/*.ts`. **Never hand-edit those generated files**
-  — they're overwritten on the next generation pass. `time.Time` fields must
-  have a `string` mapping in `tygo.yaml`, matching their JSON encoding.
-- `internal/nuvio` embeds pure-Go dependencies (`goja`, `goja_nodejs`,
-  `andybalholm/brotli`) for its sandboxed JS runtime, so the OSS build stays
-  `CGO_ENABLED=0` with no Node/V8 dependency. Keep any new dependency for that
-  package pure Go for the same reason.
+`make hot` is the preferred Compose UI loop. For focused work, run Gradle from
+`app/`, for example `./gradlew :backend:desktopTest` or
+`./gradlew :desktop:run`.
 
-## Working without submodule access
+For phone/tablet work, install Android SDK platform/build-tools 36 and run
+`make mobile` or `./gradlew :mobile:installDebug`. The `app/mobile` APK uses the
+same `CoveApp` Compose root as desktop. Android TV is a separate presentation
+host: share its domain/backend logic, but do not add D-pad/ten-foot behavior as
+conditional branches throughout the touch UI.
 
-`internal/discover` and `internal/supabase` each have two implementations,
-switched at compile time by build tag: an open-source stub (`noop.go`,
-compiled by a plain untagged Go command) and a proprietary implementation.
-The Supabase auth/sync implementation is mirrored in `internal/supabase` so
-tagged CI and contributors can compile it; releases still verify that it
-matches `_private/cove-auth` byte-for-byte. The discovery implementation is
-injected from `_private/cove-discover` by `make inject-private`. See
-[ARCHITECTURE.md](ARCHITECTURE.md#the-ossproprietary-split) for the full
-mechanism.
+## Code organization
 
-If you don't have private-submodule access, that's fine. Untagged
-`go test ./...` exercises the public stubs; `go test -tags supabase ./...`
-exercises the mirrored auth/sync implementation. Personalized discovery
-remains on its stub unless the private discovery files are present. This
-covers shared work in `internal/library`, `internal/settings`, `internal/tmdb`,
-`internal/player`, `internal/addons`, and the frontend. If an interface changes
-across a build-tag boundary, update the corresponding stub and tagged
-implementation in the same change so both variants keep compiling.
+- Put portable models, interfaces, repositories, and business logic in
+  `commonMain`. Put filesystem, SQLite JDBC, Ktor CIO, GraalJS, jlibtorrent, and
+  desktop lifecycle code in `desktopMain`; put Android drivers and lifecycle
+  adapters in `androidMain` or `app/mobile`.
+- Compose screens depend on `AppGraph` repositories. Do not route ordinary
+  in-process UI operations through localhost.
+- Keep URL-requiring media operations and external compatibility in
+  `CoreRoutes`. New routes belong under `/api/v1`; only add an unversioned alias
+  when an existing client contract requires it.
+- `AppSettings` is a whole-object persisted contract. Add new settings with
+  safe defaults and update the SQL/JSON compatibility tests in the same change.
+- Every stored row is either explicitly global or profile-scoped. Include the
+  active profile in caches and invalidate caches when provider/settings state
+  changes.
+- Route all user-supplied URLs through `DesktopAddonUrlPolicy`. Do not enable
+  automatic redirects on the untrusted HTTP client or forward credentials to a
+  different authority.
+- Nuvio code must remain in the child-process sandbox. Do not expose host
+  classes, filesystem/process APIs, native access, or unbounded execution.
+- Comments should explain constraints and decisions; use names and small
+  functions to explain mechanics.
 
-When changing the mirrored Supabase files, update `_private/cove-auth` and
-`internal/supabase` together, then run `bash scripts/check-private-sync.sh`.
-Push CI and release builds intentionally fail if those copies diverge.
-
-## Code style
-
-- Comments should explain **why**, not what — the codebase leans on
-  descriptive naming for the "what" and reserves comments for non-obvious
-  constraints, workarounds, or the reasoning behind a magic number. Look at
-  `internal/player/player.go` or `internal/tmdb/tmdb.go` for the tone to
-  match.
-- Every backend package that registers HTTP routes does so via a
-  `SetupHandlers(mux *http.ServeMux)` method (or, for a couple of simpler
-  packages, a package-level `SetupHandlers(mux, ...)` function) called once
-  from `main.go`. Keep new routes consistent with that pattern rather than
-  wiring `http.HandleFunc` calls elsewhere.
-- `web/src/lib/api.ts` is the single point of contact with the backend from
-  the frontend — never construct a backend URL anywhere else. If you're
-  adding a new endpoint, add its method there alongside the existing ones for
-  that package's routes.
-- Go doc comments: every package should have a `// Package x ...` comment
-  explaining its purpose and any non-obvious constraint (see
-  `internal/clientsession/clientsession.go` for the bar to hit — a couple of
-  sentences that explain *why* the package exists, not just what it's
-  called).
+The retired backend is available through Git history; a local ignored cutover
+copy may exist under `legacy/go-backend`. Do not implement fixes or features
+there.
 
 ## Testing
 
 ```sh
-make test      # complete Go + web suite; recommended before a PR
-make test-all  # add workflow/security checks plus Qt and Android builds
+make test                 # all Kotlin module tests
+make test-build           # desktop app image plus Android debug APK
+make test-workflows       # release-note tests plus actionlint/shellcheck
+make test-all             # broad local CI approximation
 ```
 
-The individual `test-go`, `test-web`, `test-build`, `test-workflows`,
-`test-security`, `test-qt`, and `test-android` targets are useful when changing
-one component. The web browser suite needs a one-time
-`cd web && npx playwright install chromium` setup. `test-workflows` also
-requires ShellCheck so actionlint performs the same embedded-shell analysis as
-CI.
+For backend changes, prefer a focused test while iterating and finish with
+`./gradlew test --no-daemon`. Add contract tests for HTTP status/body/header
+behavior, migration tests for every schema or import change, and concurrency or
+cache-invalidation tests where work is asynchronous.
 
-```sh
-make test-private            # maintainers, after make inject-private
-make test-android-connected  # with an Android device/emulator running
-```
-
-Run Prettier before committing frontend changes:
-
-```sh
-cd android
-npm run format
-```
-
-The pull-request workflow runs public and Supabase-tagged Go tests with
-coverage, vet/format checks, the race detector, Linux/Windows compilation,
-Vitest/Playwright/typecheck/lint/build, a Qt build, Android lint/JVM tests and
-an API 35 emulator smoke test, dependency review, and vulnerability scans.
-Private `supabase,discover` integration tests additionally run on trusted
-pushes where the private-submodule token is available. Coverage is uploaded
-to Codecov and retained as downloadable workflow artifacts; it is currently
-informational, with no hard percentage gate.
-
-See [`docs/TESTING.md`](docs/TESTING.md) for the complete job matrix, coverage
-artifacts, Android emulator setup, and release gating.
+CI builds and tests the complete Gradle project on Linux, lints the Android app,
+launches it on a phone emulator, reviews pull-request dependencies, and lints
+workflow files. Release jobs repeat the Kotlin gate and create Linux/Flatpak,
+Windows, and signed Android phone/tablet artifacts.
 
 ## Before opening a PR
 
-- Run the build/test/lint commands above for whatever you touched.
-- If you changed a Go struct consumed by the frontend, confirm you also ran
-  `make generate` and committed the regenerated `.ts` files.
-- Keep the scope focused — this repo doesn't have issue/PR templates yet, so
-  a clear description of *why* the change is needed (not just what changed)
-  in the PR body goes a long way.
+- Run the checks proportional to the changed surface and `git diff --check`.
+- Describe behavior and migration impact, not just the files changed.
+- Preserve desktop input/player behavior and phone/tablet touch behavior. Keep
+  TV presentation separate and never pretend desktop-native libraries are
+  portable to Android.
+- Never commit `.env`, user databases, auth sessions, provider tokens, or
+  generated release credentials.
