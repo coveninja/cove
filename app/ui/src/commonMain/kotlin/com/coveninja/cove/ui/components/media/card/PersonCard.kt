@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,25 +37,38 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import com.coveninja.cove.ui.model.MediaCastMember
+import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.tmdbImageSize
 
+/**
+ * One face in a cast row.
+ *
+ * Nothing is revealed on hover — the name and the billing are always drawn — so the card
+ * says the same thing to a finger as it does to a mouse.
+ */
 @Composable
-fun MediaCastCard(
-    member: MediaCastMember,
+fun PersonCard(
+    person: Person,
     modifier: Modifier = Modifier,
+    /** Where the shared-element hook goes when this card opens the person sheet. */
+    avatarModifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
+    val isPressed by interactionSource.collectIsPressedAsState()
     val avatarScale by animateFloatAsState(
-        targetValue = if (isHovered) 1.035f else 1f,
+        targetValue = when {
+            isPressed -> 0.96f
+            isHovered -> 1.035f
+            else -> 1f
+        },
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = Spring.StiffnessMediumLow,
         ),
-        label = "CastAvatarScale",
+        label = "PersonAvatarScale",
     )
     val containerColor by animateColorAsState(
         targetValue = if (isHovered) {
@@ -63,7 +77,7 @@ fun MediaCastCard(
             Color.Transparent
         },
         animationSpec = tween(140),
-        label = "CastCardContainer",
+        label = "PersonCardContainer",
     )
     val ringColor by animateColorAsState(
         targetValue = if (isHovered) {
@@ -72,7 +86,7 @@ fun MediaCastCard(
             colors.outlineVariant.copy(alpha = 0.55f)
         },
         animationSpec = tween(140),
-        label = "CastAvatarRing",
+        label = "PersonAvatarRing",
     )
     val clickModifier = if (onClick != null) {
         Modifier.clickable(
@@ -106,6 +120,7 @@ fun MediaCastCard(
                         scaleX = avatarScale
                         scaleY = avatarScale
                     }
+                    .then(avatarModifier)
                     .clip(CircleShape)
                     .background(ringColor)
                     .padding(3.dp)
@@ -113,10 +128,10 @@ fun MediaCastCard(
                     .background(colors.surfaceContainerHighest),
                 contentAlignment = Alignment.Center,
             ) {
-                if (member.profileUrl != null) {
+                if (person.profileUrl != null) {
                     AsyncImage(
-                        model = tmdbImageSize(member.profileUrl, "w185"),
-                        contentDescription = member.name,
+                        model = tmdbImageSize(person.profileUrl, "w185"),
+                        contentDescription = person.name,
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(CircleShape),
@@ -125,12 +140,7 @@ fun MediaCastCard(
                     )
                 } else {
                     Text(
-                        text = member.name
-                            .trim()
-                            .firstOrNull()
-                            ?.uppercaseChar()
-                            ?.toString()
-                            ?: "?",
+                        text = person.initial,
                         color = colors.onSurfaceVariant,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
@@ -139,7 +149,7 @@ fun MediaCastCard(
             }
 
             Text(
-                text = member.name,
+                text = person.name,
                 modifier = Modifier.padding(top = 8.dp),
                 color = colors.onSurface,
                 style = MaterialTheme.typography.labelMedium,
@@ -149,9 +159,9 @@ fun MediaCastCard(
                 overflow = TextOverflow.Ellipsis,
             )
 
-            member.character?.let { character ->
+            person.role?.let { role ->
                 Text(
-                    text = character,
+                    text = role,
                     modifier = Modifier.padding(top = 2.dp),
                     color = colors.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,

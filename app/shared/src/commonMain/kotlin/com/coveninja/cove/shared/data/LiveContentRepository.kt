@@ -75,6 +75,8 @@ class LiveContentRepository(
             )
         }
 
+    override suspend fun person(id: Int) = api.person(id)
+
     override suspend fun episodes(id: Int, season: Int) =
         api.tvEpisodes(id, season)
 }

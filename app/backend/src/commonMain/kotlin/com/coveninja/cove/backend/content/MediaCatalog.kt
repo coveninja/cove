@@ -7,6 +7,7 @@ import com.coveninja.cove.shared.model.MediaGenre
 import com.coveninja.cove.shared.model.MediaImages
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
+import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.network.SearchResultsDto
@@ -23,6 +24,13 @@ interface MediaCatalog {
     suspend fun seasons(id: Int): List<TvSeason>
     suspend fun episodes(id: Int, season: Int): List<TvEpisode>
     suspend fun imdbId(id: Int, type: MediaType): String
+
+    /**
+     * One person plus their combined filmography, which is what the person sheet is
+     * built from. On the interface rather than on [TmdbClient] alone because Android
+     * runs no HTTP host: in-process is the only way it can reach this at all.
+     */
+    suspend fun person(id: Int): PersonDetails
 
     /** The provider's own genre vocabulary for [type]. Ids are only meaningful alongside it. */
     suspend fun genres(type: MediaType): List<MediaGenre>

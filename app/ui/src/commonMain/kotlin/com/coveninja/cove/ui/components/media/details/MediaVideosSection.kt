@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.ui.components.common.DetailsSectionTitle
 import com.coveninja.cove.ui.components.common.HorizontalLazyListScrollbar
 import com.coveninja.cove.ui.components.media.card.MediaVideoCard
 import com.coveninja.cove.ui.model.MediaVideo

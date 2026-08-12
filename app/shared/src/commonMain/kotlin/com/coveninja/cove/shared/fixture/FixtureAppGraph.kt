@@ -238,6 +238,29 @@ private val fixtureSettings = AppSettings(
     discoveryAlgorithm = "smart",
 )
 
+// The five people the fixture credits name, so tapping a face in the cast row opens
+// somebody rather than an empty sheet. Ids match the MediaCastMember/MediaCrewMember
+// ids handed out by details() below. No profile paths: a made-up one would 404, and
+// leaving them blank exercises the card's initial-letter fallback.
+private class FixturePerson(
+    val name: String,
+    val department: String,
+    val birthday: String,
+    val placeOfBirth: String,
+    val job: String? = null,
+)
+
+private val fixturePeople = mapOf(
+    1 to FixturePerson("Alex Morgan", "Acting", "1984-03-11", "Portland, Oregon, USA"),
+    2 to FixturePerson("Jamie Chen", "Acting", "1991-07-02", "Vancouver, British Columbia, Canada"),
+    3 to FixturePerson("Sam Rivera", "Acting", "1978-11-19", "San Juan, Puerto Rico"),
+    4 to FixturePerson("Jordan Lee", "Directing", "1969-01-30", "Seoul, South Korea", job = "Director"),
+    5 to FixturePerson("Taylor Brooks", "Writing", "1975-06-08", "Dublin, Ireland", job = "Writer"),
+)
+
+private val fixtureCharacters =
+    listOf("Lead", "Supporting", "Guest", "Herself", "Narrator", "Younger self")
+
 // ── Private repository implementations ──────────────────────────────────────
 
 private class FixtureContentRepository : ContentRepository {
@@ -311,6 +334,55 @@ private class FixtureContentRepository : ContentRepository {
             ),
             videos = MediaVideos(),
             similar = all.filter { it.id != media.id }.take(6),
+        )
+    }
+
+    override suspend fun person(id: Int): PersonDetails {
+        val person = fixturePeople[id]
+            ?: FixturePerson("Fixture Person $id", "Acting", "1980-01-01", "Nowhere, Earth")
+        // Every third title, offset by the id, so two people never have the same
+        // filmography and the sheet's sorting and dedupe have something to chew on.
+        val titles = (fixtureMovies + fixtureTv)
+            .filterIndexed { index, _ -> (index + id) % 3 == 0 }
+        val credits = titles.mapIndexed { index, title ->
+            PersonCredit(
+                id = title.id,
+                title = title.title,
+                name = title.name,
+                mediaType = title.mediaType,
+                posterPath = title.posterPath,
+                backdropPath = title.backdropPath,
+                releaseDate = title.releaseDate,
+                firstAirDate = title.firstAirDate,
+                voteAverage = title.voteAverage,
+                genreIds = title.genreIds,
+                popularity = title.popularity,
+                character = if (person.job == null) {
+                    fixtureCharacters[(index + id) % fixtureCharacters.size]
+                } else {
+                    null
+                },
+                job = person.job,
+                episodeCount = if (title.mediaType == MediaType.Tv) (index % 9) + 1 else 0,
+            )
+        }
+
+        return PersonDetails(
+            id = id,
+            name = person.name,
+            biography = "${person.name} is fixture content for developing Cove's person sheet " +
+                "without a running backend. They have appeared in ${credits.size} of the " +
+                "titles this catalog knows about, and in nothing at all outside it.",
+            birthday = person.birthday,
+            placeOfBirth = person.placeOfBirth,
+            knownForDepartment = person.department,
+            alsoKnownAs = listOf(person.name.split(' ').first()),
+            popularity = 40.0 + id,
+            combinedCredits = if (person.job == null) {
+                PersonCredits(cast = credits)
+            } else {
+                PersonCredits(crew = credits)
+            },
         )
     }
 

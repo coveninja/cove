@@ -6,6 +6,7 @@ import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.shared.model.Media
+import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -71,6 +72,8 @@ class LocalContentRepository(
         val similar = async { catalog.similar(media.id, type) }
         ContentDetails(media, details.await(), images.await(), videos.await(), similar.await())
     }
+
+    override suspend fun person(id: Int): PersonDetails = catalog.person(id)
 
     override suspend fun episodes(id: Int, season: Int): List<TvEpisode> =
         catalog.episodes(id, season)

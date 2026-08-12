@@ -46,6 +46,7 @@ import com.coveninja.cove.ui.components.media.drag.MediaDragPreview
 import com.coveninja.cove.ui.components.navigation.NavBar
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
 import com.coveninja.cove.ui.components.navigation.NavDestination
+import com.coveninja.cove.ui.components.person.PersonDetailsSharedOverlay
 import com.coveninja.cove.ui.components.player.InlineVideoPlayer
 import com.coveninja.cove.ui.components.player.PlayerLayer
 import com.coveninja.cove.ui.model.Media
@@ -67,6 +68,7 @@ import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberMediaActions
 import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
+import com.coveninja.cove.ui.state.rememberPersonDetailsState
 import com.coveninja.cove.ui.state.rememberPlaybackSession
 import com.coveninja.cove.ui.state.rememberSearchSession
 import com.coveninja.cove.ui.state.rememberWatchProgressIndex
@@ -175,6 +177,7 @@ private fun CoveAppContent() {
     val watchProgress = rememberWatchProgressIndex()
     val actions = rememberMediaActions(index)
     val detailsState = rememberMediaDetailsState(catalog)
+    val personState = rememberPersonDetailsState()
     val drag = rememberDragSession()
     val playback = rememberPlaybackSession()
     val search = rememberSearchSession()
@@ -199,7 +202,7 @@ private fun CoveAppContent() {
     }
 
     val underlyingNavAlpha by animateFloatAsState(
-        targetValue = if (detailsState.selected == null) 1f else 0f,
+        targetValue = if (detailsState.selected == null && personState.selected == null) 1f else 0f,
         animationSpec = tween(120),
         label = "UnderlyingNavVisibility",
     )
@@ -364,7 +367,11 @@ private fun CoveAppContent() {
                 // selection survives, so closing the player brings the same sheet
                 // back without refetching anything. An embedded video is the
                 // opposite case — the sheet is the thing it is drawn inside.
+                //
+                // The person sheet is the same bargain: one sheet at a time, but the
+                // title stays selected underneath so coming back costs nothing.
                 visible = detailsState.selected != null &&
+                    personState.selected == null &&
                     !(playback.active && playback.presentation == PlaybackPresentation.Fullscreen),
                 onDismiss = {
                     closeInlineExtra()
@@ -385,6 +392,12 @@ private fun CoveAppContent() {
                 onMediaSelected = {
                     closeInlineExtra()
                     detailsState.open(it)
+                },
+                // An extra playing inside this sheet has nowhere to be drawn once the
+                // person sheet covers it.
+                onPersonSelected = { person ->
+                    closeInlineExtra()
+                    personState.open(person)
                 },
                 videoPlayer = if (inlineExtra) {
                     { modifier -> InlineVideoPlayer(session = playback, modifier = modifier) }
@@ -457,7 +470,36 @@ private fun CoveAppContent() {
                 modifier = Modifier.zIndex(200f),
             )
 
-            detailsState.error?.let { message ->
+            PersonDetailsSharedOverlay(
+                person = personState.overlayPerson,
+                visible = personState.selected != null &&
+                    !(playback.active && playback.presentation == PlaybackPresentation.Fullscreen),
+                onDismiss = { personState.dismiss() },
+                // Only shown when there is a title to go back to; the sheet underneath
+                // is still selected, so dismissing is all it takes.
+                backTitle = detailsState.selected?.let { selected ->
+                    detailsState.detailed?.title
+                        ?: detailsState.detailed?.name
+                        ?: selected.title
+                        ?: selected.name
+                },
+                // One sheet at a time in both directions: leaving for a title closes
+                // the person rather than stacking a second sheet behind it.
+                onMediaSelected = { media ->
+                    personState.dismiss()
+                    detailsState.open(media)
+                },
+                modifier = Modifier.zIndex(210f),
+            )
+
+            // A person that failed to load is only worth reporting while their sheet is
+            // the one on screen.
+            val overlayError = if (personState.selected != null) {
+                personState.error
+            } else {
+                detailsState.error
+            }
+            overlayError?.let { message ->
                 Text(
                     text = message,
                     modifier = Modifier

@@ -4,6 +4,7 @@ import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
 import com.coveninja.cove.shared.model.MediaImages
 import com.coveninja.cove.shared.model.MediaVideos
+import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
 import kotlinx.coroutines.flow.StateFlow
 
@@ -40,5 +41,6 @@ interface ContentRepository {
     val searchResults: StateFlow<SearchState>
     suspend fun search(query: String)
     suspend fun details(media: Media): ContentDetails
+    suspend fun person(id: Int): PersonDetails
     suspend fun episodes(id: Int, season: Int): List<TvEpisode>
 }

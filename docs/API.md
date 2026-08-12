@@ -63,6 +63,14 @@ bounded `limit`. Returned addon metadata is resolved to the shared TMDB `Media`
 shape while preserving source order; `nextSkip` advances by consumed source
 items.
 
+`/person` takes a positive `id` alone — a person has no type — and answers with
+the typed `PersonDetails` shape (biography, birthday, `place_of_birth`,
+`known_for_department`, `profile_path` and `combined_credits`), not the whole
+TMDB document it is built from. Like `/details`, it is a deliberate subset: the
+keys it does return keep TMDB's own names, and everything the app does not model
+is dropped. The route no longer requires the TMDB catalog specifically — it is
+served by whatever `MediaCatalog` the host was built with.
+
 ## Remote access
 
 The trusted listener binds to loopback. Enabling remote control creates a

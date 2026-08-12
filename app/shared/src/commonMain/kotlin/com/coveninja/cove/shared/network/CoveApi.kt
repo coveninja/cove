@@ -153,6 +153,14 @@ class CoveApi(
             parameter("type", type.wireName)
         }.requireSuccess().body()
 
+    // A person carries their own filmography: the host appends combined_credits, so
+    // this is the only request behind the person sheet.
+    suspend fun person(id: Int): PersonDetails =
+        httpClient.get("${config.baseUrl}/api/person") {
+            applyAuthHeaders()
+            parameter("id", id)
+        }.requireSuccess().body()
+
     // ── TV seasons / episodes ───────────────────────────────────────────────
 
     suspend fun tvSeasons(id: Int): List<TvSeason> =

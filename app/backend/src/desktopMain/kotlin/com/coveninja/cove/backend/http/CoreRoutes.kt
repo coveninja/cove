@@ -444,6 +444,12 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                 ?: throw IllegalArgumentException("invalid media id")
             call.respond(catalog.seasons(id))
         }
+        get("/person") {
+            call.markLegacy(legacy)
+            val id = call.request.queryParameters["id"]?.toIntOrNull()?.takeIf { it > 0 }
+                ?: throw IllegalArgumentException("invalid person id")
+            call.respond(catalog.person(id))
+        }
         if (catalog is TmdbClient) {
             get("/keywords") {
                 call.markLegacy(legacy)
@@ -458,12 +464,6 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                     ?.takeIf(String::isNotBlank)
                     ?: throw IllegalArgumentException("search query is required")
                 call.respond(catalog.searchTitles(query))
-            }
-            get("/person") {
-                call.markLegacy(legacy)
-                val id = call.request.queryParameters["id"]?.toIntOrNull()?.takeIf { it > 0 }
-                    ?: throw IllegalArgumentException("invalid person id")
-                call.respond(catalog.person(id))
             }
             get("/provider") {
                 call.markLegacy(legacy)

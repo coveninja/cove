@@ -12,6 +12,7 @@ import com.coveninja.cove.shared.model.MediaKeyword
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideo
 import com.coveninja.cove.shared.model.MediaVideos
+import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.network.SearchResultsDto
@@ -25,7 +26,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 
 class TmdbClient(
     private val httpClient: HttpClient,
@@ -179,7 +179,7 @@ class TmdbClient(
         }
     }
 
-    suspend fun person(id: Int): JsonElement {
+    override suspend fun person(id: Int): PersonDetails {
         require(id > 0) { "person id must be positive" }
         return request("/person/$id") { parameter("append_to_response", "combined_credits") }
     }

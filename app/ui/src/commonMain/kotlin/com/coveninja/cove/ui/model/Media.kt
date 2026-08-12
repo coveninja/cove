@@ -32,6 +32,8 @@ data class MediaVideo(
 }
 
 data class MediaCastMember(
+    /** TMDB person id — what the cast row needs to be able to open the person sheet. */
+    val tmdbId: Int,
     val name: String,
     val character: String?,
     val profileUrl: String?,
@@ -93,8 +95,9 @@ data class Media(
      * spellings of one genre would split a filter that an id keeps whole.
      */
     val genreIds: List<Int> = emptyList(),
-    val directors: List<String> = emptyList(),
-    val writers: List<String> = emptyList(),
+    /** Kept as people, not names, so the Details facts can open them like a cast card can. */
+    val directors: List<Person> = emptyList(),
+    val writers: List<Person> = emptyList(),
     val productionCompanies: List<String> = emptyList(),
     val originCountries: List<String> = emptyList(),
     val spokenLanguages: List<String> = emptyList(),
@@ -180,10 +183,14 @@ fun ContentDetails.toUiMedia(): Media {
         status = metadata.status.ifBlank { null },
         genres = metadata.genres.map { it.name }.filter { it.isNotBlank() },
         genreIds = metadata.genres.map { it.id }.filter { it > 0 },
-        directors = crew.filter { it.job == "Director" }.map { it.name }.distinct(),
+        // distinctBy id, not name: one person credited twice (say "Screenplay" and
+        // "Story") is one person, and two people can share a name.
+        directors = crew.filter { it.job == "Director" }
+            .distinctBy { it.id }
+            .map { it.toUiPerson() },
         writers = crew.filter {
             it.job in setOf("Writer", "Screenplay", "Teleplay", "Story")
-        }.map { it.name }.distinct(),
+        }.distinctBy { it.id }.map { it.toUiPerson() },
         productionCompanies = metadata.productionCompanies.map { it.name },
         originCountries = metadata.originCountry,
         // Entries with nowhere to play are dropped rather than shown: every card
@@ -204,6 +211,7 @@ fun ContentDetails.toUiMedia(): Media {
         }.sortedForDisplay(),
         cast = metadata.credits.cast.sortedBy { it.order }.map { member ->
             MediaCastMember(
+                tmdbId = member.id,
                 name = member.name,
                 character = member.character.ifBlank { null },
                 profileUrl = displayImageUrl(member.profilePath, "w185"),

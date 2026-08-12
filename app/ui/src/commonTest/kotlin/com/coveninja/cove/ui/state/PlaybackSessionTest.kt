@@ -18,6 +18,7 @@ import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaTimestamps
+import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.model.SubtitleSource
 import com.coveninja.cove.shared.model.TorrentProgress
@@ -161,6 +162,8 @@ private class FakeContent : ContentRepository {
     override suspend fun search(query: String) = Unit
     override suspend fun details(media: DomainMedia): ContentDetails =
         throw UnsupportedOperationException()
+
+    override suspend fun person(id: Int): PersonDetails = throw UnsupportedOperationException()
 
     override suspend fun episodes(id: Int, season: Int): List<TvEpisode> = emptyList()
 }

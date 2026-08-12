@@ -11,6 +11,7 @@ import com.coveninja.cove.shared.model.MediaGenre
 import com.coveninja.cove.shared.model.MediaImages
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
+import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.model.UpcomingEpisode
@@ -99,6 +100,7 @@ private class FakeCalendarCatalog : MediaCatalog {
     override suspend fun similar(id: Int, type: MediaType) = emptyList<Media>()
     override suspend fun seasons(id: Int) = emptyList<TvSeason>()
     override suspend fun imdbId(id: Int, type: MediaType) = "tt$id"
+    override suspend fun person(id: Int) = PersonDetails(id = id)
     override suspend fun genres(type: MediaType) = emptyList<MediaGenre>()
     override suspend fun discoverFiltered(
         type: MediaType,
