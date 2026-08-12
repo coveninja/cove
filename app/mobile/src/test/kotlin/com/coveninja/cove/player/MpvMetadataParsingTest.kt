@@ -1,8 +1,10 @@
 package com.coveninja.cove.player
 
+import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -48,5 +50,29 @@ class MpvMetadataParsingTest {
         assertEquals(listOf("Opening", "Finale"), chapters.map { it.title })
         assertEquals(120.5, chapters.last().startSeconds)
         assertTrue(parseMpvChapters("not json").isEmpty())
+    }
+
+    @Test
+    fun `recoverable native diagnostics do not become playback errors`() {
+        val messages = listOf(
+            "mov, mp4, m4a, 3gp, 3g2, mj2: stream 1, offset 0x151f4741: partial file",
+            "acquireLatestImage failed: -30001",
+        )
+
+        messages.forEach { message ->
+            val status = PlaybackStatus(hasMedia = true).withMpvDiagnostic(message)
+
+            assertEquals(message, status.statusMessage)
+            assertNull(status.error)
+        }
+    }
+
+    @Test
+    fun `native diagnostics preserve an explicit playback failure`() {
+        val status = PlaybackStatus(error = "The selected stream could not be opened.")
+            .withMpvDiagnostic("demuxer diagnostic")
+
+        assertEquals("demuxer diagnostic", status.statusMessage)
+        assertEquals("The selected stream could not be opened.", status.error)
     }
 }

@@ -483,12 +483,13 @@ class AndroidMpvVideoPlayerHost(
     override fun logMessage(prefix: String, level: Int, text: String) = onMain {
         if (destroyed) return@onMain
         val message = text.trim().takeIf(String::isNotBlank) ?: return@onMain
-        val error = if (level <= MPVLib.MPV_LOG_LEVEL_ERROR && playbackRequested && !stoppedByUser) {
-            message
-        } else {
-            _status.value.error
+        val source = prefix.takeIf(String::isNotBlank)?.let { "[$it] " }.orEmpty()
+        when {
+            level <= MPVLib.MPV_LOG_LEVEL_ERROR -> Log.e(MPV_LOG_TAG, source + message)
+            level <= MPVLib.MPV_LOG_LEVEL_WARN -> Log.w(MPV_LOG_TAG, source + message)
+            else -> Log.d(MPV_LOG_TAG, source + message)
         }
-        _status.value = _status.value.copy(statusMessage = message, error = error)
+        _status.value = _status.value.withMpvDiagnostic(message)
     }
 
     private fun applyPreferencesNow(preferences: PlaybackPreferences) {
@@ -576,6 +577,7 @@ class AndroidMpvVideoPlayerHost(
     private data class PendingLoad(val url: String, val startPositionSeconds: Double)
 
     private companion object {
+        const val MPV_LOG_TAG = "CoveMpv"
         const val SEEK_DEBOUNCE_MILLIS = 40L
         val SYSTEM_FONTS = listOf(
             "/system/fonts/Roboto-Regular.ttf",
@@ -769,6 +771,15 @@ private fun PlaybackStatus.withTracks(tracks: List<MediaTrack>): PlaybackStatus 
         selectedSubtitleId = subtitles.firstOrNull { it.selected }?.id,
     )
 }
+
+/**
+ * mpv's log level describes a decoder or demuxer message, not the state of the
+ * playback session. Recoverable FFmpeg reads and transient Android ImageReader
+ * misses are both logged as errors while the next frame continues normally, so
+ * only explicit player events may populate [PlaybackStatus.error].
+ */
+internal fun PlaybackStatus.withMpvDiagnostic(message: String): PlaybackStatus =
+    copy(statusMessage = message)
 
 private fun clampDelay(seconds: Double): Double =
     seconds.takeIf(Double::isFinite)?.coerceIn(-10.0, 10.0) ?: 0.0
