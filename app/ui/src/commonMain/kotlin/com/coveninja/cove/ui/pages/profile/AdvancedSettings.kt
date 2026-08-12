@@ -73,8 +73,7 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
         SettingsCard(
             title = "mpv configuration",
             iconName = "lucide:settings",
-            description = "Passed straight to the player. An invalid option is ignored " +
-                "silently by mpv, so check your spelling.",
+            description = "Passed straight to the player. An invalid option is ignored "
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
@@ -137,6 +136,12 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
             SettingRow(title = "Version", description = "The build you are running.") {
                 StatusPill(device.appVersion.ifBlank { "unknown" })
             }
+            Text(
+                text = "Made with love by arcady@coveninja",
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }
