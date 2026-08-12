@@ -1,8 +1,6 @@
 <component name="ArtifactManager">
   <artifact type="jar" name="ui">
     <output-path>$PROJECT_DIR$/ui/build/libs</output-path>
-    <root id="archive" name="ui.jar">
-      <element id="module-output" name="cove.ui.androidMain" />
-    </root>
+    <root id="archive" name="ui.jar" />
   </artifact>
 </component>
