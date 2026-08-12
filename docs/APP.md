@@ -127,12 +127,33 @@ sorted by TMDB's `order`, so `cast.first()` is the top-billed actor.
 
 ```kotlin
 val enriched = graph.content.details(catalog.domainFor(media)).toUiMedia()
-enriched.cast.forEach { it.name; it.character; it.profileUrl }
+enriched.cast.forEach { it.tmdbId; it.name; it.character; it.profileUrl }
 ```
 
 Directors and writers come from the same payload's `credits.crew`, filtered by
 job — `directors` is `job == "Director"`, `writers` is any of
-`Writer`/`Screenplay`/`Teleplay`/`Story`. Both are already de-duplicated.
+`Writer`/`Screenplay`/`Teleplay`/`Story`. Both are already de-duplicated (by
+TMDB person id, not by name) and both are `List<Person>`, not names, so either
+can open a person sheet.
+
+### Get a person
+
+`content.person(tmdbId)` — the one call the person sheet makes. It is in
+`commonMain`, so it works on Android too, and it returns `PersonDetails`:
+biography, birthday, place of birth, department, photo, and `combinedCredits`
+(their whole filmography, cast and crew together).
+
+```kotlin
+val person = graph.content.person(castMember.tmdbId).toUiPerson()
+filmographyOf(person.credits)          // merged, newest first
+knownForOf(person.credits)             // the poster rail, by popularity
+```
+
+`person.credits` is TMDB's raw list — the same title appears once per credit, so
+someone who wrote *and* directed a film is in there twice. `filmographyOf` is
+what merges those into one row per title; do not render `credits` directly.
+`PersonCreditEntry.toMedia()` turns a credit into the thin `Media` the details
+sheet opens with, the same way a recommendation card does.
 
 ### Get runtime, genres, certification
 
