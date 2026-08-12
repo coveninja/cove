@@ -48,11 +48,13 @@ import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.toUiMedia
+import com.coveninja.cove.ui.model.toUiPerson
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.PageEmptyState
-import com.coveninja.cove.ui.pages.common.RailDefaults
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.SearchSession
@@ -81,6 +83,7 @@ fun SearchPage(
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
+    onOpenPerson: (Person) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
@@ -124,6 +127,15 @@ fun SearchPage(
     }
     val top = remember(visible, shown.query) { topResult(visible, shown.query) }
     val rest = remember(visible, top) { visible.filterNot { it.id == top?.id } }
+    // Narrowing to a format or a genre is a question about titles, and a person is neither.
+    // The rail steps aside rather than sitting above results it is not part of.
+    val people = remember(shown.people, shown.query, filters.type, filters.genreId) {
+        if (filters.type != null || filters.genreId != null) {
+            emptyList()
+        } else {
+            rankedPeople(shown.people, shown.query)
+        }
+    }
 
     val searching = searchState is SearchState.Loading
     // Stale content says so by receding rather than by vanishing: the layout holds, and what
@@ -169,7 +181,7 @@ fun SearchPage(
             focusRequester = focusRequester,
             onFocusChanged = { fieldFocused = it },
             modifier = Modifier.padding(
-                horizontal = RailDefaults.HorizontalPadding,
+                horizontal = PageLayoutDefaults.HorizontalPadding,
                 vertical = 4.dp,
             ),
         )
@@ -202,6 +214,8 @@ fun SearchPage(
 
             shown.items.isEmpty() -> NoMatches(
                 query = session.submitted.orEmpty(),
+                people = people,
+                onOpenPerson = onOpenPerson,
                 onSearch = session::submit,
                 modifier = Modifier.weight(1f),
             )
@@ -215,15 +229,17 @@ fun SearchPage(
                     seriesCount = counts.second,
                     onFiltersChange = { filters = it },
                     onLayoutChange = { layout = it },
-                    modifier = Modifier.padding(horizontal = RailDefaults.HorizontalPadding),
+                    modifier = Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                    ),
                 )
 
                 ResultCount(
                     shown = visible.size,
                     total = shown.items.size,
                     modifier = Modifier.padding(
-                        start = RailDefaults.HorizontalPadding,
-                        end = RailDefaults.HorizontalPadding,
+                        start = PageLayoutDefaults.HorizontalPadding,
+                        end = PageLayoutDefaults.HorizontalPadding,
                         top = 10.dp,
                         bottom = 4.dp,
                     ),
@@ -245,6 +261,8 @@ fun SearchPage(
                         query = shown.query,
                         top = top,
                         rest = rest,
+                        people = people,
+                        onOpenPerson = onOpenPerson,
                         alpha = resultsAlpha,
                         inList = { media -> index.categoryOf(media.id) != null },
                         mediaCard = mediaCard,
@@ -289,6 +307,7 @@ private fun rememberShownResults(state: SearchState, submitted: String?): ShownR
             is SearchState.Ready -> ShownResults(
                 query = submitted.orEmpty(),
                 items = state.results.map { it.toUiMedia() },
+                people = state.people.map { it.toUiPerson() },
             )
             SearchState.Idle -> ShownResults()
             SearchState.Loading, is SearchState.Failed -> holder.value
@@ -311,6 +330,8 @@ private fun Results(
     query: String,
     top: Media?,
     rest: List<Media>,
+    people: List<Person>,
+    onOpenPerson: (Person) -> Unit,
     alpha: Float,
     inList: (Media) -> Boolean,
     mediaCard: @Composable (Media, Modifier) -> Unit,
@@ -332,17 +353,28 @@ private fun Results(
         }
     }
 
-    val header: (@Composable () -> Unit)? = top?.let { media ->
+    // One header for both arrangements, so the people rail and the top result scroll with
+    // the results rather than eating fixed height above them.
+    val header: (@Composable () -> Unit)? = if (top == null && people.isEmpty()) {
+        null
+    } else {
         {
-            Box(modifier = Modifier.fillMaxWidth().padding(bottom = 18.dp)) {
-                SearchTopResult(
-                    media = media,
-                    query = query,
-                    inList = inList(media),
-                    onOpen = { onOpenMedia(media) },
-                    onPlay = { onPlayMedia(media) },
-                    onToggleList = { onToggleList(media) },
+            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 18.dp)) {
+                SearchPeopleRail(
+                    people = people,
+                    onOpenPerson = onOpenPerson,
+                    modifier = Modifier.padding(bottom = if (top != null) 20.dp else 0.dp),
                 )
+                top?.let { media ->
+                    SearchTopResult(
+                        media = media,
+                        query = query,
+                        inList = inList(media),
+                        onOpen = { onOpenMedia(media) },
+                        onPlay = { onPlayMedia(media) },
+                        onToggleList = { onToggleList(media) },
+                    )
+                }
             }
         }
     }
@@ -395,7 +427,7 @@ private fun Results(
             },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = RailDefaults.HorizontalPadding, bottom = 24.dp)
+                .padding(end = PageLayoutDefaults.HorizontalPadding, bottom = 24.dp)
                 .zIndex(10f),
         )
     }
@@ -436,6 +468,8 @@ private fun ResultCount(shown: Int, total: Int, modifier: Modifier = Modifier) {
 @Composable
 private fun NoMatches(
     query: String,
+    people: List<Person>,
+    onOpenPerson: (Person) -> Unit,
     onSearch: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -443,6 +477,13 @@ private fun NoMatches(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // A name with no titles behind it is still an answer — and usually the one that was
+        // being asked for, since a person's own name rarely matches a film's.
+        SearchPeopleRail(
+            people = people,
+            onOpenPerson = onOpenPerson,
+            modifier = Modifier.padding(horizontal = PageLayoutDefaults.HorizontalPadding),
+        )
         PageEmptyState(
             iconName = "lucide:file-question",
             title = if (query.isBlank()) "Nothing found" else "Nothing matched “$query”",
@@ -452,7 +493,7 @@ private fun NoMatches(
         )
         ChoicePillRow(
             modifier = Modifier.padding(
-                horizontal = RailDefaults.HorizontalPadding,
+                horizontal = PageLayoutDefaults.HorizontalPadding,
                 vertical = 8.dp,
             ),
         ) {
@@ -488,6 +529,7 @@ private fun popularSeed(state: ExploreState, limit: Int = POPULAR_SEED_LIMIT): L
 private data class ShownResults(
     val query: String = "",
     val items: List<Media> = emptyList(),
+    val people: List<Person> = emptyList(),
 )
 
 /** Carries the last shown results across a state change. See [rememberShownResults]. */

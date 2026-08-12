@@ -13,6 +13,8 @@ import kotlinx.serialization.Serializable
 data class SearchResultsDto(
     val movies: List<Media> = emptyList(),
     val tv: List<Media> = emptyList(),
+    /** Defaulted: a compatibility host that predates person search simply omits it. */
+    val people: List<PersonDetails> = emptyList(),
 )
 
 // /api/library/{id}/{type} bundles entry + all progress records + dismissed flag.

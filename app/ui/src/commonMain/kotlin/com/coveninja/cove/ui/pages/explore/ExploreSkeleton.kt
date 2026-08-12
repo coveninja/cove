@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 
 /**
@@ -33,7 +34,9 @@ fun ExploreSkeleton(modifier: Modifier = Modifier) {
 
         repeat(2) {
             Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = HORIZONTAL_PADDING),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = PageLayoutDefaults.HorizontalPadding),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 ShimmerBlock(modifier = Modifier.width(180.dp).height(20.dp), corner = 6.dp)

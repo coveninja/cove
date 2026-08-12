@@ -46,7 +46,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
-import com.coveninja.cove.ui.pages.common.RailDefaults
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.StaggeredAppear
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 
@@ -75,8 +75,8 @@ fun SearchResultGrid(
         state = state,
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(
-            start = RailDefaults.HorizontalPadding,
-            end = RailDefaults.HorizontalPadding,
+            start = PageLayoutDefaults.HorizontalPadding,
+            end = PageLayoutDefaults.HorizontalPadding,
             top = 4.dp,
             bottom = 48.dp,
         ),
@@ -120,8 +120,8 @@ fun SearchResultList(
         state = state,
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(
-            start = RailDefaults.HorizontalPadding,
-            end = RailDefaults.HorizontalPadding,
+            start = PageLayoutDefaults.HorizontalPadding,
+            end = PageLayoutDefaults.HorizontalPadding,
             top = 4.dp,
             bottom = 48.dp,
         ),

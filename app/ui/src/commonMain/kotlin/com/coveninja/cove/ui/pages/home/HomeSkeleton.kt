@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.RailDefaults
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 
@@ -35,7 +36,7 @@ fun HomeSkeleton(modifier: Modifier = Modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = RailDefaults.HorizontalPadding),
+                .padding(horizontal = PageLayoutDefaults.HorizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ShimmerBlock(modifier = Modifier.width(220.dp).height(30.dp), corner = 8.dp)
@@ -63,7 +64,7 @@ private fun SkeletonRail(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = RailDefaults.HorizontalPadding),
+            .padding(horizontal = PageLayoutDefaults.HorizontalPadding),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         ShimmerBlock(modifier = Modifier.width(180.dp).height(20.dp), corner = 6.dp)

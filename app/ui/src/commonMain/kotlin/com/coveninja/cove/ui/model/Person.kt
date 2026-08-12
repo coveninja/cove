@@ -17,7 +17,10 @@ data class Person(
     val id: String,
     val tmdbId: Int,
     val name: String,
-    /** Character or job, as billed on the title this person was reached from. */
+    /**
+     * What to bill this person as wherever they were reached from: their character or job
+     * on a title's credits, or what they are known for in a list of search results.
+     */
     val role: String? = null,
     val profileUrl: String? = null,
     val biography: String? = null,
@@ -68,7 +71,10 @@ fun PersonDetails.toUiPerson(): Person = Person(
     placeOfBirth = placeOfBirth?.takeIf { it.isNotBlank() },
     knownForDepartment = knownForDepartment.takeIf { it.isNotBlank() },
     alsoKnownAs = alsoKnownAs.filter { it.isNotBlank() },
-    credits = (combinedCredits.cast + combinedCredits.crew).mapNotNull { it.toUiCredit() },
+    // One of these two is always empty: the person endpoint answers with a filmography,
+    // person search with TMDB's own known-for pick. Concatenating takes whichever came.
+    credits = (combinedCredits.cast + combinedCredits.crew + knownFor)
+        .mapNotNull { it.toUiCredit() },
 )
 
 /**

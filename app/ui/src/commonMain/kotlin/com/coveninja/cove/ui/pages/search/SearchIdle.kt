@@ -37,7 +37,7 @@ import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.MediaRail
-import com.coveninja.cove.ui.pages.common.RailDefaults
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
@@ -79,7 +79,9 @@ fun SearchIdle(
                     onAction = onClearRecents,
                 )
                 ChoicePillRow(
-                    modifier = Modifier.padding(horizontal = RailDefaults.HorizontalPadding),
+                    modifier = Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                    ),
                 ) {
                     recents.forEach { entry ->
                         RecentChip(
@@ -99,7 +101,7 @@ fun SearchIdle(
                 subtitle = "Search by what a film is about rather than what it is called",
             )
             ChoicePillRow(
-                modifier = Modifier.padding(horizontal = RailDefaults.HorizontalPadding),
+                modifier = Modifier.padding(horizontal = PageLayoutDefaults.HorizontalPadding),
             ) {
                 SEARCH_MOODS.forEach { mood ->
                     ChoicePill(
@@ -223,7 +225,7 @@ private fun SectionHeading(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = RailDefaults.HorizontalPadding),
+            .padding(horizontal = PageLayoutDefaults.HorizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconifyIcon(icon = icon, modifier = Modifier.size(15.dp), tint = colors.tertiary)

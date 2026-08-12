@@ -57,7 +57,8 @@ class LocalContentRepository(
         try {
             val results = catalog.searchMulti(query)
             _searchResults.value = SearchState.Ready(
-                (results.movies + results.tv).sortedByDescending(Media::popularity),
+                results = (results.movies + results.tv).sortedByDescending(Media::popularity),
+                people = results.people,
             )
         } catch (error: Exception) {
             _searchResults.value = SearchState.Failed(error.message ?: "Unknown error searching")

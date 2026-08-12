@@ -60,6 +60,7 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.PageHeader
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.rememberSettingsEditor
 import kotlinx.coroutines.launch
@@ -103,7 +104,10 @@ fun ProfilePage(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(
+                horizontal = PageLayoutDefaults.HorizontalPadding,
+                vertical = 12.dp,
+            ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         PageHeader(

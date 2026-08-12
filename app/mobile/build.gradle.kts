@@ -121,6 +121,7 @@ dependencies {
     implementation(project(":shared"))
     implementation(project(":ui"))
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.ktx)
 
     testImplementation(libs.kotlin.test)
     testImplementation("junit:junit:4.13.2")

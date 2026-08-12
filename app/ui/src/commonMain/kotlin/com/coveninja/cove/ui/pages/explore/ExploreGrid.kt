@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.pages.common.StaggeredAppear
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -63,21 +64,22 @@ fun ExploreGrid(
     onRetry: () -> Unit,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(
-        start = HORIZONTAL_PADDING,
-        end = HORIZONTAL_PADDING,
-        top = 8.dp,
-        bottom = 48.dp,
-    ),
+    contentPadding: PaddingValues? = null,
     header: (@Composable () -> Unit)? = null,
 ) {
+    val resolvedContentPadding = contentPadding ?: PaddingValues(
+        start = PageLayoutDefaults.HorizontalPadding,
+        end = PageLayoutDefaults.HorizontalPadding,
+        top = 8.dp,
+        bottom = 48.dp,
+    )
     InfiniteScrollTrigger(state = state, itemCount = items.size, onLoadMore = onLoadMore)
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(150.dp),
         state = state,
         modifier = modifier.fillMaxWidth(),
-        contentPadding = contentPadding,
+        contentPadding = resolvedContentPadding,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {

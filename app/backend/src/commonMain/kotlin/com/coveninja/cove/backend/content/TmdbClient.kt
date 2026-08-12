@@ -57,10 +57,14 @@ class TmdbClient(
         val movies = async { search(query, MediaType.Movie) }
         val tv = async { search(query, MediaType.Tv) }
         val keywordMatches = async { runCatching { searchByKeywords(query) }.getOrDefault(emptyList()) }
+        // People are an extra, not the answer: a failure here must not cost the viewer
+        // the titles, which are what they were almost certainly searching for.
+        val people = async { runCatching { searchPeople(query) }.getOrDefault(emptyList()) }
         val regularMovies = movies.await()
         val regularTv = tv.await()
         val keywordResults = keywordMatches.await()
         SearchResultsDto(
+            people = people.await(),
             movies = (regularMovies + keywordResults.filter { it.mediaType == MediaType.Movie })
                 .distinctBy(Media::id),
             tv = (regularTv + keywordResults.filter { it.mediaType == MediaType.Tv })
@@ -178,6 +182,23 @@ class TmdbClient(
             }.awaitAll().flatten()
         }
     }
+
+    /**
+     * People matching a query, most prominent first.
+     *
+     * `/search/person` answers with a slim person — no biography, and `known_for` in place of
+     * a filmography — which is all a result row needs; opening one fetches the rest. The
+     * cutoff is deliberate: TMDB's person index reaches deep into uncredited extras and
+     * duplicate records, and past the first handful the matches stop being anybody.
+     */
+    private suspend fun searchPeople(query: String, limit: Int = 12): List<PersonDetails> =
+        request<TmdbResults<PersonDetails>>("/search/person") {
+            parameter("query", query)
+            parameter("include_adult", false)
+        }.results
+            .filter { it.id > 0 && it.name.isNotBlank() }
+            .sortedByDescending(PersonDetails::popularity)
+            .take(limit)
 
     override suspend fun person(id: Int): PersonDetails {
         require(id > 0) { "person id must be positive" }

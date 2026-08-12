@@ -332,8 +332,8 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                                         ),
                                     ),
                                 ),
-                        )
-                    }
+                    )
+                }
 
                     /*
                      * The cast card is the person sheet's origin, so it carries the
@@ -1013,4 +1013,3 @@ private fun MediaFacts(
         }
     }
 }
-

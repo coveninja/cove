@@ -23,7 +23,16 @@ sealed interface ExploreState {
 sealed interface SearchState {
     data object Idle : SearchState
     data object Loading : SearchState
-    data class Ready(val results: List<Media>) : SearchState
+
+    /**
+     * [people] is defaulted rather than required: a host that cannot search people —
+     * a compatibility backend predating it — reports titles alone rather than failing.
+     */
+    data class Ready(
+        val results: List<Media>,
+        val people: List<PersonDetails> = emptyList(),
+    ) : SearchState
+
     data class Failed(val message: String) : SearchState
 }
 

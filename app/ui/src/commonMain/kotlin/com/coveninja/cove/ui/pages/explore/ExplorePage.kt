@@ -40,10 +40,12 @@ import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
+import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.state.LocalAppGraph
@@ -69,6 +71,7 @@ import kotlinx.coroutines.launch
 fun ExplorePage(
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
+    navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
@@ -128,7 +131,10 @@ fun ExplorePage(
             onFiltersChange = onFiltersChange,
             onLayoutChange = { layout = it },
             onSurpriseMe = ::surpriseMe,
-            modifier = Modifier.padding(horizontal = HORIZONTAL_PADDING, vertical = 10.dp),
+            modifier = Modifier.padding(
+                horizontal = PageLayoutDefaults.HorizontalPadding,
+                vertical = 10.dp,
+            ),
         )
     }
 
@@ -177,6 +183,7 @@ fun ExplorePage(
                     },
                     mediaCard = mediaCard,
                     toolbar = toolbar,
+                    navBarPlacement = navBarPlacement,
                 )
 
                 ExploreLayout.Grid -> GridLayout(
@@ -188,6 +195,7 @@ fun ExplorePage(
                     },
                     mediaCard = mediaCard,
                     toolbar = toolbar,
+                    navBarPlacement = navBarPlacement,
                 )
             }
         }
@@ -205,6 +213,7 @@ private fun ShelvesLayout(
     onSeeAll: (ExploreShelf) -> Unit,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     toolbar: @Composable () -> Unit,
+    navBarPlacement: NavBarPlacement,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -232,12 +241,16 @@ private fun ShelvesLayout(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(26.dp),
             contentPadding = PaddingValues(
-                // With a hero the page runs edge-to-edge and the hero passes *under* the
-                // floating nav bar — its own top scrim keeps the bar legible, and any
-                // clearance here would put a band of bare background between the two.
-                // Without one the toolbar is the first thing at the top, and it has to
-                // clear the bar or it sits behind it.
-                top = if (picks.isEmpty()) NavBarClearance else 0.dp,
+                // On desktop, a hero passes *under* the top bar and its scrim keeps the bar
+                // legible. Without a hero, the toolbar needs top clearance. The mobile bar
+                // floats over the page, so neither case needs extra room here.
+                top = if (
+                    picks.isEmpty() && navBarPlacement == NavBarPlacement.Top
+                ) {
+                    NavBarClearance
+                } else {
+                    0.dp
+                },
                 bottom = 48.dp,
             ),
         ) {
@@ -296,7 +309,7 @@ private fun ShelvesLayout(
             onClick = { scope.launch { listState.animateScrollToItem(0) } },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = HORIZONTAL_PADDING, bottom = 24.dp)
+                .padding(end = PageLayoutDefaults.HorizontalPadding, bottom = 24.dp)
                 .zIndex(10f),
         )
     }
@@ -310,25 +323,35 @@ private fun GridLayout(
     onClearFilters: () -> Unit,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     toolbar: @Composable () -> Unit,
+    navBarPlacement: NavBarPlacement,
 ) {
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val scrolled by remember { derivedStateOf { gridState.firstVisibleItemIndex > 6 } }
 
-    // The grid has no hero to run under the nav bar, so unlike the shelves it takes the
-    // clearance — and the safe insets the edge-to-edge page modifier no longer applies.
+    // The desktop grid has no hero to run under the top bar, so it takes the clearance and
+    // safe insets that its edge-to-edge page wrapper omits. CoveApp supplies the insets on
+    // mobile while allowing the bottom bar to float over this content.
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .safeContentPadding()
-            .padding(top = NavBarClearance),
+        modifier = if (navBarPlacement == NavBarPlacement.Top) {
+            Modifier
+                .fillMaxSize()
+                .safeContentPadding()
+                .padding(top = NavBarClearance)
+        } else {
+            // CoveApp already applies mobile safe insets; the bar itself remains an overlay.
+            Modifier.fillMaxSize()
+        },
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             toolbar()
 
             Text(
                 text = titleCountLabel(visible.size, moreAvailable = !controller.gridExhausted),
-                modifier = Modifier.padding(horizontal = HORIZONTAL_PADDING, vertical = 6.dp),
+                modifier = Modifier.padding(
+                    horizontal = PageLayoutDefaults.HorizontalPadding,
+                    vertical = 6.dp,
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
@@ -370,7 +393,7 @@ private fun GridLayout(
             onClick = { scope.launch { gridState.animateScrollToItem(0) } },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = HORIZONTAL_PADDING, bottom = 24.dp)
+                .padding(end = PageLayoutDefaults.HorizontalPadding, bottom = 24.dp)
                 .zIndex(10f),
         )
     }
@@ -388,7 +411,7 @@ private fun PersonalizingNotice() {
     ShimmerBlock(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = HORIZONTAL_PADDING)
+            .padding(horizontal = PageLayoutDefaults.HorizontalPadding)
             .height(18.dp),
         corner = 6.dp,
     )

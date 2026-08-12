@@ -63,6 +63,13 @@ bounded `limit`. Returned addon metadata is resolved to the shared TMDB `Media`
 shape while preserving source order; `nextSkip` advances by consumed source
 items.
 
+`/search/multi` answers with `movies`, `tv` and `people`. The people are TMDB
+`/search/person` records — the slim kind, carrying `known_for` rather than a
+filmography — capped at the dozen most prominent, and a person-search failure is
+swallowed rather than failing the whole search: the titles are what the query was
+almost certainly for. `people` is defaulted on the client, so a compatibility host
+that omits it reports titles alone.
+
 `/person` takes a positive `id` alone — a person has no type — and answers with
 the typed `PersonDetails` shape (biography, birthday, `place_of_birth`,
 `known_for_department`, `profile_path` and `combined_credits`), not the whole

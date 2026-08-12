@@ -87,8 +87,8 @@ fun HomeHeroBlock(
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val compact = maxWidth < COMPACT_HERO_WIDTH
-        // Taller than it looks: the top of the hero runs under the floating nav bar, so the
-        // first ~96dp of this height is spent behind it rather than on readable image.
+        // On desktop this is taller than it looks because the top runs under the floating
+        // nav bar; mobile shows the same cinematic crop with its bar at the bottom.
         val height = if (compact) 460.dp else 560.dp
 
         Box(

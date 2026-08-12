@@ -50,7 +50,10 @@ class LiveContentRepository(
         _searchResults.value = SearchState.Loading
         try {
             val results = api.searchMulti(query)
-            _searchResults.value = SearchState.Ready(results.movies + results.tv)
+            _searchResults.value = SearchState.Ready(
+                results = results.movies + results.tv,
+                people = results.people,
+            )
         } catch (e: Exception) {
             _searchResults.value = SearchState.Failed(e.message ?: "Unknown error searching")
         }

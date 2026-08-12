@@ -41,6 +41,7 @@ import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageHeader
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.PageLoading
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.SegmentedControl
@@ -142,7 +143,12 @@ private fun MyListReady(
         // The switch sits beside the title where there is room and beneath it where there
         // is not; on a phone the two together are wider than the screen.
         BoxWithConstraints(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = PageLayoutDefaults.HorizontalPadding,
+                    vertical = 12.dp,
+                ),
         ) {
             val stacked = maxWidth < COMPACT_HEADER_WIDTH
 
@@ -265,7 +271,10 @@ private fun LibraryView(
                 total = rows.size,
                 selected = filters.category,
                 onSelect = { filters = filters.copy(category = it) },
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                modifier = Modifier.padding(
+                    horizontal = PageLayoutDefaults.HorizontalPadding,
+                    vertical = 6.dp,
+                ),
             )
 
             MyListToolbar(
@@ -275,7 +284,10 @@ private fun LibraryView(
                 onFiltersChange = { filters = it },
                 onLayoutChange = { layout = it },
                 onToggleSelection = { selection.setSelectionMode(!selection.active) },
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                modifier = Modifier.padding(
+                    horizontal = PageLayoutDefaults.HorizontalPadding,
+                    vertical = 8.dp,
+                ),
             )
 
             if (visible.isEmpty()) {
@@ -297,7 +309,12 @@ private fun LibraryView(
                         )
                     }
                 }
-                val padding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 40.dp)
+                val padding = PaddingValues(
+                    start = PageLayoutDefaults.HorizontalPadding,
+                    end = PageLayoutDefaults.HorizontalPadding,
+                    top = 8.dp,
+                    bottom = 40.dp,
+                )
 
                 Box(modifier = Modifier.weight(1f)) {
                     when (layout) {
@@ -337,7 +354,10 @@ private fun LibraryView(
                         },
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 24.dp, bottom = 24.dp),
+                            .padding(
+                                end = PageLayoutDefaults.HorizontalPadding,
+                                bottom = 24.dp,
+                            ),
                     )
                 }
             }
@@ -425,7 +445,10 @@ private fun CalendarView(
                         scope.launch { listState.animateScrollToItem(0) }
                     },
                     onRefresh = { scope.launch { graph.calendar.refresh(force = true) } },
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                        vertical = 8.dp,
+                    ),
                 )
 
                 CalendarAgenda(
@@ -437,8 +460,8 @@ private fun CalendarView(
                     sections = sections,
                     state = listState,
                     contentPadding = PaddingValues(
-                        start = 24.dp,
-                        end = 24.dp,
+                        start = PageLayoutDefaults.HorizontalPadding,
+                        end = PageLayoutDefaults.HorizontalPadding,
                         top = 4.dp,
                         bottom = 40.dp,
                     ),

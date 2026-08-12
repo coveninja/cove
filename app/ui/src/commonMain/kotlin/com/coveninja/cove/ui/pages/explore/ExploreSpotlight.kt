@@ -111,9 +111,8 @@ fun ExploreSpotlight(
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val compact = maxWidth < COMPACT_SPOTLIGHT_WIDTH
-        // Sized to match Home's featured block, and taller than it looks: the top of the
-        // hero runs under the floating nav bar, so the first ~96dp of this height is spent
-        // behind it rather than on the image the viewer actually reads.
+        // Sized to match Home's featured block. On desktop its top runs under the floating
+        // nav bar; mobile shows the same cinematic crop with its bar at the bottom.
         val height = if (compact) 460.dp else 560.dp
 
         Box(

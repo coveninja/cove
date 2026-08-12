@@ -21,6 +21,13 @@ data class PersonDetails(
     @SerialName("also_known_as") val alsoKnownAs: List<String> = emptyList(),
     val popularity: Double = 0.0,
     @SerialName("combined_credits") val combinedCredits: PersonCredits = PersonCredits(),
+    /**
+     * TMDB's own pick of what this person is known for. Only `/search/person` fills it in;
+     * `/person/{id}` answers with [combinedCredits] instead, which is the whole filmography.
+     * Modelled on the same type so a person from a search result and a person from the
+     * person endpoint are the same shape with different amounts filled in.
+     */
+    @SerialName("known_for") val knownFor: List<PersonCredit> = emptyList(),
 )
 
 @Serializable

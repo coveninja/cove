@@ -278,7 +278,13 @@ private class FixtureContentRepository : ContentRepository {
         if (query.isBlank()) { _searchResults.value = SearchState.Idle; return }
         val q = query.lowercase()
         _searchResults.value = SearchState.Ready(
-            (fixtureMovies + fixtureTv).filter { it.displayTitle.lowercase().contains(q) }
+            results = (fixtureMovies + fixtureTv).filter { it.displayTitle.lowercase().contains(q) },
+            // Matched on the name alone: the fixture people exist to exercise the row and
+            // the sheet, not to stand in for TMDB's index.
+            people = fixturePeople
+                .filterValues { it.name.lowercase().contains(q) }
+                .keys
+                .map(::fixturePersonDetails),
         )
     }
 
@@ -337,54 +343,7 @@ private class FixtureContentRepository : ContentRepository {
         )
     }
 
-    override suspend fun person(id: Int): PersonDetails {
-        val person = fixturePeople[id]
-            ?: FixturePerson("Fixture Person $id", "Acting", "1980-01-01", "Nowhere, Earth")
-        // Every third title, offset by the id, so two people never have the same
-        // filmography and the sheet's sorting and dedupe have something to chew on.
-        val titles = (fixtureMovies + fixtureTv)
-            .filterIndexed { index, _ -> (index + id) % 3 == 0 }
-        val credits = titles.mapIndexed { index, title ->
-            PersonCredit(
-                id = title.id,
-                title = title.title,
-                name = title.name,
-                mediaType = title.mediaType,
-                posterPath = title.posterPath,
-                backdropPath = title.backdropPath,
-                releaseDate = title.releaseDate,
-                firstAirDate = title.firstAirDate,
-                voteAverage = title.voteAverage,
-                genreIds = title.genreIds,
-                popularity = title.popularity,
-                character = if (person.job == null) {
-                    fixtureCharacters[(index + id) % fixtureCharacters.size]
-                } else {
-                    null
-                },
-                job = person.job,
-                episodeCount = if (title.mediaType == MediaType.Tv) (index % 9) + 1 else 0,
-            )
-        }
-
-        return PersonDetails(
-            id = id,
-            name = person.name,
-            biography = "${person.name} is fixture content for developing Cove's person sheet " +
-                "without a running backend. They have appeared in ${credits.size} of the " +
-                "titles this catalog knows about, and in nothing at all outside it.",
-            birthday = person.birthday,
-            placeOfBirth = person.placeOfBirth,
-            knownForDepartment = person.department,
-            alsoKnownAs = listOf(person.name.split(' ').first()),
-            popularity = 40.0 + id,
-            combinedCredits = if (person.job == null) {
-                PersonCredits(cast = credits)
-            } else {
-                PersonCredits(crew = credits)
-            },
-        )
-    }
+    override suspend fun person(id: Int): PersonDetails = fixturePersonDetails(id)
 
     override suspend fun episodes(id: Int, season: Int): List<TvEpisode> =
         (1..3).map { episode ->
@@ -399,6 +358,60 @@ private class FixtureContentRepository : ContentRepository {
 
     private fun fixtureOverview(media: Media): String =
         "${media.displayTitle} is fixture content for developing Cove's interface without a running backend."
+}
+
+/**
+ * One fixture person, whole enough to fill the person sheet: a bio, vitals, and a slice of
+ * the fixture catalog as their filmography. Shared by person() and by search, so a person
+ * found by searching and the same person opened from a cast row are the same person.
+ */
+private fun fixturePersonDetails(id: Int): PersonDetails {
+    val person = fixturePeople[id]
+        ?: FixturePerson("Fixture Person $id", "Acting", "1980-01-01", "Nowhere, Earth")
+    // Every third title, offset by the id, so two people never have the same
+    // filmography and the sheet's sorting and dedupe have something to chew on.
+    val titles = (fixtureMovies + fixtureTv)
+        .filterIndexed { index, _ -> (index + id) % 3 == 0 }
+    val credits = titles.mapIndexed { index, title ->
+        PersonCredit(
+            id = title.id,
+            title = title.title,
+            name = title.name,
+            mediaType = title.mediaType,
+            posterPath = title.posterPath,
+            backdropPath = title.backdropPath,
+            releaseDate = title.releaseDate,
+            firstAirDate = title.firstAirDate,
+            voteAverage = title.voteAverage,
+            genreIds = title.genreIds,
+            popularity = title.popularity,
+            character = if (person.job == null) {
+                fixtureCharacters[(index + id) % fixtureCharacters.size]
+            } else {
+                null
+            },
+            job = person.job,
+            episodeCount = if (title.mediaType == MediaType.Tv) (index % 9) + 1 else 0,
+        )
+    }
+
+    return PersonDetails(
+        id = id,
+        name = person.name,
+        biography = "${person.name} is fixture content for developing Cove's person sheet " +
+            "without a running backend. They have appeared in ${credits.size} of the " +
+            "titles this catalog knows about, and in nothing at all outside it.",
+        birthday = person.birthday,
+        placeOfBirth = person.placeOfBirth,
+        knownForDepartment = person.department,
+        alsoKnownAs = listOf(person.name.split(' ').first()),
+        popularity = 40.0 + id,
+        combinedCredits = if (person.job == null) {
+            PersonCredits(cast = credits)
+        } else {
+            PersonCredits(crew = credits)
+        },
+    )
 }
 
 /**

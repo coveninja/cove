@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.pages.common.MediaRail
-import com.coveninja.cove.ui.pages.common.RailDefaults
 
 /**
  * One Explore rail.
@@ -40,5 +39,3 @@ fun ExploreShelfRow(
         itemContent = mediaCard,
     )
 }
-
-internal val HORIZONTAL_PADDING = RailDefaults.HorizontalPadding

@@ -27,11 +27,13 @@ import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
+import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.MediaRail
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.RailDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
@@ -72,6 +74,7 @@ fun HomePage(
     onPlayMedia: (Media) -> Unit,
     onExplore: () -> Unit,
     onOpenMyList: () -> Unit,
+    navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
@@ -176,6 +179,7 @@ fun HomePage(
             onPlayMedia = onPlayMedia,
             onExplore = onExplore,
             onOpenMyList = onOpenMyList,
+            navBarPlacement = navBarPlacement,
             modifier = modifier,
         )
     }
@@ -203,6 +207,7 @@ private fun HomeReady(
     onPlayMedia: (Media) -> Unit,
     onExplore: () -> Unit,
     onOpenMyList: () -> Unit,
+    navBarPlacement: NavBarPlacement,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -215,11 +220,16 @@ private fun HomeReady(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(26.dp),
             contentPadding = PaddingValues(
-                // With a hero the page runs edge-to-edge and the hero passes *under* the
-                // floating nav bar — its own top scrim keeps the bar legible, and clearance
-                // here would put a band of bare background between the two. Without one the
-                // greeting leads, and it has to clear the bar or it sits behind it.
-                top = if (hero == null) NavBarClearance else 0.dp,
+                // On desktop, a hero passes *under* the top bar and its scrim keeps the bar
+                // legible. Without a hero, the greeting needs top clearance. The mobile bar
+                // floats over the page, so neither case needs extra room here.
+                top = if (
+                    hero == null && navBarPlacement == NavBarPlacement.Top
+                ) {
+                    NavBarClearance
+                } else {
+                    0.dp
+                },
                 bottom = 48.dp,
             ),
         ) {
@@ -249,7 +259,9 @@ private fun HomeReady(
                 HomeGreeting(
                     greeting = greeting,
                     stats = stats,
-                    modifier = Modifier.padding(horizontal = RailDefaults.HorizontalPadding),
+                    modifier = Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                    ),
                 )
             }
 
@@ -359,7 +371,7 @@ private fun HomeReady(
                     ShimmerBlock(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = RailDefaults.HorizontalPadding)
+                            .padding(horizontal = PageLayoutDefaults.HorizontalPadding)
                             .height(18.dp),
                         corner = 6.dp,
                     )
@@ -374,7 +386,7 @@ private fun HomeReady(
             onClick = { scope.launch { listState.animateScrollToItem(0) } },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = RailDefaults.HorizontalPadding, bottom = 24.dp)
+                .padding(end = PageLayoutDefaults.HorizontalPadding, bottom = 24.dp)
                 .zIndex(10f),
         )
     }

@@ -2,6 +2,8 @@ package com.coveninja.cove.ui.pages.search
 
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.model.Person
+import com.coveninja.cove.ui.model.knownForOf
 import com.coveninja.cove.ui.model.resolveGenreName
 import kotlin.math.round
 
@@ -124,6 +126,53 @@ fun topResult(results: List<Media>, query: String): Media? {
     return results.firstOrNull { it.displayTitle().lowercase() == needle }
         ?: results.firstOrNull { it.displayTitle().lowercase().startsWith(needle) }
         ?: results.first()
+}
+
+// ── People ──────────────────────────────────────────────────────────────────
+
+/**
+ * The people worth showing for a query, best match first.
+ *
+ * TMDB orders its person index by popularity, which answers "who is the most famous person
+ * matching these letters" rather than "who did you type the name of" — searching a common
+ * surname otherwise leads with somebody who merely shares it. The tiers put an exact name
+ * first, then a name that starts with the query, then the rest; within a tier the backend's
+ * own popularity order is kept, because the sort is stable and it is the better tiebreak
+ * than anything that can be computed from a name.
+ *
+ * The billing each row shows is what they are known for — the titles if TMDB offered any,
+ * their department otherwise. Two people with the same name are told apart by their work,
+ * never by the fact that both of them act.
+ */
+fun rankedPeople(
+    people: List<Person>,
+    query: String,
+    limit: Int = MAX_PEOPLE_RESULTS,
+): List<Person> {
+    val needle = query.trim().lowercase()
+
+    return people
+        .filter { it.name.isNotBlank() }
+        .distinctBy { it.tmdbId }
+        .sortedBy { person ->
+            val name = person.name.lowercase()
+            when {
+                needle.isEmpty() -> 3
+                name == needle -> 0
+                name.startsWith(needle) -> 1
+                name.contains(needle) -> 2
+                else -> 3
+            }
+        }
+        .take(limit)
+        .map { person -> person.copy(role = knownForLabel(person)) }
+}
+
+/** "Fight Club, Se7en", or "Acting" for someone with nothing credited to them here. */
+internal fun knownForLabel(person: Person, maxTitles: Int = 2): String? {
+    val titles = knownForOf(person.credits, limit = maxTitles).map { it.title }
+    return titles.takeIf { it.isNotEmpty() }?.joinToString(", ")
+        ?: person.knownForDepartment
 }
 
 // ── Genre facets ────────────────────────────────────────────────────────────
@@ -280,6 +329,12 @@ val SEARCH_HINTS: List<String> = listOf(
 
 /** Past this the pill row is a wall of genres rather than a way to narrow one. */
 const val MAX_GENRE_FACETS = 12
+
+/**
+ * A rail's worth of faces. Search is for titles first; people are a way through to them,
+ * and a second full-width grid of them would say otherwise.
+ */
+const val MAX_PEOPLE_RESULTS = 10
 
 /** Enough history to be useful, few enough that the row never wraps into a block. */
 const val MAX_RECENT_SEARCHES = 8

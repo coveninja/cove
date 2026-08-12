@@ -24,9 +24,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,16 +48,19 @@ import com.coveninja.cove.ui.components.media.drag.MediaDragPayload
 import com.coveninja.cove.ui.components.media.drag.MediaDragPreview
 import com.coveninja.cove.ui.components.navigation.NavBar
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
+import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.ui.components.navigation.NavDestination
 import com.coveninja.cove.ui.components.person.PersonDetailsSharedOverlay
 import com.coveninja.cove.ui.components.player.InlineVideoPlayer
 import com.coveninja.cove.ui.components.player.PlayerLayer
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.explore.ExplorePage
 import com.coveninja.cove.ui.pages.home.HomePage
 import com.coveninja.cove.ui.pages.mylist.MyListPage
+import com.coveninja.cove.ui.pages.common.LocalPageHorizontalPadding
 import com.coveninja.cove.ui.pages.profile.ProfilePage
 import com.coveninja.cove.ui.pages.search.SearchPage
 import com.coveninja.cove.ui.state.FullscreenController
@@ -159,19 +165,33 @@ fun CoveApp(
     videoPlayerHost: VideoPlayerHost? = null,
     // Absent on mobile, where the player is already fullscreen.
     fullscreenController: FullscreenController? = null,
+    // Desktop keeps the floating bar over the top edge; the Android host opts into
+    // bottom placement without making a narrow desktop window behave like a phone.
+    navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
+    // The Android host uses this to enter immersive mode while a details sheet owns
+    // the screen. Desktop and other hosts can ignore it.
+    onDetailsOverlayVisibilityChanged: (Boolean) -> Unit = {},
 ) {
     CompositionLocalProvider(
         LocalAppGraph provides graph,
         LocalVideoPlayerHost provides videoPlayerHost,
         LocalFullscreenController provides fullscreenController,
+        LocalPageHorizontalPadding provides if (navBarPlacement == NavBarPlacement.Bottom) {
+            16.dp
+        } else {
+            24.dp
+        },
     ) {
-        CoveAppContent()
+        CoveAppContent(navBarPlacement, onDetailsOverlayVisibilityChanged)
     }
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
-private fun CoveAppContent() {
+private fun CoveAppContent(
+    navBarPlacement: NavBarPlacement,
+    onDetailsOverlayVisibilityChanged: (Boolean) -> Unit,
+) {
     val catalog = rememberMediaCatalog()
     val index = rememberLibraryIndex()
     val watchProgress = rememberWatchProgressIndex()
@@ -183,6 +203,17 @@ private fun CoveAppContent() {
     val search = rememberSearchSession()
     val videoPlayerHost = LocalVideoPlayerHost.current
     val uriHandler = LocalUriHandler.current
+
+    val currentOverlayVisibilityCallback = rememberUpdatedState(
+        onDetailsOverlayVisibilityChanged,
+    )
+    val detailsOverlayVisible = detailsState.selected != null || personState.selected != null
+    LaunchedEffect(detailsOverlayVisible) {
+        currentOverlayVisibilityCallback.value(detailsOverlayVisible)
+    }
+    DisposableEffect(Unit) {
+        onDispose { currentOverlayVisibilityCallback.value(false) }
+    }
 
     var selectedDestination by remember { mutableStateOf(NavDestination.Home) }
     var searchMode by remember { mutableStateOf(false) }
@@ -199,6 +230,14 @@ private fun CoveAppContent() {
             search.submitted?.let(search::rememberQuery)
         }
         detailsState.open(media)
+    }
+
+    /** Opening a person out of a search result says as much about the query as a title does. */
+    val openPerson: (Person) -> Unit = { person ->
+        if (selectedDestination == NavDestination.Search) {
+            search.submitted?.let(search::rememberQuery)
+        }
+        personState.open(person)
     }
 
     val underlyingNavAlpha by animateFloatAsState(
@@ -235,22 +274,25 @@ private fun CoveAppContent() {
                     )
                 }
 
-            // Home and Explore are intentionally edge-to-edge so their heroes can render
-            // beneath the floating navigation bar — anything else leaves a band of bare
-            // background between the bar and the top of the image. Both pages then apply
-            // NavBarClearance themselves to whichever parts of them do not lead with a
-            // hero. Other destinations take the clearance wholesale.
-            val pageModifier =
-                if (selectedDestination == NavDestination.Home ||
-                    selectedDestination == NavDestination.Explore
-                ) {
+            // Desktop heroes remain edge-to-edge beneath the top bar. Mobile pages respect
+            // system insets, but the bottom bar floats over them instead of consuming space.
+            val heroDestination = selectedDestination == NavDestination.Home ||
+                selectedDestination == NavDestination.Explore
+            val pageModifier = when {
+                navBarPlacement == NavBarPlacement.Top && heroDestination ->
                     Modifier.fillMaxSize()
-                } else {
+
+                navBarPlacement == NavBarPlacement.Top ->
                     Modifier
                         .fillMaxSize()
                         .safeContentPadding()
                         .padding(top = NavBarClearance)
-                }
+
+                else ->
+                    Modifier
+                        .fillMaxSize()
+                        .safeContentPadding()
+            }
 
             Box(modifier = pageModifier) {
                 when (selectedDestination) {
@@ -262,6 +304,7 @@ private fun CoveAppContent() {
                         onPlayMedia = { playback.open(it) },
                         onExplore = { selectedDestination = NavDestination.Explore },
                         onOpenMyList = { selectedDestination = NavDestination.MyList },
+                        navBarPlacement = navBarPlacement,
                     )
 
                     NavDestination.MyList -> MyListPage(
@@ -282,6 +325,7 @@ private fun CoveAppContent() {
                     NavDestination.Explore -> ExplorePage(
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,
+                        navBarPlacement = navBarPlacement,
                     )
 
                     NavDestination.Search -> SearchPage(
@@ -289,6 +333,7 @@ private fun CoveAppContent() {
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,
                         onPlayMedia = { playback.open(it) },
+                        onOpenPerson = openPerson,
                     )
 
                     NavDestination.Account -> ProfilePage()
@@ -332,9 +377,18 @@ private fun CoveAppContent() {
                     drag.categoryBounds[category] = bounds
                 },
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
+                    .align(
+                        if (navBarPlacement == NavBarPlacement.Top) {
+                            Alignment.TopCenter
+                        } else {
+                            Alignment.BottomCenter
+                        },
+                    )
                     .safeContentPadding()
-                    .padding(top = 16.dp)
+                    .padding(
+                        top = if (navBarPlacement == NavBarPlacement.Top) 16.dp else 0.dp,
+                        bottom = if (navBarPlacement == NavBarPlacement.Bottom) 16.dp else 0.dp,
+                    )
                     .graphicsLayer { alpha = underlyingNavAlpha }
                     .zIndex(100f),
             )
@@ -521,19 +575,30 @@ private fun CoveAppContent() {
                         dampingRatio = 0.72f,
                         stiffness = Spring.StiffnessMediumLow,
                     ),
-                    initialOffsetY = { -it / 2 },
+                    initialOffsetY = {
+                        if (navBarPlacement == NavBarPlacement.Top) -it / 2 else it / 2
+                    },
                 ),
                 exit = fadeOut(tween(110)) + slideOutVertically(
                     animationSpec = tween(140),
-                    targetOffsetY = { -it / 3 },
+                    targetOffsetY = {
+                        if (navBarPlacement == NavBarPlacement.Top) -it / 3 else it / 3
+                    },
                 ),
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .safeContentPadding()
-                        .padding(top = 16.dp),
-                    contentAlignment = Alignment.TopCenter,
+                        .padding(
+                            top = if (navBarPlacement == NavBarPlacement.Top) 16.dp else 0.dp,
+                            bottom = if (navBarPlacement == NavBarPlacement.Bottom) 16.dp else 0.dp,
+                        ),
+                    contentAlignment = if (navBarPlacement == NavBarPlacement.Top) {
+                        Alignment.TopCenter
+                    } else {
+                        Alignment.BottomCenter
+                    },
                 ) {
                     NavBar(
                         selectedDestination = selectedDestination,

@@ -2,6 +2,8 @@ package com.coveninja.cove.ui.pages.search
 
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.model.Person
+import com.coveninja.cove.ui.model.PersonCreditEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -363,5 +365,132 @@ class SearchModelTest {
 
         assertEquals(SearchSort.Newest, cleared.sort)
         assertFalse(cleared.narrowed)
+    }
+
+    // ── rankedPeople ───────────────────────────────────────────────────────
+
+    /**
+     * A person as person search delivers one: TMDB's own known-for pick rather than a
+     * filmography, which is what makes [knownForLabel] the only thing a row can be billed
+     * with. Order of the input is the backend's popularity order.
+     */
+    private fun person(
+        id: Int,
+        name: String,
+        department: String? = "Acting",
+        knownFor: List<String> = emptyList(),
+    ): Person = Person(
+        id = "Person:$id",
+        tmdbId = id,
+        name = name,
+        knownForDepartment = department,
+        credits = knownFor.mapIndexed { index, title ->
+            PersonCreditEntry(
+                id = "Movie:${id}_$index",
+                tmdbId = id * 100 + index,
+                title = title,
+                posterUrl = "/poster.jpg",
+                type = MediaType.Movie,
+                rating = 7.0,
+                year = "2011",
+                // Descending, so the label is not accidentally right because of input order.
+                popularity = (knownFor.size - index).toDouble(),
+            )
+        },
+    )
+
+    // TMDB ranks its person index by fame, which answers a different question from the one
+    // that was typed. The name that *is* the query has to beat the more popular one that
+    // merely begins with it — otherwise typing somebody's full name still leads with
+    // whichever near-namesake is hot this week.
+    // Mutation applied to verify: dropped the `name == needle` tier → test failed, the more
+    // popular "Chris Evanson" led, since an exact name also starts with itself and the two
+    // collapsed into one tier.
+    @Test
+    fun `an exact name beats a more popular name that starts the same way`() {
+        val ranked = rankedPeople(
+            listOf(
+                person(1, "Chris Evanson"),
+                person(2, "Chris Evans"),
+            ),
+            query = "chris evans",
+        )
+
+        assertEquals(listOf("Chris Evans", "Chris Evanson"), ranked.map { it.name })
+    }
+
+    // Mutation applied to verify: collapsed startsWith and contains into one tier → test
+    // failed, "Ana de Armas" and "Deana Ross" came back in input order.
+    @Test
+    fun `a name that starts with the query beats one that merely contains it`() {
+        val ranked = rankedPeople(
+            listOf(
+                person(1, "Deana Ross"),
+                person(2, "Ana de Armas"),
+            ),
+            query = "ana",
+        )
+
+        assertEquals(listOf("Ana de Armas", "Deana Ross"), ranked.map { it.name })
+    }
+
+    // Within a tier the backend's popularity order is the better answer than anything a
+    // name can be scored on, so the sort has to leave it alone.
+    // Mutation applied to verify: sorted by name inside the tier → test failed, the
+    // alphabetical order replaced the popularity order.
+    @Test
+    fun `equally good matches keep the order they arrived in`() {
+        val ranked = rankedPeople(
+            listOf(
+                person(1, "Zoe Saldana"),
+                person(2, "Adam Sandler"),
+            ),
+            query = "sa",
+        )
+
+        assertEquals(listOf("Zoe Saldana", "Adam Sandler"), ranked.map { it.name })
+    }
+
+    // Mutation applied to verify: dropped distinctBy and the blank-name filter → test
+    // failed with 3 rows, one of them nameless.
+    @Test
+    fun `duplicates and nameless records are dropped`() {
+        val ranked = rankedPeople(
+            listOf(
+                person(1, "Tilda Swinton"),
+                person(1, "Tilda Swinton"),
+                person(2, ""),
+            ),
+            query = "tilda",
+        )
+
+        assertEquals(listOf("Tilda Swinton"), ranked.map { it.name })
+    }
+
+    // Mutation applied to verify: returned every match instead of take(limit) → test
+    // failed with 12 rows.
+    @Test
+    fun `the rail is capped`() {
+        val people = (1..12).map { person(it, "Person $it") }
+
+        assertEquals(3, rankedPeople(people, query = "person", limit = 3).size)
+    }
+
+    // Two people with the same name are told apart by their work, never by the fact that
+    // both of them act.
+    // Mutation applied to verify: billed everyone with their department → test failed,
+    // both rows read "Acting".
+    @Test
+    fun `people are billed with what they are known for`() {
+        val ranked = rankedPeople(
+            listOf(
+                person(1, "Chris Evans", knownFor = listOf("Captain America", "Knives Out")),
+                person(2, "Chris Evans", department = "Directing"),
+            ),
+            query = "chris evans",
+        )
+
+        assertEquals("Captain America, Knives Out", ranked[0].role)
+        assertEquals("Directing", ranked[1].role)
     }
 }

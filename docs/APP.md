@@ -155,6 +155,23 @@ what merges those into one row per title; do not render `credits` directly.
 `PersonCreditEntry.toMedia()` turns a credit into the thin `Media` the details
 sheet opens with, the same way a recommendation card does.
 
+### Search for people
+
+`SearchState.Ready` carries `people` alongside `results`; both come from the one
+`content.search(query)` call, so there is no second request to make. The people
+arrive as `PersonDetails` with `knownFor` filled in instead of a filmography —
+`toUiPerson()` folds either into `credits`, so the same helpers work on both.
+
+```kotlin
+val ready = graph.content.searchResults.value as? SearchState.Ready
+rankedPeople(ready?.people.orEmpty().map { it.toUiPerson() }, query)
+```
+
+`rankedPeople` is what the rail draws: it re-tiers TMDB's popularity ordering so
+the name that was actually typed wins, and bills each row with what they are
+known for. Opening one hands a thin `Person` to the person sheet, which fetches
+the rest.
+
 ### Get runtime, genres, certification
 
 All on the enriched media: `runtimeMinutes` (falls back to a TV show's first

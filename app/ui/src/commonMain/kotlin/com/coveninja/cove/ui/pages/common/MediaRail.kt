@@ -76,6 +76,7 @@ fun <T> MediaRail(
     seeAllLabel: String = "See all",
     itemContent: @Composable (T, Modifier) -> Unit,
 ) {
+    val horizontalPadding = PageLayoutDefaults.HorizontalPadding
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val rowHover = remember { MutableInteractionSource() }
@@ -94,14 +95,14 @@ fun <T> MediaRail(
             showSeeAll = controlsVisible,
             seeAllLabel = seeAllLabel,
             onSeeAll = onSeeAll,
-            modifier = Modifier.padding(horizontal = RailDefaults.HorizontalPadding),
+            modifier = Modifier.padding(horizontal = horizontalPadding),
         )
 
         Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
             LazyRow(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().height(itemHeight),
-                contentPadding = PaddingValues(horizontal = RailDefaults.HorizontalPadding),
+                contentPadding = PaddingValues(horizontal = horizontalPadding),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 itemsIndexed(items, key = { _, item -> key(item) }) { index, item ->
@@ -146,7 +147,7 @@ fun <T> MediaRail(
             state = listState,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = RailDefaults.HorizontalPadding, vertical = 4.dp),
+                .padding(horizontal = horizontalPadding, vertical = 4.dp),
         )
     }
 }

@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.coveninja.cove.ui.pages.common.RailDefaults
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 
 /**
@@ -28,7 +28,7 @@ fun SearchSkeleton(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = RailDefaults.HorizontalPadding),
+            .padding(horizontal = PageLayoutDefaults.HorizontalPadding),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         ShimmerBlock(
