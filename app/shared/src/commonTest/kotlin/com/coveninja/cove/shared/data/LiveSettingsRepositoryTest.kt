@@ -66,6 +66,10 @@ private val settingsJson = """
   "prefetchNextEpisode": false,
   "allowUploading": false,
   "probeStreams": false,
+  "manageYtDlp": false,
+  "seekStepSeconds": 30.0,
+  "hardwareDecoding": false,
+  "rememberVolume": false,
   "remoteAccessEnabled": true,
   "remoteAccessToken": "deadbeefcafe",
   "allowLanStreamSources": true,
@@ -147,6 +151,13 @@ class LiveSettingsRepositoryTest {
         assertEquals(false, sent.prefetchNextEpisode,   "prefetchNextEpisode")
         assertEquals(false, sent.allowUploading,        "allowUploading")
         assertEquals(false, sent.probeStreams,          "probeStreams")
+        // Also non-default on purpose: each of these defaults to true (or to 10.0),
+        // so the stored value is what proves the preference survived the round trip
+        // rather than being re-derived from the Kotlin default.
+        assertEquals(false, sent.manageYtDlp,           "manageYtDlp")
+        assertEquals(30.0,  sent.seekStepSeconds,       "seekStepSeconds")
+        assertEquals(false, sent.hardwareDecoding,      "hardwareDecoding")
+        assertEquals(false, sent.rememberVolume,        "rememberVolume")
         assertEquals(true,  sent.remoteAccessEnabled,   "remoteAccessEnabled")
         assertEquals("deadbeefcafe", sent.remoteAccessToken, "remoteAccessToken")
         assertEquals(true,  sent.allowLanStreamSources, "allowLanStreamSources")

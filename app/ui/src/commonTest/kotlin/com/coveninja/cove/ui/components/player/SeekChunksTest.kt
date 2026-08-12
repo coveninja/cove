@@ -124,4 +124,102 @@ class SeekChunksTest {
         assertEquals(null, chunks.single().kind)
         assertEquals(600.0, chunks.single().lengthSeconds)
     }
+
+    // ── Per-piece fill, shared by the played and buffered layers ─────────────
+
+    // Mutation applied to verify: measured from zero rather than from the piece's
+    // own start → test failed at 1.0, and every piece behind the playhead would
+    // have been drawn full regardless of where the playhead was inside it.
+    @Test
+    fun `a piece fills in proportion to how far into it the mark is`() {
+        val chunk = SeekChunk(startSeconds = 100.0, endSeconds = 200.0, kind = null)
+
+        assertEquals(0.25f, chunk.fillFraction(125.0))
+        assertEquals(0.5f, chunk.fillFraction(150.0))
+    }
+
+    // Mutation applied to verify: removed the coerceIn → test failed at -1.0 and
+    // 2.0, which Modifier.fillMaxWidth rejects outright.
+    @Test
+    fun `a mark outside the piece clamps rather than running past it`() {
+        val chunk = SeekChunk(startSeconds = 100.0, endSeconds = 200.0, kind = null)
+
+        assertEquals(0f, chunk.fillFraction(0.0))
+        assertEquals(1f, chunk.fillFraction(400.0))
+    }
+
+    // The buffered layer is fed a polled value that is briefly absent, and NaN
+    // reaching fillMaxWidth is a crash rather than a wrong-looking bar.
+    // Mutation applied to verify: dropped the isFinite guard → test failed with NaN.
+    @Test
+    fun `a non-finite mark fills nothing`() {
+        val chunk = SeekChunk(startSeconds = 0.0, endSeconds = 100.0, kind = null)
+
+        assertEquals(0f, chunk.fillFraction(Double.NaN))
+    }
+
+    // ── Chapters ─────────────────────────────────────────────────────────────
+
+    private fun chapter(index: Int, start: Double, title: String = "") =
+        com.coveninja.cove.ui.state.MediaChapter(index, title, start)
+
+    // Chapters have a start and no end; the one you are in is the last one to have
+    // begun. Searching for a range instead would find nothing.
+    // Mutation applied to verify: used firstOrNull → test failed, every position
+    // past the first chapter still reported chapter one.
+    @Test
+    fun `the current chapter is the last one to have started`() {
+        val chapters = listOf(chapter(0, 0.0), chapter(1, 300.0), chapter(2, 900.0))
+
+        assertEquals(1, chapterAt(500.0, chapters)?.index)
+        assertEquals(2, chapterAt(1200.0, chapters)?.index)
+    }
+
+    // Mutation applied to verify: changed >= to > in chapterAt → test failed,
+    // landing exactly on a chapter boundary reported the previous chapter.
+    @Test
+    fun `landing exactly on a boundary is inside the new chapter`() {
+        val chapters = listOf(chapter(0, 0.0), chapter(1, 300.0))
+
+        assertEquals(1, chapterAt(300.0, chapters)?.index)
+    }
+
+    // A tick on the first pixel is indistinguishable from the end cap of the bar.
+    // Mutation applied to verify: removed the `it > 0.0` filter → test failed with
+    // an extra mark at 0.0.
+    @Test
+    fun `a chapter starting at zero draws no mark`() {
+        val marks = chapterMarks(
+            chapters = listOf(chapter(0, 0.0), chapter(1, 300.0)),
+            durationSeconds = 600.0,
+        )
+
+        assertEquals(listOf(0.5f), marks)
+    }
+
+    // Mutation applied to verify: removed the `it < duration` filter → test failed
+    // with a mark at 1.0 sitting on the far end cap.
+    @Test
+    fun `a chapter at or past the end draws no mark`() {
+        val marks = chapterMarks(
+            chapters = listOf(chapter(0, 600.0), chapter(1, 900.0)),
+            durationSeconds = 600.0,
+        )
+
+        assertTrue(marks.isEmpty(), "was: $marks")
+    }
+
+    // Mutation applied to verify: removed the duration guard → test failed with a
+    // division by zero producing infinite offsets.
+    @Test
+    fun `no duration yields no chapter marks`() {
+        assertTrue(chapterMarks(listOf(chapter(0, 30.0)), durationSeconds = 0.0).isEmpty())
+    }
+
+    // Most files have none, and the ticks are the only thing that says so.
+    @Test
+    fun `a file without chapters is unmarked and has no current chapter`() {
+        assertTrue(chapterMarks(emptyList(), durationSeconds = 600.0).isEmpty())
+        assertEquals(null, chapterAt(120.0, emptyList()))
+    }
 }

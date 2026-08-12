@@ -82,12 +82,12 @@ import com.coveninja.cove.ui.components.media.action.PrimaryWatchButton
 import com.coveninja.cove.ui.components.media.action.RatingButton
 import com.coveninja.cove.ui.components.media.card.MediaCard
 import com.coveninja.cove.ui.components.media.card.MediaCastCard
-import com.coveninja.cove.ui.components.media.card.MediaVideoCard
 import com.coveninja.cove.ui.components.media.drag.MediaDragPayload
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaSeason
 import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.model.MediaVideo
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -109,6 +109,9 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
     onListCategorySelected: (Media, MyListCategory) -> Unit = { _, _ -> },
     onRatingSelected: (Media, Int) -> Unit = { _, _ -> },
     onMediaSelected: (Media) -> Unit = {},
+    onVideoSelected: (Media, MediaVideo) -> Unit = { _, _ -> },
+    /** Rendered inside the Videos section while one of them is playing embedded. */
+    videoPlayer: @Composable ((Modifier) -> Unit)? = null,
     onLoadEpisodes: suspend (MediaSeason) -> List<MediaEpisode> = { it.episodes },
     onEpisodeSelected: (
         media: Media,
@@ -339,6 +342,10 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                             onRatingSelected(currentMedia, rating)
                         },
                         onMediaSelected = onMediaSelected,
+                        onVideoSelected = { video ->
+                            onVideoSelected(currentMedia, video)
+                        },
+                        videoPlayer = videoPlayer,
                         onLoadEpisodes = onLoadEpisodes,
                         onEpisodeSelected = { season, episode ->
                             onEpisodeSelected(
@@ -486,6 +493,8 @@ private fun MediaDetailsHeroContent(
     onListCategorySelected: (MyListCategory) -> Unit,
     onRatingSelected: (Int) -> Unit,
     onMediaSelected: (Media) -> Unit,
+    onVideoSelected: (MediaVideo) -> Unit,
+    videoPlayer: @Composable ((Modifier) -> Unit)?,
     onLoadEpisodes: suspend (MediaSeason) -> List<MediaEpisode>,
     onEpisodeSelected: (MediaSeason, MediaEpisode) -> Unit,
     onEpisodeChooseSource: (MediaSeason, MediaEpisode) -> Unit,
@@ -668,36 +677,11 @@ private fun MediaDetailsHeroContent(
                 )
             }
 
-            if (media.videos.isNotEmpty()) {
-                val videoListState = rememberLazyListState()
-
-                DetailsSectionTitle(
-                    title = "Videos",
-                    iconName = "lucide:film",
-                    count = media.videos.size,
-                )
-                LazyRow(
-                    state = videoListState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(224.dp)
-                        .padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    items(
-                        items = media.videos,
-                        key = { video -> video.id },
-                    ) { video ->
-                        MediaVideoCard(video)
-                    }
-                }
-                HorizontalLazyListScrollbar(
-                    state = videoListState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                )
-            }
+            MediaVideosSection(
+                videos = media.videos,
+                onVideoSelected = onVideoSelected,
+                player = videoPlayer,
+            )
 
             if (media.cast.isNotEmpty()) {
                 val castListState = rememberLazyListState()
@@ -774,7 +758,7 @@ private fun MediaDetailsHeroContent(
 }
 
 @Composable
-private fun DetailsSectionTitle(
+internal fun DetailsSectionTitle(
     title: String,
     iconName: String,
     count: Int? = null,

@@ -17,6 +17,21 @@ data class AppSettings(
     val defaultVolume: Double = 1.0,
     val autoPlay: Boolean = false,
     val rememberPosition: Boolean = true,
+    /** How far the skip buttons and the arrow keys jump. */
+    val seekStepSeconds: Double = 10.0,
+    /**
+     * Whether the player decodes on the GPU. On by default and worth leaving on —
+     * it is the difference between a few percent of one core and most of several on
+     * a 4K file — but copy-back decoding misbehaves on some drivers, and until now
+     * turning it off meant hand-editing the raw mpv config.
+     */
+    val hardwareDecoding: Boolean = true,
+    /**
+     * Carry the volume you last set into the next thing you play, by writing it back
+     * over [defaultVolume]. Off means [defaultVolume] is a fixed starting point that
+     * only the settings slider changes.
+     */
+    val rememberVolume: Boolean = true,
     val defaultProvider: String = "",
     val autoSelectStream: Boolean = false,
     val streamSelectionMode: String = "balanced",
@@ -42,6 +57,13 @@ data class AppSettings(
     val prefetchNextEpisode: Boolean = true,
     val allowUploading: Boolean = true,
     val probeStreams: Boolean = true,
+    /**
+     * Whether Cove may fetch and update yt-dlp for itself. Trailers and other
+     * extras are YouTube pages, and mpv needs it to turn one into a stream; a
+     * yt-dlp the viewer installed is always preferred and nothing is downloaded
+     * for them. Off means extras only play where yt-dlp is already installed.
+     */
+    val manageYtDlp: Boolean = true,
     // Device-local security config, deliberately excluded from Supabase sync on
     // the embedded HTTP boundary. Round-tripped verbatim — regenerating the token would orphan
     // every device already paired against it.

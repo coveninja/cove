@@ -33,6 +33,13 @@ class MpvSoftwarePlayer(
     // what this path needs and is far cheaper than decoding on the CPU. mpv falls
     // back to software decode by itself when no copy-back decoder is available.
     private val hardwareDecoding: Boolean = true,
+    /**
+     * Where mpv's ytdl hook should look for yt-dlp, `:`-separated (`;` on Windows).
+     * Null leaves mpv to its own defaults, which search PATH.
+     */
+    private val ytdlSearchPath: String? = null,
+    /** What the hook asks yt-dlp for; null leaves mpv's default. See [YTDL_FORMAT]. */
+    private val ytdlFormat: String? = null,
     private val frameConsumer: (BufferedImage) -> Unit,
 ) : DesktopPlayer {
     private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
@@ -48,6 +55,12 @@ class MpvSoftwarePlayer(
     private val renderExecutor = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-render"))
     private val eventExecutor  = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-events"))
     private val stateExecutor  = Executors.newSingleThreadScheduledExecutor(namedDaemon("cove-mpv-state"))
+    // Every client-API call that mutates mpv goes through here, as it already does in
+    // MpvOpenGlPlayer. Two reasons, both of which bit this path: mpv_command blocks
+    // until the core accepts the command, so issuing one from the Compose/AWT thread
+    // stalls the whole window on a slow network seek; and a single thread gives
+    // commands a defined order, which "set start" before "loadfile" depends on.
+    private val commandExecutor = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-commands"))
 
     // The render update callback fires on mpv's internal thread. It must only
     // schedule work and never touch GL or mpv API functions directly.
@@ -72,6 +85,18 @@ class MpvSoftwarePlayer(
             setOption(library, created, "terminal",  "no")
             setOption(library, created, "msg-level", "all=warn")
             setOption(library, created, "keep-open", "yes")
+            // libmpv leaves the ytdl hook off where the mpv binary has it on. With
+            // it on, a URL mpv cannot open directly is handed to yt-dlp — which is
+            // what turns the YouTube page behind a trailer into a playable stream.
+            // Costs nothing for ordinary streams: the hook runs on load failure,
+            // not on load. See MpvVideoPlayerHost.playsWebVideos.
+            setOption(library, created, "ytdl", "yes")
+            // Both are set before initialize because ytdl_hook reads them when the
+            // script loads. The search path names the managed copy first and then
+            // the names mpv would have tried anyway; the format string is there
+            // because mpv's own default picks streams YouTube answers with 403.
+            ytdlSearchPath?.let { setOption(library, created, "script-opts", "ytdl_hook-ytdl_path=$it") }
+            ytdlFormat?.let { setOption(library, created, "ytdl-format", it) }
             setOption(
                 library,
                 created,
@@ -115,10 +140,14 @@ class MpvSoftwarePlayer(
     override fun togglePause() = setPaused(!_snapshot.value.paused)
 
     override fun setPaused(paused: Boolean) {
-        val target = handle.get() ?: return
-        val value = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (paused) 1 else 0) }
-        val result = Mpv.library().mpv_set_property(target, "pause", Mpv.FORMAT_FLAG, value)
-        if (result < 0) recordError(result, "set pause")
+        submitCommand("set pause") { library, target ->
+            val value = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (paused) 1 else 0) }
+            try {
+                library.mpv_set_property(target, "pause", Mpv.FORMAT_FLAG, value)
+            } finally {
+                Reference.reachabilityFence(value)
+            }
+        }
     }
 
     override fun seek(seconds: Double) {
@@ -126,19 +155,27 @@ class MpvSoftwarePlayer(
     }
 
     override fun setVolume(volume: Double) {
-        val target = handle.get() ?: return
-        val value = Memory(Double.SIZE_BYTES.toLong()).apply {
-            setDouble(0, volume.coerceIn(0.0, 100.0))
+        submitCommand("set volume") { library, target ->
+            val value = Memory(Double.SIZE_BYTES.toLong()).apply {
+                setDouble(0, volume.coerceIn(0.0, 100.0))
+            }
+            try {
+                library.mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, value)
+            } finally {
+                Reference.reachabilityFence(value)
+            }
         }
-        val result = Mpv.library().mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, value)
-        if (result < 0) recordError(result, "set volume")
     }
 
     override fun setMuted(muted: Boolean) {
-        val target = handle.get() ?: return
-        val value = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (muted) 1 else 0) }
-        val result = Mpv.library().mpv_set_property(target, "mute", Mpv.FORMAT_FLAG, value)
-        if (result < 0) recordError(result, "set mute")
+        submitCommand("set mute") { library, target ->
+            val value = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (muted) 1 else 0) }
+            try {
+                library.mpv_set_property(target, "mute", Mpv.FORMAT_FLAG, value)
+            } finally {
+                Reference.reachabilityFence(value)
+            }
+        }
     }
 
     // set, not set-property: mpv accepts "no" for sid, which the typed property
@@ -184,6 +221,13 @@ class MpvSoftwarePlayer(
         if (!closing.compareAndSet(false, true)) return
 
         stateExecutor.shutdownNow()
+        // Before the handle is dropped, so a command already inside mpv finishes
+        // against a live handle rather than racing mpv_terminate_destroy. `closing`
+        // is already set, so submitCommand refuses new work; shutdownNow discards
+        // whatever is merely queued, which at teardown is only stale seeks.
+        commandExecutor.shutdownNow()
+        runCatching { commandExecutor.awaitTermination(2, TimeUnit.SECONDS) }
+
         val target = handle.getAndSet(null)
         target?.let { runCatching { Mpv.library().mpv_wakeup(it) } }
 
@@ -293,10 +337,20 @@ class MpvSoftwarePlayer(
     private fun pollState(library: MpvLibrary, target: Pointer) {
         if (closing.get()) return
         try {
+            val previous = _snapshot.value
             val idle     = getFlag(library, target, "idle-active")      ?: true
             val paused   = getFlag(library, target, "pause")            ?: true
-            val position = getDouble(library, target, "time-pos")       ?: 0.0
-            val duration = getDouble(library, target, "duration")       ?: 0.0
+            // Held rather than zeroed while mpv cannot answer — see resolveTimeProperty.
+            val position = resolveTimeProperty(
+                polled = getDouble(library, target, "time-pos"),
+                previous = previous.positionSeconds,
+                idle = idle,
+            )
+            val duration = resolveTimeProperty(
+                polled = getDouble(library, target, "duration"),
+                previous = previous.durationSeconds,
+                idle = idle,
+            )
             val volume   = getDouble(library, target, "volume")         ?: _snapshot.value.volume
             val muted    = getFlag(library, target, "mute")             ?: _snapshot.value.muted
             val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
@@ -307,13 +361,23 @@ class MpvSoftwarePlayer(
             val rate     = getDouble(library, target, "speed") ?: 1.0
             val forCache  = getFlag(library, target, "paused-for-cache") ?: false
             val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
+            val chapters = if (idle) "" else getString(library, target, "chapter-list").orEmpty()
+            // Absolute timestamp, so it is only meaningful against a live position.
+            val cacheEnd = getDouble(library, target, "demuxer-cache-time").finiteOrNull()
+                ?: previous.cacheEndSeconds
+            val cacheAhead = getDouble(library, target, "demuxer-cache-duration") ?: 0.0
+            val subDelay = getDouble(library, target, "sub-delay") ?: 0.0
+            val audioDelay = getDouble(library, target, "audio-delay") ?: 0.0
+            val dropped  = getDouble(library, target, "frame-drop-count") ?: 0.0
+            val fps      = getDouble(library, target, "estimated-vf-fps") ?: 0.0
+            val bitrate  = getDouble(library, target, "video-bitrate") ?: 0.0
 
             _snapshot.value = _snapshot.value.copy(
                 initialized     = true,
                 hasMedia        = !idle,
                 paused          = paused,
-                positionSeconds = position.finiteOrZero(),
-                durationSeconds = duration.finiteOrZero(),
+                positionSeconds = position,
+                durationSeconds = duration,
                 volume          = volume.coerceIn(0.0, 100.0),
                 muted           = muted,
                 title           = title,
@@ -324,9 +388,17 @@ class MpvSoftwarePlayer(
                 renderBackend   = "Software",
                 trackListJson   = tracks,
                 cacheBufferingPercent = buffering.finiteOrZero().toInt().coerceIn(0, 100),
+                cacheEndSeconds = cacheEnd,
+                cacheDurationSeconds = cacheAhead.finiteOrZero(),
                 endReached      = ended,
                 speed           = rate,
                 pausedForCache  = forCache,
+                chapterListJson = chapters,
+                subtitleDelaySeconds = subDelay.takeIf(Double::isFinite) ?: 0.0,
+                audioDelaySeconds = audioDelay.takeIf(Double::isFinite) ?: 0.0,
+                frameDropCount  = dropped.finiteOrZero().toInt(),
+                estimatedFps    = fps.finiteOrZero(),
+                videoBitrate    = bitrate.finiteOrZero(),
                 error           = null,
             )
         } catch (error: Throwable) {
@@ -334,10 +406,38 @@ class MpvSoftwarePlayer(
         }
     }
 
-    private fun command(vararg args: String) {
-        val target = handle.get() ?: return
-        val result = Mpv.library().mpv_command(target, StringArray(args))
-        if (result < 0) recordError(result, args.firstOrNull() ?: "command")
+    /**
+     * mpv sees only the raw address of the argument array, so the array has to be
+     * held reachable across the call.
+     *
+     * JNA frees a Memory from its Cleaner once Java considers it unreachable, and a
+     * local passed to a native function is unreachable the moment the call starts —
+     * the argument is on the stack, not in any live variable. Without the fence a GC
+     * landing mid-call can free the array while mpv is still reading it, and mpv then
+     * parses whatever replaced it: a seek to a garbage timestamp, which clamps to the
+     * end of the file. Rapid seeking is what makes this fire, because it is what
+     * allocates the arrays fast enough to provoke the collection. The render path in
+     * this file fences its own allocations for the same reason.
+     */
+    override fun command(vararg args: String) {
+        submitCommand(args.firstOrNull() ?: "command") { library, target ->
+            val arguments = StringArray(args)
+            try {
+                library.mpv_command(target, arguments)
+            } finally {
+                Reference.reachabilityFence(arguments)
+            }
+        }
+    }
+
+    /** Runs [call] on the command thread and records a failing result on the snapshot. */
+    private fun submitCommand(operation: String, call: (MpvLibrary, Pointer) -> Int) {
+        if (closing.get()) return
+        commandExecutor.execute {
+            val target = handle.get() ?: return@execute
+            val result = call(Mpv.library(), target)
+            if (result < 0) recordError(result, operation)
+        }
     }
 
     private fun recordError(code: Int, operation: String) {

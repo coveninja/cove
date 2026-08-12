@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.AppGraph
@@ -45,6 +46,7 @@ import com.coveninja.cove.ui.components.media.drag.MediaDragPreview
 import com.coveninja.cove.ui.components.navigation.NavBar
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
 import com.coveninja.cove.ui.components.navigation.NavDestination
+import com.coveninja.cove.ui.components.player.InlineVideoPlayer
 import com.coveninja.cove.ui.components.player.PlayerLayer
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toMedia
@@ -58,6 +60,7 @@ import com.coveninja.cove.ui.state.FullscreenController
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalFullscreenController
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
+import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberDragSession
 import com.coveninja.cove.ui.state.rememberLibraryIndex
@@ -175,6 +178,8 @@ private fun CoveAppContent() {
     val drag = rememberDragSession()
     val playback = rememberPlaybackSession()
     val search = rememberSearchSession()
+    val videoPlayerHost = LocalVideoPlayerHost.current
+    val uriHandler = LocalUriHandler.current
 
     var selectedDestination by remember { mutableStateOf(NavDestination.Home) }
     var searchMode by remember { mutableStateOf(false) }
@@ -343,13 +348,28 @@ private fun CoveAppContent() {
             }
 
             val overlayEntry = detailsState.overlayMedia?.let { index.entryOf(it.id) }
+            // An extra playing embedded belongs to the sheet it was started from,
+            // so it follows that sheet: it is only drawn while the same title is
+            // open, and it ends when the sheet does.
+            val inlineExtra = playback.active &&
+                playback.presentation == PlaybackPresentation.Inline &&
+                playback.request?.extra != null &&
+                playback.request?.media?.id == detailsState.overlayMedia?.id
+            val closeInlineExtra = {
+                if (playback.presentation == PlaybackPresentation.Inline) playback.close()
+            }
             MediaDetailsSharedOverlay(
                 media = detailsState.overlayMedia,
-                // Hidden, not dismissed, while playback is up: the selection
-                // survives, so closing the player brings the same sheet back
-                // without refetching anything.
-                visible = detailsState.selected != null && !playback.active,
-                onDismiss = { detailsState.dismiss() },
+                // Hidden, not dismissed, while playback owns the window: the
+                // selection survives, so closing the player brings the same sheet
+                // back without refetching anything. An embedded video is the
+                // opposite case — the sheet is the thing it is drawn inside.
+                visible = detailsState.selected != null &&
+                    !(playback.active && playback.presentation == PlaybackPresentation.Fullscreen),
+                onDismiss = {
+                    closeInlineExtra()
+                    detailsState.dismiss()
+                },
                 currentListCategory = overlayEntry?.status?.toUiCategory(),
                 currentRating = overlayEntry?.rating?.roundToInt(),
                 // The details sheet deliberately stays open underneath. Playback
@@ -360,7 +380,39 @@ private fun CoveAppContent() {
                 onChooseSource = { media -> playback.open(media, forcePicker = true) },
                 onListCategorySelected = actions::setListCategory,
                 onRatingSelected = actions::setRating,
-                onMediaSelected = { detailsState.open(it) },
+                // Another title replaces this sheet, and an extra of the one being
+                // left has nowhere to be drawn.
+                onMediaSelected = {
+                    closeInlineExtra()
+                    detailsState.open(it)
+                },
+                videoPlayer = if (inlineExtra) {
+                    { modifier -> InlineVideoPlayer(session = playback, modifier = modifier) }
+                } else {
+                    null
+                },
+                // Extras are YouTube pages, not media files. Where yt-dlp is
+                // installed to unwrap one, it plays embedded in the sheet just
+                // below; where it is not, the browser is the only thing that can
+                // open it at all — and it is one click either way.
+                onVideoSelected = { media, video ->
+                    val url = video.url
+                    if (videoPlayerHost?.playsWebVideos == true || url == null) {
+                        // With no address, this reports why rather than doing nothing.
+                        playback.openExtra(media, video)
+                    } else {
+                        // openUri throws where AWT has no browser to hand the link
+                        // to — a machine with neither a desktop nor xdg-open.
+                        runCatching { uriHandler.openUri(url) }.onFailure { error ->
+                            playback.failExtra(
+                                media = media,
+                                video = video,
+                                message = "Could not open this video in a browser: " +
+                                    (error.message ?: "nothing here handles web links."),
+                            )
+                        }
+                    }
+                },
                 onEpisodeSelected = { media, season, episode ->
                     playback.open(
                         media = media,

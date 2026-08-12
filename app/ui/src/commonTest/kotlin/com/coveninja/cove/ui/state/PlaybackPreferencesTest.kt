@@ -16,7 +16,80 @@ class PlaybackPreferencesTest {
 
         val preferences = settings.playbackPreferences(originalLanguage = "ja")
 
-        assertEquals(listOf("ja"), preferences.audioLanguages)
+        assertEquals("ja", preferences.audioLanguages.first())
+    }
+
+    // The bug this exists for: TMDB says "ja", the file says "jpn", and "jpn" does
+    // not start with "ja" — so asking for the original audio of a Japanese title
+    // matched nothing and left the English dub selected.
+    // Mutation applied to verify: returned listOf(code) with no aliases → test
+    // failed, jpn was absent.
+    @Test
+    fun `a two-letter language also asks for its three-letter forms`() {
+        val settings = AppSettings(defaultAudioLang = AUDIO_LANGUAGE_ORIGINAL)
+
+        val languages = settings.playbackPreferences(originalLanguage = "ja").audioLanguages
+
+        assertTrue("jpn" in languages, "was: $languages")
+    }
+
+    // Both ISO 639-2 forms, because releases use both: German tracks are tagged
+    // "ger" about as often as "deu", and only one of them is a prefix match for "de".
+    // Mutation applied to verify: kept only the terminological form → test failed,
+    // "ger" was missing and half of German releases would still not match.
+    @Test
+    fun `languages with two three-letter codes ask for both`() {
+        assertTrue(languageAliases("de").containsAll(listOf("de", "deu", "ger")))
+        assertTrue(languageAliases("fr").containsAll(listOf("fr", "fra", "fre")))
+    }
+
+    // The preferred code has to stay first, or the alias outranks the thing it is
+    // an alias for and a file carrying both tracks picks the wrong one.
+    // Mutation applied to verify: appended the code after its aliases → test failed
+    // with "jpn" first.
+    @Test
+    fun `the requested code outranks its aliases`() {
+        assertEquals("ja", languageAliases("ja").first())
+    }
+
+    // A code that is already ISO 639-2 is not a key in the table, so it comes back
+    // as itself. What this pins is that an unlisted code is passed through rather
+    // than dropped — every language not in the table depends on that.
+    //
+    // No mutation kills the distinct() in languageAliases, and that is the honest
+    // finding: no entry lists its own key, so a duplicate cannot arise today. It is
+    // kept because the failure it prevents is a table-authoring slip rather than a
+    // logic error, and this test would not catch that either.
+    @Test
+    fun `a code with no table entry passes through unchanged`() {
+        assertEquals(listOf("eng"), languageAliases("eng"))
+        assertEquals(listOf("mi"), languageAliases("mi"))
+    }
+
+    // Mutation applied to verify: removed the isEmpty guard → test failed with a
+    // list containing one empty string, which mpv treats as a language named "".
+    @Test
+    fun `a blank language asks for nothing`() {
+        assertTrue(languageAliases("").isEmpty())
+        assertTrue(languageAliases("   ").isEmpty())
+    }
+
+    // Settings and file tags disagree about case often enough to matter.
+    // Mutation applied to verify: dropped the lowercase() → test failed with "JA".
+    @Test
+    fun `language codes are normalised before use`() {
+        assertEquals("ja", languageAliases(" JA ").first())
+    }
+
+    // An explicit choice gets the same treatment as Original; there is nothing
+    // special about the language happening to be the title's own.
+    // Mutation applied to verify: expanded only the Original branch → test failed,
+    // "deu" was absent.
+    @Test
+    fun `an explicitly chosen language is expanded too`() {
+        val settings = AppSettings(defaultAudioLang = "de")
+
+        assertTrue("deu" in settings.playbackPreferences(originalLanguage = "ja").audioLanguages)
     }
 
     // A title with no declared language leaves the preference empty rather than
@@ -65,7 +138,10 @@ class PlaybackPreferencesTest {
 
         val preferences = settings.playbackPreferences(originalLanguage = "ja")
 
-        assertEquals(listOf("ja"), preferences.audioLanguages)
-        assertEquals(listOf("en"), preferences.subtitleLanguages)
+        // First, not the whole list: each preference is now sent with its
+        // three-letter equivalents behind it. What this pins is that the two read
+        // their own setting rather than sharing one.
+        assertEquals("ja", preferences.audioLanguages.first())
+        assertEquals("en", preferences.subtitleLanguages.first())
     }
 }

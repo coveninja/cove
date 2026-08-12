@@ -15,9 +15,21 @@ data class MediaVideo(
     val id: String,
     val title: String,
     val thumbnailUrl: String?,
+    /** TMDB's own label — "Trailer", "Behind the Scenes" — shown on the card as-is. */
     val type: String? = null,
     val duration: String? = null,
-)
+    /**
+     * Where the video plays: a YouTube watch page, not a direct media URL. Null
+     * for an entry on a site with no known page format, which nothing can open.
+     */
+    val url: String? = null,
+    /** TMDB's flag for an upload from the studio rather than a channel mirroring it. */
+    val official: Boolean = false,
+    /** ISO-8601 UTC, or null. Compared as a string — see [sortedForDisplay]. */
+    val publishedAt: String? = null,
+) {
+    val category: VideoCategory get() = videoCategoryOf(type)
+}
 
 data class MediaCastMember(
     val name: String,
@@ -174,16 +186,22 @@ fun ContentDetails.toUiMedia(): Media {
         }.map { it.name }.distinct(),
         productionCompanies = metadata.productionCompanies.map { it.name },
         originCountries = metadata.originCountry,
-        videos = videos.results.map { video ->
+        // Entries with nowhere to play are dropped rather than shown: every card
+        // here is a play button, and one that cannot do anything is a dead end.
+        videos = videos.results.mapNotNull { video ->
+            val watchUrl = video.watchUrl() ?: return@mapNotNull null
             MediaVideo(
                 id = "${media.id}-${video.key}",
                 title = video.name.ifBlank { video.type.ifBlank { "Video" } },
-                thumbnailUrl = video.key.takeIf { it.isNotBlank() }?.let {
-                    "https://img.youtube.com/vi/$it/hqdefault.jpg"
-                },
+                thumbnailUrl = video.key
+                    .takeIf { it.isNotBlank() && video.site.equals("YouTube", ignoreCase = true) }
+                    ?.let { "https://img.youtube.com/vi/$it/hqdefault.jpg" },
                 type = video.type.ifBlank { null },
+                url = watchUrl,
+                official = video.official,
+                publishedAt = video.publishedAt.ifBlank { null },
             )
-        },
+        }.sortedForDisplay(),
         cast = metadata.credits.cast.sortedBy { it.order }.map { member ->
             MediaCastMember(
                 name = member.name,
@@ -286,6 +304,22 @@ fun tmdbImageSize(url: String?, size: String): String? = url
 
 private fun com.coveninja.cove.shared.model.MediaImage.displayUrl(size: String): String? =
     url.takeIf { it.isNotBlank() } ?: displayImageUrl(filePath, size)
+
+/**
+ * The page a video plays on. Preferred over the embed URL the backend fills in,
+ * because that one exists to be framed and there is no browser here to frame it —
+ * both the system browser and mpv's stream extractor want the watch page.
+ */
+private fun com.coveninja.cove.shared.model.MediaVideo.watchUrl(): String? {
+    val id = key.takeIf { it.isNotBlank() }
+    return when {
+        id != null && site.equals("YouTube", ignoreCase = true) ->
+            "https://www.youtube.com/watch?v=$id"
+
+        id != null && site.equals("Vimeo", ignoreCase = true) -> "https://vimeo.com/$id"
+        else -> embedUrl.takeIf { it.isNotBlank() }
+    }
+}
 
 /**
  * The UI identity for a title known only by its TMDB id and domain type — watch progress

@@ -168,6 +168,38 @@ fun SettingsCategoryContent(
                                 onCommit = { editor.edit { copy(defaultVolume = it.toDouble()) } },
                             )
                         },
+                        {
+                            SettingToggle(
+                                title = "Remember the volume",
+                                description = "Carry the volume you set into the next " +
+                                    "thing you play.",
+                                checked = settings.rememberVolume,
+                                onCheckedChange = { editor.edit { copy(rememberVolume = it) } },
+                            )
+                        },
+                        {
+                            SettingSlider(
+                                title = "Skip step",
+                                description = "How far the skip buttons and the arrow " +
+                                    "keys jump.",
+                                value = settings.seekStepSeconds.toFloat(),
+                                range = 5f..60f,
+                                format = { "${it.toInt()}s" },
+                                onCommit = {
+                                    editor.edit { copy(seekStepSeconds = it.toDouble()) }
+                                },
+                            )
+                        },
+                        {
+                            SettingToggle(
+                                title = "Hardware decoding",
+                                description = "Decode video on the graphics card. Leave " +
+                                    "this on unless playback tears or shows the wrong " +
+                                    "colours, which means the driver mishandles it.",
+                                checked = settings.hardwareDecoding,
+                                onCheckedChange = { editor.edit { copy(hardwareDecoding = it) } },
+                            )
+                        },
                     )
                 }
             }
@@ -217,6 +249,18 @@ fun SettingsCategoryContent(
                     description = "Work done before you press play. Costs bandwidth, saves waiting.",
                 ) {
                     SettingRows(
+                        {
+                            SettingToggle(
+                                title = "Keep yt-dlp up to date",
+                                description = "Trailers and other extras are YouTube " +
+                                    "pages, and the player needs yt-dlp to turn one into " +
+                                    "a stream. Cove fetches a copy the first time you " +
+                                    "play one, about 40 MB, and refreshes it weekly. Your " +
+                                    "own yt-dlp is used instead where you have one.",
+                                checked = settings.manageYtDlp,
+                                onCheckedChange = { editor.edit { copy(manageYtDlp = it) } },
+                            )
+                        },
                         {
                             SettingToggle(
                                 title = "Check sources are alive",

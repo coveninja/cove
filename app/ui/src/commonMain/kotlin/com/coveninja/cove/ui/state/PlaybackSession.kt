@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.StreamSource
@@ -17,6 +18,8 @@ import com.coveninja.cove.shared.network.WatchProgressRequest
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaType
+import com.coveninja.cove.ui.model.MediaVideo
+import com.coveninja.cove.ui.model.toDomainMedia
 import com.coveninja.cove.ui.model.toDomainType
 import com.coveninja.cove.ui.model.toUiEpisode
 import kotlinx.coroutines.CoroutineScope
@@ -24,21 +27,38 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** What is being played: a movie, or one specific episode of a series. */
+/** What is being played: a movie, one episode of a series, or an extra. */
 data class PlaybackRequest(
     val media: Media,
     val season: Int? = null,
     val episode: Int? = null,
     val episodeTitle: String? = null,
+    /**
+     * Set when what is playing is a trailer or featurette rather than the title
+     * itself. Everything that treats playback as watching — the resume point, the
+     * source list, the next episode — is off while this is non-null.
+     */
+    val extra: MediaVideo? = null,
 ) {
     val label: String
         get() {
             val title = media.title ?: media.name ?: "Untitled"
+            extra?.let { return "$title · ${it.title}" }
             if (season == null || episode == null) return title
             val suffix = episodeTitle?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
             return "$title · S${season}E$episode$suffix"
         }
 }
+
+/**
+ * How much of the window the video occupies.
+ *
+ * [Inline] is a real playback session drawn into a slot on the page it was started
+ * from — the details sheet stays open around it. Only possible because the desktop
+ * player reads frames back into Compose rather than embedding a native surface,
+ * so the picture is an image the layout can size like any other.
+ */
+enum class PlaybackPresentation { Inline, Fullscreen }
 
 sealed interface PlaybackPhase {
     /** Asking the backend which sources exist. Seconds, not milliseconds — addons are polled in fan-out. */
@@ -69,6 +89,23 @@ class PlaybackSession(
         private set
     var phase by mutableStateOf<PlaybackPhase?>(null)
         private set
+
+    /**
+     * Extras start embedded in the sheet; the film itself always takes the window.
+     * Reset by every open, so a session never inherits the last one's framing.
+     */
+    var presentation by mutableStateOf(PlaybackPresentation.Fullscreen)
+        private set
+
+    /** Sends an embedded video to the whole window. The page stays open behind it. */
+    fun expandToFullscreen() {
+        presentation = PlaybackPresentation.Fullscreen
+    }
+
+    /** Puts it back in the slot on the page it was started from. */
+    fun collapseToInline() {
+        presentation = PlaybackPresentation.Inline
+    }
 
     /** Intro/recap/credits ranges for the seek bar; empty until they arrive. */
     var timestamps by mutableStateOf(MediaTimestamps.None)
@@ -130,6 +167,12 @@ class PlaybackSession(
 
         val token = ++generation
         stopProgressTicker()
+        // Silences whatever is playing before the next thing is resolved. The
+        // player's handle outlives the surface it was drawn on, so nothing else
+        // does: without this the outgoing episode — or a trailer started from the
+        // sheet — keeps talking over the "Finding sources" panel for as long as
+        // the addons take.
+        host.stop()
         resolvedCandidates = emptyList()
         failedSources = mutableSetOf()
         resumedFrom = null
@@ -137,6 +180,7 @@ class PlaybackSession(
         browsingSeason = null
         browsingEpisodes = emptyList()
         request = PlaybackRequest(media, season, episode, episodeTitle)
+        presentation = PlaybackPresentation.Fullscreen
         phase = PlaybackPhase.Resolving
 
         scope.launch {
@@ -212,6 +256,94 @@ class PlaybackSession(
     }
 
     /**
+     * Plays a trailer or featurette from the details sheet.
+     *
+     * Nothing is resolved: an extra already carries the only URL it has, so this
+     * goes straight to Playing rather than through the addon fan-out. The URL is a
+     * web page rather than a media file, which is why the caller checks
+     * [VideoPlayerHost.playsWebVideos] first and sends it to the browser otherwise.
+     */
+    fun openExtra(media: Media, video: MediaVideo) {
+        val url = video.url
+        val player = host
+        if (url == null || player == null) {
+            failExtra(
+                media = media,
+                video = video,
+                message = if (url == null) {
+                    "This video has no address that can be opened."
+                } else {
+                    "Playback is not available on this platform."
+                },
+            )
+            return
+        }
+
+        val token = ++generation
+        stopProgressTicker()
+        resolvedCandidates = emptyList()
+        failedSources = mutableSetOf()
+        resumedFrom = null
+        timestamps = MediaTimestamps.None
+        browsingSeason = null
+        browsingEpisodes = emptyList()
+        request = PlaybackRequest(media, extra = video)
+        // Embedded in the sheet the viewer started it from. Anyone who wants the
+        // whole window can say so; opening there would have taken the title they
+        // were reading off the screen without being asked.
+        presentation = PlaybackPresentation.Inline
+        // Synthetic, so the starting stage has something to name while the page is
+        // being resolved into a stream. It is never offered as a choice.
+        phase = PlaybackPhase.Playing(
+            source = StreamSource(name = video.type ?: "Extra", title = video.title, url = url),
+            url = url,
+        )
+
+        scope.launch {
+            val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
+            if (token != generation) return@launch
+
+            // A page URL is not a media file: the player has to have its extractor
+            // in hand before the load, and fetching one is slow enough to report.
+            val problem = player.prepareWebVideo(
+                mayInstallHelper = settings?.manageYtDlp != false,
+            )
+            if (token != generation) return@launch
+            if (problem != null) {
+                failExtra(media, video, problem)
+                return@launch
+            }
+
+            // The title's own language, not a fetched one: an extra is not worth a
+            // details round trip to decide which dub of a trailer to prefer.
+            settings?.let {
+                player.applyPreferences(it.playbackPreferences(media.originalLanguage))
+            }
+            settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
+            // Always from the start: extras keep no resume point, by the same rule
+            // that keeps them out of watch progress.
+            player.load(url, 0.0)
+        }
+    }
+
+    /**
+     * Reports an extra that nothing could open, in the player's own failure panel.
+     *
+     * That panel is the one surface the app has for "this did not play", and the
+     * caller's alternative — handing a browser a link it cannot take and letting
+     * the exception out of a click handler — takes the window down with it.
+     */
+    fun failExtra(media: Media, video: MediaVideo, message: String) {
+        generation++
+        stopProgressTicker()
+        request = PlaybackRequest(media, extra = video)
+        // Reported in the slot on the page, not by blacking out the window: the
+        // failure belongs next to the video that would not open.
+        presentation = PlaybackPresentation.Inline
+        phase = PlaybackPhase.Failed(message)
+    }
+
+    /**
      * Points the episode picker at a season. Independent of what is playing, so
      * looking ahead at the next season does not interrupt the current episode.
      */
@@ -265,12 +397,16 @@ class PlaybackSession(
 
     fun retry() {
         val current = request ?: return
+        current.extra?.let { return openExtra(current.media, it) }
         open(current.media, current.season, current.episode, current.episodeTitle)
     }
 
     /** Back to the source list from an active or starting playback. */
     fun reopenSources() {
         val current = request ?: return
+        // An extra has no source list behind it, and resolving one would replace
+        // the trailer with the film itself.
+        if (current.extra != null) return
         if (phase is PlaybackPhase.Playing) {
             host?.setPaused(true)
             saveProgress()
@@ -295,9 +431,31 @@ class PlaybackSession(
         // Save before tearing down: the ticker's last write can be a full interval
         // stale, and the position at close is the one the viewer expects back.
         saveProgress()
+        rememberVolume()
         host?.stop()
         request = null
         phase = null
+    }
+
+    /**
+     * Carries the volume the viewer settled on into the next thing they play.
+     *
+     * Written back over defaultVolume, which is the field that seeds every session:
+     * a second "last volume" alongside it would have to be kept in step with it, and
+     * with the setting on there is no meaningful difference between the two.
+     *
+     * Read before write, per the whole-object replace rule — AppSettings has no
+     * partial update, so anything not copied forward is silently reset.
+     */
+    private fun rememberVolume() {
+        val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings ?: return
+        if (!settings.rememberVolume) return
+        val player = host ?: return
+        val fraction = (player.status.value.volume / 100.0).coerceIn(0.0, 1.0)
+        if (fraction == settings.defaultVolume) return
+        scope.launch {
+            runCatching { graph.settings.update(settings.copy(defaultVolume = fraction)) }
+        }
     }
 
     private fun startPlayback(source: StreamSource, token: Int) {
@@ -334,7 +492,11 @@ class PlaybackSession(
 
             // Applied before load: mpv chooses tracks while opening the file, so
             // a preference set afterwards would only take effect next time.
-            settings?.let { player.applyPreferences(it.playbackPreferences(current.media.originalLanguage)) }
+            settings?.let {
+                player.applyPreferences(
+                    it.playbackPreferences(originalLanguageFor(current, it)),
+                )
+            }
             // AppSettings.defaultVolume is a 0..1 fraction; mpv's volume property is
             // 0..100. Passing it through unscaled is near-silent audio.
             settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
@@ -365,6 +527,37 @@ class PlaybackSession(
                 }
             }
         }
+    }
+
+    /**
+     * The title's own language, fetching it if the copy in hand does not carry one.
+     *
+     * Several routes into playback hand over a thin Media — the library grid and the
+     * continue-watching row build one from stored fields, and `originalLanguage` is
+     * not among them. "Original" audio then resolves to nothing at all, so the
+     * preference silently does not apply, and it does so precisely for the titles
+     * you watch most: the ones already in your library.
+     *
+     * Only fetched when something actually asks for Original, and awaited here
+     * because track selection happens while mpv opens the file — a language arriving
+     * after that would apply to the next episode instead of this one. A failure
+     * leaves it unknown, which is where this started.
+     */
+    private suspend fun originalLanguageFor(
+        current: PlaybackRequest,
+        settings: AppSettings,
+    ): String? {
+        val known = current.media.originalLanguage?.takeIf { it.isNotBlank() }
+        if (known != null) return known
+        val wantsOriginal = settings.defaultAudioLang == AUDIO_LANGUAGE_ORIGINAL ||
+            settings.defaultSubtitleLang == AUDIO_LANGUAGE_ORIGINAL
+        if (!wantsOriginal) return null
+
+        return runCatching { graph.content.details(current.media.toDomainMedia()) }
+            .getOrNull()
+            ?.media
+            ?.originalLanguage
+            ?.takeIf { it.isNotBlank() }
     }
 
     private suspend fun resumePosition(current: PlaybackRequest): Double {
@@ -406,6 +599,9 @@ class PlaybackSession(
 
     private fun saveProgress() {
         val current = request ?: return
+        // Two minutes into a trailer is not two minutes into the film, and writing
+        // it would drop a resume point onto a title nobody has started.
+        if (current.extra != null) return
         val player = host ?: return
         val domainType = current.media.type.toDomainType() ?: return
         val status = player.status.value

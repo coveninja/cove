@@ -73,6 +73,9 @@ class MpvOpenGlPlayer(
             setOption(library, created, "terminal",  "no")
             setOption(library, created, "msg-level", "all=warn")
             setOption(library, created, "keep-open", "yes")
+            // As in MpvSoftwarePlayer: libmpv defaults this off, and without it
+            // --play cannot be handed a page URL.
+            setOption(library, created, "ytdl", "yes")
             // OpenGL path: enable hardware decode. mpv will fall back to software
             // automatically if the GPU driver does not support the codec.
             setOption(library, created, "hwdec",     "auto-safe")
@@ -113,7 +116,14 @@ class MpvOpenGlPlayer(
     override fun setPaused(paused: Boolean) {
         submitCommand("set pause") { library, target ->
             val v = Memory(Int.SIZE_BYTES.toLong()).apply { setInt(0, if (paused) 1 else 0) }
-            library.mpv_set_property(target, "pause", Mpv.FORMAT_FLAG, v)
+            // Fenced for the same reason as command()'s argument array. The property
+            // getters get away without one only because they read the buffer back
+            // afterwards, which keeps it reachable on its own.
+            try {
+                library.mpv_set_property(target, "pause", Mpv.FORMAT_FLAG, v)
+            } finally {
+                Reference.reachabilityFence(v)
+            }
         }
     }
 
@@ -126,7 +136,11 @@ class MpvOpenGlPlayer(
             val v = Memory(Double.SIZE_BYTES.toLong()).apply {
                 setDouble(0, volume.coerceIn(0.0, 100.0))
             }
-            library.mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, v)
+            try {
+                library.mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, v)
+            } finally {
+                Reference.reachabilityFence(v)
+            }
         }
     }
 
@@ -150,7 +164,11 @@ class MpvOpenGlPlayer(
             val v = Memory(Int.SIZE_BYTES.toLong()).apply {
                 setInt(0, if (muted) 1 else 0)
             }
-            library.mpv_set_property(target, "mute", Mpv.FORMAT_FLAG, v)
+            try {
+                library.mpv_set_property(target, "mute", Mpv.FORMAT_FLAG, v)
+            } finally {
+                Reference.reachabilityFence(v)
+            }
         }
     }
 
@@ -281,10 +299,20 @@ class MpvOpenGlPlayer(
     private fun pollState(library: MpvLibrary, target: Pointer) {
         if (closing.get()) return
         try {
+            val previous = _snapshot.value
             val idle     = getFlag(library, target, "idle-active")  ?: true
             val paused   = getFlag(library, target, "pause")        ?: true
-            val position = getDouble(library, target, "time-pos")   ?: 0.0
-            val duration = getDouble(library, target, "duration")   ?: 0.0
+            // Held rather than zeroed while mpv cannot answer — see resolveTimeProperty.
+            val position = resolveTimeProperty(
+                polled = getDouble(library, target, "time-pos"),
+                previous = previous.positionSeconds,
+                idle = idle,
+            )
+            val duration = resolveTimeProperty(
+                polled = getDouble(library, target, "duration"),
+                previous = previous.durationSeconds,
+                idle = idle,
+            )
             val volume   = getDouble(library, target, "volume")     ?: _snapshot.value.volume
             val muted    = getFlag(library, target, "mute")          ?: _snapshot.value.muted
             val title    = if (idle) "" else getString(library, target, "media-title").orEmpty()
@@ -295,13 +323,22 @@ class MpvOpenGlPlayer(
             val ended    = getFlag(library, target, "eof-reached") ?: false
             val rate     = getDouble(library, target, "speed") ?: 1.0
             val forCache  = getFlag(library, target, "paused-for-cache") ?: false
+            val chapters = if (idle) "" else getString(library, target, "chapter-list").orEmpty()
+            val cacheEnd = getDouble(library, target, "demuxer-cache-time").finiteOrNull()
+                ?: previous.cacheEndSeconds
+            val cacheAhead = getDouble(library, target, "demuxer-cache-duration") ?: 0.0
+            val subDelay = getDouble(library, target, "sub-delay") ?: 0.0
+            val audioDelay = getDouble(library, target, "audio-delay") ?: 0.0
+            val dropped  = getDouble(library, target, "frame-drop-count") ?: 0.0
+            val fps      = getDouble(library, target, "estimated-vf-fps") ?: 0.0
+            val bitrate  = getDouble(library, target, "video-bitrate") ?: 0.0
 
             _snapshot.value = _snapshot.value.copy(
                 initialized     = true,
                 hasMedia        = !idle,
                 paused          = paused,
-                positionSeconds = position.finiteOrZero(),
-                durationSeconds = duration.finiteOrZero(),
+                positionSeconds = position,
+                durationSeconds = duration,
                 volume          = volume.coerceIn(0.0, 100.0),
                 muted           = muted,
                 title           = title,
@@ -310,9 +347,17 @@ class MpvOpenGlPlayer(
                 renderBackend   = "OpenGL",
                 trackListJson   = tracks,
                 cacheBufferingPercent = buffering.finiteOrZero().toInt().coerceIn(0, 100),
+                cacheEndSeconds = cacheEnd,
+                cacheDurationSeconds = cacheAhead.finiteOrZero(),
                 endReached      = ended,
                 speed           = rate,
                 pausedForCache  = forCache,
+                chapterListJson = chapters,
+                subtitleDelaySeconds = subDelay.takeIf(Double::isFinite) ?: 0.0,
+                audioDelaySeconds = audioDelay.takeIf(Double::isFinite) ?: 0.0,
+                frameDropCount  = dropped.finiteOrZero().toInt(),
+                estimatedFps    = fps.finiteOrZero(),
+                videoBitrate    = bitrate.finiteOrZero(),
                 error           = null,
             )
 
@@ -354,9 +399,21 @@ class MpvOpenGlPlayer(
         }
     }
 
-    private fun command(vararg args: String) {
+    /**
+     * The argument array is held reachable across the call: mpv receives only its
+     * raw address, and JNA frees a Memory whose Java owner has gone unreachable —
+     * which a local passed to a native function is, for the whole duration of that
+     * call. See the identical fence in MpvSoftwarePlayer.command for what a freed
+     * argument array does to a seek.
+     */
+    override fun command(vararg args: String) {
         submitCommand(args.firstOrNull() ?: "command") { library, target ->
-            library.mpv_command(target, StringArray(args))
+            val arguments = StringArray(args)
+            try {
+                library.mpv_command(target, arguments)
+            } finally {
+                Reference.reachabilityFence(arguments)
+            }
         }
     }
 

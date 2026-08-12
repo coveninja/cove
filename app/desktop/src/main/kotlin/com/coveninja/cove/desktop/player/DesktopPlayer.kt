@@ -38,4 +38,11 @@ interface DesktopPlayer : AutoCloseable {
     fun selectAudioTrack(id: Int)
     fun selectSubtitleTrack(id: Int?)
     fun stop()
+
+    /**
+     * Runs a raw mpv command. Untyped for the same reason [setOption] is: chapter
+     * stepping, frame stepping, screenshots and track cycling are each one word of
+     * mpv's own vocabulary, and a method apiece would only restate them.
+     */
+    fun command(vararg args: String)
 }

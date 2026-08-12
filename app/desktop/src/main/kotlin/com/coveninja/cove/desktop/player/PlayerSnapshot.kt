@@ -30,8 +30,27 @@ data class PlayerSnapshot(
      * everything through the same /api/play endpoint.
      */
     val cacheBufferingPercent: Int = 0,
+    /**
+     * mpv's demuxer-cache-time: the timestamp read-ahead currently reaches, in the
+     * same units as [positionSeconds]. Unlike [cacheBufferingPercent], which only
+     * says something while the cache is filling, this says *where* the data ends —
+     * which on a torrent is the difference between a seek that lands instantly and
+     * one that stalls.
+     */
+    val cacheEndSeconds: Double = 0.0,
+    /** demuxer-cache-duration: seconds of read-ahead beyond the playhead. */
+    val cacheDurationSeconds: Double = 0.0,
     /** mpv is stalled waiting for more data rather than decoding. */
     val pausedForCache:  Boolean = false,
+    /** mpv's chapter-list, verbatim. Empty for the many files that have none. */
+    val chapterListJson: String = "",
+    /** mpv's sub-delay/audio-delay, in seconds; negative pulls the track earlier. */
+    val subtitleDelaySeconds: Double = 0.0,
+    val audioDelaySeconds: Double = 0.0,
+    /** Decode diagnostics, for the stats overlay. */
+    val frameDropCount:  Int    = 0,
+    val estimatedFps:    Double = 0.0,
+    val videoBitrate:    Double = 0.0,
     /**
      * Set on MPV_EVENT_FILE_LOADED. idle-active is not a usable substitute: it
      * goes false the moment loadfile is accepted, long before the demuxer has
@@ -71,3 +90,28 @@ internal fun formatDuration(seconds: Double): String {
 
 internal fun Double.finiteOrZero(): Double =
     takeIf(Double::isFinite)?.coerceAtLeast(0.0) ?: 0.0
+
+/** Null for both an unanswered poll and a garbage one, so callers can hold a value. */
+internal fun Double?.finiteOrNull(): Double? =
+    this?.takeIf(Double::isFinite)?.coerceAtLeast(0.0)
+
+/**
+ * Resolves a polled time property (time-pos, duration) against the last known value.
+ *
+ * mpv answers MPV_ERROR_PROPERTY_UNAVAILABLE for these while a seek is resolving and
+ * during the gap between accepting a file and demuxing it. Treating that silence as
+ * zero — which is what `?: 0.0` did — is the difference between "we don't know yet"
+ * and "the playhead is at the start of the file", and the UI cannot tell them apart:
+ * the seek bar snaps to zero, and any relative seek computed from it lands somewhere
+ * the viewer never asked for. The neighbouring volume and mute polls already fall
+ * back to the previous snapshot for exactly this reason.
+ *
+ * [idle] is the one case where zero is the honest answer: no file is loaded, so there
+ * is no position to remember.
+ */
+internal fun resolveTimeProperty(polled: Double?, previous: Double, idle: Boolean): Double =
+    when {
+        idle -> 0.0
+        polled != null && polled.isFinite() -> polled.finiteOrZero()
+        else -> previous
+    }

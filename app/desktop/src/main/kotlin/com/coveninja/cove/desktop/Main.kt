@@ -26,8 +26,10 @@ import com.coveninja.cove.desktop.player.MpvOpenGlPanel
 import com.coveninja.cove.desktop.player.MpvOpenGlPlayer
 import com.coveninja.cove.desktop.player.MpvSoftwarePlayer
 import com.coveninja.cove.desktop.player.MpvVideoPlayerHost
+import com.coveninja.cove.desktop.player.YtDlpProvisioner
 import com.coveninja.cove.backend.LocalBackendRuntime
 import com.coveninja.cove.backend.LocalStoreGraph
+import com.coveninja.cove.backend.platform.DesktopConfigPaths
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.createLiveAppGraph
 import com.coveninja.cove.shared.fixture.FixtureAppGraph
@@ -99,7 +101,16 @@ fun main(args: Array<String>) {
                     onClose          = ::exitApplication,
                 )
             } else {
-                val playerHost = remember { MpvVideoPlayerHost(options.softwareRenderer) }
+                val playerHost = remember {
+                    MpvVideoPlayerHost(
+                        softwareDecoding = options.softwareRenderer,
+                        // Beside the database and the mpv config, not in the
+                        // installation: Cove never writes to where it is installed.
+                        ytDlp = YtDlpProvisioner(
+                            DesktopConfigPaths.dataDirectory().resolve("tools"),
+                        ),
+                    )
+                }
                 androidx.compose.runtime.DisposableEffect(playerHost) {
                     onDispose { playerHost.dispose() }
                 }

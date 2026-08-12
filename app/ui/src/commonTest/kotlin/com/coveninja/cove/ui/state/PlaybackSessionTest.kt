@@ -26,6 +26,7 @@ import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaSeason
+import com.coveninja.cove.ui.model.MediaVideo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -108,6 +109,7 @@ private class FakeLibrary : LibraryRepository {
 private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository {
     var requestedSeason: Int? = null
     var requestedEpisode: Int? = null
+    var streamRequests = 0
 
     override suspend fun streams(
         tmdbId: Int,
@@ -115,6 +117,7 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
         season: Int?,
         episode: Int?,
     ): List<StreamSource> {
+        streamRequests++
         requestedSeason = season
         requestedEpisode = episode
         return sources
@@ -187,6 +190,7 @@ private class FakeHost : VideoPlayerHost {
     override fun setPaused(paused: Boolean) = Unit
     override fun togglePause() = Unit
     override fun seek(seconds: Double) = Unit
+    override fun seekRelative(deltaSeconds: Double) = Unit
     override fun setVolume(volume: Double) { volumeSet = volume }
     var mutedSet: Boolean? = null
     override fun setMuted(muted: Boolean) { mutedSet = muted }
@@ -203,7 +207,26 @@ private class FakeHost : VideoPlayerHost {
     }
     override fun selectAudioTrack(id: Int) = Unit
     override fun selectSubtitleTrack(id: Int?) = Unit
-    override fun stop() = Unit
+    override fun stepChapter(delta: Int) = Unit
+    override fun stepFrame(delta: Int) = Unit
+    override fun setSubtitleDelay(seconds: Double) = Unit
+    override fun setAudioDelay(seconds: Double) = Unit
+    override fun takeScreenshot() = Unit
+
+    /** Null means ready; the tests set a sentence to refuse. */
+    var webVideoProblem: String? = null
+    var webVideoInstallAllowed: Boolean? = null
+    override suspend fun prepareWebVideo(mayInstallHelper: Boolean): String? {
+        webVideoInstallAllowed = mayInstallHelper
+        return webVideoProblem
+    }
+
+    var stops = 0
+    override fun stop() {
+        stops++
+        loadedUrl = null
+        _status.value = PlaybackStatus()
+    }
 
     @Composable
     override fun Surface(modifier: Modifier) = Unit
@@ -246,6 +269,14 @@ private fun movie() = Media(
     popularity = null,
     adult = null,
     originalLanguage = null,
+)
+
+private fun trailer() = MediaVideo(
+    id = "Movie:550-abc",
+    title = "Official Trailer",
+    thumbnailUrl = null,
+    type = "Trailer",
+    url = "https://www.youtube.com/watch?v=abc",
 )
 
 private fun entry(season: Int, episode: Int) = LibraryEntry(
@@ -727,5 +758,154 @@ class PlaybackSessionTest {
 
         assertEquals(null, h.session.phase)
         assertEquals(null, h.host.loadedUrl)
+    }
+
+    // Mutation applied to verify: routed openExtra through open() → test failed,
+    // the trailer resolved addon sources and played a .mkv instead of the video.
+    @Test
+    fun `an extra plays its own address without resolving sources`() = playbackTest { h ->
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+
+        assertEquals("https://www.youtube.com/watch?v=abc", h.host.loadedUrl)
+        assertEquals(0.0, h.host.loadedFrom, "an extra always starts at the beginning")
+        assertEquals(0, h.playback.streamRequests, "nothing should have been resolved")
+    }
+
+    // Watching two minutes of a trailer is not watching two minutes of the film,
+    // and a resume point written here would appear on a title never started.
+    // Mutation applied to verify: dropped the extra guard in saveProgress
+    // → test failed, closing the trailer recorded progress against Fight Club.
+    @Test
+    fun `an extra leaves no watch progress behind`() = playbackTest { h ->
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+        h.host.report(position = 90.0, duration = 120.0)
+
+        h.session.close()
+        runCurrent()
+
+        assertTrue(
+            h.library.recorded.isEmpty(),
+            "an extra recorded progress: ${h.library.recorded}",
+        )
+    }
+
+    // Mutation applied to verify: removed the extra guard from reopenSources
+    // → test failed, the trailer was replaced by the film's own source list.
+    @Test
+    fun `an extra cannot be swapped for the film through the source list`() = playbackTest { h ->
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+
+        h.session.reopenSources()
+        runCurrent()
+
+        assertEquals(0, h.playback.streamRequests)
+        assertEquals("https://www.youtube.com/watch?v=abc", h.host.loadedUrl)
+    }
+
+    // The bug this whole path exists to fix was a click that did nothing at all,
+    // so the one case with nowhere to go has to say so.
+    // Mutation applied to verify: returned from openExtra without setting a phase
+    // → test failed, the click produced no state at all.
+    @Test
+    fun `an extra with no address says so rather than doing nothing`() = playbackTest { h ->
+        h.session.openExtra(movie(), trailer().copy(url = null))
+        runCurrent()
+
+        val phase = h.session.phase
+        assertTrue(phase is PlaybackPhase.Failed, "was: $phase")
+        assertEquals(null, h.host.loadedUrl)
+    }
+
+    // The player header reads off this label, and "Fight Club" alone would not say
+    // which of the twenty extras is playing.
+    // Mutation applied to verify: dropped the extra branch from label → test failed,
+    // the label was the film's title on its own.
+    @Test
+    fun `the label names the extra that is playing`() {
+        assertEquals(
+            "Fight Club · Official Trailer",
+            PlaybackRequest(movie(), extra = trailer()).label,
+        )
+    }
+
+    // An extra opens embedded in the sheet it was started from; the film itself
+    // always takes the window.
+    // Mutation applied to verify: had openExtra leave the presentation alone
+    // → test failed, the trailer opened fullscreen over the sheet.
+    @Test
+    fun `an extra opens embedded and a film opens fullscreen`() = playbackTest { h ->
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+        assertEquals(PlaybackPresentation.Inline, h.session.presentation)
+
+        h.session.open(movie())
+        runCurrent()
+        assertEquals(PlaybackPresentation.Fullscreen, h.session.presentation)
+    }
+
+    // The failure has to appear in the slot on the page, not by blacking out the
+    // window for a trailer that never started.
+    // Mutation applied to verify: left failExtra at whatever presentation was set
+    // → test failed, a failure after fullscreen stayed fullscreen.
+    @Test
+    fun `a failed extra is reported in the page it was started from`() = playbackTest { h ->
+        h.session.openExtra(movie(), trailer())
+        h.session.expandToFullscreen()
+
+        h.session.failExtra(movie(), trailer(), "no")
+
+        assertEquals(PlaybackPresentation.Inline, h.session.presentation)
+    }
+
+    // The handle now outlives the surface it was drawn on, so opening the film
+    // over a playing trailer is the only thing that can silence it.
+    // Mutation applied to verify: dropped the host.stop() from open() → test
+    // failed, the trailer was still loaded while sources were being resolved.
+    @Test
+    fun `starting a title silences whatever was playing`() = playbackTest(
+        sources = emptyList(),
+    ) { h ->
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+        assertEquals("https://www.youtube.com/watch?v=abc", h.host.loadedUrl, "setup")
+
+        h.session.open(movie())
+
+        assertEquals(1, h.host.stops)
+        assertEquals(null, h.host.loadedUrl)
+    }
+
+    // A page URL needs an extractor in hand before the load, and when there is
+    // none the viewer has to be told rather than left with a black box.
+    // Mutation applied to verify: loaded regardless of what prepareWebVideo said
+    // → test failed, the trailer was handed to a player that could not open it.
+    @Test
+    fun `an extra that cannot be prepared is not loaded`() = playbackTest { h ->
+        h.host.webVideoProblem = "yt-dlp is not installed."
+
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+
+        assertEquals(null, h.host.loadedUrl)
+        val phase = h.session.phase
+        assertTrue(phase is PlaybackPhase.Failed, "was: $phase")
+        assertEquals("yt-dlp is not installed.", phase.message)
+    }
+
+    // Downloading a 40 MB helper is the viewer's call, so the setting travels with
+    // the request rather than being read inside the player.
+    // Mutation applied to verify: passed a hardcoded true → test failed, the
+    // player was told it could install with the setting off.
+    @Test
+    fun `the helper setting decides whether the player may fetch one`() = playbackTest(
+        settings = AppSettings(manageYtDlp = false),
+    ) { h ->
+        h.session.openExtra(movie(), trailer())
+        runCurrent()
+
+        assertEquals(false, h.host.webVideoInstallAllowed)
     }
 }
