@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Person
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
  * The chrome both details sheets are built out of — the title sheet and the person
@@ -402,7 +403,7 @@ internal fun OverlayCloseButton(
 
     Surface(
         modifier = modifier
-            .size(44.dp)
+            .size(if (hasPointerHover) 44.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale

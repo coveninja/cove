@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -63,24 +64,30 @@ fun HomeGreeting(
             }
         }
 
-        val chips: @Composable () -> Unit = {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (stats.watching > 0) {
-                    StatChip("lucide:play-circle", stats.watching, "on the go")
-                }
-                if (stats.episodesWaiting > 0) {
-                    StatChip("lucide:tv", stats.episodesWaiting, "waiting")
-                }
-                if (stats.watchLater > 0) {
-                    StatChip("lucide:bookmark-check", stats.watchLater, "saved")
-                }
+        val chipContent: @Composable () -> Unit = {
+            if (stats.watching > 0) {
+                StatChip("lucide:play-circle", stats.watching, "on the go")
+            }
+            if (stats.episodesWaiting > 0) {
+                StatChip("lucide:tv", stats.episodesWaiting, "waiting")
+            }
+            if (stats.watchLater > 0) {
+                StatChip("lucide:bookmark-check", stats.watchLater, "saved")
             }
         }
 
         if (stacked) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 heading()
-                if (!stats.isEmpty) chips()
+                if (!stats.isEmpty) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        chipContent()
+                    }
+                }
             }
         } else {
             Row(
@@ -88,7 +95,11 @@ fun HomeGreeting(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(modifier = Modifier.weight(1f)) { heading() }
-                if (!stats.isEmpty) chips()
+                if (!stats.isEmpty) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        chipContent()
+                    }
+                }
             }
         }
     }

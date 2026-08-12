@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -32,11 +33,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 @Composable
 fun PageLoading(message: String) {
@@ -123,6 +127,8 @@ fun ChoicePill(
             .clip(CircleShape)
             .background(containerColor)
             .hoverable(interactionSource)
+            .heightIn(min = if (hasPointerHover) 0.dp else 48.dp)
+            .semantics { this.selected = selected }
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

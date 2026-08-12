@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -51,6 +52,7 @@ import com.coveninja.cove.ui.components.common.CoveTooltip
 import com.coveninja.cove.ui.components.common.TooltipSide
 import com.coveninja.cove.ui.components.menu.CMenuItem
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
  * Toolbar and list primitives shared by every page.
@@ -81,7 +83,7 @@ fun <T> SegmentedControl(
 
     BoxWithConstraints(
         modifier = modifier
-            .height(36.dp)
+            .height(if (hasPointerHover) 36.dp else 48.dp)
             .clip(CircleShape)
             .background(colors.surfaceContainer),
     ) {
@@ -118,6 +120,10 @@ fun <T> SegmentedControl(
                         modifier = Modifier
                             .width(segmentWidth)
                             .fillMaxHeight()
+                            .semantics {
+                                contentDescription = label(option)
+                                this.selected = isSelected
+                            }
                             .clickable(
                                 interactionSource = interaction,
                                 indication = null,
@@ -198,7 +204,7 @@ fun <T> MenuPicker(
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
-                .height(36.dp)
+                .height(if (hasPointerHover) 36.dp else 48.dp)
                 .clip(CircleShape)
                 .background(
                     if (hovered) colors.onSurface.copy(alpha = 0.10f) else colors.surfaceContainer,
@@ -280,15 +286,7 @@ fun ToolbarIconButton(
     CoveTooltip(label = description, side = tooltipSide) {
         Box(
             modifier = modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(
-                    when {
-                        active -> colors.tertiary.copy(alpha = 0.18f)
-                        hovered -> colors.onSurface.copy(alpha = 0.10f)
-                        else -> colors.surfaceContainer
-                    },
-                )
+                .size(if (hasPointerHover) 36.dp else 48.dp)
                 .hoverable(interaction)
                 .clickable(interactionSource = interaction, indication = null, onClick = onClick)
                 // IconifyIcon draws with a null contentDescription, so the label has to live
@@ -296,13 +294,27 @@ fun ToolbarIconButton(
                 .semantics { contentDescription = description },
             contentAlignment = Alignment.Center,
         ) {
-            IconifyIcon(
-                icon = iconName,
+            Box(
                 modifier = Modifier
-                    .size(17.dp)
-                    .graphicsLayer { rotationZ = rotation },
-                tint = if (active) colors.tertiary else colors.onSurfaceVariant,
-            )
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            active -> colors.tertiary.copy(alpha = 0.18f)
+                            hovered -> colors.onSurface.copy(alpha = 0.10f)
+                            else -> colors.surfaceContainer
+                        },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                IconifyIcon(
+                    icon = iconName,
+                    modifier = Modifier
+                        .size(17.dp)
+                        .graphicsLayer { rotationZ = rotation },
+                    tint = if (active) colors.tertiary else colors.onSurfaceVariant,
+                )
+            }
         }
     }
 }

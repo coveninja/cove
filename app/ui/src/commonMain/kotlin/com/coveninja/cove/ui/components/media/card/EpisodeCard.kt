@@ -51,6 +51,7 @@ import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.platform.onSecondaryClick
+import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.icons.IconifyIcon
 import kotlin.math.roundToInt
 
@@ -359,7 +360,7 @@ private fun ChooseEpisodeSourceButton(
 
     Box(
         modifier = modifier
-            .size(30.dp)
+            .size(if (hasPointerHover) 30.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale

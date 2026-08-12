@@ -16,6 +16,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -61,6 +62,8 @@ import com.coveninja.cove.ui.pages.explore.ExplorePage
 import com.coveninja.cove.ui.pages.home.HomePage
 import com.coveninja.cove.ui.pages.mylist.MyListPage
 import com.coveninja.cove.ui.pages.common.LocalPageHorizontalPadding
+import com.coveninja.cove.ui.pages.common.LocalPageViewport
+import com.coveninja.cove.ui.pages.common.PageViewport
 import com.coveninja.cove.ui.pages.profile.ProfilePage
 import com.coveninja.cove.ui.pages.search.SearchPage
 import com.coveninja.cove.ui.state.FullscreenController
@@ -79,6 +82,7 @@ import com.coveninja.cove.ui.state.rememberPlaybackSession
 import com.coveninja.cove.ui.state.rememberSearchSession
 import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import com.coveninja.cove.ui.state.toUiCategory
+import com.coveninja.cove.ui.platform.PlatformBackHandler
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -175,21 +179,28 @@ fun CoveApp(
     // and keep-awake state. Desktop does not need a window callback here.
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
 ) {
-    CompositionLocalProvider(
-        LocalAppGraph provides graph,
-        LocalVideoPlayerHost provides videoPlayerHost,
-        LocalFullscreenController provides fullscreenController,
-        LocalPageHorizontalPadding provides if (navBarPlacement == NavBarPlacement.Bottom) {
-            0.dp
-        } else {
-            24.dp
-        },
-    ) {
-        CoveAppContent(
-            navBarPlacement,
-            onDetailsOverlayVisibilityChanged,
-            onFullscreenPlaybackVisibilityChanged,
-        )
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        CompositionLocalProvider(
+            LocalAppGraph provides graph,
+            LocalVideoPlayerHost provides videoPlayerHost,
+            LocalFullscreenController provides fullscreenController,
+            LocalPageHorizontalPadding provides if (navBarPlacement == NavBarPlacement.Bottom) {
+                0.dp
+            } else {
+                24.dp
+            },
+            LocalPageViewport provides PageViewport(
+                width = maxWidth,
+                height = maxHeight,
+                hasBottomNavigation = navBarPlacement == NavBarPlacement.Bottom,
+            ),
+        ) {
+            CoveAppContent(
+                navBarPlacement,
+                onDetailsOverlayVisibilityChanged,
+                onFullscreenPlaybackVisibilityChanged,
+            )
+        }
     }
 }
 
@@ -211,6 +222,7 @@ private fun CoveAppContent(
     val search = rememberSearchSession()
     val videoPlayerHost = LocalVideoPlayerHost.current
     val uriHandler = LocalUriHandler.current
+    val pageViewport = LocalPageViewport.current
 
     val currentOverlayVisibilityCallback = rememberUpdatedState(
         onDetailsOverlayVisibilityChanged,
@@ -294,7 +306,7 @@ private fun CoveAppContent(
                 }
 
             // Desktop heroes remain edge-to-edge beneath the top bar. Mobile pages respect
-            // system insets, but the bottom bar floats over them instead of consuming space.
+            // system insets and reserve a clear band behind the floating bottom bar.
             val heroDestination = selectedDestination == NavDestination.Home ||
                 selectedDestination == NavDestination.Explore
             val pageModifier = when {
@@ -311,6 +323,7 @@ private fun CoveAppContent(
                     Modifier
                         .fillMaxSize()
                         .safeContentPadding()
+                        .padding(bottom = pageViewport.bottomNavigationClearance)
             }
 
             Box(modifier = pageModifier) {
@@ -355,7 +368,9 @@ private fun CoveAppContent(
                         onOpenPerson = openPerson,
                     )
 
-                    NavDestination.Account -> ProfilePage()
+                    NavDestination.Account -> ProfilePage(
+                        onNavigateBack = { selectedDestination = NavDestination.Home },
+                    )
                 }
             }
 
@@ -648,4 +663,63 @@ private fun CoveAppContent(
             )
         }
     }
+
+    val mobileBackAction = resolveMobileBackAction(
+        fullscreenPlayback = playback.active &&
+            playback.presentation == PlaybackPresentation.Fullscreen,
+        fullscreenExtra = playback.request?.extra != null,
+        personOverlay = personState.selected != null,
+        mediaOverlay = detailsState.selected != null,
+        searchMode = searchMode,
+        destination = selectedDestination,
+    )
+    PlatformBackHandler(
+        enabled = navBarPlacement == NavBarPlacement.Bottom &&
+            mobileBackAction != MobileBackAction.None,
+    ) {
+        when (mobileBackAction) {
+            MobileBackAction.CollapseExtra -> playback.collapseToInline()
+            MobileBackAction.ClosePlayback -> playback.close()
+            MobileBackAction.ClosePerson -> personState.dismiss()
+            MobileBackAction.CloseMedia -> {
+                if (playback.presentation == PlaybackPresentation.Inline) playback.close()
+                detailsState.dismiss()
+            }
+            MobileBackAction.CloseSearch -> {
+                searchMode = false
+                search.setDraft(search.submitted.orEmpty())
+            }
+            MobileBackAction.GoHome -> selectedDestination = NavDestination.Home
+            MobileBackAction.None -> Unit
+        }
+    }
+}
+
+internal enum class MobileBackAction {
+    CollapseExtra,
+    ClosePlayback,
+    ClosePerson,
+    CloseMedia,
+    CloseSearch,
+    GoHome,
+    None,
+}
+
+/** One ordered decision keeps Android Back consistent across every app-owned layer. */
+internal fun resolveMobileBackAction(
+    fullscreenPlayback: Boolean,
+    fullscreenExtra: Boolean,
+    personOverlay: Boolean,
+    mediaOverlay: Boolean,
+    searchMode: Boolean,
+    destination: NavDestination,
+): MobileBackAction = when {
+    fullscreenPlayback && fullscreenExtra -> MobileBackAction.CollapseExtra
+    fullscreenPlayback -> MobileBackAction.ClosePlayback
+    personOverlay -> MobileBackAction.ClosePerson
+    mediaOverlay -> MobileBackAction.CloseMedia
+    searchMode -> MobileBackAction.CloseSearch
+    destination != NavDestination.Home && destination != NavDestination.Account ->
+        MobileBackAction.GoHome
+    else -> MobileBackAction.None
 }

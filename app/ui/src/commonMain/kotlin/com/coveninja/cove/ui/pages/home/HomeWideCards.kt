@@ -316,7 +316,7 @@ private fun PlayAffordance(
 
         Box(
             modifier = Modifier
-                .size(38.dp)
+                .size(if (hasPointerHover) 38.dp else 48.dp)
                 .clip(CircleShape)
                 .background(if (hovered) colors.tertiary else Color.Black.copy(alpha = 0.72f))
                 .hoverable(interaction)

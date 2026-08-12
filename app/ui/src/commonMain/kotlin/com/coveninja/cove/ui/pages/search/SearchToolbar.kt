@@ -28,6 +28,7 @@ import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.MenuPicker
 import com.coveninja.cove.ui.pages.common.SegmentedControl
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
  * Format, order, arrangement, genre, and the two things you want to hide.
@@ -91,7 +92,7 @@ fun SearchToolbar(
         icon = { it.icon },
         showLabels = false,
         onSelect = onLayoutChange,
-        modifier = Modifier.width(80.dp),
+        modifier = Modifier.width(if (hasPointerHover) 80.dp else 96.dp),
     )
 
     @Composable

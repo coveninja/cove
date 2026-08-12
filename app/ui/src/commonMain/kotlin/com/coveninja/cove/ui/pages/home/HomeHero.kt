@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,6 +57,7 @@ import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
@@ -86,15 +88,12 @@ fun HomeHeroBlock(
     val hovered by hover.collectIsHoveredAsState()
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val compact = maxWidth < COMPACT_HERO_WIDTH
-        // On desktop this is taller than it looks because the top runs under the floating
-        // nav bar; mobile shows the same cinematic crop with its bar at the bottom.
-        val height = if (compact) 460.dp else 560.dp
+        val metrics = PageLayoutDefaults.Viewport.heroMetrics(maxWidth)
 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(height)
+                .height(metrics.height)
                 .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
                 .hoverable(hover),
@@ -163,7 +162,8 @@ fun HomeHeroBlock(
             HeroCopy(
                 hero = hero,
                 art = art,
-                compact = compact,
+                compact = metrics.compact,
+                short = metrics.short,
                 hovered = hovered,
                 inList = inList,
                 onPlay = onPlay,
@@ -180,6 +180,7 @@ private fun HeroCopy(
     hero: HomeHero,
     art: Media,
     compact: Boolean,
+    short: Boolean,
     hovered: Boolean,
     inList: Boolean,
     onPlay: () -> Unit,
@@ -193,9 +194,13 @@ private fun HeroCopy(
             .padding(
                 start = if (compact) 24.dp else 48.dp,
                 end = 24.dp,
-                bottom = if (compact) 28.dp else 40.dp,
+                bottom = when {
+                    short -> 12.dp
+                    compact -> 28.dp
+                    else -> 40.dp
+                },
             ),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(if (short) 6.dp else 12.dp),
     ) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -218,7 +223,13 @@ private fun HeroCopy(
             AsyncImage(
                 model = tmdbImageSize(art.logoUrl, "w500"),
                 contentDescription = "${art.title ?: art.name} logo",
-                modifier = Modifier.width(if (compact) 200.dp else 280.dp),
+                modifier = Modifier.width(
+                    when {
+                        short -> 180.dp
+                        compact -> 200.dp
+                        else -> 280.dp
+                    },
+                ),
                 contentScale = ContentScale.Fit,
                 filterQuality = FilterQuality.High,
             )
@@ -253,7 +264,11 @@ private fun HeroCopy(
                     text = overview,
                     color = Color.White.copy(alpha = 0.84f),
                     style = MaterialTheme.typography.bodyMedium,
-                    maxLines = if (compact) 2 else 3,
+                    maxLines = when {
+                        short -> 1
+                        compact -> 2
+                        else -> 3
+                    },
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -366,6 +381,7 @@ private fun HeroButton(
             .background(if (primary) colors.tertiary else Color.White.copy(alpha = 0.16f))
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .heightIn(min = if (hasPointerHover) 0.dp else 48.dp)
             .padding(horizontal = 20.dp, vertical = 11.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -383,6 +399,3 @@ private fun HeroButton(
 
 /** Fraction of the page's scroll the backdrop moves by. */
 private const val PARALLAX_FACTOR = 0.35f
-
-/** Under this the copy column and the hero's height both need to come in. */
-private val COMPACT_HERO_WIDTH = 720.dp

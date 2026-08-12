@@ -52,6 +52,7 @@ import com.coveninja.cove.ui.pages.mylist.calendar.availableNow
 import com.coveninja.cove.ui.pages.mylist.calendar.groupByDay
 import com.coveninja.cove.ui.pages.mylist.calendar.itemsInMonth
 import com.coveninja.cove.ui.pages.mylist.calendar.rememberCalendarSections
+import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.mediaFor
@@ -502,7 +503,11 @@ private fun EmptyLibrary(
         PageEmptyState(
             iconName = "lucide:bookmark-plus",
             title = "Your list is empty",
-            message = "Right-click a media card or drag it onto a list category in the navigation bar.",
+            message = if (hasPointerHover) {
+                "Right-click a media card or drag it onto a list category in the navigation bar."
+            } else {
+                "Open a title and choose My List to save it here."
+            },
             actionLabel = "Explore titles",
             onAction = onExplore,
             modifier = modifier,

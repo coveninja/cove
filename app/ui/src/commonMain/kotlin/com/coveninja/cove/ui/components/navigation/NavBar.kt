@@ -71,6 +71,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.coveninja.cove.ui.components.common.CoveTooltip
 import com.coveninja.cove.ui.components.common.TooltipSide
 import com.coveninja.cove.ui.components.media.MyListCategory
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 /** Where the app host places the floating navigation bar. */
 enum class NavBarPlacement {
@@ -253,6 +254,7 @@ fun NavBarButton(
                 .width(48.dp)
                 .fillMaxHeight()
                 .semantics {
+                    contentDescription = label
                     this.selected = selected
                 }
                 .hoverable(interactionSource)
@@ -365,7 +367,7 @@ private fun SearchActionButton(
 
     Box(
         modifier = Modifier
-            .size(40.dp)
+            .size(if (hasPointerHover) 40.dp else 48.dp)
             .scale(scale)
             .clip(CircleShape)
             .background(backgroundColor)

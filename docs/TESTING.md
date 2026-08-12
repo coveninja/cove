@@ -47,15 +47,18 @@ For the shared phone/tablet UI:
 cd app
 ./gradlew :mobile:lintDebug :mobile:assembleDebug --no-daemon
 ./gradlew :mobile:installDebug --no-daemon
+./gradlew :mobile:connectedDebugAndroidTest --no-daemon
 adb shell am start -S -W -n com.coveninja.cove/.MainActivity
 adb shell pidof com.coveninja.cove
 ```
 
 Use a phone/tablet AVD on API 28 or newer. Verify edge-to-edge system bars,
 compact hero actions, touch scrolling/long-press behavior, real TMDB loading,
-and process survival after opening details. The mobile manifest intentionally
-requires a touchscreen and must not gain a Leanback launcher; the eventual TV
-host has its own UI.
+and process survival after opening details. The connected tests run downloaded
+scraper code in the isolated QuickJS service through its pipe-based fetch broker
+and initialize the bundled yt-dlp runtime without downloading a helper. The
+mobile manifest intentionally requires a touchscreen and must not gain a
+Leanback launcher; the eventual TV host has its own UI.
 
 ## Workflow checks
 

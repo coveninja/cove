@@ -63,6 +63,7 @@ import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.SegmentedControl
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
  * The category filters, with counts that roll rather than cut when the library changes.
@@ -187,7 +188,7 @@ fun MyListToolbar(
         icon = { it.icon },
         showLabels = false,
         onSelect = onLayoutChange,
-        modifier = Modifier.width(80.dp),
+        modifier = Modifier.width(if (hasPointerHover) 80.dp else 96.dp),
     )
 
     @Composable
@@ -328,7 +329,7 @@ private fun SearchField(
         value = query,
         onValueChange = onQueryChange,
         modifier = modifier
-            .height(36.dp)
+            .height(if (hasPointerHover) 36.dp else 48.dp)
             .focusRequester(focusRequester)
             .clip(CircleShape)
             .background(colors.onSurface.copy(alpha = 0.06f))
@@ -369,7 +370,7 @@ private fun SortControl(
     Box {
         Row(
             modifier = Modifier
-                .height(36.dp)
+                .height(if (hasPointerHover) 36.dp else 48.dp)
                 .clip(CircleShape)
                 .background(
                     if (hovered) colors.onSurface.copy(alpha = 0.10f) else colors.surfaceContainer,
@@ -430,4 +431,3 @@ private fun SortControl(
         }
     }
 }
-

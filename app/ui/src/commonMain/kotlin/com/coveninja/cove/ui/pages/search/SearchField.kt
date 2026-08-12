@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.platform.hasPointerHover
 import kotlinx.coroutines.delay
 
 /**
@@ -262,21 +263,31 @@ private fun ClearButton(onClick: () -> Unit) {
 
     Box(
         modifier = Modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .background(
-                if (hovered) colors.onSurface.copy(alpha = 0.12f) else colors.onSurface.copy(alpha = 0.06f),
-            )
+            .size(if (hasPointerHover) 30.dp else 48.dp)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .semantics { contentDescription = "Clear search" },
         contentAlignment = Alignment.Center,
     ) {
-        IconifyIcon(
-            icon = "lucide:x",
-            modifier = Modifier.size(15.dp),
-            tint = if (hovered) colors.onSurface else colors.onSurfaceVariant,
-        )
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(
+                    if (hovered) {
+                        colors.onSurface.copy(alpha = 0.12f)
+                    } else {
+                        colors.onSurface.copy(alpha = 0.06f)
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            IconifyIcon(
+                icon = "lucide:x",
+                modifier = Modifier.size(15.dp),
+                tint = if (hovered) colors.onSurface else colors.onSurfaceVariant,
+            )
+        }
     }
 }
 

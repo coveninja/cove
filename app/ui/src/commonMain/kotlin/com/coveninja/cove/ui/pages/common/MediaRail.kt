@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -82,8 +84,9 @@ fun <T> MediaRail(
     val rowHover = remember { MutableInteractionSource() }
     val hovered by rowHover.collectIsHoveredAsState()
 
-    // Touch has no hover, so anything gated on it is pinned there instead.
-    val controlsVisible = hovered || !hasPointerHover
+    // A touch rail is swipe-first. Pinning desktop arrows over the cards hid artwork and
+    // competed with the floating navigation; edge fades already communicate that more exists.
+    val controlsVisible = hovered && hasPointerHover
 
     Column(
         modifier = modifier.fillMaxWidth().hoverable(rowHover),
@@ -98,7 +101,12 @@ fun <T> MediaRail(
             modifier = Modifier.padding(horizontal = horizontalPadding),
         )
 
-        Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            val resolvedItemWidth = if (hasPointerHover) {
+                itemWidth
+            } else {
+                minOf(itemWidth, maxWidth * 0.78f)
+            }
             LazyRow(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().height(itemHeight),
@@ -107,7 +115,7 @@ fun <T> MediaRail(
             ) {
                 itemsIndexed(items, key = { _, item -> key(item) }) { index, item ->
                     StaggeredAppear(index = index) {
-                        itemContent(item, Modifier.width(itemWidth))
+                        itemContent(item, Modifier.width(resolvedItemWidth))
                     }
                 }
             }
@@ -143,12 +151,14 @@ fun <T> MediaRail(
             )
         }
 
-        HorizontalLazyListScrollbar(
-            state = listState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = horizontalPadding, vertical = 4.dp),
-        )
+        if (hasPointerHover) {
+            HorizontalLazyListScrollbar(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPadding, vertical = 4.dp),
+            )
+        }
     }
 }
 
@@ -224,6 +234,7 @@ private fun SeeAllLink(label: String, onClick: () -> Unit) {
             )
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .heightIn(min = if (hasPointerHover) 0.dp else 48.dp)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,

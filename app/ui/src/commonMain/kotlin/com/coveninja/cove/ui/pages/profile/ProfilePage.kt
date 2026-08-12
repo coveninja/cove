@@ -61,6 +61,8 @@ import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.PageHeader
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
+import com.coveninja.cove.ui.platform.PlatformBackHandler
+import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.rememberSettingsEditor
 import kotlinx.coroutines.launch
@@ -90,6 +92,7 @@ private val PageBlock = Modifier.fillMaxWidth().widthIn(max = PageMaxWidth)
 @Composable
 fun ProfilePage(
     profileName: String = "Cove",
+    onNavigateBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var tab by remember { mutableStateOf(ProfileTab.Settings) }
@@ -99,6 +102,16 @@ fun ProfilePage(
     var openedCategory by remember { mutableStateOf<SettingsCategory?>(null) }
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    val narrowSettingsLayout = PageLayoutDefaults.Viewport.width < RailBreakpoint
+
+    PlatformBackHandler(enabled = true) {
+        if (openedCategory != null && narrowSettingsLayout) {
+            openedCategory = null
+            scope.launch { scrollState.animateScrollTo(0) }
+        } else {
+            onNavigateBack()
+        }
+    }
 
     Column(
         modifier = modifier
@@ -353,7 +366,10 @@ private fun CategoryListRow(category: SettingsCategory, onClick: () -> Unit) {
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 18.dp, vertical = 32.dp),
+            .padding(
+                horizontal = 18.dp,
+                vertical = if (hasPointerHover) 32.dp else 20.dp,
+            ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -415,7 +431,7 @@ private fun CategoryDetailHeader(category: SettingsCategory, onBack: () -> Unit)
     ) {
         Box(
             modifier = Modifier
-                .size(38.dp)
+                .size(if (hasPointerHover) 38.dp else 48.dp)
                 .background(
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
                     RoundedCornerShape(11.dp),

@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.platform.hasPointerHover
 import kotlin.math.roundToInt
 
 /**
@@ -243,6 +245,7 @@ private fun HeroResumeButton(label: String, onClick: () -> Unit) {
             .background(MaterialTheme.colorScheme.tertiary)
             .hoverable(interaction)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .heightIn(min = if (hasPointerHover) 0.dp else 48.dp)
             .padding(horizontal = 20.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
