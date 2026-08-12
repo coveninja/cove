@@ -224,9 +224,10 @@ player is a 403. This is also why the embedded Kotlin backend resolves streams
 over its own loopback HTTP rather than calling the addon services in-process.
 
 Video itself is a `VideoPlayerHost`, read from `LocalVideoPlayerHost`. `:ui` is
-multiplatform and cannot see libmpv in `:desktop`, so the desktop entry point
-provides the implementation and the local is **null everywhere else** — Watch
-reports that playback is unavailable rather than crashing.
+multiplatform and cannot see libmpv directly, so desktop provides its JNA/OpenGL
+host and Android provides its native surface host. Android keeps the host in the
+application process, with a media foreground service and picture-in-picture, so
+playback survives activity recreation and backgrounding.
 
 ### Add an addon
 
@@ -243,10 +244,11 @@ shared `AddonManager` directly; addon management does not depend on the loopback
 HTTP host. Mutations do not throw on rejection — a bad manifest URL is ordinary
 user input, so it lands in `graph.addons.lastError` for display next to the field.
 
-Nuvio scraper repositories use the same repository only on hosts where
-`supportsNuvio` is true. Each scraper is enabled individually: enabling only the
-repository runs nothing. Android currently hides this section because the GraalJS
-sandbox is a desktop process boundary, not Android-compatible code.
+Nuvio scraper repositories use the same repository on desktop and Android. Each
+scraper is enabled individually: enabling only the repository runs nothing.
+Desktop executes scrapers in a disposable JVM; Android uses QuickJS in an
+`isolatedProcess` service whose only network path is the public-address fetch
+broker in the main process.
 
 ### Search
 

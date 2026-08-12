@@ -180,7 +180,7 @@ fun CoveApp(
         LocalVideoPlayerHost provides videoPlayerHost,
         LocalFullscreenController provides fullscreenController,
         LocalPageHorizontalPadding provides if (navBarPlacement == NavBarPlacement.Bottom) {
-            16.dp
+            0.dp
         } else {
             24.dp
         },
@@ -395,6 +395,7 @@ private fun CoveAppContent(
                 onListCategoryBoundsChanged = { category, bounds ->
                     drag.categoryBounds[category] = bounds
                 },
+                placement = navBarPlacement,
                 modifier = Modifier
                     .align(
                         if (navBarPlacement == NavBarPlacement.Top) {
@@ -635,6 +636,7 @@ private fun CoveAppContent(
                                 drag.categoryBounds[category] = bounds
                             }
                         },
+                        placement = navBarPlacement,
                     )
                 }
             }

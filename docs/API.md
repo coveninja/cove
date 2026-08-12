@@ -1,10 +1,11 @@
 # Embedded HTTP API
 
-The desktop and mobile applications call Kotlin repositories directly. This
-desktop-only HTTP boundary exists for media URLs, diagnostics, optional LAN
-clients, and compatibility integrations; the Android UI does not start a
-localhost server. New desktop compatibility clients should use
-`http://127.0.0.1:6969/api/v1`.
+The desktop and mobile applications call Kotlin repositories directly. The HTTP
+boundary exists for media URLs, diagnostics, optional LAN clients, and
+compatibility integrations. Desktop starts it with the backend; Android starts
+the same route graph while its remote-access foreground service is enabled.
+Compatibility clients use `/api/v1` (desktop loopback defaults to
+`http://127.0.0.1:6969/api/v1`; Android LAN defaults to port `6970`).
 
 The unversioned `/api` prefix currently exposes the same handlers but adds:
 
@@ -81,8 +82,9 @@ served by whatever `MediaCatalog` the host was built with.
 ## Remote access
 
 The trusted listener binds to loopback. Enabling remote control creates a
-separate LAN listener using the persisted settings and `COVE_REMOTE_ADDR`
-override. A remote request must provide the current token as `X-Cove-Token` or
+separate LAN listener using the persisted settings. Desktop accepts the
+`COVE_REMOTE_ADDR` override; Android binds port `6970` while its connected-device
+foreground service is visible. A remote request must provide the current token as `X-Cove-Token` or
 the `token` query parameter. Disabled access, an empty token, or a mismatch is
 rejected. Browser origins are restricted to localhost/loopback.
 

@@ -41,8 +41,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -53,13 +51,13 @@ class MediaBoundary(
     private val allowLanStreamSources: () -> Boolean,
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val torrentEngine: TorrentPlaybackEngine? = null,
-) : AutoCloseable {
+) : RouteMediaBoundary, AutoCloseable {
     private val streams = StreamRegistry(nowMillis = nowMillis)
     private val images = TmdbImageCache(httpClient, imageCacheDirectory)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefetchInFlight = AtomicBoolean()
 
-    suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {
+    override suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {
         val accepted = candidates.filter { stream ->
             if (stream.url.isBlank()) return@filter stream.infoHash.isNotBlank()
             runCatching {
@@ -71,7 +69,7 @@ class MediaBoundary(
         return accepted
     }
 
-    suspend fun playDirect(call: ApplicationCall, url: String) {
+    override suspend fun playDirect(call: ApplicationCall, url: String) {
         requireHttpUrl(url)
         val registered = streams.lookup(url)
             ?: return call.respond(HttpStatusCode.Forbidden, mapOf("error" to "unknown stream url; list streams first"))
@@ -100,13 +98,13 @@ class MediaBoundary(
         }
     }
 
-    suspend fun image(call: ApplicationCall, size: String, file: String) {
+    override suspend fun image(call: ApplicationCall, size: String, file: String) {
         val cached = images.get(size, file)
         call.response.header(HttpHeaders.CacheControl, "public, max-age=604800, immutable")
         call.respondBytes(cached.bytes, cached.contentType)
     }
 
-    suspend fun playTorrent(
+    override suspend fun playTorrent(
         call: ApplicationCall,
         hash: String,
         season: Int?,
@@ -133,9 +131,9 @@ class MediaBoundary(
         }
     }
 
-    fun torrentProgress(hash: String) = torrentEngine?.progress(hash)
+    override fun torrentProgress(hash: String) = torrentEngine?.progress(hash)
 
-    suspend fun probe(request: ProbeStreamsRequest): ProbeStreamsResponse {
+    override suspend fun probe(request: ProbeStreamsRequest): ProbeStreamsResponse {
         require(request.streams.size in 1..10) { "streams must contain 1-10 entries" }
         val timeout = (request.timeoutMs.takeIf { it > 0 } ?: 700).coerceIn(100, 800)
         return ProbeStreamsResponse(coroutineScope {
@@ -162,7 +160,7 @@ class MediaBoundary(
         })
     }
 
-    suspend fun subtitle(call: ApplicationCall, url: String) {
+    override suspend fun subtitle(call: ApplicationCall, url: String) {
         requireHttpUrl(url)
         val response = publicGet(url, emptyMap(), allowLan = false)
         check(response.status.isSuccess()) { "subtitle upstream returned HTTP ${response.status.value}" }
@@ -174,7 +172,7 @@ class MediaBoundary(
         )
     }
 
-    fun prefetchTorrent(hash: String, season: Int?, episode: Int?, fileIndex: Int?): Boolean {
+    override fun prefetchTorrent(hash: String, season: Int?, episode: Int?, fileIndex: Int?): Boolean {
         require(Regex("^[A-Fa-f0-9]{40}$").matches(hash)) { "invalid torrent info hash" }
         if (!prefetchInFlight.compareAndSet(false, true)) return false
         val engine = torrentEngine ?: run {
@@ -191,7 +189,7 @@ class MediaBoundary(
         return true
     }
 
-    suspend fun speedTest(call: ApplicationCall) {
+    override suspend fun speedTest(call: ApplicationCall) {
         call.response.header(HttpHeaders.CacheControl, "no-store")
         call.respondBytesWriter(
             contentType = ContentType.Application.OctetStream,
@@ -245,25 +243,6 @@ class MediaBoundary(
         error("too many redirects")
     }
 }
-
-@Serializable
-data class ProbeStreamsRequest(
-    val streams: List<ProbeStreamRequest> = emptyList(),
-    val timeoutMs: Int = 0,
-)
-
-@Serializable
-data class ProbeStreamRequest(val url: String)
-
-@Serializable
-data class ProbeStreamsResponse(val results: List<ProbeStreamResult>)
-
-@Serializable
-data class ProbeStreamResult(
-    val url: String,
-    val alive: Boolean,
-    @SerialName("contentLength") val contentLength: Long = 0,
-)
 
 private suspend fun io.ktor.utils.io.ByteReadChannel.readAtMost(maxBytes: Int): ByteArray {
     val output = ByteArrayOutputStream()

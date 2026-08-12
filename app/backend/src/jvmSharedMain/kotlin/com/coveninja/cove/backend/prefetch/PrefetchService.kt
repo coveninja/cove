@@ -3,7 +3,6 @@ package com.coveninja.cove.backend.prefetch
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.backend.db.CoveDatabase
-import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalSettingsRepository
 import com.coveninja.cove.shared.model.MediaType
@@ -25,8 +24,16 @@ class PrefetchService(
     private val settings: LocalSettingsRepository,
     private val catalog: TmdbClient,
     private val addons: AddonManager,
-    private val nuvio: NuvioManager,
     private val scope: CoroutineScope,
+    private val warmScrapers: suspend (
+        MediaType,
+        Int,
+        String,
+        String,
+        Int,
+        Int?,
+        Int?,
+    ) -> Unit = { _, _, _, _, _, _, _ -> },
 ) {
     private val notifications = Channel<Unit>(Channel.CONFLATED)
     private val cycleMutex = Mutex()
@@ -130,7 +137,7 @@ class PrefetchService(
             val nuvioWarm = async {
                 runCatching {
                     val media = runCatching { catalog.media(candidate.tmdbId, candidate.type) }.getOrNull()
-                    nuvio.streams(
+                    warmScrapers(
                         candidate.type,
                         candidate.tmdbId,
                         imdbId,

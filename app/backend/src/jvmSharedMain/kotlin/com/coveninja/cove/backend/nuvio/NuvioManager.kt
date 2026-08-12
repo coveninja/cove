@@ -2,7 +2,6 @@ package com.coveninja.cove.backend.nuvio
 
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
-import com.coveninja.cove.backend.addons.DesktopAddonUrlPolicy
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.shared.model.MediaType
@@ -32,8 +31,8 @@ class NuvioManager internal constructor(
     private val session: ActiveProfileSession,
     private val httpClient: HttpClient,
     private val now: () -> String,
-    private val sandbox: NuvioSandbox = ProcessNuvioSandbox(),
-    private val urlPolicy: AddonUrlPolicy = DesktopAddonUrlPolicy,
+    private val sandbox: NuvioSandbox,
+    private val urlPolicy: AddonUrlPolicy,
 ) {
     private val mutation = Mutex()
     private val cache = ConcurrentHashMap<String, CachedStreams>()

@@ -20,12 +20,21 @@ import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.VideoScaling
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import dev.jdtech.mpv.MPVLib
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -35,9 +44,14 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Native Android implementation of the shared player contract. */
-class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.EventObserver,
+class AndroidMpvVideoPlayerHost(
+    context: Context,
+    private val onPlaybackActiveChanged: (Boolean) -> Unit = {},
+) : VideoPlayerHost, MPVLib.EventObserver,
     MPVLib.LogObserver {
     private val appContext = context.applicationContext
+    private val playerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val loadGeneration = AtomicLong()
     private val main = Handler(Looper.getMainLooper())
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -52,6 +66,7 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
 
     private val _status = MutableStateFlow(PlaybackStatus())
     override val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
+    override val playsWebVideos: Boolean = true
 
     private var initialized = false
     private var destroyed = false
@@ -72,12 +87,29 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
         if (initialized) command("seek", formatNumber(target), "absolute", "exact")
     }
 
-    override fun load(url: String, startPositionSeconds: Double) = onMain {
+    override suspend fun prepareWebVideo(mayInstallHelper: Boolean): String? = withContext(Dispatchers.IO) {
+        runCatching { YoutubeDL.getInstance().init(appContext) }
+            .exceptionOrNull()
+            ?.let { "Could not initialize the bundled yt-dlp runtime: ${it.message ?: "unknown error"}" }
+    }
+
+    override fun load(url: String, startPositionSeconds: Double) {
+        val generation = loadGeneration.incrementAndGet()
+        if (url.isWebVideoPage()) {
+            resolveWebVideo(url, startPositionSeconds, generation)
+        } else {
+            loadResolved(url, startPositionSeconds, generation)
+        }
+    }
+
+    private fun loadResolved(url: String, startPositionSeconds: Double, generation: Long) = onMain {
+        if (generation != loadGeneration.get()) return@onMain
         if (!requestAudioFocus()) {
             _status.value = PlaybackStatus(error = "Another app currently owns audio playback.")
             return@onMain
         }
         stoppedByUser = false
+        onPlaybackActiveChanged(true)
         playbackRequested = true
         fileLoaded = false
         pendingSeekSeconds = null
@@ -175,6 +207,7 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
     override fun takeScreenshot() = onMain { command("screenshot", "subtitles") }
 
     override fun stop() = onMain {
+        loadGeneration.incrementAndGet()
         stoppedByUser = true
         playbackRequested = false
         pendingLoad = null
@@ -183,10 +216,11 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
         if (initialized) command("stop")
         fileLoaded = false
         abandonAudioFocus()
+        onPlaybackActiveChanged(false)
         _status.value = PlaybackStatus(volume = pendingVolume ?: _status.value.volume)
     }
 
-    /** Foreground-only policy chosen for the mobile host. */
+    /** Explicit host policy hook retained for callers that want foreground-only playback. */
     fun onHostStopped() {
         if (_status.value.hasMedia && !_status.value.paused) setPaused(true)
     }
@@ -194,6 +228,9 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
     fun dispose() = onMain {
         if (destroyed) return@onMain
         destroyed = true
+        loadGeneration.incrementAndGet()
+        onPlaybackActiveChanged(false)
+        playerScope.cancel()
         main.removeCallbacksAndMessages(null)
         abandonAudioFocus()
         if (initialized) {
@@ -282,6 +319,44 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
         pendingPreferences?.let(::applyPreferencesNow)
         pendingVolume?.let { MPVLib.setPropertyDouble("volume", it) }
         applyScaling(pendingScaling)
+    }
+
+    private fun resolveWebVideo(url: String, startPositionSeconds: Double, generation: Long) {
+        onPlaybackActiveChanged(true)
+        onMain {
+            _status.value = PlaybackStatus(
+                paused = false,
+                statusMessage = "Resolving web video…",
+                volume = pendingVolume ?: _status.value.volume,
+            )
+        }
+        playerScope.launch {
+            val resolved = runCatching {
+                YoutubeDL.getInstance().init(appContext)
+                val request = YoutubeDLRequest(url).apply {
+                    addOption("-f", "best[protocol^=http][vcodec!=none][acodec!=none]/best")
+                    addOption("--no-playlist")
+                }
+                YoutubeDL.getInstance().getInfo(request).url
+                    ?.takeIf(String::isNotBlank)
+                    ?: error("yt-dlp returned no playable URL")
+            }
+            if (generation != loadGeneration.get()) return@launch
+            resolved.fold(
+                onSuccess = { loadResolved(it, startPositionSeconds, generation) },
+                onFailure = { error ->
+                    onMain {
+                        if (generation != loadGeneration.get()) return@onMain
+                        onPlaybackActiveChanged(false)
+                        _status.value = PlaybackStatus(
+                            error = "Could not open this web video: ${error.message ?: "unknown error"}",
+                            statusMessage = "Playback failed",
+                            volume = pendingVolume ?: _status.value.volume,
+                        )
+                    }
+                },
+            )
+        }
     }
 
     private fun observeProperties() {
@@ -441,7 +516,9 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
 
     private fun stageSubtitleFont() {
         runCatching {
-            val config = File(appContext.filesDir, "mpv")
+            val config = File(appContext.filesDir, "mpv").apply { mkdirs() }
+            setInitialOption("config", "yes")
+            setInitialOption("config-dir", config.absolutePath)
             val fonts = File(config, "fonts").apply { mkdirs() }
             val rootFont = File(config, "subfont.ttf")
             val familyFont = File(fonts, "subfont.ttf")
@@ -450,8 +527,6 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
                 systemFont.copyTo(rootFont, overwrite = true)
                 systemFont.copyTo(familyFont, overwrite = true)
             }
-            setInitialOption("config", "yes")
-            setInitialOption("config-dir", config.absolutePath)
         }
     }
 
@@ -511,6 +586,12 @@ class AndroidMpvVideoPlayerHost(context: Context) : VideoPlayerHost, MPVLib.Even
         )
     }
 }
+
+private fun String.isWebVideoPage(): Boolean = runCatching {
+    val host = java.net.URI(this).host?.lowercase().orEmpty()
+    host == "youtu.be" || host.endsWith(".youtube.com") || host == "youtube.com" ||
+        host.endsWith(".vimeo.com") || host == "vimeo.com"
+}.getOrDefault(false)
 
 private class AndroidMpvSurfaceView(
     context: Context,

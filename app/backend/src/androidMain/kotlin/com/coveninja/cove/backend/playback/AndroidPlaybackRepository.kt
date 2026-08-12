@@ -4,6 +4,7 @@ import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.TimestampData
 import com.coveninja.cove.backend.content.MediaCatalog
+import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.MediaType
@@ -17,6 +18,7 @@ internal class AndroidPlaybackRepository(
     private val catalog: MediaCatalog,
     private val addons: AddonManager,
     private val media: AndroidPlaybackMediaHost,
+    private val nuvio: NuvioManager? = null,
 ) : PlaybackRepository {
     override suspend fun streams(
         tmdbId: Int,
@@ -24,15 +26,29 @@ internal class AndroidPlaybackRepository(
         season: Int?,
         episode: Int?,
     ): List<StreamSource> {
+        val imdbId = catalog.imdbId(tmdbId, type)
         val stremioId = buildString {
-            append(catalog.imdbId(tmdbId, type))
+            append(imdbId)
             if (type == MediaType.Tv) {
                 require(season != null && season >= 0) { "season is required for tv streams" }
                 require(episode != null && episode > 0) { "episode is required for tv streams" }
                 append(":$season:$episode")
             }
         }
-        return media.registerStreams(addons.streams(type, stremioId)).map(AddonStream::toShared)
+        val stremio = addons.streams(type, stremioId)
+        val scraped = nuvio?.let { manager ->
+            val title = catalog.media(tmdbId, type)
+            manager.streams(
+                mediaType = type,
+                tmdbId = tmdbId,
+                imdbId = imdbId,
+                title = title.displayTitle,
+                year = title.displayDate?.take(4)?.toIntOrNull() ?: 0,
+                season = season,
+                episode = episode,
+            )
+        }.orEmpty()
+        return media.registerStreams(stremio + scraped).map(AddonStream::toShared)
     }
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String {

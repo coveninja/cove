@@ -13,6 +13,7 @@ class LocalRepositoryGraph internal constructor(
     val profiles: LocalProfileRepository,
     val library: LocalLibraryRepository,
     val settings: LocalSettingsRepository,
+    val progressEvents: ProgressEventBus,
 )
 
 fun createLocalRepositoryGraph(
@@ -23,10 +24,12 @@ fun createLocalRepositoryGraph(
     newRemoteToken: () -> String,
 ): LocalRepositoryGraph {
     val session = ActiveProfileSession(database)
+    val progressEvents = ProgressEventBus(scope)
     return LocalRepositoryGraph(
         profileSession = session,
         profiles = LocalProfileRepository(database, session, newId, now),
-        library = LocalLibraryRepository(database, session, scope, newId, now),
+        library = LocalLibraryRepository(database, session, scope, newId, now, progressEvents),
         settings = LocalSettingsRepository(database, session, scope, now, newRemoteToken),
+        progressEvents = progressEvents,
     )
 }

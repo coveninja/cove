@@ -7,7 +7,7 @@ import com.coveninja.cove.backend.addons.LocalAddonRepository
 import com.coveninja.cove.backend.activity.ActivityService
 import com.coveninja.cove.backend.activity.ActivitySyncPayload
 import com.coveninja.cove.backend.nuvio.NuvioSyncPayload
-import com.coveninja.cove.backend.nuvio.DesktopNuvioAddonService
+import com.coveninja.cove.backend.nuvio.NuvioAddonService
 import com.coveninja.cove.backend.auth.AuthService
 import com.coveninja.cove.backend.auth.AuthSessionStore
 import com.coveninja.cove.backend.auth.ClientSessionStore
@@ -41,6 +41,7 @@ import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.backend.auth.LocalAccountRepository
 import com.coveninja.cove.backend.platform.LocalDeviceRepository
 import com.coveninja.cove.backend.trakt.LocalTraktRepository
+import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.shared.data.LivePlaybackRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
@@ -171,12 +172,14 @@ class LocalBackendRuntime private constructor(
                     session = stores.profileSession,
                     httpClient = untrustedClient,
                     now = stores.now,
+                    sandbox = com.coveninja.cove.backend.nuvio.ProcessNuvioSandbox(),
+                    urlPolicy = DesktopAddonUrlPolicy,
                 )
                 val addonRepository = LocalAddonRepository(
                     addons = addons,
                     activeProfileIds = stores.profileSession.profileId,
                     scope = scope,
-                    nuvio = DesktopNuvioAddonService(nuvio),
+                    nuvio = NuvioAddonService(nuvio),
                 )
                 val prefetch = PrefetchService(
                     stores.databaseHandle,
@@ -184,8 +187,10 @@ class LocalBackendRuntime private constructor(
                     stores.settings,
                     catalog,
                     addons,
-                    nuvio,
                     scope,
+                    warmScrapers = { type, id, imdb, title, year, season, episode ->
+                        nuvio.streams(type, id, imdb, title, year, season, episode)
+                    },
                 )
                 val trakt = TraktService(
                     config = DesktopBackendEnvironment.traktConfig(),
@@ -198,6 +203,23 @@ class LocalBackendRuntime private constructor(
                     scope = scope,
                 )
                 val deviceSettings = DeviceSettingsService(dataDirectory)
+                stores.progressEvents.subscribe { progress ->
+                    activity.record(progress)
+                    prefetch.notifyProgressChanged()
+                    trakt.enqueueScrobble(
+                        TraktScrobbleRequest(
+                            action = if (progress.completed) "stop" else "start",
+                            tmdbId = progress.tmdbId,
+                            mediaType = progress.mediaType.wireName,
+                            season = progress.season,
+                            episode = progress.episode,
+                            progress = if (progress.durationSeconds > 0.0) {
+                                (progress.positionSeconds / progress.durationSeconds * 100.0)
+                                    .coerceIn(0.0, 100.0)
+                            } else 0.0,
+                        ),
+                    )
+                }
                 val clientSessions = ClientSessionStore(stores.databaseHandle, stores.now)
                 val auth = DesktopBackendEnvironment.supabaseConfig()?.let { config ->
                     val supabase = SupabaseClient(config, client)

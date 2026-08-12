@@ -4,8 +4,8 @@ import com.coveninja.cove.backend.addons.LocalNuvioService
 import com.coveninja.cove.shared.model.NuvioRepoSummary
 import com.coveninja.cove.shared.model.NuvioScraperSummary
 
-/** Makes the desktop Nuvio store available to the in-process addon repository. */
-internal class DesktopNuvioAddonService(
+/** Makes the platform Nuvio store available to the in-process addon repository. */
+internal class NuvioAddonService(
     private val manager: NuvioManager,
 ) : LocalNuvioService {
     override suspend fun repos(): List<NuvioRepoSummary> = manager.repos().map { it.toSummary() }

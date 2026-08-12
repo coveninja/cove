@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.updater
 
+import com.coveninja.cove.backend.http.RouteUpdater
 import com.coveninja.cove.shared.network.UpdateCheckDto
 
 /**
@@ -10,10 +11,10 @@ import com.coveninja.cove.shared.network.UpdateCheckDto
  * routes explicit prevents old clients from interpreting a 404 as a network
  * failure while packaging remains the authority for updates.
  */
-class UpdateService(private val currentVersion: String) {
-    fun check(): UpdateCheckDto = UpdateCheckDto(currentVersion = currentVersion)
+class UpdateService(private val currentVersion: String) : RouteUpdater {
+    override fun check(): UpdateCheckDto = UpdateCheckDto(currentVersion = currentVersion)
 
-    fun apply(): Nothing = throw IllegalStateException(
+    override fun apply(): Nothing = throw IllegalStateException(
         "self-update is unavailable for this package; use the platform package manager",
     )
 }

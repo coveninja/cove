@@ -122,7 +122,7 @@ internal class LocalAddonRepository(
     }
 }
 
-/** Platform adapter for the desktop-only Nuvio sandbox and persistent store. */
+/** Platform adapter for the host-isolated Nuvio sandbox and persistent store. */
 internal interface LocalNuvioService {
     suspend fun repos(): List<NuvioRepoSummary>
     suspend fun addRepo(url: String)

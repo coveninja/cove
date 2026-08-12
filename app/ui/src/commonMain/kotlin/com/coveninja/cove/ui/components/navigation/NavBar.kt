@@ -69,6 +69,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import com.coveninja.cove.ui.components.common.CoveTooltip
+import com.coveninja.cove.ui.components.common.TooltipSide
 import com.coveninja.cove.ui.components.media.MyListCategory
 
 /** Where the app host places the floating navigation bar. */
@@ -183,6 +184,7 @@ fun NavBarButton(
     label: String,
     iconName: String,
     selected: Boolean,
+    tooltipSide: TooltipSide = TooltipSide.Below,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -245,7 +247,7 @@ fun NavBarButton(
         label = "NavItemIconOffset",
     )
 
-    CoveTooltip(label = label) {
+    CoveTooltip(label = label, side = tooltipSide) {
         Box(
             modifier = modifier
                 .width(48.dp)
@@ -491,6 +493,7 @@ fun NavBar(
         category: MyListCategory,
         bounds: Rect,
     ) -> Unit,
+    placement: NavBarPlacement = NavBarPlacement.Top,
     modifier: Modifier = Modifier,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -666,6 +669,11 @@ fun NavBar(
                                     iconName = destination.iconName,
                                     selected =
                                         destination == selectedDestination,
+                                    tooltipSide = if (placement == NavBarPlacement.Bottom) {
+                                        TooltipSide.Above
+                                    } else {
+                                        TooltipSide.Below
+                                    },
                                     onClick = {
                                         if (
                                             destination ==

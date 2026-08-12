@@ -26,6 +26,7 @@ import com.coveninja.cove.backend.store.LocalLibraryRepository
 import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.backend.store.LocalRepositoryGraph
 import com.coveninja.cove.backend.store.LocalSettingsRepository
+import com.coveninja.cove.backend.store.ProgressEventBus
 import com.coveninja.cove.backend.store.createLocalRepositoryGraph
 import java.nio.file.Path
 import java.security.SecureRandom
@@ -49,6 +50,7 @@ class LocalStoreGraph private constructor(
     val profiles: LocalProfileRepository get() = repositories.profiles
     val library: LocalLibraryRepository get() = repositories.library
     val settings: LocalSettingsRepository get() = repositories.settings
+    val progressEvents: ProgressEventBus get() = repositories.progressEvents
     internal val databaseHandle get() = database.database
     fun exportLegacyFallback() = exporter.export()
 

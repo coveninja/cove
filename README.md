@@ -4,8 +4,8 @@
 # Cove
 
 A Kotlin media app for Linux, Windows, and Android phones/tablets. Desktop and
-mobile share one Compose UI and Kotlin domain layer; desktop adds the in-process
-mpv and extension runtime.
+mobile share one Compose UI, Kotlin domain layer, embedded API, native mpv
+playback, and isolated extension runtime.
 
 [![CI](https://github.com/coveninja/cove/actions/workflows/ci.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)

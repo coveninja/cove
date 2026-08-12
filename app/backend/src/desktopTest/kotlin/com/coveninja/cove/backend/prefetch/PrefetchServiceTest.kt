@@ -61,7 +61,6 @@ class PrefetchServiceTest {
             val settings = LocalSettingsRepository(store.database, session, scope, now) { "token" }
             val catalog = TmdbClient(http, "key", baseUrl = "https://tmdb.test/3")
             val addons = AddonManager(store.database, session, http, now)
-            val nuvio = NuvioManager(store.database, session, http, now)
             addons.add("https://addon.test")
             library.add(42, MediaType.Movie, "Movie")
             library.setStatus(42, MediaType.Movie, LibraryStatus.Watching)
@@ -71,7 +70,6 @@ class PrefetchServiceTest {
                 settings,
                 catalog,
                 addons,
-                nuvio,
                 scope,
             )
 

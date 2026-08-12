@@ -30,6 +30,7 @@ kotlin {
             implementation(libs.ktor.serialization.kotlinx.json)
         }
         val desktopMain by getting {
+            kotlin.srcDir("src/jvmSharedMain/kotlin")
             dependencies {
                 implementation(libs.sqldelight.sqlite.driver)
                 implementation(libs.ktor.client.cio)
@@ -56,18 +57,31 @@ kotlin {
                 runtimeOnly("com.frostwire:$nativeArtifact:$torrentVersion")
             }
         }
-        androidMain.dependencies {
-            implementation(libs.sqldelight.android.driver)
-            implementation(libs.ktor.client.okhttp)
-            implementation(libs.ktor.server.core)
-            implementation(libs.ktor.server.cio)
-            implementation(libs.ktor.server.status.pages)
-            implementation(libs.jlibtorrent)
-            val torrentVersion = libs.versions.jlibtorrent.get()
-            implementation("com.frostwire:jlibtorrent-android-arm:$torrentVersion")
-            implementation("com.frostwire:jlibtorrent-android-arm64:$torrentVersion")
-            implementation("com.frostwire:jlibtorrent-android-x86:$torrentVersion")
-            implementation("com.frostwire:jlibtorrent-android-x86_64:$torrentVersion")
+        androidMain {
+            // Portable JVM services back the same embedded API on desktop and
+            // Android; native media and scraper isolation remain platform-owned.
+            kotlin.srcDirs(
+                "src/jvmSharedMain/kotlin",
+            )
+            resources.srcDir("src/desktopMain/resources")
+            dependencies {
+                implementation(libs.sqldelight.android.driver)
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.ktor.server.core)
+                implementation(libs.ktor.server.cio)
+                implementation(libs.ktor.server.content.negotiation)
+                implementation(libs.ktor.server.cors)
+                implementation(libs.ktor.server.partial.content)
+                implementation(libs.ktor.server.sse)
+                implementation(libs.ktor.server.status.pages)
+                implementation(libs.jlibtorrent)
+                implementation(libs.quickjs.android)
+                val torrentVersion = libs.versions.jlibtorrent.get()
+                implementation("com.frostwire:jlibtorrent-android-arm:$torrentVersion")
+                implementation("com.frostwire:jlibtorrent-android-arm64:$torrentVersion")
+                implementation("com.frostwire:jlibtorrent-android-x86:$torrentVersion")
+                implementation("com.frostwire:jlibtorrent-android-x86_64:$torrentVersion")
+            }
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

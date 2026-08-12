@@ -5,6 +5,7 @@ import com.coveninja.cove.backend.db.AndroidDatabase
 import com.coveninja.cove.backend.migration.AndroidLegacyMigration
 import com.coveninja.cove.backend.migration.AndroidMigrationResult
 import com.coveninja.cove.backend.store.LocalRepositoryGraph
+import com.coveninja.cove.backend.store.ProgressEventBus
 import com.coveninja.cove.backend.store.createLocalRepositoryGraph
 import java.security.SecureRandom
 import java.time.Instant
@@ -22,6 +23,7 @@ class AndroidStoreGraph private constructor(
     internal val now: () -> String,
 ) : AutoCloseable {
     internal val databaseHandle get() = database.database
+    internal val progressEvents: ProgressEventBus get() = repositories.progressEvents
 
     override fun close() {
         scope.cancel()

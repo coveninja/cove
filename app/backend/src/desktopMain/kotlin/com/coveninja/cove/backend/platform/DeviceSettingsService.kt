@@ -1,21 +1,22 @@
 package com.coveninja.cove.backend.platform
 
+import com.coveninja.cove.backend.http.MpvConfigStore
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 /** Device-global settings that intentionally do not roam with profiles. */
-class DeviceSettingsService(dataDirectory: Path) {
+class DeviceSettingsService(dataDirectory: Path) : MpvConfigStore {
     private val mpvConfig = dataDirectory.resolve("mpv/mpv.conf").toAbsolutePath().normalize()
 
-    fun readMpvConfig(): String = if (Files.isRegularFile(mpvConfig)) {
+    override suspend fun readMpvConfig(): String = if (Files.isRegularFile(mpvConfig)) {
         Files.readString(mpvConfig)
     } else {
         ""
     }
 
-    fun writeMpvConfig(content: String) {
+    override suspend fun writeMpvConfig(content: String) {
         require(content.toByteArray().size <= MAX_MPV_CONFIG_BYTES) { "mpv.conf exceeds 1 MiB" }
         Files.createDirectories(mpvConfig.parent)
         val temporary = mpvConfig.resolveSibling("${mpvConfig.fileName}.tmp-${UUID.randomUUID()}")

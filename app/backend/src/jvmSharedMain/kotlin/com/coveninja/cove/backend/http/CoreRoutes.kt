@@ -10,7 +10,6 @@ import com.coveninja.cove.backend.auth.SupabaseException
 import com.coveninja.cove.backend.content.MediaCatalog
 import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.backend.calendar.CalendarService
-import com.coveninja.cove.backend.platform.DeviceSettingsService
 import com.coveninja.cove.backend.discovery.AlgorithmTestRequest
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.quality.QualityLookup
@@ -25,7 +24,6 @@ import com.coveninja.cove.backend.trakt.TraktException
 import com.coveninja.cove.backend.trakt.TraktPollRequest
 import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.backend.trakt.TraktService
-import com.coveninja.cove.backend.updater.UpdateService
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.ProfilesState
 import com.coveninja.cove.shared.data.SettingsState
@@ -95,16 +93,16 @@ data class CoreRouteServices(
     val catalog: MediaCatalog? = null,
     val addons: AddonManager? = null,
     val nuvio: NuvioManager? = null,
-    val media: MediaBoundary? = null,
+    val media: RouteMediaBoundary? = null,
     val auth: AuthService? = null,
     val clientSessions: ClientSessionStore? = null,
     val activity: ActivityService? = null,
     val calendar: CalendarService? = null,
     val trakt: TraktService? = null,
-    val deviceSettings: DeviceSettingsService? = null,
+    val deviceSettings: MpvConfigStore? = null,
     val discovery: DiscoveryService? = null,
     val quality: QualityLookup? = null,
-    val updater: UpdateService? = null,
+    val updater: RouteUpdater? = null,
     val prefetch: PrefetchService? = null,
 )
 
@@ -968,8 +966,6 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
     post("/library/progress") {
         call.markLegacy(legacy)
         val progress = services.library.recordProgress(call.receiveJson<WatchProgressRequest>())
-        services.activity?.record(progress)
-        services.prefetch?.notifyProgressChanged()
         call.respond(progress)
     }
     services.activity?.let { activity ->
@@ -1126,4 +1122,3 @@ private data class ToggleAddonRequest(val enabled: Boolean)
 
 @Serializable
 private data class AddNuvioRepoRequest(val url: String)
-

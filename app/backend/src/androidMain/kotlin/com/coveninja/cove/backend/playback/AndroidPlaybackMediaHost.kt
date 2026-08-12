@@ -2,8 +2,13 @@ package com.coveninja.cove.backend.playback
 
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
+import com.coveninja.cove.backend.http.ProbeStreamResult
+import com.coveninja.cove.backend.http.ProbeStreamsRequest
+import com.coveninja.cove.backend.http.ProbeStreamsResponse
+import com.coveninja.cove.backend.http.RouteMediaBoundary
 import com.coveninja.cove.backend.torrent.TorrentPlaybackEngine
 import io.ktor.client.HttpClient
+import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
@@ -24,6 +29,7 @@ import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.header
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -32,13 +38,20 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.cancel
 import io.ktor.utils.io.copyTo
 import io.ktor.utils.io.readAvailable
+import io.ktor.utils.io.writeFully
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -56,10 +69,12 @@ internal class AndroidPlaybackMediaHost private constructor(
     private val torrentEngine: TorrentPlaybackEngine,
     private val server: EmbeddedServer<*, *>,
     val baseUrl: String,
-) : AutoCloseable {
+) : RouteMediaBoundary, AutoCloseable {
     private val streams = StreamRegistry()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val prefetchInFlight = AtomicBoolean()
 
-    suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {
+    override suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {
         val accepted = candidates.filter { stream ->
             if (stream.url.isBlank()) return@filter stream.infoHash.isNotBlank()
             runCatching {
@@ -106,9 +121,36 @@ internal class AndroidPlaybackMediaHost private constructor(
         }
     }
 
-    fun torrentProgress(hash: String) = torrentEngine.progress(hash)
+    override fun torrentProgress(hash: String) = torrentEngine.progress(hash)
 
-    private suspend fun playDirect(call: io.ktor.server.application.ApplicationCall, url: String) {
+    override suspend fun probe(request: ProbeStreamsRequest): ProbeStreamsResponse {
+        require(request.streams.size in 1..10) { "streams must contain 1-10 entries" }
+        val timeout = (request.timeoutMs.takeIf { it > 0 } ?: 700).coerceIn(100, 800)
+        return ProbeStreamsResponse(coroutineScope {
+            request.streams.map { stream ->
+                async {
+                    val registered = streams.lookup(stream.url)
+                        ?: return@async ProbeStreamResult(stream.url, false)
+                    withTimeoutOrNull(timeout.toLong()) {
+                        runCatching {
+                            val headers = registered.headers.toMutableMap()
+                            headers[HttpHeaders.Range] = "bytes=0-0"
+                            val response = publicGet(stream.url, headers, allowLanStreamSources())
+                            val alive = response.status.value in 200..399
+                            val length = response.headers[HttpHeaders.ContentRange]
+                                ?.substringAfterLast('/')?.toLongOrNull()
+                                ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                                ?: 0
+                            response.bodyAsChannel().cancel(CancellationException("probe complete"))
+                            ProbeStreamResult(stream.url, alive, length)
+                        }.getOrElse { ProbeStreamResult(stream.url, false) }
+                    } ?: ProbeStreamResult(stream.url, false)
+                }
+            }.awaitAll()
+        })
+    }
+
+    override suspend fun playDirect(call: io.ktor.server.application.ApplicationCall, url: String) {
         requireHttpUrl(url)
         val registered = streams.lookup(url)
             ?: return call.respondText(
@@ -140,7 +182,7 @@ internal class AndroidPlaybackMediaHost private constructor(
         }
     }
 
-    private suspend fun playTorrent(
+    override suspend fun playTorrent(
         call: io.ktor.server.application.ApplicationCall,
         hash: String,
         season: Int?,
@@ -169,7 +211,7 @@ internal class AndroidPlaybackMediaHost private constructor(
         }
     }
 
-    private suspend fun subtitle(call: io.ktor.server.application.ApplicationCall, url: String) {
+    override suspend fun subtitle(call: io.ktor.server.application.ApplicationCall, url: String) {
         requireHttpUrl(url)
         val response = publicGet(url, emptyMap(), allowLan = false)
         check(response.status.isSuccess()) { "subtitle upstream returned HTTP ${response.status.value}" }
@@ -179,6 +221,23 @@ internal class AndroidPlaybackMediaHost private constructor(
             if (content.trimStart().startsWith("WEBVTT")) content else srtToVtt(content),
             ContentType.parse("text/vtt; charset=utf-8"),
         )
+    }
+
+    override suspend fun image(
+        call: io.ktor.server.application.ApplicationCall,
+        size: String,
+        file: String,
+    ) {
+        require(size in setOf("w185", "w300", "w500", "w780", "w1280", "original")) {
+            "invalid image size"
+        }
+        require(Regex("^[A-Za-z0-9._-]+$").matches(file)) { "invalid image file" }
+        val response = publicGet("https://image.tmdb.org/t/p/$size/$file", emptyMap(), allowLan = false)
+        require(response.status.isSuccess()) { "TMDB image returned HTTP ${response.status.value}" }
+        val bytes = response.body<ByteArray>()
+        require(bytes.size <= MAX_IMAGE_BYTES) { "TMDB image exceeds 25 MiB" }
+        call.response.header(HttpHeaders.CacheControl, "public, max-age=604800, immutable")
+        call.respondBytes(bytes, imageContentType(file))
     }
 
     private suspend fun publicGet(
@@ -208,7 +267,37 @@ internal class AndroidPlaybackMediaHost private constructor(
         error("too many redirects")
     }
 
+    override fun prefetchTorrent(
+        hash: String,
+        season: Int?,
+        episode: Int?,
+        fileIndex: Int?,
+    ): Boolean {
+        require(Regex("^[A-Fa-f0-9]{40}$").matches(hash)) { "invalid torrent info hash" }
+        if (!prefetchInFlight.compareAndSet(false, true)) return false
+        scope.launch {
+            try {
+                torrentEngine.prefetch(hash, season, episode, fileIndex)
+            } finally {
+                prefetchInFlight.set(false)
+            }
+        }
+        return true
+    }
+
+    override suspend fun speedTest(call: io.ktor.server.application.ApplicationCall) {
+        call.response.header(HttpHeaders.CacheControl, "no-store")
+        call.respondBytesWriter(
+            contentType = ContentType.Application.OctetStream,
+            contentLength = SPEED_TEST_BYTES.toLong(),
+        ) {
+            val chunk = ByteArray(1024 * 1024)
+            repeat(SPEED_TEST_BYTES / chunk.size) { writeFully(chunk) }
+        }
+    }
+
     override fun close() {
+        scope.cancel()
         server.stop(500, 2_000)
         torrentEngine.close()
     }
@@ -219,6 +308,8 @@ internal class AndroidPlaybackMediaHost private constructor(
         private const val MAX_PROBED = 10
         private const val PROBE_TIMEOUT_MILLIS = 800L
         private const val MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
+        private const val MAX_IMAGE_BYTES = 25 * 1024 * 1024
+        private const val SPEED_TEST_BYTES = 25 * 1024 * 1024
         private val SENSITIVE_REDIRECT_HEADERS = setOf("authorization", "cookie", "proxy-authorization")
         private val FORWARDED_RESPONSE_HEADERS = listOf(
             HttpHeaders.AcceptRanges,
@@ -282,6 +373,14 @@ internal class AndroidPlaybackMediaHost private constructor(
         }
     }
 }
+
+private fun imageContentType(file: String): ContentType =
+    when (file.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> ContentType.Image.JPEG
+        "png" -> ContentType.Image.PNG
+        "webp" -> ContentType.parse("image/webp")
+        else -> ContentType.Application.OctetStream
+    }
 
 private data class RegisteredStream(val headers: Map<String, String>, val expiresAt: Long)
 

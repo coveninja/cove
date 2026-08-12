@@ -59,6 +59,7 @@ android {
         targetSdk = 36
         versionCode = semanticVersionCode(coveVersion)
         versionName = coveVersion
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "TMDB_API_KEY", quotedBuildConfig(deploymentValue("TMDB_API_KEY")))
         buildConfigField("String", "SUPABASE_URL", quotedBuildConfig(deploymentValue("SUPABASE_URL")))
@@ -100,6 +101,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
     packaging {
+        jniLibs.useLegacyPackaging = true
         resources.excludes += setOf(
             "/META-INF/AL2.0",
             "/META-INF/LGPL2.1",
@@ -107,6 +109,7 @@ android {
             "/META-INF/LICENSE-notice.md",
         )
     }
+    sourceSets.getByName("main").assets.srcDir("../backend/src/desktopMain/resources")
 }
 
 kotlin {
@@ -125,7 +128,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.mpv.android)
+    implementation(libs.youtubedl.android)
 
     testImplementation(libs.kotlin.test)
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
