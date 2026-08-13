@@ -84,6 +84,14 @@ class TmdbClientTest {
         assertTrue("top-secret" !in error.message.orEmpty())
     }
 
+    @Test
+    fun `blank override follows supported system locale`() {
+        assertEquals("tr", resolveAppLocale("", "tr-TR"))
+        assertEquals("ja", resolveAppLocale("  ", "ja_JP"))
+        assertEquals("de", resolveAppLocale("de", "tr-TR"))
+        assertEquals("en", resolveAppLocale("", "fr-FR"))
+    }
+
     private fun testClient(response: (String) -> String) = HttpClient(MockEngine { request ->
         respond(
             content = response(request.url.toString()),

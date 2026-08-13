@@ -59,7 +59,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
@@ -145,7 +145,7 @@ fun ExploreSpotlight(
                     label = "SpotlightZoom",
                 )
 
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(slide.backdropUrl, "w1280"),
                     contentDescription = "${slide.title ?: slide.name} backdrop",
                     modifier = Modifier
@@ -266,7 +266,7 @@ private fun SpotlightCopy(
         }
 
         if (media.logoUrl != null) {
-            AsyncImage(
+            CoveAsyncImage(
                 model = tmdbImageSize(media.logoUrl, "w500"),
                 contentDescription = "${media.title ?: media.name} logo",
                 modifier = Modifier.width(

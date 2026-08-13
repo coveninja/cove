@@ -53,7 +53,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
@@ -119,7 +119,7 @@ fun HomeHeroBlock(
                     label = "HomeHeroZoom",
                 )
 
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(image, "w1280"),
                     contentDescription = "${hero.media.title ?: hero.media.name} backdrop",
                     modifier = Modifier
@@ -220,7 +220,7 @@ private fun HeroCopy(
         }
 
         if (art.logoUrl != null) {
-            AsyncImage(
+            CoveAsyncImage(
                 model = tmdbImageSize(art.logoUrl, "w500"),
                 contentDescription = "${art.title ?: art.name} logo",
                 modifier = Modifier.width(

@@ -155,11 +155,14 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
 }
 
 private class FakeContent : ContentRepository {
+    override val presentationLocale: StateFlow<String> = MutableStateFlow("en")
     override val home: StateFlow<HomeState> = MutableStateFlow(HomeState.Ready(emptyList()))
     override val explore: StateFlow<ExploreState> =
         MutableStateFlow(ExploreState.Ready(emptyList(), emptyList()))
     override val searchResults: StateFlow<SearchState> = MutableStateFlow(SearchState.Idle)
     override suspend fun search(query: String) = Unit
+    override suspend fun media(id: Int, type: DomainMediaType): DomainMedia =
+        throw UnsupportedOperationException()
     override suspend fun details(media: DomainMedia): ContentDetails =
         throw UnsupportedOperationException()
 
@@ -202,12 +205,12 @@ private class FakeHost : VideoPlayerHost {
     var speedSet: Double? = null
     override fun setSpeed(speed: Double) { speedSet = speed }
     var appliedPreferences: PlaybackPreferences? = null
-    val addedSubtitles = mutableListOf<String>()
+    val addedSubtitles = mutableListOf<AddedSubtitle>()
     override fun applyPreferences(preferences: PlaybackPreferences) {
         appliedPreferences = preferences
     }
     override fun addSubtitle(url: String, title: String, language: String) {
-        addedSubtitles += url
+        addedSubtitles += AddedSubtitle(url, title, language)
     }
     override fun selectAudioTrack(id: Int) = Unit
     override fun selectSubtitleTrack(id: Int?) = Unit
@@ -235,6 +238,8 @@ private class FakeHost : VideoPlayerHost {
     @Composable
     override fun Surface(modifier: Modifier) = Unit
 }
+
+private data class AddedSubtitle(val url: String, val title: String, val language: String)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -424,6 +429,42 @@ class PlaybackSessionTest {
 
         assertEquals(null, h.playback.requestedSeason)
         assertEquals(null, h.playback.requestedEpisode)
+    }
+
+    @Test
+    fun `opaque external subtitle ids receive numbered labels per language`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(
+            SubtitleSource(
+                id = "v3_aHR0cHM6Ly9zdWJzNS5zdHJlbWlvL2VuL2Rvd25sb2FkLzE5NTc3NDUxMTc",
+                url = "https://subs.test/en-1.srt",
+                lang = "en",
+            ),
+            SubtitleSource(
+                id = "Signs & Songs",
+                url = "https://subs.test/en-signs.srt",
+                lang = "en-US",
+            ),
+            SubtitleSource(
+                id = "19573745118",
+                url = "https://subs.test/en-2.srt",
+                lang = "en-GB",
+            ),
+            SubtitleSource(
+                id = "19573745119",
+                url = "https://subs.test/es-1.srt",
+                lang = "es",
+            ),
+        )
+
+        h.session.open(movie())
+        runCurrent()
+
+        assertEquals(
+            listOf("Subtitle 1", "Signs & Songs", "Subtitle 2", "Subtitle 1"),
+            h.host.addedSubtitles.map(AddedSubtitle::title),
+        )
     }
 
     // AppSettings.defaultVolume is a 0..1 fraction and mpv's is 0..100; the ×100

@@ -6,20 +6,30 @@ import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.shared.model.Media
+import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 class LocalContentRepository(
     private val catalog: MediaCatalog,
     private val scope: CoroutineScope,
+    localeChanges: Flow<String> = flowOf("en"),
+    initialLocale: String = "en",
 ) : ContentRepository {
+    private val _presentationLocale = MutableStateFlow(initialLocale)
+    override val presentationLocale: StateFlow<String> = _presentationLocale.asStateFlow()
+
     private val _home = MutableStateFlow<HomeState>(HomeState.Loading)
     override val home: StateFlow<HomeState> = _home.asStateFlow()
 
@@ -30,7 +40,17 @@ class LocalContentRepository(
     override val searchResults: StateFlow<SearchState> = _searchResults.asStateFlow()
 
     init {
-        scope.launch { refreshDiscover() }
+        scope.launch {
+            localeChanges.distinctUntilChanged().collectLatest { locale ->
+                _presentationLocale.value = locale
+                // Never leave a complete page of the previous locale visible while its
+                // replacement is loading. Search is request-driven, so invalidate it.
+                _home.value = HomeState.Loading
+                _explore.value = ExploreState.Loading
+                _searchResults.value = SearchState.Idle
+                refreshDiscover()
+            }
+        }
     }
 
     suspend fun refreshDiscover() = coroutineScope {
@@ -64,6 +84,8 @@ class LocalContentRepository(
             _searchResults.value = SearchState.Failed(error.message ?: "Unknown error searching")
         }
     }
+
+    override suspend fun media(id: Int, type: MediaType): Media = catalog.media(id, type)
 
     override suspend fun details(media: Media): ContentDetails = coroutineScope {
         val type = requireNotNull(media.mediaType) { "Media type is required to load details" }

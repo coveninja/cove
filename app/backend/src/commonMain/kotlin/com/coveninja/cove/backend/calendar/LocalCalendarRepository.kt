@@ -21,7 +21,8 @@ class LocalCalendarRepository(
     private val database: CoveDatabase,
     private val session: ActiveProfileSession,
     library: LibraryRepository,
-) : BaseCalendarRepository(library) {
+    localeProvider: () -> String = { "en" },
+) : BaseCalendarRepository(library, cacheVariant = localeProvider) {
 
     override suspend fun fetchCalendar(): List<CalendarItem> = service.calendar()
 

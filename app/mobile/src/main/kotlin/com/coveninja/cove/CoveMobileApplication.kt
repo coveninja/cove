@@ -2,6 +2,7 @@ package com.coveninja.cove
 
 import android.app.Application
 import android.content.Intent
+import android.content.res.Configuration
 import androidx.core.content.ContextCompat
 import com.coveninja.cove.backend.AndroidBackendRuntime
 import com.coveninja.cove.player.AndroidMpvVideoPlayerHost
@@ -28,6 +29,7 @@ sealed interface MobileRuntimeState {
 
 class CoveMobileApplication : Application() {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val systemLocale = MutableStateFlow("")
     @Volatile
     private var backend: AndroidBackendRuntime? = null
     private val _runtimeState = MutableStateFlow<MobileRuntimeState>(MobileRuntimeState.Loading)
@@ -44,6 +46,16 @@ class CoveMobileApplication : Application() {
     }
     private val player by playerDelegate
 
+    override fun onCreate() {
+        super.onCreate()
+        systemLocale.value = resources.configuration.primaryLanguageTag()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        systemLocale.value = newConfig.primaryLanguageTag()
+    }
+
     @Synchronized
     fun initializeBackend() {
         if (backend != null || initializationJob?.isActive == true) return
@@ -59,6 +71,7 @@ class CoveMobileApplication : Application() {
                         traktClientId = BuildConfig.TRAKT_CLIENT_ID,
                         traktClientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
                         appVersion = BuildConfig.VERSION_NAME,
+                        systemLocale = systemLocale,
                     )
                 }
             }.onSuccess { runtime ->
@@ -105,3 +118,6 @@ class CoveMobileApplication : Application() {
         super.onTerminate()
     }
 }
+
+private fun Configuration.primaryLanguageTag(): String =
+    locales.takeIf { !it.isEmpty }?.get(0)?.toLanguageTag().orEmpty()

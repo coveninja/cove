@@ -63,7 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.geometry.Size
@@ -261,7 +261,7 @@ fun MediaCard(
                 onClick = onClick,
             ),
     ) {
-        AsyncImage(
+        CoveAsyncImage(
             model = media.posterUrl,
             contentDescription = "${media.title} poster",
             modifier = posterModifier

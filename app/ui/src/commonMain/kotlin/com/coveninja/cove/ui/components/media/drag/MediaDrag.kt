@@ -48,7 +48,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.icons.IconifyIcon
 import kotlinx.coroutines.delay
@@ -256,7 +256,7 @@ fun MediaDragPreview(
                 shape = shape,
             ),
     ) {
-        AsyncImage(
+        CoveAsyncImage(
             model = media.posterUrl,
             contentDescription = null,
             modifier = Modifier

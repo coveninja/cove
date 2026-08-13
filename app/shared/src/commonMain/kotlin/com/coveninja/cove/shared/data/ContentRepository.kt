@@ -3,6 +3,7 @@ package com.coveninja.cove.shared.data
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
 import com.coveninja.cove.shared.model.MediaImages
+import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
 import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
@@ -45,10 +46,14 @@ data class ContentDetails(
 )
 
 interface ContentRepository {
+    /** Effective metadata locale after resolving a blank profile override against the host. */
+    val presentationLocale: StateFlow<String>
     val home: StateFlow<HomeState>
     val explore: StateFlow<ExploreState>
     val searchResults: StateFlow<SearchState>
     suspend fun search(query: String)
+    /** Fetches current-locale presentation for a title known only by its stable TMDB identity. */
+    suspend fun media(id: Int, type: MediaType): Media
     suspend fun details(media: Media): ContentDetails
     suspend fun person(id: Int): PersonDetails
     suspend fun episodes(id: Int, season: Int): List<TvEpisode>

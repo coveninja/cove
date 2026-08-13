@@ -155,11 +155,11 @@ class CalendarModelTest {
     // Mutation applied to verify: prefixed unconditionally → test failed, an already
     // proxied URL came back doubled up behind the TMDB host.
     @Test
-    fun `an already absolute URL is left alone`() {
+    fun `a legacy loopback URL is recovered as a direct image URL`() {
         val proxied = "http://127.0.0.1:6969/api/v1/img/w500/abc.jpg"
         val url = calendarImageUrl(item("2026-08-10").copy(posterPath = proxied))
 
-        assertEquals(proxied, url)
+        assertEquals("https://image.tmdb.org/t/p/w185/abc.jpg", url)
     }
 
     // Mutation applied to verify: read stillPath first → test failed, an episode with

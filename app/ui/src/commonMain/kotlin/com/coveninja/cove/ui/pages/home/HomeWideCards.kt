@@ -50,7 +50,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -202,7 +202,7 @@ private fun WideCard(
                     tint = colors.onSurfaceVariant.copy(alpha = 0.55f),
                 )
             } else {
-                AsyncImage(
+                CoveAsyncImage(
                     model = if (resize) tmdbImageSize(artUrl, "w780") else artUrl,
                     contentDescription = contentDescription,
                     modifier = Modifier.fillMaxSize(),

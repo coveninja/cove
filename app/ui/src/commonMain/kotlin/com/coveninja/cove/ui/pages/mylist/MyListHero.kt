@@ -49,7 +49,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.platform.hasPointerHover
@@ -99,7 +99,7 @@ fun MyListHero(
                 label = "MyListHeroScale",
             )
 
-            AsyncImage(
+            CoveAsyncImage(
                 model = tmdbImageSize(image, "w1280"),
                 contentDescription = "${row.displayTitle} backdrop",
                 modifier = Modifier
@@ -151,7 +151,7 @@ fun MyListHero(
             )
 
             if (row.media.logoUrl != null) {
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(row.media.logoUrl, "w500"),
                     contentDescription = "${row.displayTitle} logo",
                     modifier = Modifier.width(240.dp),

@@ -35,8 +35,10 @@ class LibraryIndex(val entries: List<LibraryEntry>) {
  * The library is the bridge, and it always has the entry — nothing reaches the calendar that
  * is not saved.
  */
-fun LibraryIndex.mediaFor(item: CalendarItem): Media? =
-    entryOf(uiMediaId(item.tmdbId, item.type))?.toUiMedia()
+fun LibraryIndex.mediaFor(item: CalendarItem, catalog: MediaCatalog? = null): Media? =
+    entryOf(uiMediaId(item.tmdbId, item.type))?.let { entry ->
+        catalog?.enrich(entry) ?: entry.toUiMedia()
+    }
 
 /**
  * Whether this title has never been played at all.

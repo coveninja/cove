@@ -128,8 +128,8 @@ fun HomePage(
     }
     // Resolved against the library up front: a card is only drawn for something whose
     // buttons can actually do their job.
-    val backlog = remember(calendarItems, index) {
-        backlogRows(availableNow(calendarItems), index::mediaFor)
+    val backlog = remember(calendarItems, index, catalog) {
+        backlogRows(availableNow(calendarItems)) { item -> index.mediaFor(item, catalog) }
     }
     val upcoming = remember(calendarItems, today) { comingUp(calendarItems, today) }
     val stats = remember(index, calendarItems) { libraryStats(index.entries, calendarItems) }
@@ -191,7 +191,7 @@ fun HomePage(
                     actions.setListCategory(media, MyListCategory.WatchLater)
                 }
             },
-            resolveCalendarMedia = index::mediaFor,
+            resolveCalendarMedia = { item -> index.mediaFor(item, catalog) },
             stillFor = controller::stillFor,
             mediaCard = mediaCard,
             onOpenMedia = onOpenMedia,

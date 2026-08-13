@@ -22,6 +22,7 @@ import kotlin.time.Instant
 abstract class BaseCalendarRepository(
     private val library: LibraryRepository,
     private val freshness: Duration = DEFAULT_FRESHNESS,
+    private val cacheVariant: () -> String = { "" },
 ) : CalendarRepository {
 
     private val _calendar = MutableStateFlow<CalendarState>(CalendarState.Loading)
@@ -42,9 +43,9 @@ abstract class BaseCalendarRepository(
 
     override suspend fun refresh(force: Boolean): Unit = refreshLock.withLock {
         val entries = (library.entries.value as? LibraryState.Ready)?.entries.orEmpty()
-        val signature = entries.signature()
+        val signature = entries.signature(cacheVariant())
 
-        loadCacheOnce()
+        loadCacheOnce(signature)
 
         if (!force && isFresh(signature)) return@withLock
 
@@ -70,10 +71,13 @@ abstract class BaseCalendarRepository(
         publish(items, signature)
     }
 
-    private suspend fun loadCacheOnce() {
+    private suspend fun loadCacheOnce(expectedSignature: String) {
         if (cacheReadAttempted) return
         cacheReadAttempted = true
         val cached = runCatching { readCache() }.getOrNull() ?: return
+        // Old builds did not partition this cache by locale. Do not flash a valid but
+        // wrong-language snapshot while the current presentation is rebuilt.
+        if (cached.signature != expectedSignature) return
         _calendar.value = CalendarState.Ready(cached.items, cached.refreshedAt)
         lastSignature = cached.signature
         lastFetchedAt = runCatching { Instant.parse(cached.refreshedAt) }.getOrNull()
@@ -100,8 +104,8 @@ abstract class BaseCalendarRepository(
         return Clock.System.now() - fetchedAt < freshness
     }
 
-    private fun List<LibraryEntry>.signature(): String =
-        map { "${it.mediaType.wireName}:${it.tmdbId}:${it.status.wireName}" }
+    private fun List<LibraryEntry>.signature(variant: String): String =
+        (map { "${it.mediaType.wireName}:${it.tmdbId}:${it.status.wireName}" } + "variant:$variant")
             .sorted()
             .joinToString(",")
 

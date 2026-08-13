@@ -264,6 +264,7 @@ private val fixtureCharacters =
 // ── Private repository implementations ──────────────────────────────────────
 
 private class FixtureContentRepository : ContentRepository {
+    override val presentationLocale: StateFlow<String> = MutableStateFlow("en")
     override val home: StateFlow<HomeState> =
         MutableStateFlow(HomeState.Ready(fixtureMovies + fixtureTv))
 
@@ -287,6 +288,9 @@ private class FixtureContentRepository : ContentRepository {
                 .map(::fixturePersonDetails),
         )
     }
+
+    override suspend fun media(id: Int, type: MediaType): Media =
+        (fixtureMovies + fixtureTv).first { it.id == id && it.mediaType == type }
 
     override suspend fun details(media: Media): ContentDetails {
         val all = fixtureMovies + fixtureTv

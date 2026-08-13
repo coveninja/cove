@@ -1,8 +1,13 @@
 package com.coveninja.cove.ui.state
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.coveninja.cove.shared.data.ContentRepository
 import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
@@ -11,6 +16,11 @@ import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toDomainMedia
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.shared.model.Media as DomainMedia
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 // Cross-page content index. MyListPage upgrades thin LibraryEntry objects using
 // the fuller domain items seen in home/explore/search; the details fetch also
@@ -40,13 +50,57 @@ fun rememberMediaCatalog(
     homeState: HomeState,
     exploreState: ExploreState,
     searchState: SearchState,
-): MediaCatalog = remember(homeState, exploreState, searchState) {
+    localizedLibraryItems: List<DomainMedia> = emptyList(),
+): MediaCatalog = remember(homeState, exploreState, searchState, localizedLibraryItems) {
         val homeDomain = (homeState as? HomeState.Ready)?.items.orEmpty()
         val exploreDomain = (exploreState as? ExploreState.Ready)
             ?.let { it.movies + it.tv }
             .orEmpty()
         val searchDomain = (searchState as? SearchState.Ready)?.results.orEmpty()
-        val allItems = (homeDomain + exploreDomain + searchDomain)
+        // Library hydration leads so a saved title's current-locale presentation wins even
+        // during the brief hand-off while a locale-triggered Home refresh is starting.
+        val allItems = (localizedLibraryItems + homeDomain + exploreDomain + searchDomain)
             .distinctBy { it.mediaType to it.id }
         MediaCatalog(allItems)
     }
+
+/**
+ * Resolves thin, persisted library rows back through TMDB for presentation.
+ *
+ * A library title is an offline fallback, not localized truth: it may have been added in a
+ * different language or synced from another device. The stable TMDB id/type is the source of
+ * truth. The identity key deliberately excludes status/rating so ordinary library mutations do
+ * not refetch every title; locale and membership changes do.
+ */
+@Composable
+fun rememberLocalizedLibraryMedia(
+    entries: List<LibraryEntry>,
+    content: ContentRepository,
+    localeKey: String,
+): List<DomainMedia> {
+    val identity = remember(entries, localeKey) {
+        LibraryPresentationKey(
+            localeKey,
+            entries.map { "${it.mediaType.wireName}:${it.tmdbId}" }.sorted(),
+        )
+    }
+    var localized by remember(content, identity) { mutableStateOf(emptyList<DomainMedia>()) }
+
+    LaunchedEffect(content, identity) {
+        val gate = Semaphore(LIBRARY_PRESENTATION_CONCURRENCY)
+        localized = coroutineScope {
+            entries.map { entry ->
+                async {
+                    gate.withPermit {
+                        runCatching { content.media(entry.tmdbId, entry.mediaType) }.getOrNull()
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+    return localized
+}
+
+private data class LibraryPresentationKey(val locale: String, val identities: List<String>)
+
+private const val LIBRARY_PRESENTATION_CONCURRENCY = 6

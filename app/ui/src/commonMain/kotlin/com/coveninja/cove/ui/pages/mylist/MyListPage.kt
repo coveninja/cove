@@ -108,6 +108,7 @@ fun MyListPage(
             MyListReady(
                 rows = rows,
                 index = index,
+                catalog = catalog,
                 actions = actions,
                 mediaCard = mediaCard,
                 onExplore = onExplore,
@@ -124,6 +125,7 @@ fun MyListPage(
 private fun MyListReady(
     rows: List<MyListRow>,
     index: LibraryIndex,
+    catalog: MediaCatalog,
     actions: MediaActions,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onExplore: () -> Unit,
@@ -205,6 +207,7 @@ private fun MyListReady(
 
                 MyListView.Calendar -> CalendarView(
                     index = index,
+                    catalog = catalog,
                     sections = sections,
                     onOpenMedia = onOpenMedia,
                     onPlayMedia = onPlayMedia,
@@ -405,6 +408,7 @@ private fun LibraryView(
 @Composable
 private fun CalendarView(
     index: LibraryIndex,
+    catalog: MediaCatalog,
     sections: CalendarSectionState,
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
@@ -463,8 +467,10 @@ private fun CalendarView(
                         top = 4.dp,
                         bottom = 40.dp,
                     ),
-                    onOpen = { item -> index.mediaFor(item)?.let(onOpenMedia) },
-                    onPlay = { item -> playCalendarItem(item, index, onPlayMedia, onPlayEpisode) },
+                    onOpen = { item -> index.mediaFor(item, catalog)?.let(onOpenMedia) },
+                    onPlay = { item ->
+                        playCalendarItem(item, index, catalog, onPlayMedia, onPlayEpisode)
+                    },
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -475,10 +481,11 @@ private fun CalendarView(
 private fun playCalendarItem(
     item: CalendarItem,
     index: LibraryIndex,
+    catalog: MediaCatalog,
     onPlayMedia: (Media) -> Unit,
     onPlayEpisode: (Media, Int, Int, String?) -> Unit,
 ) {
-    val media = index.mediaFor(item) ?: return
+    val media = index.mediaFor(item, catalog) ?: return
     val season = item.seasonNumber
     val episode = item.episodeNumber
     if (season != null && episode != null) {

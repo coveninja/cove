@@ -48,7 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.PlaybackPhase
@@ -107,7 +107,7 @@ fun InlineVideoPlayer(
         // the slot never opens as a black rectangle.
         if (phase !is PlaybackPhase.Playing || !status.hasMedia) {
             request.extra?.thumbnailUrl?.let { thumbnail ->
-                AsyncImage(
+                CoveAsyncImage(
                     model = thumbnail,
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),

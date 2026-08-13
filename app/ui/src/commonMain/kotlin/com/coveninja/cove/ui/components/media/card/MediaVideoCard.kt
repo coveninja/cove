@@ -39,7 +39,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.model.MediaVideo
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -145,7 +145,7 @@ fun MediaVideoCard(
             contentAlignment = Alignment.Center,
         ) {
             video.thumbnailUrl?.let { thumbnailUrl ->
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(thumbnailUrl, "w500"),
                     contentDescription = video.title,
                     modifier = Modifier

@@ -68,7 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.components.common.DetailFact
 import com.coveninja.cove.ui.components.common.DetailFactData
 import com.coveninja.cove.ui.components.common.DetailsBadge
@@ -235,7 +235,7 @@ fun SharedTransitionScope.PersonDetailsSharedOverlay(
                             },
                     ) {
                         if (currentPerson.profileUrl != null) {
-                            AsyncImage(
+                            CoveAsyncImage(
                                 model = tmdbImageSize(currentPerson.profileUrl, "w780"),
                                 contentDescription = null,
                                 modifier = Modifier
@@ -469,7 +469,7 @@ private fun PersonDetailsContent(
                 contentAlignment = Alignment.Center,
             ) {
                 if (person.profileUrl != null) {
-                    AsyncImage(
+                    CoveAsyncImage(
                         model = tmdbImageSize(person.profileUrl, "w500"),
                         contentDescription = person.name,
                         modifier = Modifier
@@ -790,7 +790,7 @@ private fun FilmographyRow(
             contentAlignment = Alignment.Center,
         ) {
             if (credit.posterUrl != null) {
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(credit.posterUrl, "w185"),
                     contentDescription = credit.title,
                     modifier = Modifier.fillMaxSize(),

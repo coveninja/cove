@@ -388,6 +388,10 @@ internal fun normalizeAppLocale(value: String): String =
         }
     }
 
+/** A blank profile override means the host locale, not English. */
+internal fun resolveAppLocale(profileOverride: String, systemLocale: String): String =
+    normalizeAppLocale(profileOverride.takeIf(String::isNotBlank) ?: systemLocale)
+
 internal fun tmdbLocale(appLocale: String): String = when (appLocale) {
     "tr" -> "tr-TR"
     "pt" -> "pt-BR"

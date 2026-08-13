@@ -75,6 +75,7 @@ import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberDragSession
 import com.coveninja.cove.ui.state.rememberLibraryIndex
+import com.coveninja.cove.ui.state.rememberLocalizedLibraryMedia
 import com.coveninja.cove.ui.state.rememberMediaActions
 import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
@@ -218,8 +219,19 @@ private fun CoveAppContent(
     val homeState by graph.content.home.collectAsState()
     val exploreState by graph.content.explore.collectAsState()
     val searchState by graph.content.searchResults.collectAsState()
-    val catalog = rememberMediaCatalog(homeState, exploreState, searchState)
+    val presentationLocale by graph.content.presentationLocale.collectAsState()
     val index = rememberLibraryIndex(libraryState)
+    val localizedLibraryItems = rememberLocalizedLibraryMedia(
+        entries = index.entries,
+        content = graph.content,
+        localeKey = presentationLocale,
+    )
+    val catalog = rememberMediaCatalog(
+        homeState,
+        exploreState,
+        searchState,
+        localizedLibraryItems,
+    )
     val watchProgress = rememberWatchProgressIndex(progressRows)
     val actions = rememberMediaActions(index)
     val detailsState = rememberMediaDetailsState(catalog)

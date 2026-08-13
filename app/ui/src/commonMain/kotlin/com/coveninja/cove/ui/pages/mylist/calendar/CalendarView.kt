@@ -58,7 +58,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -403,7 +403,7 @@ private fun CalendarRow(
                     tint = colors.onSurfaceVariant.copy(alpha = 0.6f),
                 )
             } else {
-                AsyncImage(
+                CoveAsyncImage(
                     model = artwork,
                     contentDescription = "${item.title} poster",
                     modifier = Modifier.fillMaxSize(),

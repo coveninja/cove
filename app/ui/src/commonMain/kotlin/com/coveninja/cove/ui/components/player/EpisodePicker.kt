@@ -41,7 +41,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.pages.common.ChoicePill
@@ -249,7 +249,7 @@ private fun EpisodeThumbnail(episode: MediaEpisode, playing: Boolean) {
         contentAlignment = Alignment.Center,
     ) {
         if (episode.stillUrl != null) {
-            AsyncImage(
+            CoveAsyncImage(
                 model = episode.stillUrl,
                 contentDescription = null,
                 modifier = Modifier

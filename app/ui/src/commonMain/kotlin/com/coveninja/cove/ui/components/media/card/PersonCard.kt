@@ -36,7 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.tmdbImageSize
 
@@ -129,7 +129,7 @@ fun PersonCard(
                 contentAlignment = Alignment.Center,
             ) {
                 if (person.profileUrl != null) {
-                    AsyncImage(
+                    CoveAsyncImage(
                         model = tmdbImageSize(person.profileUrl, "w185"),
                         contentDescription = person.name,
                         modifier = Modifier

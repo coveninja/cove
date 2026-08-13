@@ -1,5 +1,6 @@
 package com.coveninja.cove.shared.data
 
+import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.network.CoveApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -13,6 +14,8 @@ class LiveContentRepository(
     private val api: CoveApi,
     private val scope: CoroutineScope,
 ) : ContentRepository {
+
+    override val presentationLocale: StateFlow<String> = MutableStateFlow("en")
 
     private val _home = MutableStateFlow<HomeState>(HomeState.Loading)
     override val home: StateFlow<HomeState> = _home.asStateFlow()
@@ -58,6 +61,8 @@ class LiveContentRepository(
             _searchResults.value = SearchState.Failed(e.message ?: "Unknown error searching")
         }
     }
+
+    override suspend fun media(id: Int, type: MediaType) = api.media(id, type)
 
     override suspend fun details(media: com.coveninja.cove.shared.model.Media): ContentDetails =
         coroutineScope {

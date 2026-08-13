@@ -45,7 +45,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
@@ -135,7 +135,7 @@ private fun BackdropLedCard(
             .hoverable(hover)
             .clickable(interactionSource = hover, indication = null, onClick = onOpen),
     ) {
-        AsyncImage(
+        CoveAsyncImage(
             model = tmdbImageSize(media.backdropUrl, "w1280"),
             contentDescription = "${media.displayTitle()} backdrop",
             modifier = Modifier.fillMaxSize().graphicsLayer {
@@ -221,7 +221,7 @@ private fun PosterLedCard(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             media.posterUrl?.let { poster ->
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(poster, "w500"),
                     contentDescription = "${media.displayTitle()} poster",
                     modifier = Modifier.fillMaxSize(),

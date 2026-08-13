@@ -18,6 +18,7 @@ import com.coveninja.cove.backend.calendar.CalendarService
 import com.coveninja.cove.backend.calendar.LocalCalendarRepository
 import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
+import com.coveninja.cove.backend.content.resolveAppLocale
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
 import com.coveninja.cove.backend.http.CoreRouteServices
@@ -61,6 +62,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 
 /** Android composition root for the same repositories used by CoveApp. */
 class AndroidBackendRuntime private constructor(
@@ -160,6 +168,9 @@ class AndroidBackendRuntime private constructor(
             traktClientId: String = "",
             traktClientSecret: String = "",
             appVersion: String = "dev",
+            systemLocale: StateFlow<String> = MutableStateFlow(
+                context.resources.configuration.locales[0].toLanguageTag(),
+            ),
         ): AndroidBackendRuntime {
             val stores = AndroidStoreGraph.open(context)
             val client = HttpClient(OkHttp) {
@@ -179,17 +190,29 @@ class AndroidBackendRuntime private constructor(
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             var openedMedia: LazyAndroidPlaybackMediaHost? = null
             try {
-                val catalog = TmdbClient(
-                    httpClient = client,
-                    apiKey = tmdbApiKey,
-                    localeProvider = {
+                val localeProvider = {
+                    val profileOverride =
                         (stores.repositories.settings.settings.value as? SettingsState.Ready)
                             ?.settings
                             ?.uiLanguage
                             .orEmpty()
-                    },
+                    resolveAppLocale(profileOverride, systemLocale.value)
+                }
+                val localeChanges = combine(
+                    stores.repositories.settings.settings,
+                    systemLocale,
+                ) { _, _ -> localeProvider() }.distinctUntilChanged()
+                val catalog = TmdbClient(
+                    httpClient = client,
+                    apiKey = tmdbApiKey,
+                    localeProvider = localeProvider,
                 )
-                val content = LocalContentRepository(catalog, scope)
+                val content = LocalContentRepository(
+                    catalog = catalog,
+                    scope = scope,
+                    localeChanges = localeChanges,
+                    initialLocale = localeProvider(),
+                )
                 val addonManager = AddonManager(
                     database = stores.databaseHandle,
                     session = stores.repositories.profileSession,
@@ -240,6 +263,7 @@ class AndroidBackendRuntime private constructor(
                     database = stores.databaseHandle,
                     session = stores.repositories.profileSession,
                     library = stores.repositories.library,
+                    localeProvider = localeProvider,
                 )
                 // The custom-algorithm hook is user-controlled network input, so it uses
                 // the same redirect and resolved-address restrictions as addon manifests.
@@ -254,7 +278,13 @@ class AndroidBackendRuntime private constructor(
                 val discovery = LocalDiscoveryRepository(
                     catalog = catalog,
                     service = discoveryService,
+                    localeProvider = localeProvider,
                 )
+                scope.launch {
+                    localeChanges.drop(1).collectLatest {
+                        calendar.refresh(force = true)
+                    }
+                }
                 val activity = ActivityService(
                     stores.databaseHandle,
                     stores.repositories.profileSession,

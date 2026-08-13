@@ -23,22 +23,24 @@ import kotlinx.coroutines.sync.withLock
 class LocalDiscoveryRepository(
     private val catalog: MediaCatalog,
     private val service: DiscoveryService? = null,
+    private val localeProvider: () -> String = { "en" },
 ) : DiscoveryRepository {
 
     // Genre vocabularies change on the order of years and every miss is an upstream round
     // trip, so they are fetched once per type and then held for the process lifetime.
-    private val genreCache = mutableMapOf<MediaType, List<MediaGenre>>()
+    private val genreCache = mutableMapOf<Pair<String, MediaType>, List<MediaGenre>>()
     private val genreMutex = Mutex()
 
     override suspend fun genres(type: MediaType): List<MediaGenre> {
-        genreCache[type]?.let { return it }
+        val key = localeProvider() to type
+        genreCache[key]?.let { return it }
         return genreMutex.withLock {
-            genreCache[type]?.let { return@withLock it }
+            genreCache[key]?.let { return@withLock it }
             // A failed genre fetch must not be cached as "no genres" — leaving the map
             // empty means the next caller retries, and the UI has a static fallback table
             // to draw in the meantime.
             val fetched = runCatching { catalog.genres(type) }.getOrDefault(emptyList())
-            if (fetched.isNotEmpty()) genreCache[type] = fetched
+            if (fetched.isNotEmpty()) genreCache[key] = fetched
             fetched
         }
     }

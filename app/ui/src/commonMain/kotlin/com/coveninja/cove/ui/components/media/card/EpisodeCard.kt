@@ -47,7 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.platform.onSecondaryClick
@@ -225,7 +225,7 @@ private fun EpisodeArtwork(
         contentAlignment = Alignment.Center,
     ) {
         episode.stillUrl?.let { stillUrl ->
-            AsyncImage(
+            CoveAsyncImage(
                 model = tmdbImageSize(stillUrl, "w500"),
                 contentDescription = "${episode.title} still",
                 modifier = Modifier.fillMaxSize(),

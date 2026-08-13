@@ -50,7 +50,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
@@ -203,7 +203,7 @@ private fun MyListDetailRow(
                     .clip(RoundedCornerShape(8.dp))
                     .background(colors.surfaceContainer),
             ) {
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(row.media.posterUrl, "w185"),
                     contentDescription = "${row.displayTitle} poster",
                     modifier = Modifier.fillMaxSize(),

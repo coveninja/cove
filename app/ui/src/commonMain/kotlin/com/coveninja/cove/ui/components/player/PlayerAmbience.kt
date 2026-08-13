@@ -27,7 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 
 /**
  * The title's own backdrop, blurred out behind whatever the player is doing
@@ -56,7 +56,7 @@ fun PlayerBackdrop(
                 label = "BackdropScale",
             )
 
-            AsyncImage(
+            CoveAsyncImage(
                 model = backdropUrl,
                 contentDescription = null,
                 modifier = Modifier
@@ -119,7 +119,7 @@ fun PulsingLogo(
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         if (logoUrl != null) {
-            AsyncImage(
+            CoveAsyncImage(
                 model = logoUrl,
                 contentDescription = title,
                 modifier = Modifier

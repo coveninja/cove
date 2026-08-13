@@ -16,6 +16,7 @@ import com.coveninja.cove.backend.auth.SupabaseSyncService
 import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.backend.content.LocalContentRepository
 import com.coveninja.cove.backend.content.TmdbClient
+import com.coveninja.cove.backend.content.resolveAppLocale
 import com.coveninja.cove.backend.calendar.CalendarService
 import com.coveninja.cove.backend.calendar.LocalCalendarRepository
 import com.coveninja.cove.shared.data.CalendarRepository
@@ -55,10 +56,17 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import java.nio.file.Path
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 
 /** Owns the complete in-process Kotlin backend used by the desktop app. */
 class LocalBackendRuntime private constructor(
@@ -129,13 +137,28 @@ class LocalBackendRuntime private constructor(
             }
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             try {
-                // TODO: Wire locale setting in there
+                val systemLocale = MutableStateFlow(Locale.getDefault().toLanguageTag())
+                val localeProvider = {
+                    val profileOverride = (stores.settings.settings.value as? SettingsState.Ready)
+                        ?.settings
+                        ?.uiLanguage
+                        .orEmpty()
+                    resolveAppLocale(profileOverride, systemLocale.value)
+                }
+                val localeChanges = combine(stores.settings.settings, systemLocale) { _, _ ->
+                    localeProvider()
+                }.distinctUntilChanged()
                 val catalog = TmdbClient(
                     httpClient = client,
                     apiKey = tmdbApiKey,
-                    localeProvider = { "en" },
+                    localeProvider = localeProvider,
                 )
-                val content = LocalContentRepository(catalog, scope)
+                val content = LocalContentRepository(
+                    catalog = catalog,
+                    scope = scope,
+                    localeChanges = localeChanges,
+                    initialLocale = localeProvider(),
+                )
                 val activity = ActivityService(stores.databaseHandle, stores.profileSession)
                 val calendar = CalendarService(stores.databaseHandle, stores.profileSession, catalog)
                 val discovery = DiscoveryService(
@@ -280,11 +303,17 @@ class LocalBackendRuntime private constructor(
                     database = stores.databaseHandle,
                     session = stores.profileSession,
                     library = stores.library,
+                    localeProvider = localeProvider,
                 )
                 // In-process like the calendar, not over loopback like playback: discovery
                 // has no per-request registry living behind a route, and the HTTP host is
                 // optional here.
-                val discoveryRepository = LocalDiscoveryRepository(catalog, discovery)
+                val discoveryRepository = LocalDiscoveryRepository(catalog, discovery, localeProvider)
+                scope.launch {
+                    localeChanges.drop(1).collectLatest {
+                        calendarRepository.refresh(force = true)
+                    }
+                }
                 // Without Supabase credentials there is no account to sign in to,
                 // and the settings page says exactly that rather than offering a
                 // form that could not work.

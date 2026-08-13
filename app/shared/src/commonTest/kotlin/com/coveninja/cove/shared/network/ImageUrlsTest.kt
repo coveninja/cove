@@ -38,4 +38,34 @@ class ImageUrlsTest {
         val result = resolveImageUrl("http://127.0.0.1:6969", "/logo.png", "original")
         assertEquals("http://127.0.0.1:6969/api/img/original/logo.png", result)
     }
+
+    @Test
+    fun `legacy loopback image becomes direct CDN image`() {
+        assertEquals(
+            "https://image.tmdb.org/t/p/w185/abc.jpg",
+            resolveTmdbImageUrl("http://127.0.0.1:6969/api/img/w500/abc.jpg", "w185"),
+        )
+        assertEquals(
+            "https://image.tmdb.org/t/p/w780/nested/abc.jpg",
+            resolveTmdbImageUrl("http://localhost:6969/api/v1/img/w500/nested/abc.jpg", "w780"),
+        )
+    }
+
+    @Test
+    fun `raw and existing TMDB images use requested size`() {
+        assertEquals(
+            "https://image.tmdb.org/t/p/w185/abc.jpg",
+            resolveTmdbImageUrl("/abc.jpg", "w185"),
+        )
+        assertEquals(
+            "https://image.tmdb.org/t/p/original/abc.jpg",
+            resolveTmdbImageUrl("https://image.tmdb.org/t/p/w500/abc.jpg", "original"),
+        )
+    }
+
+    @Test
+    fun `unrelated absolute image remains unchanged`() {
+        val youtube = "https://img.youtube.com/vi/example/hqdefault.jpg"
+        assertEquals(youtube, resolveTmdbImageUrl(youtube, "w185"))
+    }
 }

@@ -73,7 +73,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.components.common.DetailFact
 import com.coveninja.cove.ui.components.common.DetailFactData
 import com.coveninja.cove.ui.components.common.DetailsBadge
@@ -280,7 +280,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                                 translationY = -detailsScrollState.value.toFloat()
                             },
                     ) {
-                        AsyncImage(
+                        CoveAsyncImage(
                             model = tmdbImageSize(
                                 currentMedia.backdropUrl,
                                 "w1280",
@@ -584,7 +584,7 @@ private fun MediaDetailsHeroContent(
                 ),
         ) {
             if (media.logoUrl != null) {
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(
                         media.logoUrl,
                         "w500",

@@ -3,6 +3,7 @@ package com.coveninja.cove.ui.model
 import com.coveninja.cove.shared.data.ContentDetails
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.TvEpisode
+import com.coveninja.cove.shared.network.resolveTmdbImageUrl
 import com.coveninja.cove.shared.model.Media as DomainMedia
 import com.coveninja.cove.shared.model.MediaType as DomainMediaType
 
@@ -300,18 +301,12 @@ fun MediaType?.toDomainType(): DomainMediaType? = when (this) {
     null -> null
 }
 
-fun displayImageUrl(path: String?, size: String): String? {
-    val value = path?.takeIf { it.isNotBlank() } ?: return null
-    if (value.startsWith("http://") || value.startsWith("https://")) return value
-    return "https://image.tmdb.org/t/p/$size$value"
-}
+fun displayImageUrl(path: String?, size: String): String? = resolveTmdbImageUrl(path, size)
 
-fun tmdbImageSize(url: String?, size: String): String? = url
-    ?.replace(Regex("/t/p/[^/]+/"), "/t/p/$size/")
-    ?.replace(Regex("/api/img/[^/]+/"), "/api/img/$size/")
+fun tmdbImageSize(url: String?, size: String): String? = resolveTmdbImageUrl(url, size)
 
 private fun com.coveninja.cove.shared.model.MediaImage.displayUrl(size: String): String? =
-    url.takeIf { it.isNotBlank() } ?: displayImageUrl(filePath, size)
+    displayImageUrl(url.takeIf { it.isNotBlank() } ?: filePath, size)
 
 /**
  * The page a video plays on. Preferred over the embed URL the backend fills in,

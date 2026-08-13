@@ -43,7 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
+import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
@@ -202,7 +202,7 @@ private fun SearchResultRow(
                 .background(colors.surfaceContainerHigh),
         ) {
             media.posterUrl?.let { poster ->
-                AsyncImage(
+                CoveAsyncImage(
                     model = tmdbImageSize(poster, "w185"),
                     contentDescription = "${media.displayTitle()} poster",
                     modifier = Modifier.fillMaxSize(),

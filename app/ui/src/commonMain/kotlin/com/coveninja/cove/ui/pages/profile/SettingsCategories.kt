@@ -83,11 +83,12 @@ enum class SettingsCategory(
     ),
 }
 
-private val LANGUAGES = listOf(
+private val INTERFACE_LANGUAGES = listOf(
     "en" to "English",
     "es" to "Español",
-    "fr" to "Français",
+    "it" to "Italiano",
     "de" to "Deutsch",
+    "pt" to "Português (Brasil)",
     "tr" to "Türkçe",
     "ja" to "日本語",
 )
@@ -97,7 +98,17 @@ private val LANGUAGES = listOf(
  * TMDB original language rather than pinned to one code. It leads the list
  * because it is the option most people actually want.
  */
-private val SPOKEN_LANGUAGES = listOf(AUDIO_LANGUAGE_ORIGINAL to "Original") + LANGUAGES
+private val SPOKEN_LANGUAGES = listOf(
+    AUDIO_LANGUAGE_ORIGINAL to "Original",
+    "en" to "English",
+    "es" to "Español",
+    "fr" to "Français",
+    "it" to "Italiano",
+    "de" to "Deutsch",
+    "pt" to "Português (Brasil)",
+    "tr" to "Türkçe",
+    "ja" to "日本語",
+)
 
 /**
  * Renders one category.
@@ -422,8 +433,8 @@ fun SettingsCategoryContent(
                         {
                             SettingChoice(
                                 title = "Interface language",
-                                description = "System follows your desktop's language.",
-                                options = listOf("" to "System") + LANGUAGES,
+                                description = "System follows this device's language.",
+                                options = listOf("" to "System") + INTERFACE_LANGUAGES,
                                 selected = settings.uiLanguage,
                                 onSelect = { editor.edit { copy(uiLanguage = it) } },
                             )

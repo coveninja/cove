@@ -540,10 +540,20 @@ class PlaybackSession(
                         episode = current.episode,
                     )
                     if (token == generation) {
+                        val unnamedByLanguage = mutableMapOf<String, Int>()
                         external.take(MAX_EXTERNAL_SUBTITLES).forEach { subtitle ->
+                            val title = subtitle.displayName ?: run {
+                                val language = subtitle.lang
+                                    .trim()
+                                    .substringBefore('-')
+                                    .lowercase()
+                                val ordinal = unnamedByLanguage.getOrDefault(language, 0) + 1
+                                unnamedByLanguage[language] = ordinal
+                                "Subtitle $ordinal"
+                            }
                             player.addSubtitle(
                                 url = subtitle.url,
-                                title = subtitle.displayName,
+                                title = title,
                                 language = subtitle.lang,
                             )
                         }
