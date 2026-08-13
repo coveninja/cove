@@ -19,4 +19,4 @@ SELECT profile_id, url, addon_id, manifest_json, kind, 'stremio', enabled,
 FROM addons_v4;
 DROP TABLE addons_v4;
 
-PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys = 1;

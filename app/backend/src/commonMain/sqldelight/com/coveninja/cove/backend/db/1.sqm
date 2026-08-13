@@ -34,4 +34,4 @@ INSERT OR REPLACE INTO legacy_payloads(profile_id, kind, json, updated_at)
 SELECT COALESCE(profile_id, ''), kind, json, updated_at FROM legacy_payloads_v1;
 DROP TABLE legacy_payloads_v1;
 
-PRAGMA foreign_keys = ON;
+PRAGMA foreign_keys = 1;

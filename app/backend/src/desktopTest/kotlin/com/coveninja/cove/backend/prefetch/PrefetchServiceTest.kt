@@ -22,10 +22,6 @@ import io.ktor.serialization.kotlinx.json.json
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 
 class PrefetchServiceTest {
@@ -56,7 +52,7 @@ class PrefetchServiceTest {
             val session = ActiveProfileSession(store.database)
             var id = 0
             val now = { "2026-08-08T12:00:00Z" }
-            val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+            val scope = backgroundScope
             val library = LocalLibraryRepository(store.database, session, scope, { "id-${++id}" }, now)
             val settings = LocalSettingsRepository(store.database, session, scope, now) { "token" }
             val catalog = TmdbClient(http, "key", baseUrl = "https://tmdb.test/3")
@@ -77,8 +73,6 @@ class PrefetchServiceTest {
             assertEquals(1, streamRequests)
             assertEquals(1, addons.streams(MediaType.Movie, "tt42").size)
             assertEquals(1, streamRequests)
-
-            scope.cancel()
         }
         http.close()
     }

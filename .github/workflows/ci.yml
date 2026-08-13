@@ -57,7 +57,16 @@ jobs:
             "platforms;android-36" "build-tools;36.0.0"
       - name: Build and test
         working-directory: app
-        run: ./gradlew build test :mobile:lintDebug :mobile:assembleDebug --no-daemon
+        run: >-
+          ./gradlew
+          :shared:build
+          :backend:build
+          :ui:build
+          :desktop:build
+          :mobile:testDebugUnitTest
+          :mobile:lintDebug
+          :mobile:assembleDebug
+          --no-daemon
 
   android-smoke:
     name: Android phone launch smoke test
