@@ -52,6 +52,7 @@ import com.coveninja.cove.ui.components.common.CoveTooltip
 import com.coveninja.cove.ui.components.common.TooltipSide
 import com.coveninja.cove.ui.components.menu.CMenuItem
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
@@ -359,6 +360,11 @@ fun StaggeredAppear(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    if (LocalMotionPolicy.current.reducedMotion) {
+        Box(modifier = modifier) { content() }
+        return
+    }
+
     val progress = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {

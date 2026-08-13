@@ -101,6 +101,8 @@ fun HomePage(
     LaunchedEffect(initialContentReady) {
         if (initialContentReady) {
             withFrameNanos { }
+            withFrameNanos { }
+            withFrameNanos { }
             controller.loadPersonal()
         }
     }

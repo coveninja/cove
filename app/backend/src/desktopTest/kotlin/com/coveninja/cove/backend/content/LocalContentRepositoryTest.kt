@@ -15,6 +15,7 @@ import com.coveninja.cove.shared.network.SearchResultsDto
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
@@ -50,18 +51,63 @@ class LocalContentRepositoryTest {
             assertIs<HomeState.Ready>(repository.home.value).items.map(Media::displayTitle),
         )
     }
+
+    @Test
+    fun `artwork fetches images without loading full details`() = runTest {
+        val locale = MutableStateFlow("en")
+        val catalog = FakeCatalog(locale)
+        val repository = LocalContentRepository(
+            catalog = catalog,
+            scope = backgroundScope,
+            localeChanges = locale,
+            initialLocale = locale.value,
+        )
+        val media = Media(id = 42, title = "Hero", mediaType = MediaType.Movie)
+
+        val artwork = repository.artwork(media)
+
+        assertSame(media, artwork.media)
+        assertEquals(1, catalog.imageCalls)
+        assertEquals(0, catalog.detailCalls)
+        assertEquals(0, catalog.videoCalls)
+        assertEquals(0, catalog.similarCalls)
+    }
 }
 
 private class FakeCatalog(private val locale: MutableStateFlow<String>) : MediaCatalog {
+    var detailCalls = 0
+        private set
+    var imageCalls = 0
+        private set
+    var videoCalls = 0
+        private set
+    var similarCalls = 0
+        private set
+
     override suspend fun discover(type: MediaType, limit: Int): List<Media> =
         listOf(item(type))
 
     override suspend fun searchMulti(query: String) = SearchResultsDto()
     override suspend fun media(id: Int, type: MediaType): Media = item(type).copy(id = id)
-    override suspend fun details(id: Int, type: MediaType) = MediaDetails()
-    override suspend fun images(id: Int, type: MediaType) = MediaImages()
-    override suspend fun videos(id: Int, type: MediaType) = MediaVideos()
-    override suspend fun similar(id: Int, type: MediaType): List<Media> = emptyList()
+    override suspend fun details(id: Int, type: MediaType): MediaDetails {
+        detailCalls += 1
+        return MediaDetails()
+    }
+
+    override suspend fun images(id: Int, type: MediaType): MediaImages {
+        imageCalls += 1
+        return MediaImages()
+    }
+
+    override suspend fun videos(id: Int, type: MediaType): MediaVideos {
+        videoCalls += 1
+        return MediaVideos()
+    }
+
+    override suspend fun similar(id: Int, type: MediaType): List<Media> {
+        similarCalls += 1
+        return emptyList()
+    }
     override suspend fun seasons(id: Int): List<TvSeason> = emptyList()
     override suspend fun episodes(id: Int, season: Int): List<TvEpisode> = emptyList()
     override suspend fun imdbId(id: Int, type: MediaType) = "tt$id"

@@ -58,6 +58,7 @@ import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.pages.common.StaggeredAppear
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlinx.datetime.LocalDate
 import kotlin.math.roundToInt
 
@@ -78,6 +79,7 @@ fun MyListGrid(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     LazyVerticalGrid(
         columns = GridCells.Adaptive(150.dp),
         state = state,
@@ -98,7 +100,7 @@ fun MyListGrid(
             contentType = { _, _ -> "my-list-grid-item" },
         ) { index, row ->
             // animateItem is what makes sorting and filtering reflow instead of snapping.
-            Box(modifier = Modifier.animateItem()) {
+            Box(modifier = if (reducedMotion) Modifier else Modifier.animateItem()) {
                 StaggeredAppear(index = index) {
                     Box {
                         mediaCard(row.media, Modifier.fillMaxWidth())
@@ -126,6 +128,7 @@ fun MyListRows(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     LazyColumn(
         state = state,
         modifier = modifier.fillMaxSize(),
@@ -141,7 +144,7 @@ fun MyListRows(
             key = { it.id },
             contentType = { "my-list-row" },
         ) { row ->
-            Box(modifier = Modifier.animateItem()) {
+            Box(modifier = if (reducedMotion) Modifier else Modifier.animateItem()) {
                 MyListDetailRow(
                     row = row,
                     today = today,
@@ -357,4 +360,3 @@ private fun SelectionLayer(
 
 /** Cards are 2:3; the overlay has to be too, or it would cover the gap below them. */
 private fun Modifier.matchCardBounds(): Modifier = fillMaxWidth().aspectRatio(2f / 3f)
-

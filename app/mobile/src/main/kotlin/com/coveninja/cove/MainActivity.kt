@@ -48,12 +48,17 @@ class MainActivity : ComponentActivity() {
         val mobileApplication = application as CoveMobileApplication
         val fixtureMode = BuildConfig.BENCHMARK_FIXTURE &&
             intent.getBooleanExtra(BENCHMARK_FIXTURE_EXTRA, false)
+        val fixtureLowPerformance = fixtureMode &&
+            intent.getBooleanExtra(BENCHMARK_LOW_PERFORMANCE_EXTRA, false)
         if (!fixtureMode) mobileApplication.initializeBackend()
         setContent {
             CoveTheme {
                 if (fixtureMode) {
                     val graph = remember { FixtureAppGraph() }
-                    LaunchedEffect(Unit) { reportFullyDrawn() }
+                    LaunchedEffect(fixtureLowPerformance) {
+                        graph.device.setLowPerformanceMode(fixtureLowPerformance)
+                        reportFullyDrawn()
+                    }
                     CoveApp(
                         graph = graph,
                         navBarPlacement = NavBarPlacement.Bottom,
@@ -155,5 +160,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val BENCHMARK_FIXTURE_EXTRA = "com.coveninja.cove.BENCHMARK_FIXTURE"
+        const val BENCHMARK_LOW_PERFORMANCE_EXTRA =
+            "com.coveninja.cove.BENCHMARK_LOW_PERFORMANCE"
     }
 }

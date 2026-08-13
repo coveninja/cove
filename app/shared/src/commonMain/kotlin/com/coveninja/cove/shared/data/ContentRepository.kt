@@ -45,6 +45,12 @@ data class ContentDetails(
     val similar: List<Media>,
 )
 
+/** Artwork-only enrichment for large heroes; avoids paying for cast, videos, and similar. */
+data class ContentArtwork(
+    val media: Media,
+    val images: MediaImages,
+)
+
 interface ContentRepository {
     /** Effective metadata locale after resolving a blank profile override against the host. */
     val presentationLocale: StateFlow<String>
@@ -54,6 +60,9 @@ interface ContentRepository {
     suspend fun search(query: String)
     /** Fetches current-locale presentation for a title known only by its stable TMDB identity. */
     suspend fun media(id: Int, type: MediaType): Media
+    suspend fun artwork(media: Media): ContentArtwork = details(media).let { details ->
+        ContentArtwork(details.media, details.images)
+    }
     suspend fun details(media: Media): ContentDetails
     suspend fun person(id: Int): PersonDetails
     suspend fun episodes(id: Int, season: Int): List<TvEpisode>

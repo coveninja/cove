@@ -91,6 +91,7 @@ import com.coveninja.cove.ui.model.knownForOf
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.model.yearOf
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.datetime.TimeZone
@@ -128,6 +129,7 @@ fun SharedTransitionScope.PersonDetailsSharedOverlay(
         exit = ExitTransition.None,
     ) {
         val currentPerson = person ?: return@AnimatedVisibility
+        val reducedMotion = LocalMotionPolicy.current.reducedMotion
         val surfaceColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
         BoxWithConstraints(
@@ -159,9 +161,11 @@ fun SharedTransitionScope.PersonDetailsSharedOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .animateEnterExit(
-                        enter = fadeIn(animationSpec = tween(durationMillis = 180)),
-                        exit = fadeOut(animationSpec = tween(durationMillis = 140)),
+                    .then(
+                        if (reducedMotion) Modifier else Modifier.animateEnterExit(
+                            enter = fadeIn(animationSpec = tween(durationMillis = 180)),
+                            exit = fadeOut(animationSpec = tween(durationMillis = 140)),
+                        ),
                     )
                     .background(
                         Color.Black.copy(alpha = 0.68f * (1f - dismissProgress * 0.62f)),
@@ -174,8 +178,10 @@ fun SharedTransitionScope.PersonDetailsSharedOverlay(
             )
 
             Surface(
-                modifier = Modifier
-                    .sharedBounds(
+                modifier = (if (reducedMotion) {
+                    Modifier
+                } else {
+                    Modifier.sharedBounds(
                         sharedContentState = rememberSharedContentState(
                             key = PersonSharedKey(
                                 personId = currentPerson.id,
@@ -192,6 +198,7 @@ fun SharedTransitionScope.PersonDetailsSharedOverlay(
                         resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
                         renderInOverlayDuringTransition = false,
                     )
+                })
                     .widthIn(max = 1100.dp)
                     .fillMaxWidth()
                     .then(
@@ -288,7 +295,7 @@ fun SharedTransitionScope.PersonDetailsSharedOverlay(
                     PersonDetailsContent(
                         person = currentPerson,
                         scrollState = detailsScrollState,
-                        portraitModifier = Modifier.sharedElement(
+                        portraitModifier = if (reducedMotion) Modifier else Modifier.sharedElement(
                             sharedContentState = rememberSharedContentState(
                                 key = PersonSharedKey(
                                     personId = currentPerson.id,

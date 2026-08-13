@@ -102,6 +102,7 @@ import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.model.toPerson
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -153,6 +154,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
         exit = ExitTransition.None,
     ) {
         val currentMedia = media ?: return@AnimatedVisibility
+        val reducedMotion = LocalMotionPolicy.current.reducedMotion
         val surfaceColor = MaterialTheme.colorScheme.surfaceContainerHigh
 
         BoxWithConstraints(
@@ -192,12 +194,10 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .animateEnterExit(
-                        enter = fadeIn(
-                            animationSpec = tween(durationMillis = 180),
-                        ),
-                        exit = fadeOut(
-                            animationSpec = tween(durationMillis = 140),
+                    .then(
+                        if (reducedMotion) Modifier else Modifier.animateEnterExit(
+                            enter = fadeIn(animationSpec = tween(durationMillis = 180)),
+                            exit = fadeOut(animationSpec = tween(durationMillis = 140)),
                         ),
                     )
                     .background(
@@ -216,8 +216,10 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
             )
 
             Surface(
-                modifier = Modifier
-                    .sharedBounds(
+                modifier = (if (reducedMotion) {
+                    Modifier
+                } else {
+                    Modifier.sharedBounds(
                         sharedContentState = rememberSharedContentState(
                             key = MediaSharedKey(
                                 mediaId = currentMedia.id,
@@ -236,6 +238,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
 
                         renderInOverlayDuringTransition = false,
                     )
+                })
                     .widthIn(max = 1100.dp)
                     .fillMaxWidth()
                     .then(
@@ -345,7 +348,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                     val castCard: @Composable (Person, () -> Unit) -> Unit = { person, onClick ->
                         PersonCard(
                             person = person,
-                            modifier = Modifier.sharedBounds(
+                            modifier = if (reducedMotion) Modifier else Modifier.sharedBounds(
                                 sharedContentState = rememberSharedContentState(
                                     key = PersonSharedKey(person.id, PersonSharedPart.Container),
                                 ),
@@ -359,7 +362,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                                 resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
                                 renderInOverlayDuringTransition = false,
                             ),
-                            avatarModifier = Modifier.sharedElement(
+                            avatarModifier = if (reducedMotion) Modifier else Modifier.sharedElement(
                                 sharedContentState = rememberSharedContentState(
                                     key = PersonSharedKey(person.id, PersonSharedPart.Portrait),
                                 ),

@@ -43,6 +43,7 @@ import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.pages.common.StaggeredAppear
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 
@@ -67,6 +68,7 @@ fun ExploreGrid(
     contentPadding: PaddingValues? = null,
     header: (@Composable () -> Unit)? = null,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val resolvedContentPadding = contentPadding ?: PaddingValues(
         start = PageLayoutDefaults.HorizontalPadding,
         end = PageLayoutDefaults.HorizontalPadding,
@@ -96,12 +98,16 @@ fun ExploreGrid(
                 index = index,
                 // On the item root, not on the card: placement animation is a property of
                 // the lazy item, and nesting it a level down silently does nothing.
-                modifier = Modifier.animateItem(
-                    placementSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                ),
+                modifier = if (reducedMotion) {
+                    Modifier
+                } else {
+                    Modifier.animateItem(
+                        placementSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    )
+                },
             ) {
                 mediaCard(item, Modifier.fillMaxWidth())
             }

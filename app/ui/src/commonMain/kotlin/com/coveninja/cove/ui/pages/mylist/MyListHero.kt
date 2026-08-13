@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.tmdbImageSize
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.platform.hasPointerHover
 import kotlin.math.roundToInt
 
@@ -69,6 +70,7 @@ fun MyListHero(
     onResume: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val shape = RoundedCornerShape(20.dp)
 
     Box(
@@ -83,21 +85,29 @@ fun MyListHero(
         // here, and a cut makes the whole page look like it reloaded.
         AnimatedContent(
             targetState = row.media.backdropUrl ?: row.media.posterUrl,
-            transitionSpec = { fadeIn(tween(320)) togetherWith fadeOut(tween(320)) },
+            transitionSpec = {
+                val duration = if (reducedMotion) 0 else 320
+                fadeIn(tween(duration)) togetherWith fadeOut(tween(duration))
+            },
             label = "MyListHeroBackdrop",
         ) { image ->
             // A slow drift keeps a still frame from reading as a broken image while the
             // rest of the page animates around it.
-            val drift = rememberInfiniteTransition(label = "MyListHeroDrift")
-            val scale by drift.animateFloat(
-                initialValue = 1f,
-                targetValue = 1.06f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(durationMillis = 22_000, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse,
-                ),
-                label = "MyListHeroScale",
-            )
+            val scale = if (reducedMotion) {
+                1f
+            } else {
+                val drift = rememberInfiniteTransition(label = "MyListHeroDrift")
+                val animatedScale by drift.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 1.06f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 22_000, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "MyListHeroScale",
+                )
+                animatedScale
+            }
 
             CoveAsyncImage(
                 model = tmdbImageSize(image, "w1280"),

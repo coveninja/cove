@@ -29,6 +29,11 @@ class BaselineProfileGenerator {
     ) {
         pressHome()
         startFixtureActivity()
-        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).openExploreAndScroll()
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).apply {
+            openDetailsAndReturn()
+            scrollCurrentPage()
+            openExploreAndScroll()
+            navigatePrimaryTabs()
+        }
     }
 }

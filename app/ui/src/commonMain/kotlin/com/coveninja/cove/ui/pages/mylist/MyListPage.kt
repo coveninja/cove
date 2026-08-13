@@ -55,6 +55,7 @@ import com.coveninja.cove.ui.pages.mylist.calendar.rememberCalendarSections
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.MediaActions
 import com.coveninja.cove.ui.state.MediaCatalog
 import com.coveninja.cove.ui.state.WatchProgressIndex
@@ -134,6 +135,7 @@ private fun MyListReady(
     onPlayEpisode: (Media, Int, Int, String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     var view by remember { mutableStateOf(MyListView.Library) }
     // Owned here rather than inside the calendar so a trip to the Library tab does not
     // silently unfold everything the viewer collapsed.
@@ -185,10 +187,13 @@ private fun MyListReady(
             modifier = Modifier.fillMaxSize(),
             transitionSpec = {
                 val forward = targetState.ordinal > initialState.ordinal
-                val enter = fadeIn(tween(200)) + slideInHorizontally(tween(240)) {
+                val enterDuration = if (reducedMotion) 0 else 200
+                val movementDuration = if (reducedMotion) 0 else 240
+                val exitDuration = if (reducedMotion) 0 else 140
+                val enter = fadeIn(tween(enterDuration)) + slideInHorizontally(tween(movementDuration)) {
                     if (forward) it / 8 else -it / 8
                 }
-                val exit = fadeOut(tween(140)) + slideOutHorizontally(tween(200)) {
+                val exit = fadeOut(tween(exitDuration)) + slideOutHorizontally(tween(enterDuration)) {
                     if (forward) -it / 8 else it / 8
                 }
                 enter togetherWith exit

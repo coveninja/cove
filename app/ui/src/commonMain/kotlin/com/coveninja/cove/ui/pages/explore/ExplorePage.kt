@@ -49,6 +49,7 @@ import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.rememberMediaActions
 import kotlin.random.Random
 import kotlinx.coroutines.launch
@@ -76,6 +77,7 @@ fun ExplorePage(
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val controller = rememberExploreController(graph.discovery)
     val actions = rememberMediaActions(index)
 
@@ -152,10 +154,13 @@ fun ExplorePage(
             modifier = Modifier.fillMaxSize(),
             transitionSpec = {
                 val forward = targetState.ordinal > initialState.ordinal
-                val enter = fadeIn(tween(200)) + slideInHorizontally(tween(240)) {
+                val enterDuration = if (reducedMotion) 0 else 200
+                val movementDuration = if (reducedMotion) 0 else 240
+                val exitDuration = if (reducedMotion) 0 else 140
+                val enter = fadeIn(tween(enterDuration)) + slideInHorizontally(tween(movementDuration)) {
                     if (forward) it / 10 else -it / 10
                 }
-                val exit = fadeOut(tween(140)) + slideOutHorizontally(tween(200)) {
+                val exit = fadeOut(tween(exitDuration)) + slideOutHorizontally(tween(enterDuration)) {
                     if (forward) -it / 10 else it / 10
                 }
                 enter togetherWith exit

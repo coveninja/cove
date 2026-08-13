@@ -9,6 +9,7 @@ import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -41,6 +42,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.AppGraph
+import com.coveninja.cove.shared.data.ExploreState
+import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.media.card.MediaCard
 import com.coveninja.cove.ui.components.media.details.MediaDetailsSharedOverlay
@@ -70,7 +74,9 @@ import com.coveninja.cove.ui.pages.search.SearchPage
 import com.coveninja.cove.ui.state.FullscreenController
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalFullscreenController
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
+import com.coveninja.cove.ui.state.MotionPolicy
 import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberDragSession
@@ -105,6 +111,7 @@ private fun SharedTransitionScope.SharedMediaCard(
     onDragCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     Box(modifier = modifier.aspectRatio(2f / 3f)) {
         AnimatedVisibility(
             visible = selectedMedia?.id != media.id,
@@ -115,8 +122,10 @@ private fun SharedTransitionScope.SharedMediaCard(
             with(this@SharedMediaCard) {
                 MediaCard(
                     media = media,
-                    modifier = Modifier
-                        .sharedBounds(
+                    modifier = (if (reducedMotion) {
+                        Modifier
+                    } else {
+                        Modifier.sharedBounds(
                             sharedContentState = rememberSharedContentState(
                                 MediaSharedKey(media.id, MediaSharedPart.Container),
                             ),
@@ -130,20 +139,25 @@ private fun SharedTransitionScope.SharedMediaCard(
                             resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
                             renderInOverlayDuringTransition = false,
                         )
+                    })
                         .fillMaxSize(),
-                    posterModifier = Modifier.sharedElement(
-                        sharedContentState = rememberSharedContentState(
-                            MediaSharedKey(media.id, MediaSharedPart.Poster),
-                        ),
-                        animatedVisibilityScope = this@AnimatedVisibility,
-                        boundsTransform = { _, _ ->
-                            spring(
-                                dampingRatio = 0.82f,
-                                stiffness = Spring.StiffnessMediumLow,
-                            )
-                        },
-                        renderInOverlayDuringTransition = false,
-                    ),
+                    posterModifier = if (reducedMotion) {
+                        Modifier
+                    } else {
+                        Modifier.sharedElement(
+                            sharedContentState = rememberSharedContentState(
+                                MediaSharedKey(media.id, MediaSharedPart.Poster),
+                            ),
+                            animatedVisibilityScope = this@AnimatedVisibility,
+                            boundsTransform = { _, _ ->
+                                spring(
+                                    dampingRatio = 0.82f,
+                                    stiffness = Spring.StiffnessMediumLow,
+                                )
+                            },
+                            renderInOverlayDuringTransition = false,
+                        )
+                    },
                     myListCategory = listCategory,
                     isWatched = listCategory == MyListCategory.Finished,
                     watchFraction = watchFraction,
@@ -181,9 +195,13 @@ fun CoveApp(
     // and keep-awake state. Desktop does not need a window callback here.
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
 ) {
+    val performance by graph.device.performance.collectAsState()
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         CompositionLocalProvider(
             LocalAppGraph provides graph,
+            LocalMotionPolicy provides MotionPolicy(
+                reducedMotion = performance.lowPerformanceMode,
+            ),
             LocalVideoPlayerHost provides videoPlayerHost,
             LocalFullscreenController provides fullscreenController,
             LocalPageHorizontalPadding provides if (navBarPlacement == NavBarPlacement.Bottom) {
@@ -221,10 +239,22 @@ private fun CoveAppContent(
     val searchState by graph.content.searchResults.collectAsState()
     val presentationLocale by graph.content.presentationLocale.collectAsState()
     val index = rememberLibraryIndex(libraryState)
+    val knownPresentationItems = remember(homeState, exploreState, searchState) {
+        buildList {
+            addAll((homeState as? HomeState.Ready)?.items.orEmpty())
+            (exploreState as? ExploreState.Ready)?.let { state ->
+                addAll(state.movies)
+                addAll(state.tv)
+            }
+            addAll((searchState as? SearchState.Ready)?.results.orEmpty())
+        }.distinctBy { item -> item.mediaType to item.id }
+    }
     val localizedLibraryItems = rememberLocalizedLibraryMedia(
         entries = index.entries,
         content = graph.content,
         localeKey = presentationLocale,
+        initialContentReady = homeState !is HomeState.Loading,
+        knownItems = knownPresentationItems,
     )
     val catalog = rememberMediaCatalog(
         homeState,
@@ -242,6 +272,7 @@ private fun CoveAppContent(
     val videoPlayerHost = LocalVideoPlayerHost.current
     val uriHandler = LocalUriHandler.current
     val pageViewport = LocalPageViewport.current
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
 
     val currentOverlayVisibilityCallback = rememberUpdatedState(
         onDetailsOverlayVisibilityChanged,
@@ -292,7 +323,7 @@ private fun CoveAppContent(
 
     val underlyingNavAlpha by animateFloatAsState(
         targetValue = if (detailsState.selected == null && personState.selected == null) 1f else 0f,
-        animationSpec = tween(120),
+        animationSpec = if (reducedMotion) snap() else tween(120),
         label = "UnderlyingNavVisibility",
     )
 

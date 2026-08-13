@@ -49,6 +49,7 @@ import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.StaggeredAppear
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 
 /**
  * The two ways the rest of the results are drawn.
@@ -70,6 +71,7 @@ fun SearchResultGrid(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     LazyVerticalGrid(
         columns = GridCells.Adaptive(150.dp),
         state = state,
@@ -96,12 +98,16 @@ fun SearchResultGrid(
                 index = index,
                 // On the item root rather than on the card: placement animation is a property
                 // of the lazy item, and nesting it a level down silently does nothing.
-                modifier = Modifier.animateItem(
-                    placementSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                ),
+                modifier = if (reducedMotion) {
+                    Modifier
+                } else {
+                    Modifier.animateItem(
+                        placementSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    )
+                },
             ) {
                 mediaCard(item, Modifier.fillMaxWidth())
             }
@@ -120,6 +126,7 @@ fun SearchResultList(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     LazyColumn(
         state = state,
         modifier = modifier.fillMaxWidth(),
@@ -142,12 +149,16 @@ fun SearchResultList(
         ) { index, item ->
             StaggeredAppear(
                 index = index,
-                modifier = Modifier.animateItem(
-                    placementSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                ),
+                modifier = if (reducedMotion) {
+                    Modifier
+                } else {
+                    Modifier.animateItem(
+                        placementSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    )
+                },
             ) {
                 SearchResultRow(
                     media = item,

@@ -905,8 +905,18 @@ private class FixtureTraktRepository : TraktRepository {
 private class FixtureDeviceRepository : DeviceRepository {
     override val available: Boolean = true
     override val appVersion: String = "fixtures"
+    private val _performance = MutableStateFlow(DevicePerformanceState())
+    override val performance: StateFlow<DevicePerformanceState> = _performance
 
     private var config = "# mpv configuration\nhwdec=auto-copy\n"
+
+    override suspend fun setLowPerformanceMode(enabled: Boolean) {
+        _performance.value = _performance.value.copy(lowPerformanceMode = enabled)
+    }
+
+    override suspend fun dismissLowPerformanceRecommendation() {
+        _performance.value = _performance.value.copy(recommendationDismissed = true)
+    }
 
     override suspend fun readMpvConfig(): String = config
 

@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.content
 
 import com.coveninja.cove.shared.data.ContentDetails
+import com.coveninja.cove.shared.data.ContentArtwork
 import com.coveninja.cove.shared.data.ContentRepository
 import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
@@ -86,6 +87,11 @@ class LocalContentRepository(
     }
 
     override suspend fun media(id: Int, type: MediaType): Media = catalog.media(id, type)
+
+    override suspend fun artwork(media: Media): ContentArtwork {
+        val type = requireNotNull(media.mediaType) { "Media type is required to load artwork" }
+        return ContentArtwork(media, catalog.images(media.id, type))
+    }
 
     override suspend fun details(media: Media): ContentDetails = coroutineScope {
         val type = requireNotNull(media.mediaType) { "Media type is required to load details" }

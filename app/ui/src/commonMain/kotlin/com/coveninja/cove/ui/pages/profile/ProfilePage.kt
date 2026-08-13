@@ -64,6 +64,7 @@ import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.platform.PlatformBackHandler
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.rememberSettingsEditor
 import kotlinx.coroutines.launch
 
@@ -95,6 +96,7 @@ fun ProfilePage(
     onNavigateBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     var tab by remember { mutableStateOf(ProfileTab.Settings) }
     // Hoisted above the tab AnimatedContent: that lambda disposes the state it
     // owns once a transition ends, so keeping this inside would quietly send you
@@ -152,9 +154,13 @@ fun ProfilePage(
             AnimatedContent(
                 targetState = tab,
                 transitionSpec = {
-                    (fadeIn(tween(200, delayMillis = 40)) +
-                        slideInVertically(tween(260, delayMillis = 40)) { it / 24 })
-                        .togetherWith(fadeOut(tween(120)))
+                    val enterDuration = if (reducedMotion) 0 else 200
+                    val movementDuration = if (reducedMotion) 0 else 260
+                    val exitDuration = if (reducedMotion) 0 else 120
+                    val delay = if (reducedMotion) 0 else 40
+                    (fadeIn(tween(enterDuration, delayMillis = delay)) +
+                        slideInVertically(tween(movementDuration, delayMillis = delay)) { it / 24 })
+                        .togetherWith(fadeOut(tween(exitDuration)))
                         .using(SizeTransform(clip = false))
                 },
                 label = "ProfileTab",
@@ -187,6 +193,7 @@ private fun SettingsTab(
     modifier: Modifier = Modifier,
 ) {
     val graph = LocalAppGraph.current
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val settingsState by graph.settings.settings.collectAsState()
 
     BoxWithConstraints(modifier = modifier) {
@@ -251,9 +258,15 @@ private fun SettingsTab(
                     AnimatedContent(
                         targetState = category,
                         transitionSpec = {
-                            (fadeIn(tween(200, delayMillis = 40)) +
-                                slideInVertically(tween(260, delayMillis = 40)) { it / 22 })
-                                .togetherWith(fadeOut(tween(120)))
+                            val enterDuration = if (reducedMotion) 0 else 200
+                            val movementDuration = if (reducedMotion) 0 else 260
+                            val exitDuration = if (reducedMotion) 0 else 120
+                            val delay = if (reducedMotion) 0 else 40
+                            (fadeIn(tween(enterDuration, delayMillis = delay)) +
+                                slideInVertically(
+                                    tween(movementDuration, delayMillis = delay),
+                                ) { it / 22 })
+                                .togetherWith(fadeOut(tween(exitDuration)))
                                 .using(SizeTransform(clip = false))
                         },
                         label = "SettingsPane",
@@ -276,12 +289,16 @@ private fun SettingsTab(
                 // without reading anything.
                 transitionSpec = {
                     val forward = targetState != null
-                    val enter = slideInHorizontally(tween(260)) { full ->
+                    val enterDuration = if (reducedMotion) 0 else 260
+                    val exitDuration = if (reducedMotion) 0 else 200
+                    val enterFadeDuration = if (reducedMotion) 0 else 180
+                    val exitFadeDuration = if (reducedMotion) 0 else 140
+                    val enter = slideInHorizontally(tween(enterDuration)) { full ->
                         if (forward) full / 5 else -full / 5
-                    } + fadeIn(tween(180))
-                    val exit = slideOutHorizontally(tween(200)) { full ->
+                    } + fadeIn(tween(enterFadeDuration))
+                    val exit = slideOutHorizontally(tween(exitDuration)) { full ->
                         if (forward) -full / 8 else full / 8
-                    } + fadeOut(tween(140))
+                    } + fadeOut(tween(exitFadeDuration))
                     enter.togetherWith(exit).using(SizeTransform(clip = false))
                 },
                 label = "SettingsDrill",

@@ -64,6 +64,13 @@ class LiveContentRepository(
 
     override suspend fun media(id: Int, type: MediaType) = api.media(id, type)
 
+    override suspend fun artwork(media: com.coveninja.cove.shared.model.Media): ContentArtwork {
+        val type = requireNotNull(media.mediaType) {
+            "Media type is required to load artwork"
+        }
+        return ContentArtwork(media, api.images(media.id, type))
+    }
+
     override suspend fun details(media: com.coveninja.cove.shared.model.Media): ContentDetails =
         coroutineScope {
             val type = requireNotNull(media.mediaType) {

@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.model
 
 import com.coveninja.cove.shared.data.ContentDetails
+import com.coveninja.cove.shared.data.ContentArtwork
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.network.resolveTmdbImageUrl
@@ -241,6 +242,17 @@ fun ContentDetails.toUiMedia(): Media {
                 )
             },
     )
+}
+
+fun ContentArtwork.toUiMedia(): Media {
+    val base = media.toUiMedia()
+    val logo = images.logos
+        .sortedByDescending { it.language == "en" }
+        .firstOrNull()
+        ?.displayUrl("w500")
+    val backdrop = images.backdrops.firstOrNull()?.displayUrl("w1280") ?: base.backdropUrl
+    val poster = images.posters.firstOrNull()?.displayUrl("w500") ?: base.posterUrl
+    return base.copy(posterUrl = poster, logoUrl = logo, backdropUrl = backdrop)
 }
 
 fun MediaRecommendation.toMedia(): Media = Media(

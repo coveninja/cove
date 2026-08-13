@@ -16,16 +16,48 @@ class MobileScrollBenchmark {
     val rule = MacrobenchmarkRule()
 
     @Test
-    fun exploreScroll() = rule.measureRepeated(
+    fun exploreScroll() = measureExplore(lowPerformance = false)
+
+    @Test
+    fun exploreScrollLowPerformance() = measureExplore(lowPerformance = true)
+
+    @Test
+    fun homeScroll() = measureJourney(lowPerformance = false) { scrollCurrentPage() }
+
+    @Test
+    fun homeScrollLowPerformance() = measureJourney(lowPerformance = true) { scrollCurrentPage() }
+
+    @Test
+    fun detailsOpenClose() = measureJourney(lowPerformance = false) { openDetailsAndReturn() }
+
+    @Test
+    fun detailsOpenCloseLowPerformance() =
+        measureJourney(lowPerformance = true) { openDetailsAndReturn() }
+
+    @Test
+    fun primaryNavigation() = measureJourney(lowPerformance = false) { navigatePrimaryTabs() }
+
+    @Test
+    fun primaryNavigationLowPerformance() =
+        measureJourney(lowPerformance = true) { navigatePrimaryTabs() }
+
+    private fun measureExplore(lowPerformance: Boolean) = measureJourney(lowPerformance) {
+        openExploreAndScroll()
+    }
+
+    private fun measureJourney(
+        lowPerformance: Boolean,
+        journey: UiDevice.() -> Unit,
+    ) = rule.measureRepeated(
         packageName = PACKAGE_NAME,
         metrics = listOf(FrameTimingMetric()),
         compilationMode = CompilationMode.Partial(),
         iterations = 10,
         setupBlock = {
             pressHome()
-            startFixtureActivity()
+            startFixtureActivity(lowPerformance)
         },
     ) {
-        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).openExploreAndScroll()
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).journey()
     }
 }

@@ -58,6 +58,7 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
@@ -84,6 +85,7 @@ fun HomeHeroBlock(
      */
     scrollOffset: () -> Float = { 0f },
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
 
@@ -103,21 +105,32 @@ fun HomeHeroBlock(
             // better dissolved than cut.
             AnimatedContent(
                 targetState = art.backdropUrl ?: art.posterUrl,
-                transitionSpec = { fadeIn(tween(420)) togetherWith fadeOut(tween(420)) },
+                transitionSpec = {
+                    val duration = if (reducedMotion) 0 else 420
+                    fadeIn(tween(duration)) togetherWith fadeOut(tween(duration))
+                },
                 label = "HomeHeroBackdrop",
             ) { image ->
                 // A very slow push keeps a still frame from reading as a stalled image while
                 // everything around it animates.
-                val drift = rememberInfiniteTransition(label = "HomeHeroDrift")
-                val zoom by drift.animateFloat(
-                    initialValue = 1f,
-                    targetValue = 1.08f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(durationMillis = 20_000, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse,
-                    ),
-                    label = "HomeHeroZoom",
-                )
+                val zoom = if (reducedMotion) {
+                    1f
+                } else {
+                    val drift = rememberInfiniteTransition(label = "HomeHeroDrift")
+                    val animatedZoom by drift.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 1.08f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(
+                                durationMillis = 20_000,
+                                easing = FastOutSlowInEasing,
+                            ),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "HomeHeroZoom",
+                    )
+                    animatedZoom
+                }
 
                 CoveAsyncImage(
                     model = tmdbImageSize(image, "w1280"),

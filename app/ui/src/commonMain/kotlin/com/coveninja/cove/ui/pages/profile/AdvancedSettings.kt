@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,11 +42,13 @@ import kotlinx.coroutines.launch
 fun AdvancedSettings(modifier: Modifier = Modifier) {
     val device = LocalAppGraph.current.device
     val scope = rememberCoroutineScope()
+    val performance by device.performance.collectAsState()
 
     var config by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var performanceError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(device) {
         if (device.available) {
@@ -68,6 +71,89 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
                 )
             }
             return@Column
+        }
+
+        if (
+            performance.lowPerformanceRecommended &&
+            !performance.recommendationDismissed &&
+            !performance.lowPerformanceMode
+        ) {
+            SettingsCard(
+                title = "Performance suggestion",
+                iconName = "lucide:gauge",
+                description = "Android reports that this device has limited working memory.",
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "Low-performance mode reduces nonessential page, card, and " +
+                            "hero motion. Artwork, shadows, playback, and loading feedback " +
+                            "stay unchanged.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PrimaryButton(
+                            label = "Enable",
+                            onClick = {
+                                scope.launch {
+                                    val result = runCatching {
+                                        device.setLowPerformanceMode(true)
+                                        device.dismissLowPerformanceRecommendation()
+                                    }
+                                    performanceError = result.exceptionOrNull()?.message
+                                }
+                            },
+                        )
+                        SecondaryButton(
+                            label = "Not now",
+                            onClick = {
+                                scope.launch {
+                                    val result = runCatching {
+                                        device.dismissLowPerformanceRecommendation()
+                                    }
+                                    performanceError = result.exceptionOrNull()?.message
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        SettingsCard(
+            title = "Performance",
+            iconName = "lucide:gauge",
+            description = "Rendering choices for this device only. This does not sync.",
+        ) {
+            SettingToggle(
+                title = "Low-performance mode",
+                description = "Reduce nonessential page, card, and hero motion while keeping " +
+                    "loading and interaction feedback.",
+                checked = performance.lowPerformanceMode,
+                onCheckedChange = { enabled ->
+                    scope.launch {
+                        val result = runCatching {
+                            device.setLowPerformanceMode(enabled)
+                            if (enabled) device.dismissLowPerformanceRecommendation()
+                        }
+                        performanceError = result.exceptionOrNull()?.message
+                    }
+                },
+            )
+            performanceError?.let { message ->
+                Text(
+                    text = message,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
 
         SettingsCard(

@@ -65,6 +65,7 @@ import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.platform.hasPointerHover
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlin.math.roundToInt
 
 /**
@@ -93,6 +94,7 @@ fun ExploreSpotlight(
 ) {
     if (picks.isEmpty()) return
 
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     var index by remember(picks.size) { mutableStateOf(0) }
     var paused by remember { mutableStateOf(false) }
     val progress = remember { Animatable(0f) }
@@ -102,7 +104,7 @@ fun ExploreSpotlight(
     // that un-hovering carries on from where hovering stopped.
     LaunchedEffect(index) { progress.snapTo(0f) }
     LaunchedEffect(index, paused, picks.size) {
-        if (paused || picks.size <= 1) return@LaunchedEffect
+        if (reducedMotion || paused || picks.size <= 1) return@LaunchedEffect
         val remaining = ((1f - progress.value) * SPOTLIGHT_DWELL_MILLIS).roundToInt()
         if (remaining > 0) {
             progress.animateTo(1f, tween(remaining, easing = LinearEasing))
@@ -127,23 +129,34 @@ fun ExploreSpotlight(
         ) {
             AnimatedContent(
                 targetState = current.id,
-                transitionSpec = { fadeIn(tween(420)) togetherWith fadeOut(tween(420)) },
+                transitionSpec = {
+                    val duration = if (reducedMotion) 0 else 420
+                    fadeIn(tween(duration)) togetherWith fadeOut(tween(duration))
+                },
                 label = "SpotlightBackdrop",
             ) { id ->
                 val slide = picks.firstOrNull { it.id == id } ?: return@AnimatedContent
 
                 // A very slow push keeps a still frame from reading as a stalled image
                 // while everything around it animates.
-                val drift = rememberInfiniteTransition(label = "SpotlightDrift")
-                val zoom by drift.animateFloat(
-                    initialValue = 1f,
-                    targetValue = 1.08f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(durationMillis = 20_000, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse,
-                    ),
-                    label = "SpotlightZoom",
-                )
+                val zoom = if (reducedMotion) {
+                    1f
+                } else {
+                    val drift = rememberInfiniteTransition(label = "SpotlightDrift")
+                    val animatedZoom by drift.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 1.08f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(
+                                durationMillis = 20_000,
+                                easing = FastOutSlowInEasing,
+                            ),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "SpotlightZoom",
+                    )
+                    animatedZoom
+                }
 
                 CoveAsyncImage(
                     model = tmdbImageSize(slide.backdropUrl, "w1280"),
@@ -188,7 +201,11 @@ fun ExploreSpotlight(
             AnimatedContent(
                 targetState = current.id,
                 modifier = Modifier.align(Alignment.BottomStart),
-                transitionSpec = { fadeIn(tween(320)) togetherWith fadeOut(tween(220)) },
+                transitionSpec = {
+                    val enterDuration = if (reducedMotion) 0 else 320
+                    val exitDuration = if (reducedMotion) 0 else 220
+                    fadeIn(tween(enterDuration)) togetherWith fadeOut(tween(exitDuration))
+                },
                 label = "SpotlightCopy",
             ) { id ->
                 val slide = picks.firstOrNull { it.id == id } ?: return@AnimatedContent

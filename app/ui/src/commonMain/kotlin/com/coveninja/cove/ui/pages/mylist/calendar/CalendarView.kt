@@ -65,6 +65,7 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
+import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.YearMonth
 
@@ -207,6 +208,7 @@ fun CalendarAgenda(
     onPlay: (CalendarItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val reducedMotion = LocalMotionPolicy.current.reducedMotion
     if (available.isEmpty() && days.isEmpty()) {
         PageEmptyState(
             iconName = "lucide:calendar-days",
@@ -237,7 +239,7 @@ fun CalendarAgenda(
                     collapsed = collapsed,
                     accent = true,
                     onToggle = { sections.toggle(key) },
-                    modifier = Modifier.animateItem(),
+                    modifier = if (reducedMotion) Modifier else Modifier.animateItem(),
                 )
             }
             // Collapsed sections emit no rows at all rather than hiding them: a lazy list
@@ -245,7 +247,7 @@ fun CalendarAgenda(
             // the fold its exit for free.
             if (!collapsed) {
                 items(available, key = { "available-${it.id}" }) { item ->
-                    Box(modifier = Modifier.animateItem()) {
+                    Box(modifier = if (reducedMotion) Modifier else Modifier.animateItem()) {
                         CalendarRow(
                             item = item,
                             today = today,
@@ -273,12 +275,12 @@ fun CalendarAgenda(
                     },
                     collapsed = collapsed,
                     onToggle = { sections.toggle(key) },
-                    modifier = Modifier.animateItem(),
+                    modifier = if (reducedMotion) Modifier else Modifier.animateItem(),
                 )
             }
             if (!collapsed) {
                 items(day.items, key = { "${day.key}-${it.id}" }) { item ->
-                    Box(modifier = Modifier.animateItem()) {
+                    Box(modifier = if (reducedMotion) Modifier else Modifier.animateItem()) {
                         CalendarRow(
                             item = item,
                             today = today,

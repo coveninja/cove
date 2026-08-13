@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import com.coveninja.cove.shared.data.ContentRepository
 import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
@@ -19,8 +20,7 @@ import com.coveninja.cove.shared.model.Media as DomainMedia
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.yield
 
 // Cross-page content index. MyListPage upgrades thin LibraryEntry objects using
 // the fuller domain items seen in home/explore/search; the details fetch also
@@ -77,6 +77,8 @@ fun rememberLocalizedLibraryMedia(
     entries: List<LibraryEntry>,
     content: ContentRepository,
     localeKey: String,
+    initialContentReady: Boolean,
+    knownItems: List<DomainMedia> = emptyList(),
 ): List<DomainMedia> {
     val identity = remember(entries, localeKey) {
         LibraryPresentationKey(
@@ -84,23 +86,63 @@ fun rememberLocalizedLibraryMedia(
             entries.map { "${it.mediaType.wireName}:${it.tmdbId}" }.sorted(),
         )
     }
-    var localized by remember(content, identity) { mutableStateOf(emptyList<DomainMedia>()) }
-
-    LaunchedEffect(content, identity) {
-        val gate = Semaphore(LIBRARY_PRESENTATION_CONCURRENCY)
-        localized = coroutineScope {
-            entries.map { entry ->
-                async {
-                    gate.withPermit {
-                        runCatching { content.media(entry.tmdbId, entry.mediaType) }.getOrNull()
-                    }
-                }
-            }.awaitAll().filterNotNull()
+    var localizedByIdentity by remember(content) {
+        mutableStateOf<Map<LibraryPresentationIdentity, DomainMedia>>(emptyMap())
+    }
+    val wanted = remember(entries, localeKey) {
+        entries.associateBy { entry -> entry.presentationIdentity(localeKey) }
+    }
+    val knownByIdentity = remember(knownItems, localeKey) {
+        knownItems.associateBy { item ->
+            LibraryPresentationIdentity(localeKey, item.id, item.mediaType)
         }
     }
-    return localized
+
+    LaunchedEffect(content, identity, initialContentReady, knownByIdentity.keys) {
+        if (!initialContentReady) return@LaunchedEffect
+
+        // Discovery and first-viewport images get two complete frames before background
+        // presentation hydration joins the network queue.
+        withFrameNanos { }
+        withFrameNanos { }
+        yield()
+
+        val missing = wanted.filterKeys { key ->
+            key !in knownByIdentity && key !in localizedByIdentity
+        }.values.toList()
+
+        missing.chunked(LIBRARY_PRESENTATION_CONCURRENCY).forEach { batch ->
+            val resolved = coroutineScope {
+                batch.map { entry ->
+                    async {
+                        runCatching { content.media(entry.tmdbId, entry.mediaType) }
+                            .getOrNull()
+                            ?.let { entry.presentationIdentity(localeKey) to it }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            if (resolved.isNotEmpty()) localizedByIdentity += resolved
+            // Let the small in-place update settle before hydrating another pair.
+            withFrameNanos { }
+        }
+    }
+
+    return remember(wanted.keys, knownByIdentity, localizedByIdentity) {
+        wanted.keys.mapNotNull { key -> knownByIdentity[key] ?: localizedByIdentity[key] }
+    }
 }
 
 private data class LibraryPresentationKey(val locale: String, val identities: List<String>)
+private data class LibraryPresentationIdentity(
+    val locale: String,
+    val tmdbId: Int,
+    val mediaType: com.coveninja.cove.shared.model.MediaType?,
+)
 
-private const val LIBRARY_PRESENTATION_CONCURRENCY = 6
+private fun LibraryEntry.presentationIdentity(locale: String) = LibraryPresentationIdentity(
+    locale = locale,
+    tmdbId = tmdbId,
+    mediaType = mediaType,
+)
+
+private const val LIBRARY_PRESENTATION_CONCURRENCY = 2

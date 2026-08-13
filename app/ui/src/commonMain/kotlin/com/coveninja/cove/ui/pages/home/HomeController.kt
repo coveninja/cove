@@ -28,9 +28,9 @@ import com.coveninja.cove.shared.model.MediaType as DomainMediaType
  * calendar — is already in a `StateFlow` the composition collects, so it paints with no I/O
  * at all. What is left is expensive and therefore deferred:
  *
- *  - **Hero art.** One `details()` call for the single title at the top, which is the only
- *    way to get its logo and a full-width backdrop. The hero draws immediately with whatever
- *    art it already has and upgrades in place when this lands.
+ *  - **Hero art.** One artwork call for the single title at the top, which gets its logo and
+ *    full-width backdrop without also loading cast, videos, or recommendations. The hero draws
+ *    immediately with whatever art it already has and upgrades in place when this lands.
  *  - **Episode stills.** A season fetch per show on the carry-on rail. Library rows carry a
  *    poster and nothing else, so the frame the viewer stopped on has to be asked for.
  *  - **Personal rails.** Behind `favorites`/`topGenres` sits a taste profile costing a
@@ -87,10 +87,10 @@ class HomeController(
         enrichedHero = null
 
         heroJob = scope.launch {
-            val details = runCatching { content.details(media.toDomainMedia()) }.getOrNull()
+            val artwork = runCatching { content.artwork(media.toDomainMedia()) }.getOrNull()
                 ?: return@launch
             if (heroId != media.id) return@launch
-            enrichedHero = details.toUiMedia()
+            enrichedHero = artwork.toUiMedia()
         }
     }
 
