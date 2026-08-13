@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -18,6 +19,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,12 +34,14 @@ import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.MediaRail
+import com.coveninja.cove.ui.pages.common.MediaRailStateStore
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.RailDefaults
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
+import com.coveninja.cove.ui.pages.common.rememberMediaRailStateStore
 import com.coveninja.cove.ui.pages.mylist.calendar.availableNow
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
@@ -51,6 +55,20 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.todayIn
 import kotlinx.datetime.toLocalDateTime
 import kotlin.time.Clock
+
+/** State worth retaining when Home is temporarily removed by primary navigation. */
+@Stable
+class HomePageState internal constructor(
+    internal val listState: LazyListState,
+    internal val railStates: MediaRailStateStore,
+)
+
+@Composable
+fun rememberHomePageState(): HomePageState {
+    val listState = rememberLazyListState()
+    val railStates = rememberMediaRailStateStore()
+    return remember(listState, railStates) { HomePageState(listState, railStates) }
+}
 
 /**
  * Home: what *this viewer* should do next.
@@ -71,6 +89,8 @@ import kotlin.time.Clock
 @Composable
 fun HomePage(
     homeState: HomeState,
+    controller: HomeController,
+    pageState: HomePageState,
     index: LibraryIndex,
     watchProgress: WatchProgressIndex,
     catalog: MediaCatalog,
@@ -85,7 +105,6 @@ fun HomePage(
     val graph = LocalAppGraph.current
     val calendarState by graph.calendar.calendar.collectAsState()
     val actions = rememberMediaActions(index)
-    val controller = rememberHomeController(graph.content, graph.discovery)
 
     val initialContentReady = homeState !is HomeState.Loading
 
@@ -201,6 +220,7 @@ fun HomePage(
             onExplore = onExplore,
             onOpenMyList = onOpenMyList,
             navBarPlacement = navBarPlacement,
+            pageState = pageState,
             modifier = modifier,
         )
     }
@@ -229,9 +249,10 @@ private fun HomeReady(
     onExplore: () -> Unit,
     onOpenMyList: () -> Unit,
     navBarPlacement: NavBarPlacement,
+    pageState: HomePageState,
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
+    val listState = pageState.listState
     val scope = rememberCoroutineScope()
     val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
 
@@ -296,6 +317,7 @@ private fun HomeReady(
                         key = ContinueRow::id,
                         itemWidth = RailDefaults.WideCardWidth,
                         itemHeight = RailDefaults.WideCardHeight,
+                        state = pageState.railStates.stateFor("continue"),
                         onSeeAll = onOpenMyList,
                     ) { row, cardModifier ->
                         ContinueCard(
@@ -319,6 +341,7 @@ private fun HomeReady(
                         key = BacklogRow::id,
                         itemWidth = RailDefaults.WideCardWidth,
                         itemHeight = RailDefaults.WideCardHeight,
+                        state = pageState.railStates.stateFor("backlog"),
                         onSeeAll = onOpenMyList,
                     ) { row, cardModifier ->
                         BacklogCard(
@@ -344,6 +367,7 @@ private fun HomeReady(
                         key = { it.id },
                         itemWidth = UpcomingTileDefaults.Width,
                         itemHeight = UpcomingTileDefaults.Height,
+                        state = pageState.railStates.stateFor("upcoming"),
                         onSeeAll = onOpenMyList,
                     ) { item, tileModifier ->
                         UpcomingTile(
@@ -377,6 +401,7 @@ private fun HomeReady(
                     icon = rail.icon,
                     items = rail.media,
                     key = Media::id,
+                    state = pageState.railStates.stateFor(rail.id),
                     // Only the impersonal rail has an equivalent anywhere else. A "see all"
                     // on a personal rail would have to show something other than the rail.
                     onSeeAll = if (rail.ordered) onExplore else null,

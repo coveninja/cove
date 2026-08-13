@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.pages.explore
 
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.Modifier
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.pages.common.MediaRail
@@ -15,6 +16,7 @@ import com.coveninja.cove.ui.pages.common.MediaRail
 @Composable
 fun ExploreShelfRow(
     shelf: ExploreShelf,
+    state: LazyListState,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onSeeAll: (ExploreShelf) -> Unit,
     modifier: Modifier = Modifier,
@@ -34,6 +36,7 @@ fun ExploreShelfRow(
         icon = shelf.icon,
         items = shelf.media,
         key = Media::id,
+        state = state,
         modifier = modifier,
         onSeeAll = seeAll,
         itemContent = mediaCard,

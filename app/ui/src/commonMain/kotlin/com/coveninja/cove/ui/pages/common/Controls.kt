@@ -358,9 +358,10 @@ fun ScrollToTopButton(
 fun StaggeredAppear(
     index: Int,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    if (LocalMotionPolicy.current.reducedMotion) {
+    if (!enabled || LocalMotionPolicy.current.reducedMotion) {
         Box(modifier = modifier) { content() }
         return
     }

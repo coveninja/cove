@@ -33,6 +33,10 @@ class BaselineProfileGenerator {
             openDetailsAndReturn()
             scrollCurrentPage()
             openExploreAndScroll()
+            revealExploreRails()
+            scrollExploreRail()
+            openExploreGrid()
+            scrollCurrentPage()
             navigatePrimaryTabs()
         }
     }

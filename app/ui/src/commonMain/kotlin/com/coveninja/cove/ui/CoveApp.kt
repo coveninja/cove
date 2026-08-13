@@ -64,7 +64,11 @@ import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.explore.ExplorePage
+import com.coveninja.cove.ui.pages.explore.rememberExploreController
+import com.coveninja.cove.ui.pages.explore.rememberExplorePageState
 import com.coveninja.cove.ui.pages.home.HomePage
+import com.coveninja.cove.ui.pages.home.rememberHomeController
+import com.coveninja.cove.ui.pages.home.rememberHomePageState
 import com.coveninja.cove.ui.pages.mylist.MyListPage
 import com.coveninja.cove.ui.pages.common.LocalPageHorizontalPadding
 import com.coveninja.cove.ui.pages.common.LocalPageViewport
@@ -269,6 +273,13 @@ private fun CoveAppContent(
     val drag = rememberDragSession()
     val playback = rememberPlaybackSession()
     val search = rememberSearchSession()
+    // These page sessions live above the destination switch. Returning to a primary tab keeps
+    // its loaded optional content and every vertical/horizontal scroll position instead of
+    // rebuilding request-owning controllers from scratch.
+    val homeController = rememberHomeController(graph.content, graph.discovery)
+    val homePageState = rememberHomePageState()
+    val exploreController = rememberExploreController(graph.discovery)
+    val explorePageState = rememberExplorePageState()
     val videoPlayerHost = LocalVideoPlayerHost.current
     val uriHandler = LocalUriHandler.current
     val pageViewport = LocalPageViewport.current
@@ -380,6 +391,8 @@ private fun CoveAppContent(
                 when (selectedDestination) {
                     NavDestination.Home -> HomePage(
                         homeState = homeState,
+                        controller = homeController,
+                        pageState = homePageState,
                         index = index,
                         watchProgress = watchProgress,
                         catalog = catalog,
@@ -414,6 +427,8 @@ private fun CoveAppContent(
 
                     NavDestination.Explore -> ExplorePage(
                         exploreState = exploreState,
+                        controller = exploreController,
+                        pageState = explorePageState,
                         index = index,
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,

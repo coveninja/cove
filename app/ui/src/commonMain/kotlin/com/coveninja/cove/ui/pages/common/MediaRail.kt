@@ -12,12 +12,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -27,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,6 +35,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -73,13 +73,14 @@ fun <T> MediaRail(
     modifier: Modifier = Modifier,
     itemWidth: Dp = RailDefaults.CardWidth,
     itemHeight: Dp = RailDefaults.CardHeight,
+    state: LazyListState? = null,
     /** Null when there is nowhere honest for a "see all" to lead. */
     onSeeAll: (() -> Unit)? = null,
     seeAllLabel: String = "See all",
     itemContent: @Composable (T, Modifier) -> Unit,
 ) {
     val horizontalPadding = PageLayoutDefaults.HorizontalPadding
-    val listState = rememberLazyListState()
+    val listState = state ?: rememberMediaRailListState()
     val scope = rememberCoroutineScope()
     val rowHover = remember { MutableInteractionSource() }
     val hovered = if (hasPointerHover) {
@@ -113,11 +114,9 @@ fun <T> MediaRail(
             modifier = Modifier.padding(horizontal = horizontalPadding),
         )
 
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-            val resolvedItemWidth = if (hasPointerHover) {
-                itemWidth
-            } else {
-                minOf(itemWidth, maxWidth * 0.78f)
+        Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            val resolvedItemWidth = if (hasPointerHover) itemWidth else {
+                minOf(itemWidth, PageLayoutDefaults.Viewport.width * 0.78f)
             }
             LazyRow(
                 state = listState,
@@ -130,21 +129,19 @@ fun <T> MediaRail(
                     key = { _, item -> key(item) },
                     contentType = { _, _ -> "media-rail-item" },
                 ) { index, item ->
-                    StaggeredAppear(index = index) {
+                    StaggeredAppear(
+                        index = index,
+                        enabled = index < INITIAL_RAIL_STAGGER_ITEMS,
+                    ) {
                         itemContent(item, Modifier.width(resolvedItemWidth))
                     }
                 }
             }
 
-            EdgeFade(
-                visible = listState.canScrollBackward,
-                alignment = Alignment.CenterStart,
-                modifier = Modifier.align(Alignment.CenterStart),
-            )
-            EdgeFade(
-                visible = listState.canScrollForward,
-                alignment = Alignment.CenterEnd,
-                modifier = Modifier.align(Alignment.CenterEnd),
+            RailEdgeFades(
+                showStart = listState.canScrollBackward,
+                showEnd = listState.canScrollForward,
+                modifier = Modifier.matchParentSize(),
             )
 
             RailArrow(
@@ -306,31 +303,42 @@ private fun RailArrow(
  * page instead of banding against it.
  */
 @Composable
-private fun EdgeFade(
-    visible: Boolean,
-    alignment: Alignment,
+private fun RailEdgeFades(
+    showStart: Boolean,
+    showEnd: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val background = MaterialTheme.colorScheme.background
-    AnimatedVisibility(
-        visible = visible,
-        modifier = modifier,
-        enter = fadeIn(tween(160)),
-        exit = fadeOut(tween(140)),
-    ) {
-        val colors = if (alignment == Alignment.CenterStart) {
-            listOf(background, background.copy(alpha = 0f))
-        } else {
-            listOf(background.copy(alpha = 0f), background)
-        }
-        Box(
-            modifier = Modifier
-                .width(RailDefaults.EdgeFadeWidth)
-                .fillMaxHeight()
-                .background(Brush.horizontalGradient(colors)),
-        )
-    }
+    Box(
+        modifier = modifier.drawWithCache {
+            val fadeWidth = RailDefaults.EdgeFadeWidth.toPx()
+            val startBrush = Brush.horizontalGradient(
+                colors = listOf(background, background.copy(alpha = 0f)),
+                startX = 0f,
+                endX = fadeWidth,
+            )
+            val endBrush = Brush.horizontalGradient(
+                colors = listOf(background.copy(alpha = 0f), background),
+                startX = size.width - fadeWidth,
+                endX = size.width,
+            )
+            onDrawBehind {
+                if (showStart) {
+                    drawRect(startBrush, size = Size(fadeWidth, size.height))
+                }
+                if (showEnd) {
+                    drawRect(
+                        brush = endBrush,
+                        topLeft = Offset(size.width - fadeWidth, 0f),
+                        size = Size(fadeWidth, size.height),
+                    )
+                }
+            }
+        },
+    )
 }
+
+private const val INITIAL_RAIL_STAGGER_ITEMS = 3
 
 /**
  * How far an arrow press travels: most of the viewport, but not all of it.

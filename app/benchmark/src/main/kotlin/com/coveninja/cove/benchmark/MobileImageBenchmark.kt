@@ -1,8 +1,6 @@
 package com.coveninja.cove.benchmark
 
 import androidx.benchmark.macro.CompilationMode
-import androidx.benchmark.macro.StartupMode
-import androidx.benchmark.macro.StartupTimingMetric
 import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.TraceSectionMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
@@ -13,40 +11,47 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-@RunWith(AndroidJUnit4::class)
+/** Cold-cache network, decode, and total request timing on the physical performance device. */
 @OptIn(ExperimentalMetricApi::class)
-class MobileStartupBenchmark {
+@RunWith(AndroidJUnit4::class)
+class MobileImageBenchmark {
     @get:Rule
     val rule = MacrobenchmarkRule()
 
     @Test
-    fun coldStartup() = rule.measureRepeated(
+    fun coldExploreImages() = rule.measureRepeated(
         packageName = PACKAGE_NAME,
         metrics = listOf(
-            StartupTimingMetric(),
             TraceSectionMetric(
-                sectionName = "Cove startup stores",
+                sectionName = "Cove image request",
                 mode = TraceSectionMetric.Mode.First,
+                label = "firstImageRequest",
             ),
             TraceSectionMetric(
-                sectionName = "Cove startup %HTTP client",
+                sectionName = "Cove image fetch",
                 mode = TraceSectionMetric.Mode.Sum,
-                label = "Cove startup HTTP clients",
+                label = "imageFetch",
             ),
             TraceSectionMetric(
-                sectionName = "Cove startup repositories",
-                mode = TraceSectionMetric.Mode.First,
+                sectionName = "Cove image decode",
+                mode = TraceSectionMetric.Mode.Sum,
+                label = "imageDecode",
             ),
         ),
         compilationMode = CompilationMode.Partial(),
-        startupMode = StartupMode.COLD,
-        iterations = 10,
+        iterations = 5,
         setupBlock = {
-            UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-                .grantStartupPermissions()
             pressHome()
+            startFixtureActivity()
+            UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).apply {
+                waitForIdle()
+                clearBenchmarkImageCache()
+            }
         },
     ) {
-        startActivityAndWait()
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).apply {
+            openExplore()
+            waitForBenchmarkImages()
+        }
     }
 }

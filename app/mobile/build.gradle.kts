@@ -63,6 +63,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("boolean", "BENCHMARK_FIXTURE", "false")
+        manifestPlaceholders["benchmarkControlEnabled"] = "false"
         buildConfigField("String", "TMDB_API_KEY", quotedBuildConfig(deploymentValue("TMDB_API_KEY")))
         buildConfigField("String", "SUPABASE_URL", quotedBuildConfig(deploymentValue("SUPABASE_URL")))
         buildConfigField(
@@ -98,8 +99,14 @@ android {
             )
         }
         create("benchmarkRelease") {
+            // Macrobenchmarks must exercise the same optimized code that ships. A standalone
+            // build type defaults to an unminified debug-like configuration, which made the
+            // physical numbers pessimistic and hid R8/profile interactions seen by release.
+            initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             buildConfigField("boolean", "BENCHMARK_FIXTURE", "true")
+            manifestPlaceholders["benchmarkControlEnabled"] = "true"
+            matchingFallbacks += listOf("release")
         }
         create("nonMinifiedRelease") {
             signingConfig = signingConfigs.getByName("debug")
@@ -146,6 +153,8 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.coil3)
+    implementation(libs.coil3.network.ktor)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.mpv.android)

@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -25,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,14 +48,39 @@ import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
+import com.coveninja.cove.ui.pages.common.MediaRailStateStore
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
+import com.coveninja.cove.ui.pages.common.rememberMediaRailStateStore
 import com.coveninja.cove.ui.state.LibraryIndex
-import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.rememberMediaActions
 import kotlin.random.Random
 import kotlinx.coroutines.launch
+
+/** Filters, scroll positions, and rail offsets retained while another primary tab is visible. */
+@Stable
+class ExplorePageState internal constructor(
+    internal val shelvesListState: LazyListState,
+    internal val gridState: LazyGridState,
+    internal val railStates: MediaRailStateStore,
+) {
+    var filters by mutableStateOf(ExploreFilters())
+        internal set
+
+    var layout by mutableStateOf(ExploreLayout.Shelves)
+        internal set
+}
+
+@Composable
+fun rememberExplorePageState(): ExplorePageState {
+    val shelvesListState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val railStates = rememberMediaRailStateStore()
+    return remember(shelvesListState, gridState, railStates) {
+        ExplorePageState(shelvesListState, gridState, railStates)
+    }
+}
 
 /**
  * Explore: a spotlight over rails of things to watch, collapsing into a filtered,
@@ -70,19 +98,19 @@ import kotlinx.coroutines.launch
 @Composable
 fun ExplorePage(
     exploreState: ExploreState,
+    controller: ExploreController,
+    pageState: ExplorePageState,
     index: LibraryIndex,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
     navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
     modifier: Modifier = Modifier,
 ) {
-    val graph = LocalAppGraph.current
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
-    val controller = rememberExploreController(graph.discovery)
     val actions = rememberMediaActions(index)
 
-    var filters by remember { mutableStateOf(ExploreFilters()) }
-    var layout by remember { mutableStateOf(ExploreLayout.Shelves) }
+    val filters = pageState.filters
+    val layout = pageState.layout
 
     val seed = remember(exploreState) {
         (exploreState as? ExploreState.Ready)
@@ -104,12 +132,12 @@ fun ExplorePage(
     // the grid. The format switch is not: it re-shelves rather than narrowing.
     val onFiltersChange: (ExploreFilters) -> Unit = { next ->
         if (next.catalogKey != filters.catalogKey && next.type == filters.type) {
-            layout = ExploreLayout.Grid
+            pageState.layout = ExploreLayout.Grid
         }
         if (next.query != filters.query && next.query.isNotBlank()) {
-            layout = ExploreLayout.Grid
+            pageState.layout = ExploreLayout.Grid
         }
-        filters = next
+        pageState.filters = next
     }
 
     val shelfMedia = remember(controller.shelves) {
@@ -130,7 +158,7 @@ fun ExplorePage(
             layout = layout,
             genres = controller.genres,
             onFiltersChange = onFiltersChange,
-            onLayoutChange = { layout = it },
+            onLayoutChange = { pageState.layout = it },
             onSurpriseMe = ::surpriseMe,
             modifier = Modifier.padding(
                 horizontal = PageLayoutDefaults.HorizontalPadding,
@@ -182,12 +210,17 @@ fun ExplorePage(
                         }
                     },
                     onSeeAll = { shelf ->
-                        filters = filters.copy(genreId = shelf.genreId, sort = shelf.sort)
-                        layout = ExploreLayout.Grid
+                        pageState.filters = filters.copy(
+                            genreId = shelf.genreId,
+                            sort = shelf.sort,
+                        )
+                        pageState.layout = ExploreLayout.Grid
                     },
                     mediaCard = mediaCard,
                     toolbar = toolbar,
                     navBarPlacement = navBarPlacement,
+                    listState = pageState.shelvesListState,
+                    railStates = pageState.railStates,
                 )
 
                 ExploreLayout.Grid -> GridLayout(
@@ -195,11 +228,15 @@ fun ExplorePage(
                     filters = filters,
                     visible = visibleGrid,
                     onClearFilters = {
-                        filters = ExploreFilters(type = filters.type, sort = filters.sort)
+                        pageState.filters = ExploreFilters(
+                            type = filters.type,
+                            sort = filters.sort,
+                        )
                     },
                     mediaCard = mediaCard,
                     toolbar = toolbar,
                     navBarPlacement = navBarPlacement,
+                    gridState = pageState.gridState,
                 )
             }
         }
@@ -218,8 +255,9 @@ private fun ShelvesLayout(
     mediaCard: @Composable (Media, Modifier) -> Unit,
     toolbar: @Composable () -> Unit,
     navBarPlacement: NavBarPlacement,
+    listState: LazyListState,
+    railStates: MediaRailStateStore,
 ) {
-    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     // Rails are the better source once they exist — they are ordered and complete — but
@@ -283,6 +321,7 @@ private fun ShelvesLayout(
             items(controller.shelves, key = { it.id }) { shelf ->
                 ExploreShelfRow(
                     shelf = shelf,
+                    state = railStates.stateFor(shelf.id),
                     mediaCard = mediaCard,
                     onSeeAll = onSeeAll,
                 )
@@ -328,8 +367,8 @@ private fun GridLayout(
     mediaCard: @Composable (Media, Modifier) -> Unit,
     toolbar: @Composable () -> Unit,
     navBarPlacement: NavBarPlacement,
+    gridState: LazyGridState,
 ) {
-    val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val scrolled by remember { derivedStateOf { gridState.firstVisibleItemIndex > 6 } }
 

@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -52,8 +53,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -120,12 +119,12 @@ fun MediaCard(
     val currentOnDragEnd by rememberUpdatedState(onDragEnd)
     val currentOnDragCancel by rememberUpdatedState(onDragCancel)
 
-    var contextMenuVisible by remember {
-        mutableStateOf(false)
-    }
-
-    var contextMenuPosition by remember {
-        mutableStateOf(Offset.Zero)
+    // Secondary click does not exist on the Android touch host. Avoid creating two snapshot
+    // states and a dormant popup subtree for every poster in every mobile lazy list.
+    val contextMenuState = if (hasPointerHover) {
+        remember { MediaCardContextMenuState() }
+    } else {
+        null
     }
 
     val shape = RoundedCornerShape(12.dp)
@@ -169,16 +168,14 @@ fun MediaCard(
     Box(
         modifier = modifier
             .aspectRatio(2f / 3f)
-            .scale(scale)
             .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
                 alpha = cardAlpha
+                shadowElevation = elevation.toPx()
+                this.shape = shape
+                clip = true
             }
-            .shadow(
-                elevation = elevation,
-                shape = shape,
-                clip = false,
-            )
-            .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .then(
                 if (hasPointerHover) {
@@ -251,10 +248,16 @@ fun MediaCard(
                     },
                 )
             }
-            .onSecondaryClick { position ->
-                contextMenuPosition = position
-                contextMenuVisible = true
-            }
+            .then(
+                if (contextMenuState != null) {
+                    Modifier.onSecondaryClick { position ->
+                        contextMenuState.position = position
+                        contextMenuState.visible = true
+                    }
+                } else {
+                    Modifier
+                },
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -264,69 +267,68 @@ fun MediaCard(
         CoveAsyncImage(
             model = media.posterUrl,
             contentDescription = "${media.title} poster",
-            modifier = posterModifier
-                .fillMaxSize()
-                .clip(shape),
+            modifier = posterModifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
         )
-        AnimatedVisibility(
-            visible = isHovered,
-            modifier = Modifier.align(Alignment.BottomCenter),
-            enter = fadeIn() + slideInVertically(
-                initialOffsetY = { height -> height / 3 },
-            ),
-            exit = fadeOut() + slideOutVertically(
-                targetOffsetY = { height -> height / 3 },
-            ),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.55f),
-                                Color.Black.copy(alpha = 0.92f),
-                            ),
-                        ),
-                    )
-                    .padding(
-                        start = 12.dp,
-                        end = 12.dp,
-                        top = 40.dp,
-                        bottom = 12.dp,
-                    ),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        if (hasPointerHover) {
+            AnimatedVisibility(
+                visible = isHovered,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = fadeIn() + slideInVertically(
+                    initialOffsetY = { height -> height / 3 },
+                ),
+                exit = fadeOut() + slideOutVertically(
+                    targetOffsetY = { height -> height / 3 },
+                ),
             ) {
-                media.title?.let {
-                    Text(
-                        text = it,
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.55f),
+                                    Color.Black.copy(alpha = 0.92f),
+                                ),
+                            ),
+                        )
+                        .padding(
+                            start = 12.dp,
+                            end = 12.dp,
+                            top = 40.dp,
+                            bottom = 12.dp,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    MediaBadge(
-                        text = media.type?.label ?: "Unknown",
-                        containerColor = Color.White.copy(alpha = 0.16f),
-                        contentColor = Color.White,
-                    )
+                    media.title?.let {
+                        Text(
+                            text = it,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
 
-                    media.rating?.let {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         MediaBadge(
-                            text = "★ ${"%.1f".format(it)}",
-                            containerColor =
-                                Color.White.copy(alpha = 0.16f),
+                            text = media.type?.label ?: "Unknown",
+                            containerColor = Color.White.copy(alpha = 0.16f),
                             contentColor = Color.White,
                         )
+
+                        media.rating?.let {
+                            MediaBadge(
+                                text = "★ ${"%.1f".format(it)}",
+                                containerColor = Color.White.copy(alpha = 0.16f),
+                                contentColor = Color.White,
+                            )
+                        }
                     }
                 }
             }
@@ -341,32 +343,37 @@ fun MediaCard(
             modifier = Modifier.fillMaxSize(),
         )
 
-        Box(
-            modifier = Modifier
-                .offset {
-                    IntOffset(
-                        x = contextMenuPosition.x.roundToInt(),
-                        y = contextMenuPosition.y.roundToInt(),
-                    )
-                }
-                .size(1.dp),
-        ) {
-            MediaContextMenu(
-                expanded = contextMenuVisible,
-                title = media.title,
-                mediaType = media.type?.label ?: "Unknown",
-                rating = media.rating,
-                currentListCategory = myListCategory,
-                isWatched = isWatched,
-                onDismissRequest = {
-                    contextMenuVisible = false
-                },
-                onSetMyListCategory = onSetMyListCategory,
-                onRemoveFromMyList = onRemoveFromMyList,
-                onToggleWatched = onMarkAsWatched,
-            )
+        contextMenuState?.let { menu ->
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            x = menu.position.x.roundToInt(),
+                            y = menu.position.y.roundToInt(),
+                        )
+                    }
+                    .size(1.dp),
+            ) {
+                MediaContextMenu(
+                    expanded = menu.visible,
+                    title = media.title,
+                    mediaType = media.type?.label ?: "Unknown",
+                    rating = media.rating,
+                    currentListCategory = myListCategory,
+                    isWatched = isWatched,
+                    onDismissRequest = { menu.visible = false },
+                    onSetMyListCategory = onSetMyListCategory,
+                    onRemoveFromMyList = onRemoveFromMyList,
+                    onToggleWatched = onMarkAsWatched,
+                )
+            }
         }
     }
+}
+
+private class MediaCardContextMenuState {
+    var visible by mutableStateOf(false)
+    var position by mutableStateOf(Offset.Zero)
 }
 
 @Composable
@@ -519,9 +526,20 @@ private fun MediaCardDecorations(
     hasNewEpisodes: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val categoryVisibility = remember {
+        MutableTransitionState(category != null)
+    }.apply {
+        targetState = category != null
+    }
+    val newEpisodeVisibility = remember {
+        MutableTransitionState(hasNewEpisodes)
+    }.apply {
+        targetState = hasNewEpisodes
+    }
+
     Box(modifier = modifier) {
         AnimatedVisibility(
-            visible = category != null,
+            visibleState = categoryVisibility,
             modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
             enter = fadeIn() + scaleIn(initialScale = 0.4f),
             exit = fadeOut() + scaleOut(targetScale = 0.4f),
@@ -548,7 +566,7 @@ private fun MediaCardDecorations(
         }
 
         AnimatedVisibility(
-            visible = hasNewEpisodes,
+            visibleState = newEpisodeVisibility,
             modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
             enter = fadeIn() + scaleIn(
                 initialScale = 0.6f,
@@ -568,10 +586,13 @@ private fun MediaCardDecorations(
 
         if (watchFraction != null) {
             val accent = category?.accentColor ?: MaterialTheme.colorScheme.tertiary
-            val grown = remember { Animatable(0f) }
-            LaunchedEffect(watchFraction) {
+            val targetFraction = watchFraction.coerceIn(0f, 1f)
+            // A card entering a lazy viewport should paint its existing progress immediately.
+            // Only a real progress change after that first composition needs animation.
+            val grown = remember { Animatable(targetFraction) }
+            LaunchedEffect(targetFraction) {
                 grown.animateTo(
-                    targetValue = watchFraction.coerceIn(0f, 1f),
+                    targetValue = targetFraction,
                     animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing),
                 )
             }

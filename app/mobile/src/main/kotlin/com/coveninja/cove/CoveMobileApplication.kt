@@ -1,9 +1,19 @@
 package com.coveninja.cove
 
+import android.app.ActivityManager
 import android.app.Application
 import android.content.Intent
 import android.content.res.Configuration
+import android.os.Trace
 import androidx.core.content.ContextCompat
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.annotation.ExperimentalCoilApi
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
+import coil3.network.DeDupeConcurrentRequestStrategy
+import coil3.network.ktor3.KtorNetworkFetcherFactory
 import com.coveninja.cove.backend.AndroidBackendRuntime
 import com.coveninja.cove.player.AndroidMpvVideoPlayerHost
 import com.coveninja.cove.shared.data.SettingsState
@@ -20,6 +30,7 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okio.Path.Companion.toOkioPath
 
 sealed interface MobileRuntimeState {
     data object Loading : MobileRuntimeState
@@ -27,7 +38,7 @@ sealed interface MobileRuntimeState {
     data class Failed(val message: String) : MobileRuntimeState
 }
 
-class CoveMobileApplication : Application() {
+class CoveMobileApplication : Application(), SingletonImageLoader.Factory {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val systemLocale = MutableStateFlow("")
     @Volatile
@@ -56,6 +67,42 @@ class CoveMobileApplication : Application() {
         systemLocale.value = newConfig.primaryLanguageTag()
     }
 
+    /**
+     * One explicitly sized loader for every poster, backdrop, and prefetch request in the app.
+     * The default is also singleton-backed, but owning the policy here lets Cove bound memory on
+     * low-RAM devices, retain a useful disk working set, and de-duplicate a visible request that
+     * races a look-ahead prefetch for the same URL.
+     */
+    @OptIn(ExperimentalCoilApi::class)
+    override fun newImageLoader(context: PlatformContext): ImageLoader {
+        val lowRam = getSystemService(ActivityManager::class.java).isLowRamDevice
+        return ImageLoader.Builder(context)
+            .components {
+                add(
+                    KtorNetworkFetcherFactory(
+                        concurrentRequestStrategy = {
+                            DeDupeConcurrentRequestStrategy()
+                        },
+                    ),
+                )
+            }
+            .memoryCache {
+                MemoryCache.Builder()
+                    .maxSizePercent(context, if (lowRam) 0.15 else 0.25)
+                    .build()
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(cacheDir.resolve(IMAGE_CACHE_DIRECTORY).toOkioPath())
+                    .maxSizeBytes(
+                        if (lowRam) LOW_RAM_IMAGE_CACHE_BYTES else IMAGE_CACHE_BYTES,
+                    )
+                    .build()
+            }
+            .eventListenerFactory { CoveImageEventListener() }
+            .build()
+    }
+
     @Synchronized
     fun initializeBackend() {
         if (backend != null || initializationJob?.isActive == true) return
@@ -63,16 +110,18 @@ class CoveMobileApplication : Application() {
         initializationJob = applicationScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    AndroidBackendRuntime.open(
-                        context = this@CoveMobileApplication,
-                        tmdbApiKey = BuildConfig.TMDB_API_KEY,
-                        supabaseUrl = BuildConfig.SUPABASE_URL,
-                        supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
-                        traktClientId = BuildConfig.TRAKT_CLIENT_ID,
-                        traktClientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
-                        appVersion = BuildConfig.VERSION_NAME,
-                        systemLocale = systemLocale,
-                    )
+                    traced("Cove startup backend") {
+                        AndroidBackendRuntime.open(
+                            context = this@CoveMobileApplication,
+                            tmdbApiKey = BuildConfig.TMDB_API_KEY,
+                            supabaseUrl = BuildConfig.SUPABASE_URL,
+                            supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
+                            traktClientId = BuildConfig.TRAKT_CLIENT_ID,
+                            traktClientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
+                            appVersion = BuildConfig.VERSION_NAME,
+                            systemLocale = systemLocale,
+                        )
+                    }
                 }
             }.onSuccess { runtime ->
                 backend = runtime
@@ -116,6 +165,21 @@ class CoveMobileApplication : Application() {
         backend?.close()
         backend = null
         super.onTerminate()
+    }
+
+    private companion object {
+        const val IMAGE_CACHE_DIRECTORY = "cove_image_cache"
+        const val LOW_RAM_IMAGE_CACHE_BYTES = 128L * 1024L * 1024L
+        const val IMAGE_CACHE_BYTES = 256L * 1024L * 1024L
+    }
+}
+
+private inline fun <T> traced(name: String, block: () -> T): T {
+    Trace.beginSection(name)
+    return try {
+        block()
+    } finally {
+        Trace.endSection()
     }
 }
 

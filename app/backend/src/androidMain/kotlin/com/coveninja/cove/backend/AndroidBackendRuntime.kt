@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend
 
 import android.content.Context
+import android.os.Trace
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.addons.AddonSyncPayload
 import com.coveninja.cove.backend.addons.AndroidAddonUrlPolicy
@@ -172,222 +173,230 @@ class AndroidBackendRuntime private constructor(
                 context.resources.configuration.locales[0].toLanguageTag(),
             ),
         ): AndroidBackendRuntime {
-            val stores = AndroidStoreGraph.open(context)
-            val client = HttpClient(OkHttp) {
-                engine { config { fastFallback(false) } }
-                install(ContentNegotiation) { json(CoveJson) }
-                install(HttpTimeout) { requestTimeoutMillis = 20_000 }
+            val stores = tracedStartup("Cove startup stores") {
+                AndroidStoreGraph.open(context)
+            }
+            val client = tracedStartup("Cove startup HTTP client") {
+                HttpClient(OkHttp) {
+                    engine { config { fastFallback(false) } }
+                    install(ContentNegotiation) { json(CoveJson) }
+                    install(HttpTimeout) { requestTimeoutMillis = 20_000 }
+                }
             }
             // Addon and custom-discovery URLs are user controlled. Do not follow a
             // public URL's redirect into a private network; the policy validates the
             // original destination, and callers can explicitly install the final URL.
-            val untrustedClient = HttpClient(OkHttp) {
-                engine { config { fastFallback(false) } }
-                followRedirects = false
-                install(ContentNegotiation) { json(CoveJson) }
-                install(HttpTimeout) { requestTimeoutMillis = 25_000 }
+            val untrustedClient = tracedStartup("Cove startup untrusted HTTP client") {
+                HttpClient(OkHttp) {
+                    engine { config { fastFallback(false) } }
+                    followRedirects = false
+                    install(ContentNegotiation) { json(CoveJson) }
+                    install(HttpTimeout) { requestTimeoutMillis = 25_000 }
+                }
             }
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             var openedMedia: LazyAndroidPlaybackMediaHost? = null
             try {
-                val localeProvider = {
-                    val profileOverride =
-                        (stores.repositories.settings.settings.value as? SettingsState.Ready)
-                            ?.settings
-                            ?.uiLanguage
-                            .orEmpty()
-                    resolveAppLocale(profileOverride, systemLocale.value)
-                }
-                val localeChanges = combine(
-                    stores.repositories.settings.settings,
-                    systemLocale,
-                ) { _, _ -> localeProvider() }.distinctUntilChanged()
-                val catalog = TmdbClient(
-                    httpClient = client,
-                    apiKey = tmdbApiKey,
-                    localeProvider = localeProvider,
-                )
-                val content = LocalContentRepository(
-                    catalog = catalog,
-                    scope = scope,
-                    localeChanges = localeChanges,
-                    initialLocale = localeProvider(),
-                )
-                val addonManager = AddonManager(
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    httpClient = untrustedClient,
-                    now = stores.now,
-                    tmdbApiKey = tmdbApiKey,
-                    imdbLookup = { id ->
-                        runCatching { catalog.imdbId(id, MediaType.Tv) }.getOrNull()
-                    },
-                    urlPolicy = AndroidAddonUrlPolicy,
-                )
-                val nuvio = NuvioManager(
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    httpClient = untrustedClient,
-                    now = stores.now,
-                    sandbox = AndroidNuvioSandbox(context, untrustedClient, AndroidAddonUrlPolicy),
-                    urlPolicy = AndroidAddonUrlPolicy,
-                )
-                val addons = LocalAddonRepository(
-                    addons = addonManager,
-                    activeProfileIds = stores.repositories.profileSession.profileId,
-                    scope = scope,
-                    nuvio = NuvioAddonService(nuvio),
-                )
-                val media = LazyAndroidPlaybackMediaHost {
-                    AndroidPlaybackMediaHost.start(
-                        httpClient = untrustedClient,
-                        publicUrlPolicy = AndroidAddonUrlPolicy,
-                        allowLanStreamSources = {
+                return tracedStartup("Cove startup repositories") {
+                    val localeProvider = {
+                        val profileOverride =
                             (stores.repositories.settings.settings.value as? SettingsState.Ready)
                                 ?.settings
-                                ?.allowLanStreamSources == true
-                        },
-                        torrentEngine = AndroidJlibtorrentPlaybackEngine(
-                            context.filesDir.resolve("torrents").toPath(),
-                        ),
-                    )
-                }.also { openedMedia = it }
-                val playback = AndroidPlaybackRepository(catalog, addonManager, media, nuvio)
-                val calendarService = CalendarService(
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    catalog = catalog,
-                )
-                val calendar = LocalCalendarRepository(
-                    service = calendarService,
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    library = stores.repositories.library,
-                    localeProvider = localeProvider,
-                )
-                // The custom-algorithm hook is user-controlled network input, so it uses
-                // the same redirect and resolved-address restrictions as addon manifests.
-                val discoveryService = DiscoveryService(
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    settings = stores.repositories.settings,
-                    catalog = catalog,
-                    customHttpClient = untrustedClient,
-                    customUrlPolicy = AndroidAddonUrlPolicy,
-                )
-                val discovery = LocalDiscoveryRepository(
-                    catalog = catalog,
-                    service = discoveryService,
-                    localeProvider = localeProvider,
-                )
-                scope.launch {
-                    localeChanges.drop(1).collectLatest {
-                        calendar.refresh(force = true)
+                                ?.uiLanguage
+                                .orEmpty()
+                        resolveAppLocale(profileOverride, systemLocale.value)
                     }
-                }
-                val activity = ActivityService(
-                    stores.databaseHandle,
-                    stores.repositories.profileSession,
-                )
-                val traktService = TraktService(
-                    config = TraktConfig(traktClientId, traktClientSecret),
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    settings = stores.repositories.settings,
-                    library = stores.repositories.library,
-                    catalog = catalog,
-                    httpClient = client,
-                    scope = scope,
-                )
-                val trakt = LocalTraktRepository(traktService, scope)
-                val device = AndroidDeviceRepository(context, appVersion)
-                val quality = QualityService(catalog, addonManager)
-                val prefetch = PrefetchService(
-                    database = stores.databaseHandle,
-                    session = stores.repositories.profileSession,
-                    settings = stores.repositories.settings,
-                    catalog = catalog,
-                    addons = addonManager,
-                    scope = scope,
-                    warmScrapers = { type, id, imdb, title, year, season, episode ->
-                        nuvio.streams(type, id, imdb, title, year, season, episode)
-                    },
-                )
-                stores.progressEvents.subscribe { progress ->
-                    activity.record(progress)
-                    prefetch.notifyProgressChanged()
-                    traktService.enqueueScrobble(
-                        TraktScrobbleRequest(
-                            action = if (progress.completed) "stop" else "start",
-                            tmdbId = progress.tmdbId,
-                            mediaType = progress.mediaType.wireName,
-                            season = progress.season,
-                            episode = progress.episode,
-                            progress = if (progress.durationSeconds > 0.0) {
-                                (progress.positionSeconds / progress.durationSeconds * 100.0)
-                                    .coerceIn(0.0, 100.0)
-                            } else 0.0,
-                        ),
+                    val localeChanges = combine(
+                        stores.repositories.settings.settings,
+                        systemLocale,
+                    ) { _, _ -> localeProvider() }.distinctUntilChanged()
+                    val catalog = TmdbClient(
+                        httpClient = client,
+                        apiKey = tmdbApiKey,
+                        localeProvider = localeProvider,
                     )
-                }
-                var routeAuth: AuthService? = null
-                val account = supabaseConfig(supabaseUrl, supabaseKey)?.let { config ->
-                    val supabase = SupabaseClient(config, client)
-                    val now = stores.now
-                    val auth = AuthService(
-                        client = supabase,
-                        sessions = AuthSessionStore(stores.databaseHandle, now),
-                        profiles = stores.repositories.profiles,
-                        settings = stores.repositories.settings,
-                        sync = SupabaseSyncService(
-                            client = supabase,
-                            database = stores.databaseHandle,
-                            profiles = stores.repositories.profiles,
-                            library = stores.repositories.library,
-                            settings = stores.repositories.settings,
-                            now = now,
-                            payloads = listOf(
-                                AddonSyncPayload(addonManager, addons::reload),
-                                NuvioSyncPayload(nuvio),
-                                ActivitySyncPayload(activity),
+                    val content = LocalContentRepository(
+                        catalog = catalog,
+                        scope = scope,
+                        localeChanges = localeChanges,
+                        initialLocale = localeProvider(),
+                    )
+                    val addonManager = AddonManager(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        httpClient = untrustedClient,
+                        now = stores.now,
+                        tmdbApiKey = tmdbApiKey,
+                        imdbLookup = { id ->
+                            runCatching { catalog.imdbId(id, MediaType.Tv) }.getOrNull()
+                        },
+                        urlPolicy = AndroidAddonUrlPolicy,
+                    )
+                    val nuvio = NuvioManager(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        httpClient = untrustedClient,
+                        now = stores.now,
+                        sandbox = AndroidNuvioSandbox(context, untrustedClient, AndroidAddonUrlPolicy),
+                        urlPolicy = AndroidAddonUrlPolicy,
+                    )
+                    val addons = LocalAddonRepository(
+                        addons = addonManager,
+                        activeProfileIds = stores.repositories.profileSession.profileId,
+                        scope = scope,
+                        nuvio = NuvioAddonService(nuvio),
+                    )
+                    val media = LazyAndroidPlaybackMediaHost {
+                        AndroidPlaybackMediaHost.start(
+                            httpClient = untrustedClient,
+                            publicUrlPolicy = AndroidAddonUrlPolicy,
+                            allowLanStreamSources = {
+                                (stores.repositories.settings.settings.value as? SettingsState.Ready)
+                                    ?.settings
+                                    ?.allowLanStreamSources == true
+                            },
+                            torrentEngine = AndroidJlibtorrentPlaybackEngine(
+                                context.filesDir.resolve("torrents").toPath(),
                             ),
-                        ),
-                    ).also { routeAuth = it }
-                    LocalAccountRepository(
-                        auth = auth,
+                        )
+                    }.also { openedMedia = it }
+                    val playback = AndroidPlaybackRepository(catalog, addonManager, media, nuvio)
+                    val calendarService = CalendarService(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        catalog = catalog,
+                    )
+                    val calendar = LocalCalendarRepository(
+                        service = calendarService,
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        library = stores.repositories.library,
+                        localeProvider = localeProvider,
+                    )
+                    // The custom-algorithm hook is user-controlled network input, so it uses
+                    // the same redirect and resolved-address restrictions as addon manifests.
+                    val discoveryService = DiscoveryService(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        settings = stores.repositories.settings,
+                        catalog = catalog,
+                        customHttpClient = untrustedClient,
+                        customUrlPolicy = AndroidAddonUrlPolicy,
+                    )
+                    val discovery = LocalDiscoveryRepository(
+                        catalog = catalog,
+                        service = discoveryService,
+                        localeProvider = localeProvider,
+                    )
+                    scope.launch {
+                        localeChanges.drop(1).collectLatest {
+                            calendar.refresh(force = true)
+                        }
+                    }
+                    val activity = ActivityService(
+                        stores.databaseHandle,
+                        stores.repositories.profileSession,
+                    )
+                    val traktService = TraktService(
+                        config = TraktConfig(traktClientId, traktClientSecret),
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
                         settings = stores.repositories.settings,
                         library = stores.repositories.library,
+                        catalog = catalog,
+                        httpClient = client,
                         scope = scope,
                     )
-                } ?: UnavailableAccountRepository
-                val routeServices = CoreRouteServices(
-                    profiles = stores.repositories.profiles,
-                    settings = stores.repositories.settings,
-                    library = stores.repositories.library,
-                    catalog = catalog,
-                    addons = addonManager,
-                    nuvio = nuvio,
-                    media = media,
-                    auth = routeAuth,
-                    clientSessions = ClientSessionStore(stores.databaseHandle, stores.now),
-                    activity = activity,
-                    calendar = calendarService,
-                    trakt = traktService,
-                    deviceSettings = device,
-                    discovery = discoveryService,
-                    quality = quality,
-                    updater = object : RouteUpdater {
-                        override fun check() = UpdateCheckDto(currentVersion = appVersion)
-                        override fun apply(): Nothing = throw IllegalStateException(
-                            "self-update is unavailable on Android; use the app store or package installer",
+                    val trakt = LocalTraktRepository(traktService, scope)
+                    val device = AndroidDeviceRepository(context, appVersion)
+                    val quality = QualityService(catalog, addonManager)
+                    val prefetch = PrefetchService(
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        settings = stores.repositories.settings,
+                        catalog = catalog,
+                        addons = addonManager,
+                        scope = scope,
+                        warmScrapers = { type, id, imdb, title, year, season, episode ->
+                            nuvio.streams(type, id, imdb, title, year, season, episode)
+                        },
+                    )
+                    stores.progressEvents.subscribe { progress ->
+                        activity.record(progress)
+                        prefetch.notifyProgressChanged()
+                        traktService.enqueueScrobble(
+                            TraktScrobbleRequest(
+                                action = if (progress.completed) "stop" else "start",
+                                tmdbId = progress.tmdbId,
+                                mediaType = progress.mediaType.wireName,
+                                season = progress.season,
+                                episode = progress.episode,
+                                progress = if (progress.durationSeconds > 0.0) {
+                                    (progress.positionSeconds / progress.durationSeconds * 100.0)
+                                        .coerceIn(0.0, 100.0)
+                                } else 0.0,
+                            ),
                         )
-                    },
-                    prefetch = prefetch,
-                )
-                return AndroidBackendRuntime(
-                    stores, client, untrustedClient, scope, media, routeServices, content, playback, addons,
-                    calendar, discovery, account, trakt, device,
-                )
+                    }
+                    var routeAuth: AuthService? = null
+                    val account = supabaseConfig(supabaseUrl, supabaseKey)?.let { config ->
+                        val supabase = SupabaseClient(config, client)
+                        val now = stores.now
+                        val auth = AuthService(
+                            client = supabase,
+                            sessions = AuthSessionStore(stores.databaseHandle, now),
+                            profiles = stores.repositories.profiles,
+                            settings = stores.repositories.settings,
+                            sync = SupabaseSyncService(
+                                client = supabase,
+                                database = stores.databaseHandle,
+                                profiles = stores.repositories.profiles,
+                                library = stores.repositories.library,
+                                settings = stores.repositories.settings,
+                                now = now,
+                                payloads = listOf(
+                                    AddonSyncPayload(addonManager, addons::reload),
+                                    NuvioSyncPayload(nuvio),
+                                    ActivitySyncPayload(activity),
+                                ),
+                            ),
+                        ).also { routeAuth = it }
+                        LocalAccountRepository(
+                            auth = auth,
+                            settings = stores.repositories.settings,
+                            library = stores.repositories.library,
+                            scope = scope,
+                        )
+                    } ?: UnavailableAccountRepository
+                    val routeServices = CoreRouteServices(
+                        profiles = stores.repositories.profiles,
+                        settings = stores.repositories.settings,
+                        library = stores.repositories.library,
+                        catalog = catalog,
+                        addons = addonManager,
+                        nuvio = nuvio,
+                        media = media,
+                        auth = routeAuth,
+                        clientSessions = ClientSessionStore(stores.databaseHandle, stores.now),
+                        activity = activity,
+                        calendar = calendarService,
+                        trakt = traktService,
+                        deviceSettings = device,
+                        discovery = discoveryService,
+                        quality = quality,
+                        updater = object : RouteUpdater {
+                            override fun check() = UpdateCheckDto(currentVersion = appVersion)
+                            override fun apply(): Nothing = throw IllegalStateException(
+                                "self-update is unavailable on Android; use the app store or package installer",
+                            )
+                        },
+                        prefetch = prefetch,
+                    )
+                    AndroidBackendRuntime(
+                        stores, client, untrustedClient, scope, media, routeServices, content, playback, addons,
+                        calendar, discovery, account, trakt, device,
+                    )
+                }
             } catch (error: Throwable) {
                 scope.cancel()
                 openedMedia?.close()
@@ -400,5 +409,14 @@ class AndroidBackendRuntime private constructor(
 
         const val LOOPBACK_API_PORT = 6969
         const val REMOTE_API_PORT = 6970
+    }
+}
+
+private inline fun <T> tracedStartup(name: String, block: () -> T): T {
+    Trace.beginSection(name)
+    return try {
+        block()
+    } finally {
+        Trace.endSection()
     }
 }

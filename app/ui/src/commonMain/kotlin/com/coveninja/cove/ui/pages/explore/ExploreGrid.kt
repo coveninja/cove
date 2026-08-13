@@ -96,6 +96,7 @@ fun ExploreGrid(
         ) { index, item ->
             StaggeredAppear(
                 index = index,
+                enabled = index < INITIAL_GRID_STAGGER_ITEMS,
                 // On the item root, not on the card: placement animation is a property of
                 // the lazy item, and nesting it a level down silently does nothing.
                 modifier = if (reducedMotion) {
@@ -124,6 +125,8 @@ fun ExploreGrid(
         }
     }
 }
+
+private const val INITIAL_GRID_STAGGER_ITEMS = 8
 
 /**
  * Asks for the next page once the end of the loaded ones is in sight.

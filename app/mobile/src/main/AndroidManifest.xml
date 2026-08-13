@@ -51,5 +51,16 @@
             android:exported="false"
             android:isolatedProcess="true"
             android:process=":nuvio" />
+        <!-- Disabled and non-exported in every shipping build. benchmarkRelease enables this
+             narrow control surface so Macrobenchmark can define and observe a cold image run. -->
+        <receiver
+            android:name=".BenchmarkControlReceiver"
+            android:enabled="${benchmarkControlEnabled}"
+            android:exported="${benchmarkControlEnabled}">
+            <intent-filter>
+                <action android:name="com.coveninja.cove.benchmark.CLEAR_IMAGE_CACHE" />
+                <action android:name="com.coveninja.cove.benchmark.IMAGE_STATUS" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

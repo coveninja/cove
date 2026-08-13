@@ -16,10 +16,52 @@ class MobileScrollBenchmark {
     val rule = MacrobenchmarkRule()
 
     @Test
-    fun exploreScroll() = measureExplore(lowPerformance = false)
+    fun exploreShelvesVerticalScroll() = measurePreparedJourney(
+        lowPerformance = false,
+        prepare = { openExplore() },
+        journey = { scrollCurrentPage() },
+    )
 
     @Test
-    fun exploreScrollLowPerformance() = measureExplore(lowPerformance = true)
+    fun exploreShelvesVerticalScrollLowPerformance() = measurePreparedJourney(
+        lowPerformance = true,
+        prepare = { openExplore() },
+        journey = { scrollCurrentPage() },
+    )
+
+    @Test
+    fun exploreRailHorizontalScroll() = measurePreparedJourney(
+        lowPerformance = false,
+        prepare = {
+            openExplore()
+            revealExploreRails()
+        },
+        journey = { scrollExploreRail() },
+    )
+
+    @Test
+    fun exploreRailHorizontalScrollLowPerformance() = measurePreparedJourney(
+        lowPerformance = true,
+        prepare = {
+            openExplore()
+            revealExploreRails()
+        },
+        journey = { scrollExploreRail() },
+    )
+
+    @Test
+    fun exploreGridScroll() = measurePreparedJourney(
+        lowPerformance = false,
+        prepare = { openExploreGrid() },
+        journey = { scrollCurrentPage() },
+    )
+
+    @Test
+    fun exploreGridScrollLowPerformance() = measurePreparedJourney(
+        lowPerformance = true,
+        prepare = { openExploreGrid() },
+        journey = { scrollCurrentPage() },
+    )
 
     @Test
     fun homeScroll() = measureJourney(lowPerformance = false) { scrollCurrentPage() }
@@ -41,10 +83,6 @@ class MobileScrollBenchmark {
     fun primaryNavigationLowPerformance() =
         measureJourney(lowPerformance = true) { navigatePrimaryTabs() }
 
-    private fun measureExplore(lowPerformance: Boolean) = measureJourney(lowPerformance) {
-        openExploreAndScroll()
-    }
-
     private fun measureJourney(
         lowPerformance: Boolean,
         journey: UiDevice.() -> Unit,
@@ -56,6 +94,24 @@ class MobileScrollBenchmark {
         setupBlock = {
             pressHome()
             startFixtureActivity(lowPerformance)
+        },
+    ) {
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).journey()
+    }
+
+    private fun measurePreparedJourney(
+        lowPerformance: Boolean,
+        prepare: UiDevice.() -> Unit,
+        journey: UiDevice.() -> Unit,
+    ) = rule.measureRepeated(
+        packageName = PACKAGE_NAME,
+        metrics = listOf(FrameTimingMetric()),
+        compilationMode = CompilationMode.Partial(),
+        iterations = 10,
+        setupBlock = {
+            pressHome()
+            startFixtureActivity(lowPerformance)
+            UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).prepare()
         },
     ) {
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).journey()
