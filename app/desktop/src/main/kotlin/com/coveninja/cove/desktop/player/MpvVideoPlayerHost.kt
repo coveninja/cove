@@ -20,6 +20,7 @@ import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.VideoPlayerHost
+import com.coveninja.cove.ui.state.classifyPlaybackTermination
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
@@ -98,6 +99,8 @@ class MpvVideoPlayerHost(
     private val surfaceSequence = AtomicInteger(0)
     private val activeSurface = AtomicInteger(0)
     private var mirrorJob: Job? = null
+    /** Latched for the current load so a pre-open failure stays a startup error. */
+    private var currentMediaOpened = false
 
     private var pendingLoad: PendingLoad? = null
     private var pendingVolume: Double? = null
@@ -137,6 +140,16 @@ class MpvVideoPlayerHost(
         // The new file starts wherever it starts; a target aimed at the old one would
         // otherwise survive and drag the playhead there.
         pendingSeekSeconds = null
+        currentMediaOpened = false
+        _status.value = _status.value.copy(
+            hasMedia = false,
+            fileLoaded = false,
+            positionSeconds = startPositionSeconds.coerceAtLeast(0.0),
+            endReached = false,
+            interrupted = false,
+            error = null,
+            statusMessage = "Opening stream…",
+        )
         val active = player
         if (active == null) {
             pendingLoad = PendingLoad(url, startPositionSeconds)
@@ -424,7 +437,31 @@ class MpvVideoPlayerHost(
         mirrorJob?.cancel()
         mirrorJob = scope.launch {
             active.snapshot.collect { snapshot ->
-                val resolved = applyPendingSeek(snapshot.toPlaybackStatus(), pendingSeekSeconds)
+                val previous = _status.value
+                val raw = snapshot.toPlaybackStatus()
+                if (raw.hasMedia) currentMediaOpened = true
+                val terminalAware = when {
+                    raw.endReached && currentMediaOpened -> {
+                        val termination = classifyPlaybackTermination(
+                            positionSeconds = raw.positionSeconds,
+                            previousPositionSeconds = previous.positionSeconds,
+                            durationSeconds = raw.durationSeconds,
+                        )
+                        raw.copy(
+                            positionSeconds = termination.positionSeconds,
+                            endReached = termination.ended,
+                            interrupted = termination.interrupted,
+                            statusMessage = if (termination.interrupted) {
+                                "The stream stopped before the end."
+                            } else {
+                                raw.statusMessage
+                            },
+                        )
+                    }
+                    raw.endReached -> raw.copy(endReached = false, interrupted = false)
+                    else -> raw.copy(interrupted = false)
+                }
+                val resolved = applyPendingSeek(terminalAware, pendingSeekSeconds)
                 pendingSeekSeconds = resolved.pendingSeconds
                 _status.value = provisioningMessage
                     ?.let { resolved.status.copy(statusMessage = it) }
@@ -448,6 +485,7 @@ class MpvVideoPlayerHost(
         mirrorJob = null
         player = null
         pendingSeekSeconds = null
+        currentMediaOpened = false
         _status.value = PlaybackStatus()
     }
 

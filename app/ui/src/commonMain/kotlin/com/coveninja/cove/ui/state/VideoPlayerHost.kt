@@ -85,6 +85,12 @@ data class PlaybackStatus(
     val statusMessage: String = "",
     /** Playback ran to the end, as opposed to being paused near it. */
     val endReached: Boolean = false,
+    /**
+     * libmpv stopped before the reported duration, usually because its network,
+     * torrent, or HTTP input disappeared. Kept separate from [endReached] so an
+     * interrupted stream cannot be completed or advanced like a finished file.
+     */
+    val interrupted: Boolean = false,
     /** 1.0 is normal speed. */
     val speed: Double = 1.0,
     val audioTracks: List<MediaTrack> = emptyList(),
@@ -113,6 +119,66 @@ data class PlaybackStatus(
         } else {
             0f
         }
+}
+
+/**
+ * Result of interpreting libmpv's ambiguous EOF signal.
+ *
+ * mpv documents EOF for incomplete files and broken network streams as well as
+ * natural completion. [positionSeconds] is therefore also the position recovery
+ * should use: when mpv jumped from mid-file to the duration while terminating,
+ * this rolls that synthetic jump back to [previousPositionSeconds].
+ */
+data class PlaybackTermination(
+    val ended: Boolean,
+    val interrupted: Boolean,
+    val positionSeconds: Double,
+)
+
+/** True only when a terminal position is credibly at the file's natural end. */
+fun playbackReachedNaturalEnd(positionSeconds: Double, durationSeconds: Double): Boolean {
+    if (!positionSeconds.isFinite() || !durationSeconds.isFinite()) return false
+    if (positionSeconds < 0.0 || durationSeconds <= 0.0) return false
+    val tolerance = (durationSeconds * 0.01).coerceIn(2.0, 30.0)
+    return durationSeconds - positionSeconds <= tolerance
+}
+
+/**
+ * Classifies one EOF observation using the position immediately before it.
+ *
+ * Natural playback reports several positions inside the end tolerance. A broken
+ * input can instead make keep-open park at the duration in one update; requiring
+ * both samples to be near the end distinguishes that jump and preserves the last
+ * position the viewer actually reached.
+ */
+fun classifyPlaybackTermination(
+    positionSeconds: Double,
+    previousPositionSeconds: Double,
+    durationSeconds: Double,
+): PlaybackTermination {
+    val currentAtEnd = playbackReachedNaturalEnd(positionSeconds, durationSeconds)
+    val previousAtEnd = playbackReachedNaturalEnd(previousPositionSeconds, durationSeconds)
+    if (currentAtEnd && previousAtEnd) {
+        return PlaybackTermination(
+            ended = true,
+            interrupted = false,
+            positionSeconds = positionSeconds.coerceAtLeast(0.0),
+        )
+    }
+
+    val recoveryPosition = when {
+        currentAtEnd && previousPositionSeconds.isFinite() && previousPositionSeconds >= 0.0 ->
+            previousPositionSeconds
+        positionSeconds.isFinite() && positionSeconds >= 0.0 -> positionSeconds
+        previousPositionSeconds.isFinite() && previousPositionSeconds >= 0.0 ->
+            previousPositionSeconds
+        else -> 0.0
+    }
+    return PlaybackTermination(
+        ended = false,
+        interrupted = true,
+        positionSeconds = recoveryPosition,
+    )
 }
 
 /**

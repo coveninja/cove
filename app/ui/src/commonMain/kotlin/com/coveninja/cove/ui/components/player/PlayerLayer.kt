@@ -210,7 +210,15 @@ fun PlayerLayer(
     val skipped = remember(request.season, request.episode, request.media.id) {
         mutableSetOf<String>()
     }
-    LaunchedEffect(currentSegment, status.positionSeconds, settings) {
+    LaunchedEffect(
+        currentSegment,
+        status.positionSeconds,
+        status.interrupted,
+        session.reconnecting,
+        session.recoveryFailed,
+        settings,
+    ) {
+        if (status.interrupted || session.reconnecting || session.recoveryFailed) return@LaunchedEffect
         val segment = currentSegment ?: return@LaunchedEffect
         val preferences = settings ?: return@LaunchedEffect
         if (!preferences.skipsAutomatically(segment.kind)) return@LaunchedEffect
@@ -570,12 +578,21 @@ fun PlayerLayer(
                 // the starting stage covers the wait for the first frame and then
                 // never comes back, so a torrent running dry mid-episode simply froze.
                 AnimatedVisibility(
-                    visible = status.waitingForData && status.hasMedia,
+                    visible = status.waitingForData && status.hasMedia && !session.reconnecting,
                     modifier = Modifier.align(Alignment.Center),
                     enter = fadeIn(tween(220)),
                     exit = fadeOut(tween(160)),
                 ) {
                     StallIndicator(bufferingPercent = status.bufferingPercent)
+                }
+
+                AnimatedVisibility(
+                    visible = session.reconnecting,
+                    modifier = Modifier.align(Alignment.Center),
+                    enter = fadeIn(tween(160)),
+                    exit = fadeOut(tween(160)),
+                ) {
+                    StallIndicator(bufferingPercent = 0, label = "Reconnecting…")
                 }
 
                 AnimatedVisibility(
@@ -596,7 +613,19 @@ fun PlayerLayer(
                     ShortcutSheet()
                 }
 
-                status.error?.takeIf { status.hasMedia }?.let { error ->
+                if ((status.interrupted || session.recoveryFailed) && !session.reconnecting) {
+                    PlaybackInterruptionBanner(
+                        message = "The stream stopped before the end.",
+                        onRetry = session::retryCurrentSource,
+                        onPickSource = (session::reopenSources).takeUnless { request.extra != null },
+                        onClose = session::close,
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 78.dp),
+                    )
+                }
+
+                status.error?.takeIf {
+                    status.hasMedia && !status.interrupted && !session.recoveryFailed
+                }?.let { error ->
                     PlaybackErrorBanner(
                         message = error,
                         // Both actions collapse onto a reload for an extra, for
@@ -682,7 +711,8 @@ fun PlayerLayer(
                 // At the end of an episode, what comes next. Shown whether or not
                 // autoplay is on: with it off this is the way to continue, with
                 // it on it is the way to stop it happening.
-                val atEnd = showUpNext(
+                val atEnd = !status.interrupted && !session.reconnecting &&
+                    !session.recoveryFailed && showUpNext(
                     positionSeconds = status.positionSeconds,
                     durationSeconds = status.durationSeconds,
                     segments = segments,
@@ -1056,7 +1086,7 @@ private val SPEED_STEPS = listOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
  * the last frame of the episode rather than a backdrop.
  */
 @Composable
-private fun StallIndicator(bufferingPercent: Int) {
+private fun StallIndicator(bufferingPercent: Int, label: String? = null) {
     val spin = rememberInfiniteTransition(label = "Stall")
     val sweep by spin.animateFloat(
         initialValue = 0f,
@@ -1079,7 +1109,11 @@ private fun StallIndicator(bufferingPercent: Int) {
             tint = Color.White,
         )
         Text(
-            text = if (bufferingPercent in 1..99) "Buffering · $bufferingPercent%" else "Buffering",
+            text = label ?: if (bufferingPercent in 1..99) {
+                "Buffering · $bufferingPercent%"
+            } else {
+                "Buffering"
+            },
             modifier = Modifier.padding(top = 10.dp),
             color = Color.White.copy(alpha = 0.86f),
             style = MaterialTheme.typography.labelMedium,
@@ -1488,6 +1522,53 @@ private fun rememberTorrentProgress(
         }
     }
     return progress
+}
+
+/** Recovery after the one automatic same-source reconnect has also stopped. */
+@Composable
+private fun PlaybackInterruptionBanner(
+    message: String,
+    onRetry: () -> Unit,
+    onPickSource: (() -> Unit)?,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.widthIn(max = 480.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.96f),
+        shadowElevation = 12.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                IconifyIcon(
+                    icon = "lucide:triangle-alert",
+                    modifier = Modifier.size(17.dp),
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Text(
+                    text = message,
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            Row(
+                modifier = Modifier.align(Alignment.End),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextAction(label = "Retry", onClick = onRetry)
+                onPickSource?.let { TextAction(label = "Sources", onClick = it) }
+                TextAction(label = "Close", onClick = onClose)
+            }
+        }
+    }
 }
 
 /**

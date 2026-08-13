@@ -183,15 +183,47 @@ private class FakeHost : VideoPlayerHost {
 
     var loadedUrl: String? = null
     var loadedFrom: Double? = null
+    val loads = mutableListOf<Pair<String, Double>>()
     var volumeSet: Double? = null
 
     fun report(position: Double, duration: Double) {
         _status.value = _status.value.copy(positionSeconds = position, durationSeconds = duration)
     }
 
+    fun reportPlayback(
+        position: Double,
+        duration: Double,
+        interrupted: Boolean = false,
+        ended: Boolean = false,
+    ) {
+        _status.value = _status.value.copy(
+            hasMedia = true,
+            fileLoaded = true,
+            positionSeconds = position,
+            durationSeconds = duration,
+            interrupted = interrupted,
+            endReached = ended,
+        )
+    }
+
+    fun reportError(message: String) {
+        _status.value = _status.value.copy(
+            hasMedia = false,
+            fileLoaded = false,
+            interrupted = false,
+            endReached = false,
+            error = message,
+        )
+    }
+
     override fun load(url: String, startPositionSeconds: Double) {
         loadedUrl = url
         loadedFrom = startPositionSeconds
+        loads += url to startPositionSeconds
+        _status.value = PlaybackStatus(
+            positionSeconds = startPositionSeconds,
+            statusMessage = "Opening stream…",
+        )
     }
 
     override fun setPaused(paused: Boolean) = Unit
@@ -569,6 +601,70 @@ class PlaybackSessionTest {
         val saved = assertNotNull(h.library.recorded.lastOrNull(), "no progress was recorded")
         assertTrue(!saved.completed, "halfway is not completed")
     }
+
+    @Test
+    fun `the first interruption retries the same source once from its retained position`() =
+        playbackTest { h ->
+            h.session.open(movie())
+            runCurrent()
+            val initialUrl = assertNotNull(h.host.loadedUrl)
+
+            h.host.reportPlayback(position = 400.0, duration = 1000.0)
+            runCurrent()
+            h.host.reportPlayback(position = 400.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+
+            assertEquals(listOf(initialUrl to 0.0, initialUrl to 400.0), h.host.loads)
+            assertTrue(h.session.reconnecting)
+
+            h.host.reportPlayback(position = 401.0, duration = 1000.0)
+            runCurrent()
+            assertTrue(!h.session.reconnecting)
+
+            h.host.reportPlayback(position = 520.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+            assertEquals(2, h.host.loads.size, "a repeated interruption must not loop")
+            assertTrue(!h.session.reconnecting)
+            assertTrue(h.session.recoveryFailed)
+
+            h.session.retryCurrentSource()
+            runCurrent()
+            assertEquals(initialUrl to 520.0, h.host.loads.last())
+            assertEquals(3, h.host.loads.size)
+            assertTrue(h.session.reconnecting)
+            assertTrue(!h.session.recoveryFailed)
+        }
+
+    @Test
+    fun `an interrupted late stream is saved incomplete at its retained position`() =
+        playbackTest { h ->
+            h.session.open(movie())
+            runCurrent()
+
+            h.host.reportPlayback(position = 950.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+
+            val saved = assertNotNull(h.library.recorded.lastOrNull())
+            assertEquals(950.0, saved.positionSeconds)
+            assertTrue(!saved.completed, "an interruption must never complete the title")
+        }
+
+    @Test
+    fun `a reconnect that cannot reopen exposes recovery without looping`() =
+        playbackTest { h ->
+            h.session.open(movie())
+            runCurrent()
+            h.host.reportPlayback(position = 400.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+            assertTrue(h.session.reconnecting)
+
+            h.host.reportError("The selected stream could not be opened.")
+            runCurrent()
+
+            assertTrue(!h.session.reconnecting)
+            assertTrue(h.session.recoveryFailed)
+            assertEquals(2, h.host.loads.size)
+        }
 
     // Mutation applied to verify: removed the `position <= 0.0` guard → test
     // failed, a zero position was written over the stored resume point.

@@ -26,6 +26,7 @@ import com.coveninja.cove.ui.state.VideoCodecCapabilities
 import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.VideoScaling
+import com.coveninja.cove.ui.state.classifyPlaybackTermination
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import dev.jdtech.mpv.MPVLib
@@ -86,6 +87,8 @@ class AndroidMpvVideoPlayerHost(
     private var pendingVolume: Double? = null
     private var pendingScaling: VideoScaling = VideoScaling.Fit
     private var pendingSeekSeconds: Double? = null
+    /** Position before mpv's latest time-pos update, used to detect an EOF jump. */
+    private var previousPositionSeconds = 0.0
     private var trackListJson = ""
     private var chapterListJson = ""
 
@@ -120,6 +123,7 @@ class AndroidMpvVideoPlayerHost(
         playbackRequested = true
         fileLoaded = false
         pendingSeekSeconds = null
+        previousPositionSeconds = startPositionSeconds.coerceAtLeast(0.0)
         pendingLoad = PendingLoad(url, startPositionSeconds.coerceAtLeast(0.0))
         _status.value = PlaybackStatus(
             paused = false,
@@ -146,6 +150,9 @@ class AndroidMpvVideoPlayerHost(
             else -> seconds.coerceAtLeast(0.0)
         }
         pendingSeekSeconds = target
+        // A deliberate seek is trustworthy. If the viewer explicitly seeks near
+        // the end, the following EOF must not look like a synthetic jump there.
+        previousPositionSeconds = target
         _status.value = _status.value.copy(positionSeconds = target, endReached = false)
         main.removeCallbacks(dispatchSeek)
         main.postDelayed(dispatchSeek, SEEK_DEBOUNCE_MILLIS)
@@ -392,6 +399,7 @@ class AndroidMpvVideoPlayerHost(
                 if (pendingSeekSeconds?.let { kotlin.math.abs(it - value) < 0.75 } == true) {
                     pendingSeekSeconds = null
                 }
+                previousPositionSeconds = current.positionSeconds
                 current.copy(positionSeconds = pendingSeekSeconds ?: value.coerceAtLeast(0.0))
             }
             "duration" -> current.copy(durationSeconds = value.coerceAtLeast(0.0))
@@ -416,7 +424,12 @@ class AndroidMpvVideoPlayerHost(
             "pause" -> current.copy(paused = value)
             "mute" -> current.copy(muted = value)
             "paused-for-cache" -> current.copy(waitingForData = value)
-            "eof-reached" -> current.copy(endReached = value && !stoppedByUser)
+            "eof-reached" -> current.withMpvEof(
+                reached = value,
+                stoppedByUser = stoppedByUser,
+                fileLoaded = fileLoaded,
+                previousPositionSeconds = previousPositionSeconds,
+            )
             else -> current
         }
     }
@@ -449,6 +462,7 @@ class AndroidMpvVideoPlayerHost(
                     hasMedia = false,
                     fileLoaded = false,
                     endReached = false,
+                    interrupted = false,
                     error = null,
                     statusMessage = "Opening stream…",
                 )
@@ -461,6 +475,8 @@ class AndroidMpvVideoPlayerHost(
                     .copy(
                         hasMedia = true,
                         fileLoaded = true,
+                        endReached = false,
+                        interrupted = false,
                         error = null,
                         statusMessage = "",
                         chapters = parseMpvChapters(chapterListJson),
@@ -780,6 +796,33 @@ private fun PlaybackStatus.withTracks(tracks: List<MediaTrack>): PlaybackStatus 
  */
 internal fun PlaybackStatus.withMpvDiagnostic(message: String): PlaybackStatus =
     copy(statusMessage = message)
+
+/** Interprets Android's observed eof-reached flag without promoting stop() to EOF. */
+internal fun PlaybackStatus.withMpvEof(
+    reached: Boolean,
+    stoppedByUser: Boolean,
+    fileLoaded: Boolean,
+    previousPositionSeconds: Double,
+): PlaybackStatus {
+    if (!reached || stoppedByUser || !fileLoaded) {
+        return copy(endReached = false, interrupted = false)
+    }
+    val termination = classifyPlaybackTermination(
+        positionSeconds = positionSeconds,
+        previousPositionSeconds = previousPositionSeconds,
+        durationSeconds = durationSeconds,
+    )
+    return copy(
+        positionSeconds = termination.positionSeconds,
+        endReached = termination.ended,
+        interrupted = termination.interrupted,
+        statusMessage = if (termination.interrupted) {
+            "The stream stopped before the end."
+        } else {
+            statusMessage
+        },
+    )
+}
 
 private fun clampDelay(seconds: Double): Double =
     seconds.takeIf(Double::isFinite)?.coerceIn(-10.0, 10.0) ?: 0.0

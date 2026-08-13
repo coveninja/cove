@@ -25,6 +25,7 @@ import com.coveninja.cove.ui.model.toUiEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 /** What is being played: a movie, one episode of a series, or an extra. */
@@ -90,6 +91,14 @@ class PlaybackSession(
     var phase by mutableStateOf<PlaybackPhase?>(null)
         private set
 
+    /** True only while the one automatic same-source reconnect is opening. */
+    var reconnecting by mutableStateOf(false)
+        private set
+
+    /** The automatic reconnect, or a later manual retry, also failed. */
+    var recoveryFailed by mutableStateOf(false)
+        private set
+
     /**
      * Extras start embedded in the sheet; the film itself always takes the window.
      * Reset by every open, so a session never inherits the last one's framing.
@@ -135,6 +144,10 @@ class PlaybackSession(
 
     private var generation = 0
     private var progressJob: Job? = null
+    private var playbackMonitorJob: Job? = null
+    private var reloadJob: Job? = null
+    private var automaticRetryUsed = false
+    private var interruptionPositionSeconds = 0.0
 
     // Kept so a source that dies can be stepped over without resolving again.
     // Named apart from the lambda parameter it would otherwise shadow.
@@ -167,6 +180,8 @@ class PlaybackSession(
 
         val token = ++generation
         stopProgressTicker()
+        stopPlaybackMonitor()
+        resetPlaybackRecovery()
         // Silences whatever is playing before the next thing is resolved. The
         // player's handle outlives the surface it was drawn on, so nothing else
         // does: without this the outgoing episode — or a trailer started from the
@@ -297,6 +312,8 @@ class PlaybackSession(
 
         val token = ++generation
         stopProgressTicker()
+        stopPlaybackMonitor()
+        resetPlaybackRecovery()
         resolvedCandidates = emptyList()
         failedSources = mutableSetOf()
         resumedFrom = null
@@ -330,15 +347,17 @@ class PlaybackSession(
                 return@launch
             }
 
-            // The title's own language, not a fetched one: an extra is not worth a
-            // details round trip to decide which dub of a trailer to prefer.
-            settings?.let {
-                player.applyPreferences(it.playbackPreferences(media.originalLanguage))
-            }
-            settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
             // Always from the start: extras keep no resume point, by the same rule
             // that keeps them out of watch progress.
-            player.load(url, 0.0)
+            loadCurrentSource(
+                current = request ?: return@launch,
+                player = player,
+                url = url,
+                startPositionSeconds = 0.0,
+                token = token,
+                settings = settings,
+                showResumeNotice = false,
+            )
         }
     }
 
@@ -352,6 +371,8 @@ class PlaybackSession(
     fun failExtra(media: Media, video: MediaVideo, message: String) {
         generation++
         stopProgressTicker()
+        stopPlaybackMonitor()
+        resetPlaybackRecovery()
         request = PlaybackRequest(media, extra = video)
         // Reported in the slot on the page, not by blacking out the window: the
         // failure belongs next to the video that would not open.
@@ -452,6 +473,7 @@ class PlaybackSession(
     fun close() {
         generation++
         stopProgressTicker()
+        stopPlaybackMonitor()
         // Save before tearing down: the ticker's last write can be a full interval
         // stale, and the position at close is the one the viewer expects back.
         saveProgress()
@@ -486,6 +508,9 @@ class PlaybackSession(
         val current = request ?: return
         val player = host ?: return
 
+        stopPlaybackMonitor()
+        resetPlaybackRecovery()
+
         val url = runCatching {
             graph.playback.playUrl(source, current.season, current.episode)
         }.getOrElse { error ->
@@ -513,54 +538,165 @@ class PlaybackSession(
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
             val resumeFrom = if (settings?.rememberPosition != false) resumePosition(current) else 0.0
             if (token != generation) return@launch
+            loadCurrentSource(
+                current = current,
+                player = player,
+                url = url,
+                startPositionSeconds = resumeFrom,
+                token = token,
+                settings = settings,
+                showResumeNotice = true,
+            )
+        }
+    }
 
-            // Applied before load: mpv chooses tracks while opening the file, so
-            // a preference set afterwards would only take effect next time.
-            settings?.let {
-                player.applyPreferences(
-                    it.playbackPreferences(originalLanguageFor(current, it)),
-                )
+    /**
+     * Reloads the selected URL without resolving or ranking sources again.
+     *
+     * Preferences go on before loadfile because mpv chooses tracks while opening;
+     * external subtitles go on afterwards because replacing the file removes them.
+     */
+    private suspend fun loadCurrentSource(
+        current: PlaybackRequest,
+        player: VideoPlayerHost,
+        url: String,
+        startPositionSeconds: Double,
+        token: Int,
+        settings: AppSettings?,
+        showResumeNotice: Boolean,
+    ) {
+        settings?.let {
+            // An extra is not worth a details round trip merely to decide which
+            // dub of a trailer to prefer; ordinary playback retains the richer lookup.
+            val originalLanguage = if (current.extra != null) {
+                current.media.originalLanguage
+            } else {
+                originalLanguageFor(current, it)
             }
-            // AppSettings.defaultVolume is a 0..1 fraction; mpv's volume property is
-            // 0..100. Passing it through unscaled is near-silent audio.
-            settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
-            resumedFrom = resumeFrom.takeIf { it > 0.0 }
-            player.load(url, resumeFrom)
-            startProgressTicker(token)
+            player.applyPreferences(
+                it.playbackPreferences(originalLanguage),
+            )
+        }
+        if (token != generation) return
 
-            // After load, so mpv attaches them to the file that is open. They then
-            // appear alongside the embedded tracks in the subtitle menu.
-            if (settings?.subtitlesEnabled != false) {
-                val domainType = current.media.type.toDomainType()
-                if (domainType != null) {
-                    val external = graph.playback.subtitles(
-                        tmdbId = current.media.tmdbId,
-                        type = domainType,
-                        season = current.season,
-                        episode = current.episode,
-                    )
-                    if (token == generation) {
-                        val unnamedByLanguage = mutableMapOf<String, Int>()
-                        external.take(MAX_EXTERNAL_SUBTITLES).forEach { subtitle ->
-                            val title = subtitle.displayName ?: run {
-                                val language = subtitle.lang
-                                    .trim()
-                                    .substringBefore('-')
-                                    .lowercase()
-                                val ordinal = unnamedByLanguage.getOrDefault(language, 0) + 1
-                                unnamedByLanguage[language] = ordinal
-                                "Subtitle $ordinal"
-                            }
-                            player.addSubtitle(
-                                url = subtitle.url,
-                                title = title,
-                                language = subtitle.lang,
-                            )
+        // AppSettings.defaultVolume is a 0..1 fraction; mpv's volume property is
+        // 0..100. Passing it through unscaled is near-silent audio.
+        settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
+        resumedFrom = startPositionSeconds.takeIf { showResumeNotice && it > 0.0 }
+        player.load(url, startPositionSeconds.coerceAtLeast(0.0))
+        startPlaybackMonitor(token)
+        startProgressTicker(token)
+
+        if (current.extra != null || settings?.subtitlesEnabled == false) return
+        val domainType = current.media.type.toDomainType() ?: return
+        val external = runCatching {
+            graph.playback.subtitles(
+                tmdbId = current.media.tmdbId,
+                type = domainType,
+                season = current.season,
+                episode = current.episode,
+            )
+        }.getOrDefault(emptyList())
+        if (token != generation) return
+
+        val unnamedByLanguage = mutableMapOf<String, Int>()
+        external.take(MAX_EXTERNAL_SUBTITLES).forEach { subtitle ->
+            val title = subtitle.displayName ?: run {
+                val language = subtitle.lang
+                    .trim()
+                    .substringBefore('-')
+                    .lowercase()
+                val ordinal = unnamedByLanguage.getOrDefault(language, 0) + 1
+                unnamedByLanguage[language] = ordinal
+                "Subtitle $ordinal"
+            }
+            player.addSubtitle(
+                url = subtitle.url,
+                title = title,
+                language = subtitle.lang,
+            )
+        }
+    }
+
+    /** User-requested retry of the current source; never spends another automatic retry. */
+    fun retryCurrentSource() {
+        val status = host?.status?.value ?: return
+        val start = status.positionSeconds
+            .takeIf { it.isFinite() && it >= 0.0 }
+            ?: interruptionPositionSeconds
+        reloadCurrentSource(start, generation)
+    }
+
+    private fun reloadCurrentSource(startPositionSeconds: Double, token: Int) {
+        val current = request ?: return
+        val playing = phase as? PlaybackPhase.Playing ?: return
+        val player = host ?: return
+        reconnecting = true
+        recoveryFailed = false
+        reloadJob?.cancel()
+        reloadJob = scope.launch {
+            val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
+            loadCurrentSource(
+                current = current,
+                player = player,
+                url = playing.url,
+                startPositionSeconds = startPositionSeconds.coerceAtLeast(0.0),
+                token = token,
+                settings = settings,
+                showResumeNotice = false,
+            )
+        }
+    }
+
+    private fun startPlaybackMonitor(token: Int) {
+        if (playbackMonitorJob != null) return
+        val player = host ?: return
+        playbackMonitorJob = scope.launch {
+            player.status.collect { status ->
+                if (token != generation) return@collect
+                when {
+                    status.interrupted -> {
+                        interruptionPositionSeconds = status.positionSeconds
+                            .takeIf { it.isFinite() && it >= 0.0 }
+                            ?: interruptionPositionSeconds
+                        // Capture the rolled-back position before load() clears the
+                        // terminal status for the reconnect attempt.
+                        saveProgress()
+                        if (!automaticRetryUsed && phase is PlaybackPhase.Playing) {
+                            automaticRetryUsed = true
+                            reloadCurrentSource(interruptionPositionSeconds, token)
+                        } else {
+                            reconnecting = false
+                            recoveryFailed = true
                         }
+                    }
+                    reconnecting && status.error != null -> {
+                        reconnecting = false
+                        recoveryFailed = true
+                    }
+                    reconnecting && status.hasMedia -> {
+                        reconnecting = false
+                        recoveryFailed = false
                     }
                 }
             }
         }
+    }
+
+    private fun stopPlaybackMonitor() {
+        playbackMonitorJob?.cancel()
+        playbackMonitorJob = null
+        reloadJob?.cancel()
+        reloadJob = null
+        reconnecting = false
+        recoveryFailed = false
+    }
+
+    private fun resetPlaybackRecovery() {
+        automaticRetryUsed = false
+        interruptionPositionSeconds = 0.0
+        reconnecting = false
+        recoveryFailed = false
     }
 
     /**
@@ -657,7 +793,11 @@ class PlaybackSession(
             episode = current.episode,
             positionSeconds = position,
             durationSeconds = duration,
-            completed = position / duration >= COMPLETED_FRACTION,
+            // EOF is ambiguous for remote input. The host rolls an interruption
+            // back to the last credible position, and this explicit guard keeps a
+            // late disconnect from completing the title even if it crossed 90%.
+            completed = !status.interrupted && !reconnecting && !recoveryFailed &&
+                position / duration >= COMPLETED_FRACTION,
         )
         // Fire-and-forget on the composition scope: a failed save must never
         // interrupt playback, and at close there is nothing left to await on.

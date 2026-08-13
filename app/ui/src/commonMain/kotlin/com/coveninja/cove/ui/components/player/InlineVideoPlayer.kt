@@ -151,8 +151,20 @@ fun InlineVideoPlayer(
                     )
                 }
 
-                if (!status.hasMedia) {
-                    InlineStarting(
+                when {
+                    session.reconnecting -> InlineStarting(
+                        title = request.extra?.title.orEmpty(),
+                        message = "Reconnecting…",
+                    )
+                    status.interrupted || session.recoveryFailed -> InlineFailure(
+                        message = "The stream stopped before the end.",
+                        onRetry = session::retryCurrentSource,
+                        onOpenInBrowser = request.extra?.url?.let { url ->
+                            { runCatching { uriHandler.openUri(url) }.let { } }
+                        },
+                        onClose = session::close,
+                    )
+                    !status.hasMedia -> InlineStarting(
                         title = request.extra?.title.orEmpty(),
                         message = status.statusMessage,
                     )

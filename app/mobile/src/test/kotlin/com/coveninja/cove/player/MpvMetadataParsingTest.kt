@@ -75,4 +75,39 @@ class MpvMetadataParsingTest {
         assertEquals("demuxer diagnostic", status.statusMessage)
         assertEquals("The selected stream could not be opened.", status.error)
     }
+
+    @Test
+    fun `programmatic stop never becomes completion or interruption`() {
+        val status = PlaybackStatus(
+            hasMedia = true,
+            positionSeconds = 400.0,
+            durationSeconds = 1000.0,
+        ).withMpvEof(
+            reached = true,
+            stoppedByUser = true,
+            fileLoaded = true,
+            previousPositionSeconds = 399.0,
+        )
+
+        assertFalse(status.endReached)
+        assertFalse(status.interrupted)
+    }
+
+    @Test
+    fun `early eof becomes an interruption at the last real position`() {
+        val status = PlaybackStatus(
+            hasMedia = true,
+            positionSeconds = 1000.0,
+            durationSeconds = 1000.0,
+        ).withMpvEof(
+            reached = true,
+            stoppedByUser = false,
+            fileLoaded = true,
+            previousPositionSeconds = 400.0,
+        )
+
+        assertFalse(status.endReached)
+        assertTrue(status.interrupted)
+        assertEquals(400.0, status.positionSeconds)
+    }
 }
