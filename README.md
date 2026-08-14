@@ -1,126 +1,191 @@
 <div align="center">
-  <img src="packaging/icons/cove.svg" alt="Cove" width="120" />
+  <img src="packaging/icons/cove.svg" alt="Cove logo" width="128" />
 
-# Cove
+  <h1>Cove</h1>
 
-A Kotlin media app for Linux, Windows, and Android phones/tablets. Desktop and
-mobile share one Compose UI, Kotlin domain layer, embedded API, native mpv
-playback, and isolated extension runtime.
+  <p><strong>Discover, organize, and play your media in one native application.</strong></p>
 
-[![CI](https://github.com/coveninja/cove/actions/workflows/ci.yml/badge.svg)](https://github.com/coveninja/cove/actions/workflows/ci.yml)
-[![Latest Release](https://img.shields.io/github/v/release/coveninja/cove?label=release)](https://github.com/coveninja/cove/releases/latest)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Kotlin](https://img.shields.io/badge/Kotlin-Compose%20Multiplatform-7F52FF?logo=kotlin&logoColor=white)](https://www.jetbrains.com/compose-multiplatform/)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20android-informational)](#install)
+  <p>
+    Cove brings a personal library, rich discovery, extensible sources, and
+    hardware-accelerated playback to Linux, Windows, and Android phones and tablets.
+  </p>
+
+  <p>
+    <a href="#installation">Installation</a> ·
+    <a href="#building-from-source">Build from source</a> ·
+    <a href="#architecture">Architecture</a> ·
+    <a href="#documentation">Documentation</a> ·
+    <a href="CONTRIBUTING.md">Contributing</a>
+  </p>
+
+  <p>
+    <a href="https://github.com/coveninja/cove/actions/workflows/ci.yml"><img src="https://github.com/coveninja/cove/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
+    <a href="https://github.com/coveninja/cove/releases/latest"><img src="https://img.shields.io/github/v/release/coveninja/cove?label=latest" alt="Latest release" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-2563eb" alt="AGPL-3.0 license" /></a>
+    <a href="https://www.jetbrains.com/compose-multiplatform/"><img src="https://img.shields.io/badge/Kotlin-Compose%20Multiplatform-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin and Compose Multiplatform" /></a>
+  </p>
 </div>
 
-> Cove is a media player and organizer, not a content host. A fresh install
-> has no third-party stream sources. You are responsible for the addons and
-> plugins you configure and for complying with the laws in your jurisdiction.
+> [!IMPORTANT]
+> Cove is a media player and organizer, not a content host or provider. A fresh
+> installation contains no third-party stream sources. You are responsible for
+> the addons and plugins you configure and for following the laws that apply in
+> your jurisdiction.
 
 ## Features
 
-- **Stream anything** — connects to Stremio-compatible addon sources and streams directly in the app
-- **Extend with plugins** — add community JS scraper plugins for additional stream sources, sandboxed and opt-in per scraper
-- **Built-in player** — hardware-accelerated mpv playback with subtitle support, live buffering/download progress, and progress saving
-- **Smart stream picker** — auto-selects the best available stream using a configurable strategy (quality, size, reliability, or a connection-speed match via a built-in speed test), or sort/filter candidates yourself
-- **Skip intro & recap** — auto-skip buttons for intro, recap, and credits segments during playback, independently toggleable
-- **Where to watch** — see which legal streaming/rental services carry a title alongside the stream picker
-- **Discover** — personalized recommendations based on your watch history, ratings, and taste profile
-- **Library** — track what you've watched, mark favorites, and pick up where you left off with continue watching
-- **Explore** — browse trending, upcoming releases, genres, and curated categories
-- **Insights** — view your watch stats and genre/actor taste breakdown
-- **Search** — find any movie or TV show by title
-- **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
-- **Multiple profiles** — profile switching, works fully offline with no sign-in required
-- **Accounts & sync** — optional sign-in syncs your library and preferences across devices
-- **Trakt.tv integration** — optional Trakt sign-in scrobbles what you watch in real time and two-way syncs your watch history and watchlist with Trakt automatically
+### Discovery and organization
 
-## Install
+- Personalized recommendations informed by watch history, ratings, and taste.
+- Search, trending and upcoming titles, genres, curated collections, and people.
+- A profile-scoped library with favorites, progress, continue watching, and
+  spoiler protection for unwatched episodes.
+- Multiple local profiles, with optional account sync and Trakt integration.
 
-### Arch / CachyOS
+### Playback
+
+- Native, hardware-accelerated mpv playback on desktop and Android.
+- Direct HTTP and torrent playback with subtitles and live buffering progress.
+- Automatic stream selection by quality, size, reliability, or measured
+  connection speed, plus full manual sorting and filtering.
+- Configurable intro, recap, and credits skipping, with progress saved as you watch.
+
+### Sources and extensions
+
+- Stremio-compatible addons for catalogs, streams, subtitles, and metadata.
+- Opt-in community scraper plugins executed behind platform-specific isolation.
+- Legal watch-option discovery alongside configured playback sources.
+- Local-first profiles and settings: signing in is optional.
+
+## Platform support
+
+| Platform | Status | Distribution | Update path |
+|---|---|---|---|
+| Linux | Available | AUR, Flatpak | `cove-bin` through `pacman`; standalone Flatpak bundles are manual |
+| Windows | Available | Installer, portable ZIP | Verified in-app updates for both forms beginning with `1.0.0` |
+| Android phone/tablet | Preview | APK, Android 9+ | Verified APK through Android's package installer |
+| Android TV | Planned | — | Dedicated ten-foot/D-pad host is not packaged yet |
+| macOS | Not available | — | No native build or packaging yet |
+
+## Installation
+
+All downloadable packages are published on the
+[GitHub Releases](https://github.com/coveninja/cove/releases/latest) page.
+
+### Arch Linux and CachyOS
+
+Install the AUR package with your preferred helper:
 
 ```sh
 yay -S cove-bin
 ```
 
+Updates remain managed by `pacman` and your AUR workflow.
+
 ### Flatpak
 
-Download `cove-linux-amd64.flatpak` from the
-[latest release](https://github.com/coveninja/cove/releases/latest), then:
+Download `cove-linux-amd64.flatpak` from the latest release, then run:
 
 ```sh
 flatpak install --user cove-linux-amd64.flatpak
 flatpak run io.github.coveninja.Cove
 ```
 
+Standalone Flatpak bundles are replaced manually when a new version is released.
+
 ### Windows
 
-Use `cove-windows-amd64-setup.exe` from the latest release, or the portable
-`cove-windows-amd64.zip`. Both forms can download a verified update in Cove and
-ask before closing and applying it. Existing Windows versions before `1.0.0`
-need one manual installer/ZIP update to enter that update path.
+Download one of the following from the latest release:
+
+- `cove-windows-amd64-setup.exe` for a conventional installation.
+- `cove-windows-amd64.zip` for a self-contained portable copy.
+
+Both distributions support signed, verified in-app updates beginning with
+`1.0.0`. Older Windows builds need one manual installer or ZIP update to enter
+the new update path.
 
 ### Android phone/tablet
 
-Download `cove-android.apk` from the latest release and install it on Android 9
-(API 28) or newer. Cove verifies the APK and its installed signing certificate,
-then uses Android's normal per-app install permission and system confirmation.
+Download and install `cove-android.apk` on Android 9 (API 28) or newer. Android
+may ask you to allow installs from Cove when applying the first in-app update.
+Cove verifies the package name, version, release manifest, payload checksum, and
+installed signing certificate before handing the APK to the system installer.
 
-Android TV is intentionally not included in this APK: TV keeps its own
-ten-foot/D-pad presentation while sharing the Kotlin domain and backend layers.
-That dedicated TV host is not packaged yet.
+## Building from source
 
-### macOS
-Not currently supported. There's no native build or packaging for macOS yet — see [Roadmap](#roadmap--known-limitations).
+### Prerequisites
 
-## Build from source
+- JDK 21
+- libmpv (`mpv` on Arch/CachyOS or `libmpv-dev` on Debian/Ubuntu)
+- Android SDK platform and build-tools 36 for Android builds
+- A TMDB API key for live catalog data
 
-Desktop prerequisites are JDK 21 and libmpv (`mpv` on Arch/CachyOS,
-`libmpv-dev` on Debian/Ubuntu). Building the Android APK additionally requires
-the Android SDK with platform/build-tools 36. Cove also needs a TMDB API key.
+Clone the repository, create your local configuration, and launch the desktop app:
 
 ```sh
-git clone https://github.com/coveninja/cove
+git clone https://github.com/coveninja/cove.git
 cd cove
-echo "TMDB_API_KEY=your_key_here" > .env
+cp .env.example .env
+# Set TMDB_API_KEY in .env
 make run
 ```
 
-Useful targets:
+Common development commands:
 
-```sh
-make app       # build backend, shared code, UI, and desktop launcher
-make mobile    # build the Android phone/tablet APK
-make hot       # Compose hot-reload loop
-make test      # all Kotlin tests
-make test-all  # tests, workflow lint, desktop image, and mobile APK
-```
+| Command | Purpose |
+|---|---|
+| `make run` | Build and launch the desktop application |
+| `make mobile` | Build the Android phone/tablet debug APK |
+| `make hot` | Start the Compose hot-reload development loop |
+| `make test` | Run the Kotlin test suites |
+| `make test-build` | Build the desktop image and Android debug APK |
+| `make test-all` | Run the broadest local approximation of CI |
 
-Desktop runtime configuration is read from environment variables, the nearest
-`.env`, or release build properties. Android reads the same values when the APK
-is built. Supported deployment keys are `TMDB_API_KEY`,
-`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `TRAKT_CLIENT_ID`, and
-`TRAKT_CLIENT_SECRET`. On desktop, set `COVE_DATA_DIR` to override the data
-directory; Android always uses app-private storage.
+Desktop configuration is loaded from environment variables, the nearest `.env`,
+and then bundled release properties. Android receives the same deployment values
+through `BuildConfig` at build time. See [.env.example](.env.example) for the
+supported keys. `COVE_DATA_DIR` overrides the desktop data directory; Android
+always uses app-private storage.
+
+## Architecture
+
+Cove is a Kotlin Multiplatform application with two native hosts over one shared
+application graph:
+
+- `app/shared` defines domain models, repository contracts, and the app graph.
+- `app/backend` owns local persistence, integrations, addons, discovery, sync,
+  media boundaries, and host-specific runtime composition.
+- `app/ui` contains the shared adaptive Compose presentation.
+- `app/desktop` owns the desktop window, native mpv surfaces, lifecycle, and packaging.
+- `app/mobile` owns Android lifecycle, system integration, native playback, and APK packaging.
+
+Ordinary UI operations stay in-process. An embedded, authenticated Ktor boundary
+is retained only where URL semantics are required—for example media proxying,
+torrent delivery, diagnostics, and optional LAN clients. SQLDelight provides the
+shared database contract with platform-native drivers, while libmpv provides the
+playback boundary on both shipping hosts.
+
+For the detailed module and security model, read [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Documentation
 
+- [Application and presentation guide](docs/APP.md)
 - [Architecture](ARCHITECTURE.md)
 - [HTTP compatibility API](docs/API.md)
-- [Testing and release checks](docs/TESTING.md)
 - [Application updates and signing](docs/UPDATES.md)
-- [Contributing](CONTRIBUTING.md)
+- [Testing and release checks](docs/TESTING.md)
+- [Contributing guide](CONTRIBUTING.md)
 
-Translations salvaged from the former Svelte UI remain in `app/i18n/messages/`.
-They are not wired into the current Compose screens yet.
+Translations recovered from Cove's former frontend remain under
+`app/i18n/messages/`; they are not yet connected to the current Compose UI.
 
-## Community & Support
+## Contributing and support
 
-- **Bugs & feature requests:** [GitHub Issues](https://github.com/coveninja/cove/issues)
-- **Questions & discussion:** [GitHub Discussions](https://github.com/coveninja/cove/discussions)
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development workflow, architecture boundaries, and validation expectations.
 
-New contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and code style before opening a PR.
+- [Report a bug or request a feature](https://github.com/coveninja/cove/issues)
+- [Ask a question or start a discussion](https://github.com/coveninja/cove/discussions)
 
 ## Star History
 
@@ -132,8 +197,7 @@ New contributors are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev 
  </picture>
 </a>
 
-## Roadmap / Known Limitations
+## License
 
-- **Android & Android TV** are experimental — expect rough edges (see [Install](#install))
-- **macOS** is not yet supported — no native build exists
-- Have a request? Open an [issue](https://github.com/coveninja/cove/issues) to discuss it
+Cove is free software licensed under the
+[GNU Affero General Public License v3.0](LICENSE).
