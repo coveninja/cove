@@ -40,6 +40,8 @@ import com.coveninja.cove.backend.trakt.LocalTraktRepository
 import com.coveninja.cove.backend.trakt.TraktConfig
 import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.backend.trakt.TraktService
+import com.coveninja.cove.backend.updater.SignedUpdateService
+import com.coveninja.cove.backend.updater.createAndroidUpdateRepository
 import com.coveninja.cove.shared.data.AccountRepository
 import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.AppGraph
@@ -51,6 +53,7 @@ import com.coveninja.cove.shared.data.UnavailableDeviceRepository
 import com.coveninja.cove.shared.data.TraktRepository
 import com.coveninja.cove.shared.data.DeviceRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
+import com.coveninja.cove.shared.data.UpdateRepository
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.network.CoveJson
 import com.coveninja.cove.shared.network.UpdateCheckDto
@@ -87,6 +90,7 @@ class AndroidBackendRuntime private constructor(
     account: AccountRepository,
     trakt: TraktRepository,
     device: DeviceRepository,
+    private val updateRepository: UpdateRepository,
 ) : AutoCloseable {
     private var closed = false
     private var remoteHost: LocalBackendHost? = null
@@ -108,6 +112,7 @@ class AndroidBackendRuntime private constructor(
         profiles = stores.repositories.profiles,
         trakt = trakt,
         device = device,
+        updates = updateRepository,
         onClose = ::close,
     )
 
@@ -139,6 +144,7 @@ class AndroidBackendRuntime private constructor(
         remoteHost = null
         scope.cancel()
         media.close()
+        (updateRepository as? AutoCloseable)?.close()
         untrustedClient.close()
         client.close()
         stores.close()
@@ -169,6 +175,8 @@ class AndroidBackendRuntime private constructor(
             traktClientId: String = "",
             traktClientSecret: String = "",
             appVersion: String = "dev",
+            updatePublicKeys: String = "",
+            updateApiBase: String = SignedUpdateService.DEFAULT_API_BASE,
             systemLocale: StateFlow<String> = MutableStateFlow(
                 context.resources.configuration.locales[0].toLanguageTag(),
             ),
@@ -309,6 +317,13 @@ class AndroidBackendRuntime private constructor(
                     )
                     val trakt = LocalTraktRepository(traktService, scope)
                     val device = AndroidDeviceRepository(context, appVersion)
+                    val updateRepository = createAndroidUpdateRepository(
+                        context = context,
+                        currentVersion = appVersion,
+                        scope = scope,
+                        publicKeys = updatePublicKeys,
+                        apiBase = updateApiBase,
+                    )
                     val quality = QualityService(catalog, addonManager)
                     val prefetch = PrefetchService(
                         database = stores.databaseHandle,
@@ -395,6 +410,7 @@ class AndroidBackendRuntime private constructor(
                     AndroidBackendRuntime(
                         stores, client, untrustedClient, scope, media, routeServices, content, playback, addons,
                         calendar, discovery, account, trakt, device,
+                        updateRepository,
                     )
                 }
             } catch (error: Throwable) {

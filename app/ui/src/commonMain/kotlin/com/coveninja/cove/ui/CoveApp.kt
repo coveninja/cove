@@ -46,6 +46,7 @@ import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.ui.components.media.MyListCategory
+import com.coveninja.cove.ui.components.common.AppUpdateOverlay
 import com.coveninja.cove.ui.components.media.card.MediaCard
 import com.coveninja.cove.ui.components.media.details.MediaDetailsSharedOverlay
 import com.coveninja.cove.ui.components.media.details.MediaSharedKey
@@ -198,8 +199,12 @@ fun CoveApp(
     // Android combines this with the details callback to manage immersive mode
     // and keep-awake state. Desktop does not need a window callback here.
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
+    // Desktop closes its graph and releases the single-instance lock after a verified
+    // detached updater has started. Android's PackageInstaller does not use this.
+    onUpdateExitRequested: () -> Unit = {},
 ) {
     val performance by graph.device.performance.collectAsState()
+    LaunchedEffect(graph.updates) { graph.updates.start() }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         CompositionLocalProvider(
             LocalAppGraph provides graph,
@@ -223,6 +228,7 @@ fun CoveApp(
                 navBarPlacement,
                 onDetailsOverlayVisibilityChanged,
                 onFullscreenPlaybackVisibilityChanged,
+                onUpdateExitRequested,
             )
         }
     }
@@ -234,6 +240,7 @@ private fun CoveAppContent(
     navBarPlacement: NavBarPlacement,
     onDetailsOverlayVisibilityChanged: (Boolean) -> Unit,
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit,
+    onUpdateExitRequested: () -> Unit,
 ) {
     val graph = LocalAppGraph.current
     val libraryState by graph.library.entries.collectAsState()
@@ -284,6 +291,8 @@ private fun CoveAppContent(
     val uriHandler = LocalUriHandler.current
     val pageViewport = LocalPageViewport.current
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
+    val updateState by graph.updates.state.collectAsState()
+    val playerStatus = videoPlayerHost?.status?.collectAsState()?.value
 
     val currentOverlayVisibilityCallback = rememberUpdatedState(
         onDetailsOverlayVisibilityChanged,
@@ -733,6 +742,14 @@ private fun CoveAppContent(
                     )
                 }
             }
+
+            AppUpdateOverlay(
+                updates = graph.updates,
+                state = updateState,
+                playbackActive = playerStatus?.hasMedia == true,
+                onExitRequired = onUpdateExitRequested,
+                modifier = Modifier.zIndex(600f),
+            )
 
             // Above every other layer: playback owns the window while it is open.
             PlayerLayer(

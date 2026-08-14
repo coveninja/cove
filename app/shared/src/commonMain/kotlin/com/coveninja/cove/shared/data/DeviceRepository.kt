@@ -19,11 +19,9 @@ data class DevicePerformanceState(
 /**
  * Settings that belong to this installation rather than to the profile, and so
  * deliberately do not roam with sync: the mpv configuration file and the app
- * build itself.
- *
- * Deliberately no update check. `UpdateService` reports the running version and
- * nothing else — there is no release feed behind it — so a "check for updates"
- * control here would only ever tell the user what they already see.
+ * build itself. Update lifecycle state is intentionally kept in
+ * [UpdateRepository], because checking, staging, and installation have a
+ * different security boundary from editable player settings.
  */
 interface DeviceRepository {
     /** False on hosts without editable local device settings, such as remote backends. */

@@ -27,6 +27,7 @@ import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
 import com.coveninja.cove.shared.data.DiscoveryRepository
 import com.coveninja.cove.backend.quality.QualityService
 import com.coveninja.cove.backend.updater.UpdateService
+import com.coveninja.cove.backend.updater.createDesktopUpdateRepository
 import com.coveninja.cove.backend.prefetch.PrefetchService
 import com.coveninja.cove.backend.http.LocalBackendHost
 import com.coveninja.cove.backend.http.MediaBoundary
@@ -47,6 +48,7 @@ import com.coveninja.cove.shared.data.LivePlaybackRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
+import com.coveninja.cove.shared.data.UpdateRepository
 import com.coveninja.cove.shared.network.CoveApi
 import com.coveninja.cove.shared.network.CoveApiConfig
 import com.coveninja.cove.shared.network.CoveJson
@@ -84,6 +86,7 @@ class LocalBackendRuntime private constructor(
     accountRepository: AccountRepository,
     traktRepository: TraktRepository,
     deviceRepository: DeviceRepository,
+    private val updateRepository: UpdateRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
@@ -97,6 +100,7 @@ class LocalBackendRuntime private constructor(
         profiles = stores.profiles,
         trakt = traktRepository,
         device = deviceRepository,
+        updates = updateRepository,
         onClose = ::close,
     )
 
@@ -109,6 +113,7 @@ class LocalBackendRuntime private constructor(
         closed = true
         host?.close()
         media.close()
+        (updateRepository as? AutoCloseable)?.close()
         contentScope.cancel()
         untrustedClient.close()
         contentClient.close()
@@ -309,6 +314,11 @@ class LocalBackendRuntime private constructor(
                 // has no per-request registry living behind a route, and the HTTP host is
                 // optional here.
                 val discoveryRepository = LocalDiscoveryRepository(catalog, discovery, localeProvider)
+                val updateRepository = createDesktopUpdateRepository(
+                    dataDirectory = dataDirectory,
+                    currentVersion = DesktopBackendEnvironment.appVersion(),
+                    scope = scope,
+                )
                 scope.launch {
                     localeChanges.drop(1).collectLatest {
                         calendarRepository.refresh(force = true)
@@ -331,6 +341,7 @@ class LocalBackendRuntime private constructor(
                     accountRepository,
                     LocalTraktRepository(trakt, scope),
                     LocalDeviceRepository(deviceSettings, DesktopBackendEnvironment.appVersion()),
+                    updateRepository,
                 )
             } catch (error: Throwable) {
                 scope.cancel()

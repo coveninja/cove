@@ -10,6 +10,7 @@ val generateCoveConfig by tasks.registering {
         "SUPABASE_PUBLISHABLE_KEY",
         "TRAKT_CLIENT_ID",
         "TRAKT_CLIENT_SECRET",
+        "UPDATE_PUBLIC_KEYS",
     )
     val values = keys.associateWith { providers.environmentVariable(it).orElse("") }
     // Captured as locals so the doLast lambda holds plain values and Providers rather than a

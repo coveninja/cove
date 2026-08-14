@@ -119,6 +119,8 @@ class CoveMobileApplication : Application(), SingletonImageLoader.Factory {
                             traktClientId = BuildConfig.TRAKT_CLIENT_ID,
                             traktClientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
                             appVersion = BuildConfig.VERSION_NAME,
+                            updatePublicKeys = BuildConfig.UPDATE_PUBLIC_KEYS,
+                            updateApiBase = BuildConfig.UPDATE_API_BASE,
                             systemLocale = systemLocale,
                         )
                     }

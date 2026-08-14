@@ -25,6 +25,15 @@ object DesktopBackendEnvironment {
             ?: bundledValues["COVE_VERSION"]?.takeIf(String::isNotBlank)
             ?: "dev"
 
+    fun updatePublicKeys(environment: Map<String, String> = System.getenv()): String =
+        environment["COVE_UPDATE_PUBLIC_KEYS"]?.takeIf(String::isNotBlank)
+            ?: bundledValues["UPDATE_PUBLIC_KEYS"]?.takeIf(String::isNotBlank)
+            ?: ""
+
+    fun updateApiBase(environment: Map<String, String> = System.getenv()): String =
+        environment["COVE_UPDATE_API_BASE"]?.takeIf(String::isNotBlank)
+            ?: "https://api.github.com/repos/coveninja/cove"
+
     fun supabaseConfig(
         environment: Map<String, String> = System.getenv(),
         searchStart: Path = Path.of("").toAbsolutePath(),

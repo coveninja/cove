@@ -569,7 +569,8 @@ class CoveApi(
             applyAuthHeaders()
         }.requireSuccess().body()
 
-    // Triggers download + restart; the process exits 42 so the shell re-execs.
+    // Compatibility only. Application updates are never exposed through the
+    // HTTP/LAN boundary; the device-local UpdateRepository owns installation.
     suspend fun applyUpdate() {
         httpClient.post("${config.baseUrl}/api/update/apply") {
             applyAuthHeaders()

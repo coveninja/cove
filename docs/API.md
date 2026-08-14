@@ -94,6 +94,8 @@ gateway.
 
 ## Updates
 
-The JVM build does not rewrite its own installation. `/update/check` reports
-the current version and no downloadable self-update; `/update/apply` returns a
-conflict directing the caller to Flatpak, AUR, or the Windows installer.
+The compatibility routes do not expose the application updater. `/update/check`
+reports the current version and no downloadable update; `/update/apply` returns
+a conflict. Signed update checking, staging, and installation live in the host's
+device-local `UpdateRepository`, are not reachable from the LAN API, and never
+accept a caller-supplied URL or key. See [Application updates](UPDATES.md).

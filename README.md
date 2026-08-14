@@ -57,12 +57,15 @@ flatpak run io.github.coveninja.Cove
 ### Windows
 
 Use `cove-windows-amd64-setup.exe` from the latest release, or the portable
-`cove-windows-amd64.zip`.
+`cove-windows-amd64.zip`. Both forms can download a verified update in Cove and
+ask before closing and applying it. Existing Windows versions before `1.0.0`
+need one manual installer/ZIP update to enter that update path.
 
 ### Android phone/tablet
 
 Download `cove-android.apk` from the latest release and install it on Android 9
-(API 28) or newer.
+(API 28) or newer. Cove verifies the APK and its installed signing certificate,
+then uses Android's normal per-app install permission and system confirmation.
 
 Android TV is intentionally not included in this APK: TV keeps its own
 ten-foot/D-pad presentation while sharing the Kotlin domain and backend layers.
@@ -106,6 +109,7 @@ directory; Android always uses app-private storage.
 - [Architecture](ARCHITECTURE.md)
 - [HTTP compatibility API](docs/API.md)
 - [Testing and release checks](docs/TESTING.md)
+- [Application updates and signing](docs/UPDATES.md)
 - [Contributing](CONTRIBUTING.md)
 
 Translations salvaged from the former Svelte UI remain in `app/i18n/messages/`.

@@ -129,6 +129,7 @@ fun main(args: Array<String>) {
                             graph,
                             videoPlayerHost = playerHost,
                             fullscreenController = fullscreen,
+                            onUpdateExitRequested = ::exitApplication,
                         )
                     }
                 }

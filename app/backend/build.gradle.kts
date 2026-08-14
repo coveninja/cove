@@ -28,6 +28,9 @@ kotlin {
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
+            // Android API 28 does not guarantee a system Ed25519 provider. Bundle
+            // one so signed update manifests verify identically on every host.
+            implementation(libs.bouncycastle.provider)
         }
         val desktopMain by getting {
             kotlin.srcDir("src/jvmSharedMain/kotlin")

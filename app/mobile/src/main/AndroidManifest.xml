@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- This artifact is intentionally the shared touch UI. Android TV gets a
          separate launcher/UI module instead of mode-switching this activity. -->
@@ -60,6 +61,16 @@
             <intent-filter>
                 <action android:name="com.coveninja.cove.benchmark.CLEAR_IMAGE_CACHE" />
                 <action android:name="com.coveninja.cove.benchmark.IMAGE_STATUS" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name="com.coveninja.cove.backend.updater.AndroidPackageInstallerReceiver"
+            android:exported="false" />
+        <receiver
+            android:name="com.coveninja.cove.backend.updater.AndroidPostUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
     </application>

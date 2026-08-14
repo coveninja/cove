@@ -92,8 +92,26 @@ publishes `cove-android.apk` plus its SHA-256 checksum. Deployment keys are
 supplied to the desktop resource or Android `BuildConfig` during packaging.
 
 The release workflow must not fetch private source submodules or stage a second
-backend executable. Platform package managers own updates; the zip checksum is
-an integrity artifact, not an in-app self-update protocol.
+backend executable. It publishes no GitHub release until every platform package
+exists, creates one canonical update manifest with exact asset sizes and SHA-256
+digests, signs those exact bytes with Ed25519, verifies that signature, and only
+then publishes all assets atomically. Windows installed/portable helpers and the
+Android APK are the in-app update payloads; AUR remains package-manager managed
+and standalone Flatpak bundles remain manual.
+
+Focused updater coverage uses an ephemeral Ed25519 key and mock HTTP engine:
+
+```sh
+cd app
+./gradlew :backend:desktopTest --tests '*SignedUpdateServiceTest' --no-daemon
+./gradlew :mobile:testDebugUnitTest --tests '*MobileArtifactContractTest' --no-daemon
+```
+
+Before tagging, also compile both NSIS modes on Windows and exercise replacement
+failure/rollback in a disposable installed and portable directory. A release
+candidate APK should be installed over the previous production APK on a device
+signed with the production certificate; the system must accept the upgrade and
+the post-update notification must open the new version.
 
 ## Final local checklist
 

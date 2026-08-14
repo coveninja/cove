@@ -18,6 +18,7 @@ class AppGraph(
     val profiles: ProfileRepository = UnavailableProfileRepository,
     val trakt: TraktRepository = UnavailableTraktRepository,
     val device: DeviceRepository = UnavailableDeviceRepository,
+    val updates: UpdateRepository = UnavailableUpdateRepository,
     private val onClose: () -> Unit = {},
 ) : AutoCloseable {
     override fun close() = onClose()

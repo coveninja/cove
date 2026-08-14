@@ -18,6 +18,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.lifecycle.lifecycleScope
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -29,7 +30,9 @@ import com.coveninja.cove.ui.components.common.AppBootstrapLoading
 import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.player.AndroidMpvVideoPlayerHost
 import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.data.AppUpdateState
 import com.coveninja.cove.shared.fixture.FixtureAppGraph
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val requestNotificationPermission = registerForActivityResult(
@@ -101,6 +104,17 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) updateSystemBars()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val mobileApplication = application as CoveMobileApplication
+        val ready = mobileApplication.runtimeState.value as? MobileRuntimeState.Ready ?: return
+        if (ready.runtime.graph.updates.state.value is AppUpdateState.PermissionRequired &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls())
+        ) {
+            lifecycleScope.launch { ready.runtime.graph.updates.resumePendingAction() }
+        }
     }
 
     override fun onUserLeaveHint() {

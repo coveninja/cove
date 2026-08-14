@@ -14,63 +14,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Create the GitHub release up front with the tagged commit's body (the MSG
-  # + linked user-facing fix/feat list that `make patch`/`minor`/`major`
-  # writes) as the release notes — the markdown only renders on the release
-  # page. The softprops asset-upload steps otherwise create a body-less
-  # release. If a
-  # package job wins the race and creates the release first, fall back to
-  # editing the notes in. softprops preserves an existing body when no body
-  # input is given, so later asset uploads don't clobber the notes.
-  create-release:
-    name: Create release with notes
+  update-key:
+    name: Prepare update verification key
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    needs: [kotlin]
-    permissions:
-      contents: write
+    outputs:
+      public_keys: ${{ steps.key.outputs.public_keys }}
+      key_id: ${{ steps.key.outputs.key_id }}
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Seed release notes from the tagged commit body
+      - id: key
+        name: Derive public key from protected signing key
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY_BASE64 }}
+          KEY_ID: ${{ vars.UPDATE_SIGNING_KEY_ID || 'cove-2026-1' }}
+          TRUSTED_PUBLIC_KEYS: ${{ vars.UPDATE_TRUSTED_PUBLIC_KEYS }}
         run: |
-          git log -1 --format=%b > notes.md
-          gh release create "$TAG" --title "$TAG" --notes-file notes.md \
-            || gh release edit "$TAG" --notes-file notes.md
+          set -euo pipefail
+          test -n "$PRIVATE_KEY" || { echo '::error::UPDATE_SIGNING_KEY_BASE64 is not configured'; exit 1; }
+          [[ "$KEY_ID" =~ ^[a-zA-Z0-9._-]{1,64}$ ]] || { echo '::error::Invalid update signing key id'; exit 1; }
+          printf '%s' "$PRIVATE_KEY" | tr -d ' \t\r\n' | base64 -d > private.der
+          openssl pkey -inform DER -in private.der -pubout -outform DER -out public.der
+          PUBLIC=$(base64 -w0 public.der)
+          TRUSTED=$(printf '%s' "$TRUSTED_PUBLIC_KEYS" | tr -d ' \t\r\n')
+          PUBLIC_KEYS="${TRUSTED:+$TRUSTED,}$KEY_ID=$PUBLIC"
+          echo "key_id=$KEY_ID" >> "$GITHUB_OUTPUT"
+          echo "public_keys=$PUBLIC_KEYS" >> "$GITHUB_OUTPUT"
 
   kotlin:
     name: Kotlin desktop/mobile build and test
+    needs: [update-key]
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-
+      - name: Verify tag and source version agree
+        run: test "${GITHUB_REF_NAME#v}" = "$(tr -d '\r\n' < VERSION)"
       - name: Install libmpv
-        # The desktop app links libmpv in-process through JNA, so the shared
-        # library must be present for the JVM to load it at test time.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libmpv-dev
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-
       - uses: gradle/actions/setup-gradle@v5
-
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0"
-
       - name: Build and test
         working-directory: app
+        env:
+          UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
         run: >-
           ./gradlew
           :shared:build
@@ -82,332 +79,179 @@ jobs:
           :mobile:assembleDebug
           --no-daemon
 
-  package:
-    name: Package release asset (Flatpak)
-    needs: [kotlin, create-release]
+  package-linux:
+    name: Package Linux assets
+    needs: [update-key, kotlin]
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-
       - uses: gradle/actions/setup-gradle@v5
-
-      - name: Install libmpv build deps
+      - name: Install libmpv and Flatpak tooling
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libmpv-dev
-
-      # Build the Compose Desktop app image outside the Flatpak sandbox (Gradle
-      # requires network for dependency resolution). The jpackage distributable
-      # bundles its own JRE so the packaged artifact is self-contained.
+          sudo apt-get install -y libmpv-dev flatpak flatpak-builder
+          sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y --noninteractive flathub \
+            org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08
       - name: Build Compose Desktop distributable
         working-directory: app
         env:
+          UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
         run: ./gradlew :desktop:createDistributable --no-daemon
-
-      - name: Assemble PKGBUILD tarball
+      - name: Assemble tarball and PKGBUILD
         run: |
           mkdir -p _pkg/bin _pkg/lib/cove _pkg/share/applications \
-                   "_pkg/share/icons/hicolor/scalable/apps"
-
-          # Stable launcher for the self-contained Compose app image.
-          printf '#!/bin/sh\nexec /usr/lib/cove/Cove/bin/Cove "$@"\n' \
-            > _pkg/bin/cove
+                   _pkg/share/icons/hicolor/scalable/apps compose-app
+          printf '#!/bin/sh\nexec /usr/lib/cove/Cove/bin/Cove "$@"\n' > _pkg/bin/cove
           chmod +x _pkg/bin/cove
-
-          # Compose Desktop distributable (includes bundled JRE)
           cp -r app/desktop/build/compose/binaries/main/app/Cove _pkg/lib/cove/Cove
-          cp flatpak/io.github.coveninja.Cove.desktop \
-             _pkg/share/applications/
-          cp packaging/icons/cove.svg \
-             "_pkg/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg"
-
+          cp -r app/desktop/build/compose/binaries/main/app/Cove compose-app/Cove
+          cp flatpak/io.github.coveninja.Cove.desktop _pkg/share/applications/
+          cp packaging/icons/cove.svg _pkg/share/icons/hicolor/scalable/apps/io.github.coveninja.Cove.svg
           tar -czf cove-linux-amd64.tar.gz -C _pkg .
-
-      - name: Generate PKGBUILD
-        run: |
-          PKG_VER="${{ github.ref_name }}"
-          PKG_VER="${PKG_VER#v}"
+          VERSION="${GITHUB_REF_NAME#v}"
           SHA256=$(sha256sum cove-linux-amd64.tar.gz | cut -d' ' -f1)
-          sed -e "s/__VERSION__/${PKG_VER}/" \
-              -e "s/__SHA256__/${SHA256}/" \
-              packaging/PKGBUILD > PKGBUILD
-          printf '%s  cove-linux-amd64.tar.gz' "$SHA256" > cove-linux-amd64.tar.gz.sha256
-
-      - name: Install Flatpak build tools and runtimes
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y flatpak flatpak-builder
-          sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install --system -y --noninteractive flathub \
-            org.freedesktop.Sdk//24.08 \
-            org.freedesktop.Platform//24.08
-
-      # Copy the Compose distributable to compose-app/ so the Flatpak manifest
-      # can reference it as a separate type:dir source without pulling in the
-      # entire Gradle build cache.
-      - name: Stage Compose app for Flatpak
-        run: |
-          mkdir -p compose-app
-          cp -r app/desktop/build/compose/binaries/main/app/Cove compose-app/
-
-      - name: Build Flatpak
+          sed -e "s/__VERSION__/${VERSION}/" -e "s/__SHA256__/${SHA256}/" packaging/PKGBUILD > PKGBUILD
+          printf '%s  cove-linux-amd64.tar.gz\n' "$SHA256" > cove-linux-amd64.tar.gz.sha256
+      - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: cove-linux-amd64.flatpak
           manifest-path: flatpak/io.github.coveninja.Cove.yml
           cache-key: flatpak-builder-${{ hashFiles('flatpak/io.github.coveninja.Cove.yml') }}
           upload-artifact: false
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+      - name: Checksum Flatpak bundle
+        run: sha256sum cove-linux-amd64.flatpak > cove-linux-amd64.flatpak.sha256
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: linux-release-assets
+          if-no-files-found: error
+          path: |
             cove-linux-amd64.flatpak
+            cove-linux-amd64.flatpak.sha256
             cove-linux-amd64.tar.gz
             cove-linux-amd64.tar.gz.sha256
             PKGBUILD
 
-  aur-publish:
-    name: Publish to AUR
-    needs: [package]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    # Arch container gives us makepkg (for --printsrcinfo) without hand-rolling
-    # pacman setup on a plain ubuntu runner.
-    container: archlinux:base
-    steps:
-      - name: Install git, openssh, base-devel, create builder user
-        run: |
-          pacman -Sy --noconfirm git openssh base-devel
-          # base-devel's makepkg refuses to run as root; do everything below
-          # as an unprivileged user, matching normal Arch usage. Setting up
-          # SSH directly in its home dir (rather than as root and copying
-          # over) avoids ownership/ordering pitfalls that broke host key
-          # verification.
-          useradd -m builder
-
-      - name: Set up SSH for AUR (as builder)
-        run: |
-          install -d -m 700 -o builder -g builder /home/builder/.ssh
-
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > /home/builder/.ssh/aur
-          chmod 600 /home/builder/.ssh/aur
-          chown builder:builder /home/builder/.ssh/aur
-
-          ssh-keyscan -H aur.archlinux.org >> /home/builder/.ssh/known_hosts
-          chmod 600 /home/builder/.ssh/known_hosts
-          chown builder:builder /home/builder/.ssh/known_hosts
-
-          cat >> /home/builder/.ssh/config <<EOF
-          Host aur.archlinux.org
-            IdentityFile ~/.ssh/aur
-            User aur
-            StrictHostKeyChecking accept-new
-          EOF
-          chmod 600 /home/builder/.ssh/config
-          chown builder:builder /home/builder/.ssh/config
-
-      - name: Download generated PKGBUILD from this release, push to AUR (as builder)
-        run: |
-          # Variables in this command body intentionally expand in builder's shell.
-          # shellcheck disable=SC2016
-          su builder -c '
-            set -e
-            cd ~
-            curl -L -o PKGBUILD \
-              "https://github.com/coveninja/cove/releases/download/${{ github.ref_name }}/PKGBUILD"
-            git clone ssh://aur@aur.archlinux.org/cove-bin.git aur-repo
-            cp PKGBUILD aur-repo/
-            cd aur-repo
-            makepkg --printsrcinfo > .SRCINFO
-            git config user.name "coveninja-bot"
-            git config user.email "actions@github.com"
-            git add PKGBUILD .SRCINFO
-            if git diff --cached --quiet; then
-              echo "No changes to push"
-            else
-              git commit -m "Update to ${{ github.ref_name }}"
-              # The AUR SSH endpoint intermittently drops the connection
-              # mid-handshake (unrelated to auth/config); retry a few times
-              # before failing the job.
-              for attempt in 1 2 3 4 5; do
-                if git push origin master; then
-                  break
-                fi
-                echo "push attempt $attempt failed, retrying in 15s..."
-                sleep 15
-                if [ "$attempt" = 5 ]; then
-                  echo "git push failed after 5 attempts"
-                  exit 1
-                fi
-              done
-            fi
-          '
-
   package-windows:
-    name: Package release asset (Windows)
-    needs: [kotlin, create-release]
+    name: Package Windows assets
+    needs: [update-key, kotlin]
     runs-on: windows-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-
       - uses: gradle/actions/setup-gradle@v5
-
-      - name: Download mpv DLL (shinchiro)
+      - name: Download mpv DLL
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+          RESPONSE=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest)
-          ASSET_URL=$(echo "$RESPONSE" \
-            | jq -r '.assets[] | select(.name | test("mpv-dev-x86_64.*\\.7z$")) | .browser_download_url' \
-            | head -1)
-          if [ -z "$ASSET_URL" ]; then
-            echo "Failed to find asset; API response:"
-            echo "$RESPONSE" | head -c 500
-            exit 1
-          fi
-          echo "Downloading $ASSET_URL"
-          curl -L "$ASSET_URL" -o mpv-dev.7z
+          ASSET_URL=$(echo "$RESPONSE" | jq -r \
+            '.assets[] | select(.name | test("mpv-dev-x86_64.*\\.7z$")) | .browser_download_url' | head -1)
+          test -n "$ASSET_URL"
+          curl -fL "$ASSET_URL" -o mpv-dev.7z
           7z x mpv-dev.7z -ompv-sdk -y
-
       - name: Locate mpv DLL
         shell: pwsh
         run: |
           $dll = Get-ChildItem mpv-sdk -Filter "mpv-2.dll" -Recurse | Select-Object -First 1
           if (-not $dll) { $dll = Get-ChildItem mpv-sdk -Filter "libmpv-2.dll" -Recurse | Select-Object -First 1 }
-          if (-not $dll) { Write-Error "mpv DLL not found in mpv-sdk"; exit 1 }
+          if (-not $dll) { Write-Error "mpv DLL not found"; exit 1 }
           "MPV_DLL=$($dll.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Found mpv DLL: $($dll.FullName)"
-
-      # Build the Compose Desktop distributable for Windows. jpackage bundles a
-      # JRE so the packaged artifact is self-contained; no system Java required
-      # at install time.
-      - name: Build Compose Desktop distributable (Windows)
+      - name: Build Compose Desktop distributable
         working-directory: app
         env:
+          UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
         run: ./gradlew :desktop:createDistributable --no-daemon
-
-      - name: Assemble staging directory
+      - name: Assemble and validate staging directory
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force staging | Out-Null
-          # Compose Desktop app image (Cove.exe launcher + bundled JRE + app JARs)
-          $appDir = "app\desktop\build\compose\binaries\main\app\Cove"
-          Copy-Item -Recurse "$appDir\*" staging\
-          # mpv DLL loaded at runtime via JNA; must be on PATH or in the working
-          # directory so JNA can locate it — staging root alongside Cove.exe works.
+          Copy-Item -Recurse "app\desktop\build\compose\binaries\main\app\Cove\*" staging\
           Copy-Item "${{ env.MPV_DLL }}" staging\mpv-2.dll
-
-      - name: Sanity-check staged package
-        shell: pwsh
-        run: |
-          $missing = @()
-          foreach ($f in @("Cove.exe", "mpv-2.dll")) {
-            if (-not (Test-Path "staging\$f")) { $missing += $f }
+          foreach ($f in @("Cove.exe", "mpv-2.dll", "runtime", "app")) {
+            if (-not (Test-Path "staging\$f")) { Write-Error "staging is missing $f"; exit 1 }
           }
-          if (-not (Test-Path "staging\runtime")) { $missing += "runtime\" }
-          if (-not (Test-Path "staging\app"))     { $missing += "app\" }
-          if ($missing) {
-            Write-Error ("Staged Windows package is incomplete — missing: " + ($missing -join ", "))
-            exit 1
-          }
-
-      - name: Create zip (for auto-updater)
-        shell: pwsh
-        run: |
-          Compress-Archive -Path staging/* -DestinationPath cove-windows-amd64.zip
-
-      # Publish an integrity checksum alongside the portable package.
-      - name: Publish zip checksum
-        shell: pwsh
-        run: |
-          $hash = (Get-FileHash cove-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  cove-windows-amd64.zip" | Out-File cove-windows-amd64.zip.sha256 -Encoding ascii -NoNewline
-
-      - name: Install NSIS
+      - name: Build installer, portable updater, and portable ZIP
         shell: pwsh
         run: |
           choco install nsis --no-progress -y
-          echo "C:\Program Files (x86)\NSIS" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Create NSIS installer
-        shell: pwsh
-        run: |
-          makensis /DVERSION="${{ github.ref_name }}" /DOUTDIR="${{ github.workspace }}" packaging/windows/cove.nsi
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          & $nsis /DVERSION="${{ github.ref_name }}" /DOUTDIR="${{ github.workspace }}" packaging/windows/cove.nsi
+          & $nsis /DPORTABLE_UPDATE=1 /DVERSION="${{ github.ref_name }}" /DOUTDIR="${{ github.workspace }}" packaging/windows/cove.nsi
+          New-Item -ItemType Directory -Force staging-portable | Out-Null
+          Copy-Item -Recurse staging\* staging-portable\
+          Set-Content staging-portable\.cove-portable -Value "${{ github.ref_name }}" -Encoding ascii
+          $portableFiles = Get-ChildItem staging-portable -Force
+          Compress-Archive -Path $portableFiles.FullName -DestinationPath cove-windows-amd64.zip
+          foreach ($f in @(
+            "cove-windows-amd64-setup.exe",
+            "cove-windows-amd64-portable-update.exe",
+            "cove-windows-amd64.zip"
+          )) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            "$hash  $f" | Out-File "$f.sha256" -Encoding ascii -NoNewline
+          }
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: windows-release-assets
+          if-no-files-found: error
+          path: |
             cove-windows-amd64-setup.exe
+            cove-windows-amd64-setup.exe.sha256
+            cove-windows-amd64-portable-update.exe
+            cove-windows-amd64-portable-update.exe.sha256
             cove-windows-amd64.zip
             cove-windows-amd64.zip.sha256
 
   package-android:
-    name: Package release asset (Android phone/tablet)
-    needs: [kotlin, create-release]
+    name: Package Android asset
+    needs: [update-key, kotlin]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-
       - uses: gradle/actions/setup-gradle@v5
-
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0"
-
       - name: Decode release keystore
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          CLEAN=$(printf '%s' "$KS_B64" | tr -d ' \t\r\n')
-          if [ -z "$CLEAN" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not configured"
-            exit 1
-          fi
-          printf '%s' "$CLEAN" | base64 -d > "$RUNNER_TEMP/cove-release.jks"
-
+          test -n "$KEYSTORE" || { echo '::error::ANDROID_KEYSTORE_BASE64 is not configured'; exit 1; }
+          printf '%s' "$KEYSTORE" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/cove-release.jks"
       - name: Build signed release APK
         working-directory: app
         env:
+          UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/cove-release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -418,15 +262,137 @@ jobs:
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
         run: ./gradlew :mobile:lintDebug :mobile:testDebugUnitTest :mobile:assembleRelease --no-daemon
-
-      - name: Stage APK and checksum
+      - name: Stage and checksum APK
         run: |
           cp app/mobile/build/outputs/apk/release/mobile-release.apk cove-android.apk
           sha256sum cove-android.apk > cove-android.apk.sha256
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: android-release-assets
+          if-no-files-found: error
+          path: |
             cove-android.apk
             cove-android.apk.sha256
+
+  publish-release:
+    name: Sign manifest and publish complete release
+    needs: [update-key, package-linux, package-windows, package-android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-release-assets'
+          path: release-assets
+          merge-multiple: true
+      - name: Generate and sign update manifest
+        env:
+          PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY_BASE64 }}
+          KEY_ID: ${{ needs.update-key.outputs.key_id }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          WIN_SETUP=cove-windows-amd64-setup.exe
+          WIN_PORTABLE=cove-windows-amd64-portable-update.exe
+          ANDROID=cove-android.apk
+          for file in "$WIN_SETUP" "$WIN_PORTABLE" "$ANDROID"; do test -s "release-assets/$file"; done
+          jq -n \
+            --arg key_id "$KEY_ID" \
+            --arg version "$VERSION" \
+            --arg release_name "$GITHUB_REF_NAME" \
+            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg win_setup "$WIN_SETUP" \
+            --arg win_setup_sha "$(sha256sum "release-assets/$WIN_SETUP" | cut -d' ' -f1)" \
+            --argjson win_setup_size "$(stat -c %s "release-assets/$WIN_SETUP")" \
+            --arg win_portable "$WIN_PORTABLE" \
+            --arg win_portable_sha "$(sha256sum "release-assets/$WIN_PORTABLE" | cut -d' ' -f1)" \
+            --argjson win_portable_size "$(stat -c %s "release-assets/$WIN_PORTABLE")" \
+            --arg android "$ANDROID" \
+            --arg android_sha "$(sha256sum "release-assets/$ANDROID" | cut -d' ' -f1)" \
+            --argjson android_size "$(stat -c %s "release-assets/$ANDROID")" \
+            '{schema_version:1,key_id:$key_id,version:$version,release_name:$release_name,published_at:$published_at,assets:[
+              {target:"windows-installer",name:$win_setup,size_bytes:$win_setup_size,sha256:$win_setup_sha},
+              {target:"windows-portable",name:$win_portable,size_bytes:$win_portable_size,sha256:$win_portable_sha},
+              {target:"android",name:$android,size_bytes:$android_size,sha256:$android_sha}
+            ]}' > cove-update-manifest-v1.json
+          printf '%s' "$PRIVATE_KEY" | tr -d ' \t\r\n' | base64 -d > private.der
+          openssl pkeyutl -sign -rawin -inkey private.der -keyform DER \
+            -in cove-update-manifest-v1.json -out manifest-signature.bin
+          base64 -w0 manifest-signature.bin > cove-update-manifest-v1.json.sig
+          openssl pkey -inform DER -in private.der -pubout -outform DER -out public.der
+          openssl pkeyutl -verify -rawin -pubin -inkey public.der -keyform DER \
+            -in cove-update-manifest-v1.json -sigfile manifest-signature.bin
+      - name: Verify human checksums
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          for checksum in *.sha256; do sha256sum -c "$checksum"; done
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "::error::Release $GITHUB_REF_NAME already exists; publish a new patch tag instead of replacing assets."
+            exit 1
+          fi
+          git log -1 --format=%b > notes.md
+          cleanup_failed_draft() {
+            gh release delete "$GITHUB_REF_NAME" --yes >/dev/null 2>&1 || true
+          }
+          trap cleanup_failed_draft ERR
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md release-assets/* \
+            cove-update-manifest-v1.json cove-update-manifest-v1.json.sig
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+          trap - ERR
+
+  aur-publish:
+    name: Publish to AUR
+    needs: [publish-release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    container: archlinux:base
+    steps:
+      - name: Install tools and create builder user
+        run: |
+          pacman -Sy --noconfirm git openssh base-devel curl
+          useradd -m builder
+      - name: Configure AUR key
+        run: |
+          install -d -m 700 -o builder -g builder /home/builder/.ssh
+          printf '%s' "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > /home/builder/.ssh/aur
+          chmod 600 /home/builder/.ssh/aur
+          chown builder:builder /home/builder/.ssh/aur
+          ssh-keyscan -H aur.archlinux.org > /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/known_hosts
+          printf 'Host aur.archlinux.org\n  IdentityFile ~/.ssh/aur\n  User aur\n  StrictHostKeyChecking accept-new\n' \
+            > /home/builder/.ssh/config
+          chmod 600 /home/builder/.ssh/config
+          chown builder:builder /home/builder/.ssh/config
+      - name: Publish generated PKGBUILD
+        run: |
+          # Variables in this command body intentionally expand in builder's shell.
+          # shellcheck disable=SC2016
+          su builder -c '
+            set -e
+            cd ~
+            curl -fL -o PKGBUILD "https://github.com/coveninja/cove/releases/download/${{ github.ref_name }}/PKGBUILD"
+            git clone ssh://aur@aur.archlinux.org/cove-bin.git aur-repo
+            cp PKGBUILD aur-repo/
+            cd aur-repo
+            makepkg --printsrcinfo > .SRCINFO
+            git config user.name coveninja-bot
+            git config user.email actions@github.com
+            git add PKGBUILD .SRCINFO
+            git diff --cached --quiet && exit 0
+            git commit -m "Update to ${{ github.ref_name }}"
+            for attempt in 1 2 3 4 5; do
+              git push origin master && exit 0
+              test "$attempt" = 5 && exit 1
+              sleep 15
+            done
+          '

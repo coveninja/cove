@@ -76,6 +76,15 @@ android {
         )
         buildConfigField("String", "TRAKT_CLIENT_ID", quotedBuildConfig(deploymentValue("TRAKT_CLIENT_ID")))
         buildConfigField("String", "TRAKT_CLIENT_SECRET", quotedBuildConfig(deploymentValue("TRAKT_CLIENT_SECRET")))
+        buildConfigField("String", "UPDATE_PUBLIC_KEYS", quotedBuildConfig(deploymentValue("UPDATE_PUBLIC_KEYS")))
+        buildConfigField(
+            "String",
+            "UPDATE_API_BASE",
+            quotedBuildConfig(
+                deploymentValue("UPDATE_API_BASE")
+                    .ifBlank { "https://api.github.com/repos/coveninja/cove" },
+            ),
+        )
     }
 
     signingConfigs {

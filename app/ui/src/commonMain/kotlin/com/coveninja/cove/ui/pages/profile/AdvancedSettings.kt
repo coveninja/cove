@@ -29,6 +29,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.shared.data.AppUpdateState
+import com.coveninja.cove.ui.components.common.formatUpdateBytes
 import kotlinx.coroutines.launch
 
 /**
@@ -40,9 +42,13 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AdvancedSettings(modifier: Modifier = Modifier) {
-    val device = LocalAppGraph.current.device
+    val graph = LocalAppGraph.current
+    val device = graph.device
+    val updates = graph.updates
     val scope = rememberCoroutineScope()
     val performance by device.performance.collectAsState()
+    val updateState by updates.state.collectAsState()
+    val automaticUpdates by updates.automaticUpdatesEnabled.collectAsState()
 
     var config by remember { mutableStateOf<String?>(null) }
     var draft by remember { mutableStateOf("") }
@@ -218,6 +224,57 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
             }
         }
 
+        if (updates.available) {
+            SettingsCard(
+                title = "Updates",
+                iconName = "lucide:refresh-cw",
+                description = "Verified application updates for this device only.",
+            ) {
+                SettingToggle(
+                    title = "Automatic updates",
+                    description = "Check in Cove, download verified releases, and ask before restarting.",
+                    checked = automaticUpdates,
+                    onCheckedChange = { enabled ->
+                        scope.launch { updates.setAutomaticUpdatesEnabled(enabled) }
+                    },
+                )
+                SettingRow(
+                    title = updateStatusTitle(updateState),
+                    description = updateStatusDescription(updateState),
+                ) {
+                    StatusPill(updateStatusPill(updateState))
+                }
+                Row(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    PrimaryButton(
+                        label = "Check now",
+                        enabled = updateState !is AppUpdateState.Checking &&
+                            updateState !is AppUpdateState.Downloading &&
+                            updateState !is AppUpdateState.Installing &&
+                            updateState !is AppUpdateState.Ready &&
+                            updateState !is AppUpdateState.PermissionRequired &&
+                            updateState !is AppUpdateState.MeteredApprovalRequired,
+                        onClick = { scope.launch { updates.checkNow() } },
+                    )
+                    if (updateState is AppUpdateState.Failed) {
+                        Text(
+                            text = (updateState as AppUpdateState.Failed).message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        } else if (updateState is AppUpdateState.ManagedExternally) {
+            SettingsCard(title = "Updates", iconName = "lucide:refresh-cw") {
+                SettingsNotice((updateState as AppUpdateState.ManagedExternally).message)
+            }
+        }
+
         SettingsCard(title = "About", iconName = "lucide:info") {
             SettingRow(title = "Version", description = "The build you are running.") {
                 StatusPill(device.appVersion.ifBlank { "unknown" })
@@ -230,6 +287,46 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+private fun updateStatusTitle(state: AppUpdateState): String = when (state) {
+    AppUpdateState.Idle -> "Automatic update status"
+    is AppUpdateState.Checking -> "Checking for updates"
+    is AppUpdateState.UpToDate -> "Cove is up to date"
+    is AppUpdateState.MeteredApprovalRequired -> "Update ${state.release.version} available"
+    is AppUpdateState.Downloading -> "Downloading ${state.release.version}"
+    is AppUpdateState.Ready -> "Update ${state.release.version} ready"
+    is AppUpdateState.PermissionRequired -> "Android permission required"
+    is AppUpdateState.Installing -> "Installing ${state.release.version}"
+    is AppUpdateState.Failed -> "Update failed"
+    is AppUpdateState.ManagedExternally -> "Managed externally"
+}
+
+private fun updateStatusDescription(state: AppUpdateState): String? = when (state) {
+    is AppUpdateState.Downloading ->
+        "${formatUpdateBytes(state.downloadedBytes)} of ${formatUpdateBytes(state.totalBytes)}"
+    is AppUpdateState.Ready -> "Verified and staged. Install when the prompt appears."
+    is AppUpdateState.MeteredApprovalRequired ->
+        "Waiting for approval to use this metered network."
+    is AppUpdateState.PermissionRequired -> "Allow installs from Cove in Android settings."
+    is AppUpdateState.Failed -> state.message
+    else -> null
+}
+
+private fun updateStatusPill(state: AppUpdateState): String = when (state) {
+    AppUpdateState.Idle -> "Ready"
+    is AppUpdateState.Checking -> "Checking"
+    is AppUpdateState.UpToDate -> "Current"
+    is AppUpdateState.MeteredApprovalRequired -> "Approval needed"
+    is AppUpdateState.Downloading -> {
+        val percent = if (state.totalBytes > 0L) state.downloadedBytes * 100 / state.totalBytes else 0L
+        "$percent%"
+    }
+    is AppUpdateState.Ready -> "Install ready"
+    is AppUpdateState.PermissionRequired -> "Permission"
+    is AppUpdateState.Installing -> "Installing"
+    is AppUpdateState.Failed -> "Retry"
+    is AppUpdateState.ManagedExternally -> "External"
 }
 
 @Composable
