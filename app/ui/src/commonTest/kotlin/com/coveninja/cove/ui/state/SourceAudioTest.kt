@@ -162,4 +162,104 @@ class SourceAudioTest {
 
         assertEquals("Show.S01E01.1080p.cached", ranked.first().name)
     }
+
+    // ── Selection mode ───────────────────────────────────────────────────────
+
+    /** A torrent, whose peer count only ever arrives inside the display text. */
+    private fun torrent(name: String, size: Long, seeders: Int) = StreamSource(
+        name = name,
+        title = "$name\n👤 $seeders 💾 whatever ⚙️ Example",
+        infoHash = "0".repeat(40),
+        sizeBytes = size,
+    )
+
+    // The case that started this: a 4K remux nobody is seeding used to lead the
+    // list purely by being the biggest file.
+    //
+    // The whole order is asserted rather than just the winner, because a list
+    // this shape is the only way to tell the peer count apart from "prefer the
+    // smaller file" — those two agree at the top and disagree in the middle,
+    // where the 17 GB release outranks two leaner ones on seeders alone.
+    // Mutation applied to verify: dropped the swarmRank term from Balanced →
+    // the order came back sorted purely by ascending size.
+    @Test
+    fun `balanced ranks by peers, not by size`() {
+        val ranked = rankSources(
+            sources = listOf(
+                torrent("2160p.REMUX", size = 54_300_000_000, seeders = 7),
+                torrent("1080p.WEB", size = 3_200_000_000, seeders = 220),
+                torrent("720p.WEB", size = 1_100_000_000, seeders = 12),
+                torrent("2160p.WEB", size = 17_000_000_000, seeders = 31),
+                torrent("1080p.HDTV", size = 2_100_000_000, seeders = 48),
+            ),
+            mode = StreamSelectionMode.Balanced,
+        )
+
+        assertEquals(
+            listOf("1080p.WEB", "1080p.HDTV", "2160p.WEB", "720p.WEB", "2160p.REMUX"),
+            ranked.map { it.name },
+        )
+    }
+
+    // The same list under the mode that does want the biggest file, so the two
+    // settings are demonstrably not the same code path. Mutation applied to
+    // verify: made Quality fall through to the Balanced comparator → the 1080p
+    // came first.
+    @Test
+    fun `quality first still leads with the biggest file`() {
+        val ranked = rankSources(
+            sources = listOf(
+                torrent("Show.S01E01.1080p.WEB", size = 3_200_000_000, seeders = 220),
+                torrent("Show.S01E01.2160p.REMUX", size = 54_000_000_000, seeders = 7),
+            ),
+            mode = StreamSelectionMode.Quality,
+        )
+
+        assertEquals("Show.S01E01.2160p.REMUX", ranked.first().name)
+    }
+
+    // Balanced prefers the leaner file only where it weighed a swarm against it.
+    // Debrid and direct links report no peers at all, and ordering those
+    // smallest-first would hand a debrid viewer the worst copy every time.
+    // Mutation applied to verify: removed the `seederCount() == null` branch
+    // from balancedSizeKey → the 2 GB link came first.
+    @Test
+    fun `balanced does not turn a list of direct links upside down`() {
+        val ranked = rankSources(
+            sources = listOf(
+                source("Show.S01E01.1080p.small", size = 2_000_000_000),
+                source("Show.S01E01.2160p.large", size = 9_000_000_000),
+            ),
+            mode = StreamSelectionMode.Balanced,
+        )
+
+        assertEquals("Show.S01E01.2160p.large", ranked.first().name)
+    }
+
+    // Providers that report no size at all must not win the leaner-file
+    // tie-break by being zero. Mutation applied to verify: keyed an unknown size
+    // as 0 rather than MAX_VALUE → the sizeless release came first.
+    @Test
+    fun `an unknown size does not count as the leanest file`() {
+        val ranked = rankSources(
+            sources = listOf(
+                torrent("Show.S01E01.sizeless", size = 0, seeders = 40),
+                torrent("Show.S01E01.known", size = 3_000_000_000, seeders = 40),
+            ),
+            mode = StreamSelectionMode.Balanced,
+        )
+
+        assertEquals("Show.S01E01.known", ranked.first().name)
+    }
+
+    // The stored setting is a free-form string, and an unreadable one must land
+    // on the same default the settings screen shows. Mutation applied to verify:
+    // made the else branch return Quality → the null and garbage cases failed.
+    @Test
+    fun `an unknown stored mode falls back to balanced`() {
+        assertEquals(StreamSelectionMode.Quality, StreamSelectionMode.from("quality"))
+        assertEquals(StreamSelectionMode.Seeders, StreamSelectionMode.from("seeders"))
+        assertEquals(StreamSelectionMode.Balanced, StreamSelectionMode.from(null))
+        assertEquals(StreamSelectionMode.Balanced, StreamSelectionMode.from("best"))
+    }
 }

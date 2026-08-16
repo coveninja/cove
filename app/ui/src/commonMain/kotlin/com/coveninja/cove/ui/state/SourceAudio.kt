@@ -73,22 +73,84 @@ internal fun audioScore(
 }
 
 /**
- * Ranks candidates so the first row is the one most likely to be wanted:
- * matching audio first, then already-cached debrid links, then bigger files,
- * which in practice track higher bitrates.
+ * What the viewer asked Cove to optimise for, from `AppSettings.streamSelectionMode`.
+ *
+ * The stored values are the strings the settings screen writes; anything
+ * unrecognised falls back to [Balanced], which is also the stored default.
+ */
+enum class StreamSelectionMode {
+    /** Best-seeded first, leaner file breaking ties. */
+    Balanced,
+
+    /** Biggest file first, which in practice tracks the highest bitrate. */
+    Quality,
+
+    /** Peer count above all else. */
+    Seeders,
+
+    ;
+
+    companion object {
+        fun from(value: String?): StreamSelectionMode = when (value?.lowercase()) {
+            "quality" -> Quality
+            "seeders" -> Seeders
+            else -> Balanced
+        }
+    }
+}
+
+/**
+ * Ranks candidates so the first row is the one most likely to be wanted.
+ *
+ * Matching audio and an already-cached debrid link lead in every mode: a viewer
+ * who asked for original audio should not be handed a dub, and a cached link
+ * plays instantly whatever the rest of the list looks like. [mode] decides only
+ * what happens below that.
  */
 fun rankSources(
     sources: List<StreamSource>,
     preferredAudioLanguage: String? = null,
     originalLanguage: String? = null,
-): List<StreamSource> =
-    sources.sortedWith(
-        compareByDescending<StreamSource> {
-            audioScore(it.audioHints(), preferredAudioLanguage, originalLanguage)
-        }
-            .thenByDescending { it.cached }
-            .thenByDescending { it.sizeBytes },
+    mode: StreamSelectionMode = StreamSelectionMode.Balanced,
+): List<StreamSource> {
+    val base = compareByDescending<StreamSource> {
+        audioScore(it.audioHints(), preferredAudioLanguage, originalLanguage)
+    }.thenByDescending { it.cached }
+
+    return sources.sortedWith(
+        when (mode) {
+            StreamSelectionMode.Quality -> base.thenByDescending { it.sizeBytes }
+            StreamSelectionMode.Seeders ->
+                base.thenByDescending { it.swarmRank() }.thenByDescending { it.sizeBytes }
+            StreamSelectionMode.Balanced ->
+                base.thenByDescending { it.swarmRank() }.thenBy { it.balancedSizeKey() }
+        },
     )
+}
+
+/**
+ * Peer count for a torrent; a direct or debrid link has no swarm at all, so it
+ * counts as just-healthy — ahead of a torrent nobody is seeding, behind one
+ * plenty of people are.
+ */
+private fun StreamSource.swarmRank(): Int = seederCount() ?: NEUTRAL_SWARM
+
+/**
+ * Balanced prefers the leaner file, but only where a swarm was actually weighed
+ * against it. A source reporting no peer count keeps the bigger-is-better
+ * preference of the other modes, since there is nothing to trade the size off
+ * against — otherwise a list of debrid links would rank worst-quality first.
+ *
+ * An unknown size sorts last either way rather than winning by being zero.
+ */
+private fun StreamSource.balancedSizeKey(): Long = when {
+    sizeBytes <= 0 -> Long.MAX_VALUE
+    seederCount() == null -> -sizeBytes
+    else -> sizeBytes
+}
+
+/** The [seederHealth] Healthy floor: what "no swarm to worry about" is worth. */
+private const val NEUTRAL_SWARM = 10
 
 private val TOKEN_SEPARATORS = charArrayOf(
     ' ', '.', '-', '_', '+', '[', ']', '(', ')', '{', '}', '/', ',', '|', ':',

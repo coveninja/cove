@@ -1,10 +1,7 @@
 package com.coveninja.cove.ui.components.player
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -22,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -46,10 +44,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.SeederHealth
 import com.coveninja.cove.ui.state.StreamChoice
 import com.coveninja.cove.ui.state.StreamCompatibility
 import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.audioHints
+import com.coveninja.cove.ui.state.seederCount
+import com.coveninja.cove.ui.state.seederHealth
 import kotlinx.coroutines.delay
 
 /**
@@ -162,15 +163,6 @@ private fun SourceRow(
         label = "SourceRowEntrance",
     )
 
-    val scale by animateFloatAsState(
-        targetValue = when {
-            enabled && pressed -> 0.985f
-            enabled && hovered -> 1.012f
-            else -> 1f
-        },
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "SourceRowScale",
-    )
     val container by animateColorAsState(
         targetValue = when {
             !enabled -> colors.surfaceContainerHighest.copy(alpha = 0.32f)
@@ -189,19 +181,12 @@ private fun SourceRow(
         animationSpec = tween(140),
         label = "SourceRowOutline",
     )
-    // The play affordance slides out from under the row edge on hover.
-    val playSize by animateDpAsState(
-        targetValue = if (enabled && hovered) 30.dp else 0.dp,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-        label = "SourceRowPlay",
-    )
+    val playFilled = enabled && (hovered || pressed)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
                 alpha = entrance * if (enabled) 1f else 0.58f
                 translationY = (1f - entrance) * 14f
             }
@@ -244,22 +229,20 @@ private fun SourceRow(
 
             Row(
                 modifier = Modifier.padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                source.addonName?.takeIf { it.isNotBlank() }?.let { MetaTag(it) }
-                if (source.sizeBytes > 0) MetaTag(formatBytes(source.sizeBytes))
-                if (source.cached) MetaTag("Cached", accent = true)
-                compatibility.codecLabel?.let { MetaTag(it) }
-                // Audio read out of the release name — the stream list carries no
-                // track data, so this is a hint, and absent when the name says
-                // nothing rather than guessed at.
-                val audio = source.audioHints()
-                if (audio.multi) MetaTag("Dual audio", accent = true)
-                audio.languages.take(3).forEach { MetaTag(it.uppercase()) }
-                // Nothing else distinguishes a torrent from a direct link, and the
-                // two behave very differently on first play.
-                if (source.url.isNullOrBlank()) MetaTag("Torrent")
+                // Cached is the one qualifier that changes what happens when you
+                // press play — everything else only describes the file — so it
+                // stays a chip while the rest collapse into one quiet line.
+                if (source.cached) CachedChip()
+                Text(
+                    text = source.qualifiers(compatibility),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             compatibility.warningLabel()?.let { warning ->
                 Text(
@@ -273,22 +256,13 @@ private fun SourceRow(
             }
         }
 
+        // The two numbers a choice actually turns on, in a fixed lane so they
+        // line up down the list and can be compared by scanning one column
+        // rather than by reading every row.
+        StatLane(source = source, enabled = enabled)
+
         if (enabled) {
-            Box(
-                modifier = Modifier
-                    .size(playSize)
-                    .clip(CircleShape)
-                    .background(colors.tertiary),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (playSize > 14.dp) {
-                    IconifyIcon(
-                        icon = "lucide:play",
-                        modifier = Modifier.size(13.dp),
-                        tint = colors.onTertiary,
-                    )
-                }
-            }
+            PlayAffordance(filled = playFilled, colors = colors)
         } else {
             Box(
                 modifier = Modifier.size(30.dp),
@@ -301,6 +275,95 @@ private fun SourceRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * Size over peers, right-aligned in a fixed lane.
+ *
+ * The width is reserved whether or not a row has either number, because the
+ * point of the lane is that the values sit on the same vertical line in every
+ * row; letting it collapse would put each row's figures in a different place.
+ */
+@Composable
+private fun StatLane(source: StreamSource, enabled: Boolean) {
+    val colors = MaterialTheme.colorScheme
+    val seeders = source.seederCount()
+
+    Column(
+        modifier = Modifier.width(72.dp),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        if (source.sizeBytes > 0) {
+            Text(
+                text = formatBytes(source.sizeBytes),
+                color = if (enabled) colors.onSurface else colors.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+        seeders?.let { count ->
+            // Zero is shown rather than hidden, in the error colour: a dead
+            // torrent is the single most useful thing this number can say.
+            val tint = when (seederHealth(count)) {
+                SeederHealth.Dead -> colors.error
+                SeederHealth.Thin -> colors.onSurfaceVariant
+                SeederHealth.Healthy -> colors.tertiary
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconifyIcon(
+                    icon = "lucide:users",
+                    modifier = Modifier.size(11.dp),
+                    tint = tint,
+                )
+                Text(
+                    text = count.toString(),
+                    color = tint,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Always drawn, because there is no hover on a phone: pointer hosts get the
+ * outline filling in under the cursor, touch hosts get a chevron that is at
+ * least visibly the thing you are about to press.
+ */
+@Composable
+private fun PlayAffordance(filled: Boolean, colors: androidx.compose.material3.ColorScheme) {
+    val background by animateColorAsState(
+        targetValue = if (filled) colors.tertiary else Color.Transparent,
+        animationSpec = tween(140),
+        label = "SourceRowPlayBackground",
+    )
+    val border by animateColorAsState(
+        targetValue = if (filled) Color.Transparent else colors.onSurface.copy(alpha = 0.18f),
+        animationSpec = tween(140),
+        label = "SourceRowPlayBorder",
+    )
+
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(background)
+            .border(1.dp, border, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        IconifyIcon(
+            icon = "lucide:play",
+            modifier = Modifier.size(13.dp),
+            tint = if (filled) colors.onTertiary else colors.onSurfaceVariant,
+        )
     }
 }
 
@@ -361,19 +424,47 @@ private fun BestMatchTag() {
 }
 
 @Composable
-private fun MetaTag(
-    text: String,
-    accent: Boolean = false,
-) {
-    Text(
-        text = text,
-        color = when {
-            accent -> MaterialTheme.colorScheme.tertiary
-            else -> MaterialTheme.colorScheme.onSurfaceVariant
-        },
-        style = MaterialTheme.typography.labelSmall,
-        maxLines = 1,
-    )
+private fun CachedChip() {
+    Box(
+        modifier = Modifier
+            .background(
+                MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f),
+                RoundedCornerShape(5.dp),
+            )
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        Text(
+            text = "Cached",
+            color = MaterialTheme.colorScheme.tertiary,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+/**
+ * Everything about a source that describes the file rather than the choice,
+ * as one dot-separated line.
+ *
+ * These used to be separate tags at equal weight, which put the provider name,
+ * the codec and three language codes in the same visual register as the size —
+ * seven items of identical colour and size that had to be read rather than
+ * scanned. Folded together they become one quiet caption under the name.
+ */
+private fun StreamSource.qualifiers(compatibility: StreamCompatibility): String {
+    val parts = mutableListOf<String>()
+    addonName?.takeIf { it.isNotBlank() }?.let(parts::add)
+    compatibility.codecLabel?.let(parts::add)
+    // Audio read out of the release name — the stream list carries no track
+    // data, so this is a hint, and absent when the name says nothing rather
+    // than guessed at.
+    val audio = audioHints()
+    if (audio.multi) parts += "Dual audio"
+    audio.languages.take(3).forEach { parts += it.uppercase() }
+    // Nothing else distinguishes a torrent from a direct link, and the two
+    // behave very differently on first play.
+    if (url.isNullOrBlank()) parts += "Torrent"
+    return parts.joinToString("  ·  ")
 }
 
 private fun StreamCompatibility.warningLabel(): String? = when (support) {

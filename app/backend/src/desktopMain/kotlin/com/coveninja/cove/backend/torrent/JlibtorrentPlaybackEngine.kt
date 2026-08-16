@@ -68,6 +68,13 @@ class JlibtorrentPlaybackEngine(
         }
         var cursor = start
         val buffer = ByteArray(1024 * 1024)
+        // libtorrent allocates sparsely: until it flushes the first piece covering
+        // this file, nothing exists on disk — not the file, not even the directory
+        // holding it. Opening before that wait throws FileNotFoundException for
+        // every freshly added torrent, and because respondBytesWriter has already
+        // sent the 206 by then, the player sees a stream that dies at byte zero.
+        awaitPieces(managed, cursor, min(endInclusive, cursor + buffer.size - 1))
+        awaitTorrentFile(managed.path, pieceTimeoutMillis)
         RandomAccessFile(managed.path.toFile(), "r").use { input ->
             while (cursor <= endInclusive) {
                 val chunkEnd = min(endInclusive, cursor + buffer.size - 1)

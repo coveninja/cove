@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.nuvio
 
 import com.coveninja.cove.backend.addons.AddonStream
+import com.coveninja.cove.backend.addons.humanSizeToBytes
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -110,17 +111,4 @@ internal data class NuvioScrapedStream(
             sizeBytes = parsedSize,
         )
     }
-}
-
-internal fun humanSizeToBytes(value: String): Long {
-    val match = Regex("(?i)([\\d.]+)\\s*(TB|GB|MB|KB)").find(value) ?: return 0
-    val amount = match.groupValues[1].toDoubleOrNull() ?: return 0
-    val multiplier = when (match.groupValues[2].uppercase()) {
-        "TB" -> 1L shl 40
-        "GB" -> 1L shl 30
-        "MB" -> 1L shl 20
-        "KB" -> 1L shl 10
-        else -> return 0
-    }
-    return (amount * multiplier).toLong()
 }

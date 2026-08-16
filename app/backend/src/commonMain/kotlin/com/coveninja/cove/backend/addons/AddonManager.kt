@@ -322,6 +322,10 @@ class AddonManager(
                 addonName = addon.manifest.name,
                 sizeBytes = stream.sizeBytes.takeIf { it > 0 }
                     ?: stream.behaviorHints?.videoSize?.takeIf { it > 0 }
+                    // Torrentio, the busiest provider there is, sets neither of
+                    // the above and writes the size into the title instead.
+                    // Without this the field is zero for most real answers.
+                    ?: humanSizeToBytes(stream.title).takeIf { it > 0 }
                     ?: 0,
             )
         }

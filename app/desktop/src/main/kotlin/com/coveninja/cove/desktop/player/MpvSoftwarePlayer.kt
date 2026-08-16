@@ -251,6 +251,13 @@ class MpvSoftwarePlayer(
         renderExecutor.shutdown()
         runCatching { renderExecutor.awaitTermination(2, TimeUnit.SECONDS) }
 
+        // shutdownNow interrupts, but a poll already inside mpv is making twenty
+        // uninterruptible native calls against a handle it captured at schedule
+        // time, and it only tests `closing` on entry. Destroying underneath it
+        // frees the handle mid-read. Awaited here rather than beside the
+        // shutdownNow above so the rest of the teardown drains it in parallel.
+        runCatching { stateExecutor.awaitTermination(2, TimeUnit.SECONDS) }
+
         target?.let { runCatching { Mpv.library().mpv_terminate_destroy(it) } }
         _snapshot.value = _snapshot.value.copy(initialized = false, hasMedia = false, paused = true)
     }

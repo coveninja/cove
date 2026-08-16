@@ -290,6 +290,12 @@ class MpvOpenGlPlayer(
         commandExecutor.shutdownNow()
         runCatching { commandExecutor.awaitTermination(2, TimeUnit.SECONDS) }
 
+        // shutdownNow interrupts, but a poll already inside mpv is making twenty
+        // uninterruptible native calls against a handle it captured at schedule
+        // time, and it only tests `closing` on entry. Destroying underneath it
+        // frees the handle mid-read.
+        runCatching { stateExecutor.awaitTermination(2, TimeUnit.SECONDS) }
+
         if (target != null && renderContext.get() == null) {
             runCatching { Mpv.library().mpv_terminate_destroy(target) }
         }

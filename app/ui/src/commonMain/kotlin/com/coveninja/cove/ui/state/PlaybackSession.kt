@@ -251,6 +251,7 @@ class PlaybackSession(
                     sources = checked,
                     preferredAudioLanguage = settings?.defaultAudioLang,
                     originalLanguage = resolved.media.originalLanguage,
+                    mode = StreamSelectionMode.from(settings?.streamSelectionMode),
                 )
                 // Keep the source-ranking order within each compatibility tier,
                 // but never put a software-only or impossible stream ahead of a
