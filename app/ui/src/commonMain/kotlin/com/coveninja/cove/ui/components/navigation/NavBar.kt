@@ -71,12 +71,37 @@ import androidx.compose.ui.text.font.FontWeight
 import com.coveninja.cove.ui.components.common.CoveTooltip
 import com.coveninja.cove.ui.components.common.TooltipSide
 import com.coveninja.cove.ui.components.media.MyListCategory
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
+import com.coveninja.cove.ui.pages.common.windowSizeClassFor
+import com.coveninja.cove.ui.pages.common.WindowSizeClass
+import androidx.compose.ui.unit.Dp
 import com.coveninja.cove.ui.platform.hasPointerHover
 
 /** Where the app host places the floating navigation bar. */
 enum class NavBarPlacement {
     Top,
     Bottom,
+}
+
+/**
+ * The placement a window of [width] actually gets.
+ *
+ * A host asking for [NavBarPlacement.Bottom] is declaring "this is a touch device", not
+ * "this window is phone-sized". A tablet or an unfolded foldable has room for the
+ * desktop-shaped top bar and reads better with it, so the request is widened there.
+ * A host that asked for [NavBarPlacement.Top] is never overridden — a narrow desktop
+ * window is still a desktop window.
+ */
+internal fun resolveNavBarPlacement(
+    requested: NavBarPlacement,
+    width: Dp,
+): NavBarPlacement = if (
+    requested == NavBarPlacement.Bottom &&
+    windowSizeClassFor(width) == WindowSizeClass.Expanded
+) {
+    NavBarPlacement.Top
+} else {
+    requested
 }
 
 /**
@@ -87,6 +112,14 @@ enum class NavBarPlacement {
  * desktop top bar; the mobile bottom bar deliberately floats over page content.
  */
 val NavBarClearance = 96.dp
+
+/**
+ * How much of a phone's width the floating bar spans in portrait.
+ *
+ * Its intrinsic width is the sum of its buttons, which on a phone leaves a stub floating in
+ * the middle of the screen rather than something that reads as a bottom bar.
+ */
+private const val PhoneNavBarWidthFraction = 0.88f
 
 private enum class NavBarMode {
     Navigation,
@@ -507,9 +540,26 @@ fun NavBar(
         else -> NavBarMode.Navigation
     }
 
-    val normalWidth = (NavDestination.entries.size * 48).dp
-    val searchWidth = (NavDestination.entries.size * 64).dp
-    val categoryWidth = (MyListCategory.entries.size * 48).dp
+    val viewport = PageLayoutDefaults.Viewport
+    // The bar floats, so nothing else constrains it: at 5 entries search mode wants 320.dp,
+    // which leaves 20.dp a side on a 360.dp phone. Cap it to the page's own gutter.
+    val maxBarWidth = (viewport.width - viewport.gutter * 2).coerceAtLeast(200.dp)
+    // On a phone the bar reads as a bottom bar and should span the screen the way one does;
+    // its intrinsic 240.dp leaves it a stub floating in the middle. A tablet has room for a
+    // normal bar, so there the intrinsic widths stand and only the cap applies.
+    // Phone portrait only: landscape has width to spare and a tablet should keep a normal
+    // bar rather than a stretched phone one.
+    val spansWidth = viewport.sizeClass == WindowSizeClass.Compact &&
+        viewport.height >= viewport.width
+    val phoneBarWidth = (viewport.width * PhoneNavBarWidthFraction).coerceAtMost(maxBarWidth)
+    fun barWidth(intrinsic: Dp): Dp = if (spansWidth) {
+        phoneBarWidth
+    } else {
+        intrinsic.coerceAtMost(maxBarWidth)
+    }
+    val normalWidth = barWidth((NavDestination.entries.size * 48).dp)
+    val searchWidth = barWidth((NavDestination.entries.size * 64).dp)
+    val categoryWidth = barWidth((MyListCategory.entries.size * 48).dp)
     val navbarHeight = 48.dp
 
 
@@ -662,7 +712,14 @@ fun NavBar(
                     NavBarMode.Navigation -> {
                         Row(
                             modifier = Modifier.fillMaxSize(),
-                            horizontalArrangement = Arrangement.Center,
+                            // Centred keeps the buttons snug at their intrinsic width; once
+                            // the bar spans a phone, they have to spread or the extra width
+                            // is just empty space around a cluster in the middle.
+                            horizontalArrangement = if (spansWidth) {
+                                Arrangement.SpaceEvenly
+                            } else {
+                                Arrangement.Center
+                            },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             NavDestination.entries.forEach { destination ->

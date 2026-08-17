@@ -2,7 +2,10 @@
 #
 #   make            # build the Kotlin/Compose desktop and mobile apps
 #   make run        # build, then launch the desktop app
-#   make mobile     # build the Android phone/tablet APK
+#   make mobile     # build the Android phone/tablet/TV APK (one artifact, all three)
+#   make run-tv     # launch the television shell in a desktop window (arrows = D-pad)
+#   make tv-avd     # create the Android TV emulator (once); then: emulator -avd cove-tv -gpu host
+#   make tv-install # build and install the APK on a running TV emulator or device
 #   make test       # Kotlin test suites
 #   make test-all   # broad local CI approximation
 #   make patch      # bump patch version, stage all pending changes, commit, tag
@@ -13,8 +16,12 @@
 
 KOTLIN_DIR  := app
 
+TV_AVD      := cove-tv
+TV_IMAGE    := system-images;android-36;android-tv;x86_64
+
 .PHONY: all build run dev hot app mobile test test-kotlin test-all test-build \
-        test-workflows test-release-notes patch minor major clean
+        test-workflows test-release-notes patch minor major clean \
+        run-tv hot-tv tv-avd tv-install
 
 all: build
 
@@ -39,6 +46,34 @@ dev: run
 ## Tight Compose UI loop with the in-process Kotlin backend.
 hot:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto
+
+## The television shell in a desktop window. Arrow keys are the D-pad, Enter is OK and
+## Escape is Back, so the whole TV UI can be driven without an emulator in the loop.
+run-tv:
+	cd $(KOTLIN_DIR) && ./gradlew :desktop:run --args="--backend-mode kotlin --tv"
+
+## Hot-reload loop for the television shell. hotRun owns its own process arguments, so the
+## shell is selected by environment variable rather than by --tv.
+hot-tv:
+	cd $(KOTLIN_DIR) && COVE_UI=tv ./gradlew :desktop:hotRun --auto
+
+## Create the Android TV emulator once. Run it afterwards with:
+##   emulator -avd $(TV_AVD) -gpu host
+## `-gpu host` is not optional — mpv renders black on the emulator's software GL.
+tv-avd:
+	@command -v avdmanager >/dev/null 2>&1 || { echo "avdmanager not on PATH (Android SDK cmdline-tools)."; exit 1; }
+	sdkmanager "$(TV_IMAGE)"
+	avdmanager create avd -n $(TV_AVD) -k "$(TV_IMAGE)" -d tv_1080p --force
+	@# avdmanager writes hw.keyboard=no by default, which drops every host key event —
+	@# including the arrows that are the only way to navigate a TV UI.
+	@config="$$HOME/.android/avd/$(TV_AVD).avd/config.ini"; \
+	  sed -i'' -e '/^hw\.keyboard=/d' -e '/^hw\.dpad=/d' "$$config"; \
+	  printf 'hw.keyboard=yes\nhw.dpad=yes\n' >> "$$config"; \
+	  echo "configured $$config"
+
+## Build the debug APK and install it on the running TV emulator or device.
+tv-install: mobile
+	adb install -r $(KOTLIN_DIR)/mobile/build/outputs/apk/debug/mobile-debug.apk
 
 ## Kotlin (shared KMP + desktop JVM + Android host) test suite.
 test-kotlin:

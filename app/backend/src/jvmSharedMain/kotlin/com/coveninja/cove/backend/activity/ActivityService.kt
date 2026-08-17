@@ -1,7 +1,12 @@
 package com.coveninja.cove.backend.activity
 
 import com.coveninja.cove.backend.db.CoveDatabase
+import com.coveninja.cove.backend.db.Title_plays
 import com.coveninja.cove.backend.store.ActiveProfileSession
+import com.coveninja.cove.shared.model.ActivityStats
+import com.coveninja.cove.shared.model.ActivityTitle
+import com.coveninja.cove.shared.model.InsightsRange
+import com.coveninja.cove.shared.model.TitlePlayCount
 import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.CoveJson
 import java.time.Clock
@@ -41,10 +46,15 @@ class ActivityService(
                 .selectActivityPosition(profileId, key)
                 .executeAsOneOrNull() ?: 0.0
             database.coveQueries.upsertActivityPosition(profileId, key, progress.positionSeconds)
+
+            val titleKey = "${progress.tmdbId}:${progress.mediaType.wireName}"
+            val startedAt = parseInstant(progress.watchedAt) ?: clock.instant()
+            recordPlay(profileId, titleKey, previous, progress, startedAt)
+
             val delta = progress.positionSeconds - previous
             if (delta <= 0.0 || delta > MAX_CREDIT_SECONDS) return@transaction
 
-            val at = parseInstant(progress.watchedAt) ?: clock.instant()
+            val at = startedAt
             val local = at.atZone(zoneId)
             val seconds = delta.toLong()
             if (seconds <= 0) return@transaction
@@ -57,20 +67,83 @@ class ActivityService(
             addTitle(
                 profileId,
                 local.toLocalDate().toString(),
-                "${progress.tmdbId}:${progress.mediaType.wireName}",
+                titleKey,
                 seconds,
             )
         }
     }
 
-    fun stats(): ActivityStats {
+    /**
+     * Counts how many times a title has been started from the beginning.
+     *
+     * A restart is the one thing the progress table cannot express: it is an upsert, so a
+     * viewer who finishes a film and plays it again leaves exactly the same row behind as
+     * one who watched it once. What it does leave is a signature — a position that was at
+     * or near the end, followed by one back at the start — and that is what this watches
+     * for.
+     *
+     * The first sighting of a title records a single play rather than a rewatch, so a
+     * freshly-watched library reads as ones rather than zeros.
+     */
+    private fun recordPlay(
+        profileId: String,
+        titleKey: String,
+        previousPosition: Double,
+        progress: WatchProgress,
+        at: Instant,
+    ) {
+        val existing = database.coveQueries.selectTitlePlay(profileId, titleKey)
+            .executeAsOneOrNull()
+        if (existing == null) {
+            database.coveQueries.upsertTitlePlay(profileId, titleKey, 1, at.toString())
+            return
+        }
+
+        val duration = progress.durationSeconds
+        val wasAtEnd = duration > 0.0 && previousPosition >= duration * NEAR_END_FRACTION
+        val isAtStart = progress.positionSeconds <= RESTART_SECONDS
+        if (!wasAtEnd || !isAtStart) return
+
+        // One rewind produces a burst of progress ticks, and every one of them sees the
+        // same end-to-start transition until the position climbs again. Without a window
+        // a single restart would be counted several times over.
+        val last = existing.last_started_at.takeIf(String::isNotBlank)?.let(::parseInstant)
+        if (last != null && at.isBefore(last.plusSeconds(RESTART_DEBOUNCE_SECONDS))) return
+
+        database.coveQueries.upsertTitlePlay(
+            profileId,
+            titleKey,
+            existing.plays + 1,
+            at.toString(),
+        )
+    }
+
+    /**
+     * The counters, optionally narrowed to one year.
+     *
+     * [range] filters the rows that feed the totals, the calendar and the hour/weekday
+     * breakdowns. Everything that only means something across the whole history — the
+     * by-year series, the year-over-year pair, the streaks, the rewatch tally — is computed
+     * from all rows regardless, because narrowing them would produce numbers that read as
+     * answers to a question nobody asked.
+     *
+     * Defaults to all-time so the HTTP route's existing contract is unchanged.
+     */
+    fun stats(range: InsightsRange = InsightsRange.AllTime): ActivityStats {
         val profileId = session.profileId.value
         ensureInitialized(profileId)
         val today = LocalDate.now(clock.withZone(zoneId))
         val thisYear = today.year
         val lastYear = thisYear - 1
+        val selectedYear = when (range) {
+            InsightsRange.ThisYear -> thisYear
+            InsightsRange.LastYear -> lastYear
+            InsightsRange.AllTime -> null
+        }
+        fun inRange(date: LocalDate) = selectedYear == null || date.year == selectedYear
         val byYear = linkedMapOf<String, Long>()
         val calendar = linkedMapOf<String, Long>()
+        val allCalendar = linkedMapOf<String, Long>()
         val byMonthThisYear = MutableList(12) { 0L }
         val byMonthLastYear = MutableList(12) { 0L }
         val byDayOfWeek = MutableList(7) { 0L }
@@ -79,15 +152,21 @@ class ActivityService(
         database.coveQueries.selectActivityHours(profileId).executeAsList().forEach { row ->
             val date = runCatching { LocalDate.parse(row.date) }.getOrNull() ?: return@forEach
             val seconds = row.seconds
-            calendar[row.date] = (calendar[row.date] ?: 0L) + seconds
+            // Always all rows: the by-year series is the all-time chart, the month pair
+            // feeds the year-over-year comparison, and streaks are about the run up to
+            // today rather than about the selected period.
             byYear[date.year.toString()] = (byYear[date.year.toString()] ?: 0L) + seconds
-            byDayOfWeek[date.dayOfWeek.value % 7] += seconds // response index 0 is Sunday
-            val hour = row.hour.toInt()
-            if (hour in byHourOfDay.indices) byHourOfDay[hour] += seconds
+            allCalendar[row.date] = (allCalendar[row.date] ?: 0L) + seconds
             when (date.year) {
                 thisYear -> byMonthThisYear[date.monthValue - 1] += seconds
                 lastYear -> byMonthLastYear[date.monthValue - 1] += seconds
             }
+
+            if (!inRange(date)) return@forEach
+            calendar[row.date] = (calendar[row.date] ?: 0L) + seconds
+            byDayOfWeek[date.dayOfWeek.value % 7] += seconds // response index 0 is Sunday
+            val hour = row.hour.toInt()
+            if (hour in byHourOfDay.indices) byHourOfDay[hour] += seconds
         }
 
         val titlesThisYear = linkedMapOf<String, Long>()
@@ -95,7 +174,7 @@ class ActivityService(
         database.coveQueries.selectActivityTitles(profileId).executeAsList().forEach { row ->
             allTitles += row.title_key
             val date = runCatching { LocalDate.parse(row.date) }.getOrNull() ?: return@forEach
-            if (date.year == thisYear) {
+            if (inRange(date)) {
                 titlesThisYear[row.title_key] = (titlesThisYear[row.title_key] ?: 0L) + row.seconds
             }
         }
@@ -119,13 +198,37 @@ class ActivityService(
                 )
             }
 
+        val plays = database.coveQueries.selectTitlePlays(profileId).executeAsList()
+            .filter { it.plays > 1 }
+            .sortedWith(compareByDescending<Title_plays> { it.plays }.thenBy { it.title_key })
+            .mapNotNull { row ->
+                val separator = row.title_key.indexOf(':')
+                if (separator <= 0) return@mapNotNull null
+                val id = row.title_key.substring(0, separator).toIntOrNull()
+                    ?: return@mapNotNull null
+                val entry = entryByKey[row.title_key]
+                TitlePlayCount(
+                    tmdbId = id,
+                    mediaType = row.title_key.substring(separator + 1),
+                    plays = row.plays.toInt(),
+                    title = entry?.title.orEmpty(),
+                    posterPath = entry?.poster_path.orEmpty(),
+                )
+            }
+            .filter { it.title.isNotBlank() }
+            .take(12)
+
         val activeDays = calendar.filterValues { it > 0 }.keys.sorted()
+        // Streaks read from the whole history even when a single year is selected: a run
+        // of days is a fact about the calendar, and clipping it at a year boundary would
+        // report a shorter streak than the viewer actually has.
+        val allActiveDays = allCalendar.filterValues { it > 0 }.keys.sorted()
         val total = calendar.values.sum()
         return ActivityStats(
             totalSeconds = total,
             totalTitles = allTitles.size,
-            currentStreak = currentStreak(activeDays, today),
-            longestStreak = longestStreak(activeDays),
+            currentStreak = currentStreak(allActiveDays, today),
+            longestStreak = longestStreak(allActiveDays),
             avgSecondsPerActiveDay = if (activeDays.isEmpty()) 0 else total / activeDays.size,
             titlesThisYear = titlesThisYear.size,
             thisYearSeconds = byYear[thisYear.toString()] ?: 0,
@@ -137,6 +240,7 @@ class ActivityService(
             byHourOfDay = byHourOfDay,
             calendar = calendar.filterValues { it > 0 },
             titlesWatchedThisYear = topTitles,
+            rewatched = plays,
         )
     }
 
@@ -301,6 +405,15 @@ class ActivityService(
     companion object {
         private const val MAX_CREDIT_SECONDS = 90.0
 
+        /** How close to the end counts as "was finishing it". */
+        private const val NEAR_END_FRACTION = 0.90
+
+        /** How close to the start counts as "began it again". */
+        private const val RESTART_SECONDS = 60.0
+
+        /** One rewind, one play — however many progress ticks it produces. */
+        private const val RESTART_DEBOUNCE_SECONDS = 30L * 60L
+
         private fun progressKey(progress: WatchProgress): String = buildString {
             append(progress.tmdbId).append(':').append(progress.mediaType.wireName)
             if (progress.season != null && progress.episode != null) {
@@ -344,34 +457,6 @@ class ActivityService(
         }
     }
 }
-
-@Serializable
-data class ActivityTitle(
-    @SerialName("tmdb_id") val tmdbId: Int,
-    @SerialName("media_type") val mediaType: String,
-    val seconds: Long,
-    val title: String = "",
-    @SerialName("poster_path") val posterPath: String = "",
-)
-
-@Serializable
-data class ActivityStats(
-    @SerialName("total_seconds") val totalSeconds: Long = 0,
-    @SerialName("total_titles") val totalTitles: Int = 0,
-    @SerialName("current_streak") val currentStreak: Int = 0,
-    @SerialName("longest_streak") val longestStreak: Int = 0,
-    @SerialName("avg_seconds_per_active_day") val avgSecondsPerActiveDay: Long = 0,
-    @SerialName("titles_this_year") val titlesThisYear: Int = 0,
-    @SerialName("this_year_seconds") val thisYearSeconds: Long = 0,
-    @SerialName("last_year_seconds") val lastYearSeconds: Long = 0,
-    @SerialName("by_year") val byYear: Map<String, Long> = emptyMap(),
-    @SerialName("by_month_this_year") val byMonthThisYear: List<Long> = List(12) { 0 },
-    @SerialName("by_month_last_year") val byMonthLastYear: List<Long> = List(12) { 0 },
-    @SerialName("by_day_of_week") val byDayOfWeek: List<Long> = List(7) { 0 },
-    @SerialName("by_hour_of_day") val byHourOfDay: List<Long> = List(24) { 0 },
-    val calendar: Map<String, Long> = emptyMap(),
-    @SerialName("titles_watched_this_year") val titlesWatchedThisYear: List<ActivityTitle> = emptyList(),
-)
 
 @Serializable
 internal data class ActivityDiskStore(

@@ -18,10 +18,18 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,6 +65,7 @@ import com.coveninja.cove.ui.components.navigation.NavBar
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
 import com.coveninja.cove.ui.components.navigation.NavBarPlacement
 import com.coveninja.cove.ui.components.navigation.NavDestination
+import com.coveninja.cove.ui.components.navigation.resolveNavBarPlacement
 import com.coveninja.cove.ui.components.person.PersonDetailsSharedOverlay
 import com.coveninja.cove.ui.components.player.InlineVideoPlayer
 import com.coveninja.cove.ui.components.player.PlayerLayer
@@ -71,6 +80,7 @@ import com.coveninja.cove.ui.pages.home.HomePage
 import com.coveninja.cove.ui.pages.home.rememberHomeController
 import com.coveninja.cove.ui.pages.home.rememberHomePageState
 import com.coveninja.cove.ui.pages.mylist.MyListPage
+import com.coveninja.cove.ui.pages.common.LocalPageBottomClearance
 import com.coveninja.cove.ui.pages.common.LocalPageHorizontalPadding
 import com.coveninja.cove.ui.pages.common.LocalPageViewport
 import com.coveninja.cove.ui.pages.common.PageViewport
@@ -206,6 +216,14 @@ fun CoveApp(
     val performance by graph.device.performance.collectAsState()
     LaunchedEffect(graph.updates) { graph.updates.start() }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val resolvedPlacement = resolveNavBarPlacement(navBarPlacement, maxWidth)
+        // One viewport drives both the gutter and every size-class decision below it, so a
+        // phone, a tablet and a desktop window can't drift apart per call site.
+        val viewport = PageViewport(
+            width = maxWidth,
+            height = maxHeight,
+            hasBottomNavigation = resolvedPlacement == NavBarPlacement.Bottom,
+        )
         CompositionLocalProvider(
             LocalAppGraph provides graph,
             LocalMotionPolicy provides MotionPolicy(
@@ -213,19 +231,22 @@ fun CoveApp(
             ),
             LocalVideoPlayerHost provides videoPlayerHost,
             LocalFullscreenController provides fullscreenController,
-            LocalPageHorizontalPadding provides if (navBarPlacement == NavBarPlacement.Bottom) {
-                0.dp
+            LocalPageHorizontalPadding provides viewport.gutter,
+            LocalPageViewport provides viewport,
+            // The bar floats over content, so this is what keeps the last row of a list
+            // reachable above it — and, on mobile, above the system navigation area the
+            // page now paints into.
+            LocalPageBottomClearance provides if (
+                resolvedPlacement == NavBarPlacement.Bottom
+            ) {
+                viewport.bottomNavigationClearance +
+                    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             } else {
-                24.dp
+                0.dp
             },
-            LocalPageViewport provides PageViewport(
-                width = maxWidth,
-                height = maxHeight,
-                hasBottomNavigation = navBarPlacement == NavBarPlacement.Bottom,
-            ),
         ) {
             CoveAppContent(
-                navBarPlacement,
+                resolvedPlacement,
                 onDetailsOverlayVisibilityChanged,
                 onFullscreenPlaybackVisibilityChanged,
                 onUpdateExitRequested,
@@ -289,7 +310,6 @@ private fun CoveAppContent(
     val explorePageState = rememberExplorePageState()
     val videoPlayerHost = LocalVideoPlayerHost.current
     val uriHandler = LocalUriHandler.current
-    val pageViewport = LocalPageViewport.current
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val updateState by graph.updates.state.collectAsState()
     val playerStatus = videoPlayerHost?.status?.collectAsState()?.value
@@ -375,12 +395,14 @@ private fun CoveAppContent(
                     )
                 }
 
-            // Desktop heroes remain edge-to-edge beneath the top bar. Mobile pages respect
-            // system insets and reserve a clear band behind the floating bottom bar.
+            // A full-bleed hero owns its own top inset on both hosts: the artwork runs under
+            // the status bar and the hero pads its own copy instead. Consuming the inset here
+            // would leave a band of window background above the image, which is what mobile
+            // used to do — desktop always skipped it, and a phone needs the same treatment.
             val heroDestination = selectedDestination == NavDestination.Home ||
                 selectedDestination == NavDestination.Explore
             val pageModifier = when {
-                navBarPlacement == NavBarPlacement.Top && heroDestination ->
+                heroDestination && navBarPlacement == NavBarPlacement.Top ->
                     Modifier.fillMaxSize()
 
                 navBarPlacement == NavBarPlacement.Top ->
@@ -389,11 +411,21 @@ private fun CoveAppContent(
                         .safeContentPadding()
                         .padding(top = NavBarClearance)
 
+                // Mobile pages reach the physical bottom edge on purpose: padding them clear
+                // of the gesture area left an unpainted strip that read as a black bar under
+                // the floating navigation. Scroll containers keep content clear of the bar
+                // via LocalPageBottomClearance instead. Only the top and sides are consumed,
+                // and a hero destination consumes nothing at all.
+                heroDestination -> Modifier.fillMaxSize()
+
                 else ->
                     Modifier
                         .fillMaxSize()
-                        .safeContentPadding()
-                        .padding(bottom = pageViewport.bottomNavigationClearance)
+                        .windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(
+                                WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                            ),
+                        )
             }
 
             Box(modifier = pageModifier) {
@@ -457,6 +489,7 @@ private fun CoveAppContent(
 
                     NavDestination.Account -> ProfilePage(
                         onNavigateBack = { selectedDestination = NavDestination.Home },
+                        onOpenMedia = openMedia,
                     )
                 }
             }
@@ -506,7 +539,13 @@ private fun CoveAppContent(
                             Alignment.BottomCenter
                         },
                     )
-                    .safeContentPadding()
+                    // safeDrawing rather than safeContent, then the IME only while the bar
+                    // owns the focused field. Tracking the keyboard unconditionally lifted
+                    // the bar whenever the Search page's own field was focused, which reads
+                    // as the bar wandering; ignoring it entirely would bury the bar's inline
+                    // search field under the keyboard.
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .then(if (searchMode) Modifier.imePadding() else Modifier)
                     .padding(
                         top = if (navBarPlacement == NavBarPlacement.Top) 16.dp else 0.dp,
                         bottom = if (navBarPlacement == NavBarPlacement.Bottom) 16.dp else 0.dp,
@@ -711,7 +750,9 @@ private fun CoveAppContent(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .safeContentPadding()
+                        // Matches the primary bar above. This instance only appears during a
+                        // drag, where no field is focused, so it never tracks the keyboard.
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
                         .padding(
                             top = if (navBarPlacement == NavBarPlacement.Top) 16.dp else 0.dp,
                             bottom = if (navBarPlacement == NavBarPlacement.Bottom) 16.dp else 0.dp,

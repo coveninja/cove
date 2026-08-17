@@ -272,7 +272,7 @@ private fun HomeReady(
                 } else {
                     0.dp
                 },
-                bottom = 48.dp,
+                bottom = 48.dp + PageLayoutDefaults.BottomClearance,
             ),
         ) {
             if (hero != null && heroArt != null) {

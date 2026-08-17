@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.app.PictureInPictureParams
+import android.app.UiModeManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -25,6 +26,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.coveninja.cove.ui.CoveApp
 import com.coveninja.cove.ui.CoveTheme
+import com.coveninja.cove.ui.tv.CoveTvApp
 import com.coveninja.cove.ui.components.common.AppBootstrapFailed
 import com.coveninja.cove.ui.components.common.AppBootstrapLoading
 import com.coveninja.cove.ui.components.navigation.NavBarPlacement
@@ -41,6 +43,24 @@ class MainActivity : ComponentActivity() {
     private var detailsOverlayVisible = false
     private var fullscreenPlaybackVisible = false
     private lateinit var playerHost: AndroidMpvVideoPlayerHost
+
+    /**
+     * Which shell this device gets, decided once at startup.
+     *
+     * One APK serves both, because a television and a phone are the same installation of the
+     * same app to everything underneath — one package identity, one update channel, one
+     * database. What differs is entirely above the graph: a remote cannot hover, cannot drag a
+     * card between library categories, and cannot reach anything the touch UI reveals on press.
+     *
+     * The leanback feature is the reliable half of the test — it is what the launcher itself
+     * keys off — and the UI mode catches devices that report a television configuration
+     * without declaring the feature, such as some set-top boxes and the emulator.
+     */
+    private val isTelevision: Boolean by lazy {
+        packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            (getSystemService(UI_MODE_SERVICE) as UiModeManager).currentModeType ==
+            Configuration.UI_MODE_TYPE_TELEVISION
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,10 +82,14 @@ class MainActivity : ComponentActivity() {
                         graph.device.setLowPerformanceMode(fixtureLowPerformance)
                         reportFullyDrawn()
                     }
-                    CoveApp(
-                        graph = graph,
-                        navBarPlacement = NavBarPlacement.Bottom,
-                    )
+                    if (isTelevision) {
+                        CoveTvApp(graph = graph)
+                    } else {
+                        CoveApp(
+                            graph = graph,
+                            navBarPlacement = NavBarPlacement.Bottom,
+                        )
+                    }
                 } else {
                     val runtimeState by mobileApplication.runtimeState.collectAsState()
                     when (val state = runtimeState) {
@@ -81,19 +105,32 @@ class MainActivity : ComponentActivity() {
                             LaunchedEffect(homeState) {
                                 if (homeState !is HomeState.Loading) reportFullyDrawn()
                             }
-                            CoveApp(
-                                graph = state.runtime.graph,
-                                videoPlayerHost = host,
-                                navBarPlacement = NavBarPlacement.Bottom,
-                                onDetailsOverlayVisibilityChanged = ::setDetailsOverlayVisible,
-                                onFullscreenPlaybackVisibilityChanged = ::setFullscreenPlaybackVisible,
-                            )
+                            if (isTelevision) {
+                                CoveTvApp(
+                                    graph = state.runtime.graph,
+                                    videoPlayerHost = host,
+                                    onFullscreenPlaybackVisibilityChanged =
+                                        ::setFullscreenPlaybackVisible,
+                                )
+                            } else {
+                                CoveApp(
+                                    graph = state.runtime.graph,
+                                    videoPlayerHost = host,
+                                    navBarPlacement = NavBarPlacement.Bottom,
+                                    onDetailsOverlayVisibilityChanged = ::setDetailsOverlayVisible,
+                                    onFullscreenPlaybackVisibilityChanged = ::setFullscreenPlaybackVisible,
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-        if (!fixtureMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        // Not on a television: the only notification Cove posts is the playback one a phone
+        // uses from its lock screen, and a permission dialog on first launch is a poor way to
+        // meet a viewer who has no use for the result.
+        if (!fixtureMode && !isTelevision &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -119,8 +156,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && fullscreenPlaybackVisible &&
-            playerHost.status.value.hasMedia
+        // Picture-in-picture is a phone gesture. Leaving Cove on a television means pressing
+        // Home on a remote, where a shrinking window in the corner of someone's living room
+        // is a surprise rather than a convenience.
+        if (!isTelevision && Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+            fullscreenPlaybackVisible && playerHost.status.value.hasMedia
         ) {
             enterPictureInPictureMode(pictureInPictureParams())
         }
@@ -146,7 +186,9 @@ class MainActivity : ComponentActivity() {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-        setPictureInPictureParams(pictureInPictureParams())
+        // Same reasoning as onUserLeaveHint: on a television, auto-enter would turn pressing
+        // Home into a floating window rather than leaving the app.
+        if (!isTelevision) setPictureInPictureParams(pictureInPictureParams())
         updateSystemBars()
     }
 

@@ -12,11 +12,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -293,7 +298,7 @@ private fun ShelvesLayout(
                 } else {
                     0.dp
                 },
-                bottom = 48.dp,
+                bottom = 48.dp + PageLayoutDefaults.BottomClearance,
             ),
         ) {
             if (picks.isNotEmpty()) {
@@ -372,9 +377,9 @@ private fun GridLayout(
     val scope = rememberCoroutineScope()
     val scrolled by remember { derivedStateOf { gridState.firstVisibleItemIndex > 6 } }
 
-    // The desktop grid has no hero to run under the top bar, so it takes the clearance and
-    // safe insets that its edge-to-edge page wrapper omits. CoveApp supplies the insets on
-    // mobile while allowing the bottom bar to float over this content.
+    // The grid has no hero to run under the system bars, so it takes the safe insets that
+    // its edge-to-edge page wrapper omits on both hosts — Explore is treated as a full-bleed
+    // destination for the sake of the spotlight, and only the shelves layout has one.
     Box(
         modifier = if (navBarPlacement == NavBarPlacement.Top) {
             Modifier
@@ -382,8 +387,16 @@ private fun GridLayout(
                 .safeContentPadding()
                 .padding(top = NavBarClearance)
         } else {
-            // CoveApp already applies mobile safe insets; the bar itself remains an overlay.
-            Modifier.fillMaxSize()
+            // Top and sides only. The bottom is deliberately left unconsumed so the grid
+            // paints into the gesture area rather than leaving a bar there; ExploreGrid's
+            // contentPadding carries the clearance instead.
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                    ),
+                )
         },
     ) {
         Column(modifier = Modifier.fillMaxSize()) {

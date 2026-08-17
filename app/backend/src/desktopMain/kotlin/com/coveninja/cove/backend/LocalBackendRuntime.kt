@@ -24,7 +24,9 @@ import com.coveninja.cove.backend.trakt.TraktService
 import com.coveninja.cove.backend.platform.DeviceSettingsService
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
+import com.coveninja.cove.backend.insights.LocalInsightsRepository
 import com.coveninja.cove.shared.data.DiscoveryRepository
+import com.coveninja.cove.shared.data.InsightsRepository
 import com.coveninja.cove.backend.quality.QualityService
 import com.coveninja.cove.backend.updater.UpdateService
 import com.coveninja.cove.backend.updater.createDesktopUpdateRepository
@@ -83,6 +85,7 @@ class LocalBackendRuntime private constructor(
     addonRepository: AddonRepository,
     calendarRepository: CalendarRepository,
     discoveryRepository: DiscoveryRepository,
+    insightsRepository: InsightsRepository,
     accountRepository: AccountRepository,
     traktRepository: TraktRepository,
     deviceRepository: DeviceRepository,
@@ -96,6 +99,7 @@ class LocalBackendRuntime private constructor(
         addons = addonRepository,
         calendar = calendarRepository,
         discovery = discoveryRepository,
+        insights = insightsRepository,
         account = accountRepository,
         profiles = stores.profiles,
         trakt = traktRepository,
@@ -338,6 +342,13 @@ class LocalBackendRuntime private constructor(
                 return LocalBackendRuntime(
                     stores, client, untrustedClient, scope, httpHost, media, content,
                     playback, addonRepository, calendarRepository, discoveryRepository,
+                    LocalInsightsRepository(
+                        activity = activity,
+                        discovery = discovery,
+                        database = stores.databaseHandle,
+                        session = stores.profileSession,
+                        trakt = trakt,
+                    ),
                     accountRepository,
                     LocalTraktRepository(trakt, scope),
                     LocalDeviceRepository(deviceSettings, DesktopBackendEnvironment.appVersion()),

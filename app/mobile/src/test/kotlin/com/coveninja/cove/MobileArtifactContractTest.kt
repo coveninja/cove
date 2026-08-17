@@ -25,13 +25,53 @@ class MobileArtifactContractTest {
         ).forEach { value -> assertFalse(value.contains('\n')) }
     }
 
+    // This artifact is installed by phones and televisions alike, and the two conditions below
+    // are what make that possible: a required touchscreen hides it from every television, and a
+    // missing leanback launcher category leaves it installed but unopenable on one — the app is
+    // simply absent from the launcher. Requiring leanback would cost every phone instead.
+    // Mutation applied to verify: put touchscreen back to required="true" → test failed.
     @Test
-    fun `phone artifact requires touch and never advertises a TV launcher`() {
+    fun `one artifact stays installable and launchable on both phones and televisions`() {
         val manifest = File("src/main/AndroidManifest.xml").readText()
 
-        assertTrue(manifest.contains("android.hardware.touchscreen"))
-        assertTrue(manifest.contains("android:required=\"true\""))
-        assertFalse(manifest.contains("android.intent.category.LEANBACK_LAUNCHER"))
+        val touchscreen = manifest
+            .substringAfter("android.hardware.touchscreen")
+            .substringBefore("/>")
+        val leanbackFeature = manifest
+            .substringAfter("android.software.leanback")
+            .substringBefore("/>")
+        assertTrue(touchscreen.contains("android:required=\"false\""), "touch must not be required")
+        assertTrue(
+            leanbackFeature.contains("android:required=\"false\""),
+            "leanback must not be required",
+        )
+        assertTrue(manifest.contains("android.intent.category.LEANBACK_LAUNCHER"))
+        assertTrue(manifest.contains("android.intent.category.LAUNCHER"))
+    }
+
+    // A television launcher shows android:banner, not android:icon, and an app without one is
+    // drawn as a blank tile rather than falling back to the icon.
+    // Mutation applied to verify: removed android:banner from <application> → test failed.
+    @Test
+    fun `the television launcher has a banner to draw`() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+
+        assertTrue(manifest.contains("android:banner=\"@drawable/tv_banner\""))
+        assertTrue(File("src/main/res/drawable/tv_banner.xml").isFile)
+    }
+
+    // The shell is chosen from the device, not the build. If this detection is ever dropped, a
+    // television silently gets the touch UI — which looks correct and is entirely unusable,
+    // because none of its affordances can be reached without a pointer.
+    // Mutation applied to verify: replaced PackageManager.FEATURE_LEANBACK with the bare
+    // string it resolves to → test failed.
+    @Test
+    fun `the activity picks its shell from the device`() {
+        val activity = File("src/main/kotlin/com/coveninja/cove/MainActivity.kt").readText()
+
+        assertTrue(activity.contains("FEATURE_LEANBACK"))
+        assertTrue(activity.contains("UI_MODE_TYPE_TELEVISION"))
+        assertTrue(activity.contains("CoveTvApp("))
     }
 
     @Test

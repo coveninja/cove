@@ -62,7 +62,10 @@ fun SearchIdle(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = PageLayoutDefaults.BottomClearance),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
         AnimatedVisibility(
@@ -180,7 +183,7 @@ private fun RecentChip(
             val removeHovered by removeInteraction.collectIsHoveredAsState()
             Box(
                 modifier = Modifier
-                    .size(22.dp)
+                    .size(if (hasPointerHover) 22.dp else 40.dp)
                     .clip(CircleShape)
                     .background(
                         if (removeHovered) colors.onSurface.copy(alpha = 0.14f) else colors.surfaceContainer.copy(alpha = 0f),

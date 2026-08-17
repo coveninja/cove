@@ -184,3 +184,21 @@ private fun <T : Comparable<T>> List<MyListRow>.sortedByOptional(
     return present.sortedWith(ordered.thenBy { it.sortTitle }) +
         missing.sortedBy { it.sortTitle }
 }
+
+/**
+ * Whether the category pills and the filter toolbar stay pinned above the list.
+ *
+ * Together they cost roughly 180 dp. A desktop window has that to spare and reads better with a
+ * filter always one click away. A phone does not: in portrait the pinned controls plus the title
+ * block take about a third of the screen before any title is visible, and a landscape phone has
+ * only ~411 dp of height in total, which leaves almost nothing. There they scroll with the
+ * content instead.
+ *
+ * [listEmpty] overrides both — a filter that hides every row must not also hide the control that
+ * clears it, and with no rows there is no list to scroll the header back into view.
+ */
+fun shouldPinListFilters(
+    compactWidth: Boolean,
+    shortViewport: Boolean,
+    listEmpty: Boolean,
+): Boolean = listEmpty || (!compactWidth && !shortViewport)

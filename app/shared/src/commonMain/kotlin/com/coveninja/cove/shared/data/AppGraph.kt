@@ -11,6 +11,7 @@ class AppGraph(
     val addons: AddonRepository,
     val calendar: CalendarRepository = UnavailableCalendarRepository,
     val discovery: DiscoveryRepository = UnavailableDiscoveryRepository,
+    val insights: InsightsRepository = UnavailableInsightsRepository,
     // Defaulted to the Unavailable objects so a host that cannot offer one — for
     // example a remote backend over --api-base — is a rendering decision in the
     // settings page rather than a compile error here.

@@ -23,8 +23,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,6 +55,7 @@ import com.coveninja.cove.ui.components.media.card.EpisodeCard
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaSeason
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 @Composable
 fun SeriesEpisodeBrowser(
@@ -401,7 +404,12 @@ private fun SeasonChip(
     ) {
         Text(
             text = season.title,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            modifier = Modifier
+                // Season selection is the browser's main control; padding alone left the
+                // chip around 32 dp tall.
+                .heightIn(min = if (hasPointerHover) 0.dp else 48.dp)
+                .wrapContentHeight(Alignment.CenterVertically)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
         )

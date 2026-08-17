@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.RailDefaults
@@ -68,7 +69,12 @@ private fun SkeletonRail(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         ShimmerBlock(modifier = Modifier.width(180.dp).height(20.dp), corner = 6.dp)
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        // Enough cards to fill a desktop rail overflow a phone, and a plain Row paints past
+        // the page edge. Clipping matches what the real LazyRow shows at rest.
+        Row(
+            modifier = Modifier.fillMaxWidth().clipToBounds(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
             repeat(cards) {
                 ShimmerBlock(modifier = Modifier.width(cardWidth).height(cardHeight))
             }

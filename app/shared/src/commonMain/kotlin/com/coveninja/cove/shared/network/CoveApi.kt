@@ -116,6 +116,33 @@ class CoveApi(
             parameter("limit", limit)
         }.requireSuccess().body()
 
+    // ── Insights ────────────────────────────────────────────────────────────
+
+    /** Pre-aggregated watch-time counters. Cheap on the host — a read of local counters. */
+    suspend fun activityStats(range: InsightsRange = InsightsRange.AllTime): ActivityStats =
+        httpClient.get("${config.baseUrl}/api/library/activity") {
+            applyAuthHeaders()
+            parameter("range", range.wireName)
+        }.requireSuccess().body()
+
+    /** The whole taste profile in one call. As expensive as the discovery calls above. */
+    suspend fun discoverInsights(): DiscoveryInsights =
+        httpClient.get("${config.baseUrl}/api/discover/insights") {
+            applyAuthHeaders()
+        }.requireSuccess().body()
+
+    /**
+     * All-time Trakt totals, or null when the host answers 204 — which is what it sends for
+     * an unlinked account or one Trakt had nothing to say about.
+     */
+    suspend fun traktStats(): TraktStats? {
+        val response = httpClient.get("${config.baseUrl}/api/trakt/stats") {
+            applyAuthHeaders()
+        }
+        if (response.status == HttpStatusCode.NoContent) return null
+        return response.requireSuccess().body()
+    }
+
     // ── Media metadata ──────────────────────────────────────────────────────
 
     suspend fun media(id: Int, type: MediaType): Media =

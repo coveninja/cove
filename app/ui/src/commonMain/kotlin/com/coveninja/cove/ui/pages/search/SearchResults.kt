@@ -73,14 +73,14 @@ fun SearchResultGrid(
 ) {
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(150.dp),
+        columns = GridCells.Adaptive(PageLayoutDefaults.PosterGridMinWidth),
         state = state,
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(
             start = PageLayoutDefaults.HorizontalPadding,
             end = PageLayoutDefaults.HorizontalPadding,
             top = 4.dp,
-            bottom = 48.dp,
+            bottom = 48.dp + PageLayoutDefaults.BottomClearance,
         ),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -134,7 +134,7 @@ fun SearchResultList(
             start = PageLayoutDefaults.HorizontalPadding,
             end = PageLayoutDefaults.HorizontalPadding,
             top = 4.dp,
-            bottom = 48.dp,
+            bottom = 48.dp + PageLayoutDefaults.BottomClearance,
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {

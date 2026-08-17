@@ -52,10 +52,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.icons.IconifyIcon
 
-private val RatingGold = Color(0xFFFFC107)
-private val RatingGoldBright = Color(0xFFFFD54F)
+private val RatingGold = CoveColors.Status.Rating
+private val RatingGoldBright = CoveColors.Status.RatingBright
 
 @Composable
 fun RatingButton(

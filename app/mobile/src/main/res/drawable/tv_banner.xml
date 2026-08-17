@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The tile a television launcher shows for Cove. Android asks for 320x180; a vector holds
+    that shape at any panel density without shipping four bitmaps.
+
+    Colours are Cove's own rather than the launcher icon's: CoveColors.Neutral.Background and
+    CoveColors.Brand.Accent, so the tile matches the first frame of the app it opens.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M0,0h320v180h-320z" />
+    <!-- Ring: an outer circle and an inner one wound the opposite way, which is what leaves
+         the hole rather than a filled disc. -->
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M160,46A44,44 0,1 0,160 134A44,44 0,1 0,160 46M160,58A32,32 0,1 1,160 122A32,32 0,1 1,160 58" />
+    <path
+        android:fillColor="#FAFAFA"
+        android:pathData="M151,73L177,90L151,107Z" />
+</vector>

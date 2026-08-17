@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.components.media
 
 import androidx.compose.ui.graphics.Color
+import com.coveninja.cove.ui.CoveColors
 
 enum class MyListCategory(
     val label: String,
@@ -10,26 +11,26 @@ enum class MyListCategory(
     Watching(
         label = "Watching",
         icon = "lucide:play",
-        accentColor = Color(0xFF0E94BD),
+        accentColor = CoveColors.Category.Watching,
     ),
     WatchLater(
         label = "Watch Later",
         icon = "lucide:clock",
-        accentColor = Color(0xFFE5851E),
+        accentColor = CoveColors.Category.WatchLater,
     ),
     Finished(
         label = "Finished",
         icon = "lucide:check",
-        accentColor = Color(0xFF2DAA24),
+        accentColor = CoveColors.Category.Finished,
     ),
     Dropped(
         label = "Dropped",
         icon = "lucide:x",
-        accentColor = Color(0xFFC11A16),
+        accentColor = CoveColors.Category.Dropped,
     ),
     NotInterested(
         label = "Not Interested",
         icon = "lucide:trash",
-        accentColor = Color(0xFF959595),
+        accentColor = CoveColors.Category.NotInterested,
     ),
 }

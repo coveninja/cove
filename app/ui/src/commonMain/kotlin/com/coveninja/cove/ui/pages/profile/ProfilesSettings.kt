@@ -145,7 +145,7 @@ fun ProfilesSettings(modifier: Modifier = Modifier) {
 
             SettingDivider()
             Column(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                modifier = Modifier.padding(horizontal = RowPadding, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 SettingLabels(
@@ -239,7 +239,7 @@ private fun ProfileRow(
                 enabled = !active,
                 onClick = onActivate,
             )
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .padding(horizontal = RowPadding, vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -335,7 +335,7 @@ private fun RenameRow(
     onSave: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = RowPadding, vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

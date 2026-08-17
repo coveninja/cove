@@ -353,8 +353,6 @@ private fun LazyListState.viewportStride(): Float {
 
 /** Rail metrics, shared so Home and Explore line up down the page. */
 object RailDefaults {
-    val HorizontalPadding = 24.dp
-
     val CardWidth = 158.dp
 
     /** 2:3 posters plus the room the card's hover lift needs so it is not clipped. */

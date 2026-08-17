@@ -13,6 +13,12 @@ data class MediaDetails(
     val runtime: Int = 0,
     @SerialName("episode_run_time") val episodeRunTime: List<Int> = emptyList(),
     @SerialName("release_date") val releaseDate: String = "",
+    // TMDB names a series' debut differently from a film's. Both are read the same way by
+    // anything asking "how old is this", so both are carried and the caller falls back.
+    @SerialName("first_air_date") val firstAirDate: String = "",
+    // ISO 639-1. Response-only and defaulted, so a host that does not send it is not a
+    // decoding failure — it simply contributes nothing to the language breakdown.
+    @SerialName("original_language") val originalLanguage: String = "",
     val credits: MediaCredits = MediaCredits(),
     @SerialName("release_dates") val releaseDates: MediaReleaseDates = MediaReleaseDates(),
     @SerialName("content_ratings") val contentRatings: MediaContentRatings = MediaContentRatings(),

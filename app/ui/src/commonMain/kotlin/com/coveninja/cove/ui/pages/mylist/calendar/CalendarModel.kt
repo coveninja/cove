@@ -77,6 +77,16 @@ fun countdownLabel(date: LocalDate, today: LocalDate): String {
 fun monthLabel(month: YearMonth): String =
     "${MONTHS_FULL[month.month.number - 1]} ${month.year}"
 
+/**
+ * "Aug 2026", for the month header on a phone.
+ *
+ * The bar carries three 48 dp touch targets and the Today chip alongside the label, which on a
+ * 360 dp screen leaves the label under 60 dp — not enough for a full month name, so it would
+ * ellipsize to "Aug…" and lose the year anyway. Abbreviating keeps the whole date readable.
+ */
+fun monthLabelShort(month: YearMonth): String =
+    "${MONTHS_SHORT[month.month.number - 1]} ${month.year}"
+
 fun CalendarItem.parsedDate(): LocalDate? =
     runCatching { LocalDate.parse(date) }.getOrNull()
 

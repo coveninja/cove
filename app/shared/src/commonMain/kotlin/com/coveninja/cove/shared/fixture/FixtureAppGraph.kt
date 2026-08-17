@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.isoDayNumber
+import kotlinx.datetime.number
 import kotlinx.datetime.plus
 import kotlinx.datetime.todayIn
 import kotlin.time.Clock
@@ -107,10 +109,13 @@ private fun fixtureEntry(
     updatedAt = daysAgo(watchedDaysAgo ?: addedDaysAgo),
 )
 
+// Ratings are on the 1..5 star scale the rating control writes — see `MediaActions.setRating`,
+// which passes a star count, and the taste weighting that centres on 2.5. A 0..10 value here
+// fills every star at once and reads as "loved it" for a title that was dropped.
 private val fixtureEntries = listOf(
     fixtureEntry(
         1, 550, MediaType.Movie, "Fight Club", LibraryStatus.Finished, 8.8,
-        addedDaysAgo = 40, watchedDaysAgo = 30, rating = 9.0,
+        addedDaysAgo = 40, watchedDaysAgo = 30, rating = 5.0,
     ),
     // Two aired episodes ahead of where the viewer stopped: this is the entry that
     // exercises the "new episodes" badge.
@@ -132,7 +137,7 @@ private val fixtureEntries = listOf(
     ),
     fixtureEntry(
         5, 1399, MediaType.Tv, "Game of Thrones", LibraryStatus.Dropped, 8.4,
-        addedDaysAgo = 60, watchedDaysAgo = 50, rating = 6.0,
+        addedDaysAgo = 60, watchedDaysAgo = 50, rating = 2.0,
         lastWatchedSeason = 5, lastWatchedEpisode = 2,
         lastAiredSeason = 8, lastAiredEpisode = 6,
     ),
@@ -150,7 +155,7 @@ private val fixtureEntries = listOf(
     ),
     fixtureEntry(
         9, 680, MediaType.Movie, "Pulp Fiction", LibraryStatus.Finished, 8.5,
-        addedDaysAgo = 70, watchedDaysAgo = 65, rating = 8.0,
+        addedDaysAgo = 70, watchedDaysAgo = 65, rating = 4.0,
     ),
     fixtureEntry(
         10, 13, MediaType.Movie, "Forrest Gump", LibraryStatus.Dropped, 8.5,
@@ -485,6 +490,326 @@ private class FixtureDiscoveryRepository : DiscoveryRepository {
             .sortedByDescending { it.rating ?: 0.0 }
             .take(limit)
             .map { FavoriteTitle(it.tmdbId, it.mediaType, it.title) }
+}
+
+/**
+ * Insights with enough history behind them to judge the page by.
+ *
+ * Everything here is *derived* from one generated day-by-day calendar rather than written
+ * out as a list of impressive-looking totals. Hand-picked numbers drift out of agreement
+ * the moment one of them is edited — a streak that the calendar contradicts, a monthly bar
+ * chart that does not add up to the headline total — and a chart that disagrees with itself
+ * is worse than no chart, because it looks like a rendering bug.
+ *
+ * The generator is seeded, so the page looks the same on every launch and a visual change
+ * is attributable to the code rather than to new random data.
+ */
+private class FixtureInsightsRepository : InsightsRepository {
+    override suspend fun activity(range: InsightsRange): ActivityStats =
+        fixtureActivityFor(range)
+    override suspend fun taste(): DiscoveryInsights = fixtureTaste
+    // Plausible rather than derived: Trakt totals come from an account this fixture has no
+    // model of, and the point of showing them is that they disagree with the local figures.
+    override suspend fun trakt(): TraktStats = TraktStats(
+        moviesWatched = 412,
+        movieMinutes = 48_960,
+        showsWatched = 96,
+        episodesWatched = 4_201,
+        episodeMinutes = 151_236,
+        ratings = 318,
+    )
+}
+
+/**
+ * Original languages for the handful of fixture titles that are not English.
+ *
+ * The fixture catalog does not carry a language field, and inventing a spread would make
+ * the chart meaningless. Naming the ones that are genuinely foreign — and defaulting the
+ * rest to English — keeps the breakdown true to the catalog it is drawn from.
+ */
+private val FIXTURE_LANGUAGES = mapOf(
+    129 to "ja", 372058 to "ja", 12477 to "ja", 496243 to "ko", 429 to "it",
+)
+
+
+/**
+ * The generated history, narrowed to one year.
+ *
+ * Recomputed from the calendar rather than regenerated, so the ranges stay consistent with
+ * each other and with the all-time figures. The hour distribution is scaled rather than
+ * re-derived: the generator applies one fixed evening-weighted shape to every day, so a
+ * year's hours are that same shape at a smaller size — which is exactly what scaling gives,
+ * and is why this shortcut is honest here and would not be against real data.
+ */
+private fun fixtureActivityFor(range: InsightsRange): ActivityStats {
+    val all = fixtureActivity
+    if (range == InsightsRange.AllTime) return all
+
+    val today = Clock.System.todayIn(TimeZone.currentSystemDefault())
+    val year = if (range == InsightsRange.ThisYear) today.year else today.year - 1
+    val calendar = all.calendar.filterKeys { it.startsWith("$year-") }
+    val total = calendar.values.sum()
+    if (total <= 0L) return all.copy(calendar = emptyMap(), totalSeconds = 0)
+
+    val byDayOfWeek = MutableList(7) { 0L }
+    calendar.forEach { (value, seconds) ->
+        val date = runCatching { kotlinx.datetime.LocalDate.parse(value) }.getOrNull()
+            ?: return@forEach
+        byDayOfWeek[date.dayOfWeek.isoDayNumber % 7] += seconds
+    }
+    val scale = total.toDouble() / all.totalSeconds.coerceAtLeast(1L)
+    val activeDays = calendar.size.coerceAtLeast(1)
+
+    return all.copy(
+        totalSeconds = total,
+        avgSecondsPerActiveDay = total / activeDays,
+        byDayOfWeek = byDayOfWeek,
+        byHourOfDay = all.byHourOfDay.map { (it * scale).toLong() },
+        calendar = calendar,
+    )
+}
+
+/** Roughly fourteen months, so this year and the whole of last year both have shape. */
+private const val FIXTURE_ACTIVITY_DAYS = 430
+
+/**
+ * How a day's watching is spread across the clock.
+ *
+ * Weighted towards the evening with a small lunchtime bump and a dead zone from 3am to
+ * 7am — the point is that the viewing clock reads as a person's habits rather than as
+ * noise, since a flat distribution would make that chart look broken.
+ */
+private val FIXTURE_HOUR_WEIGHTS = listOf(
+    3, 1, 1, 0, 0, 0, 0, 1, 2, 3, 4, 5,
+    7, 8, 6, 5, 6, 9, 14, 20, 26, 30, 22, 12,
+)
+
+// Lazy, not eager. Top-level properties initialise in file order, and this derives from
+// FIXTURE_GENRE_NAMES and friends declared further down — reading them from an eager
+// initialiser here gets null and takes the whole file's class initialiser down with it.
+// Deferring also keeps 430 days of generation off the startup path for hosts that never
+// open the insights page.
+private val fixtureActivity: ActivityStats by lazy { buildFixtureActivity() }
+
+private fun buildFixtureActivity(): ActivityStats {
+    val random = kotlin.random.Random(seed = 20260817)
+    val today = Clock.System.todayIn(TimeZone.currentSystemDefault())
+    val thisYear = today.year
+
+    // Only days with time on them go in, which is what the real table stores — the gaps
+    // are what give the heatmap texture and make the streak counters mean something.
+    val calendar = linkedMapOf<String, Long>()
+    val byDayOfWeek = MutableList(7) { 0L }
+    val byMonthThisYear = MutableList(12) { 0L }
+    val byMonthLastYear = MutableList(12) { 0L }
+    val byYear = linkedMapOf<String, Long>()
+
+    for (offset in FIXTURE_ACTIVITY_DAYS downTo 0) {
+        val date = today.plus(-offset, DateTimeUnit.DAY)
+        // Sunday is 7 in ISO; the arrays here are Sunday-first, hence the modulo.
+        val weekdayIndex = date.dayOfWeek.isoDayNumber % 7
+        val weekend = weekdayIndex == 0 || weekdayIndex == 6
+        // Skipped days are the norm midweek and rare at weekends.
+        if (random.nextInt(100) < (if (weekend) 18 else 42)) continue
+
+        val minutes = if (weekend) 60 + random.nextInt(180) else 25 + random.nextInt(110)
+        val seconds = minutes * 60L
+        calendar[date.toString()] = seconds
+        byDayOfWeek[weekdayIndex] += seconds
+        byYear[date.year.toString()] = (byYear[date.year.toString()] ?: 0L) + seconds
+        when (date.year) {
+            thisYear -> byMonthThisYear[date.month.number - 1] += seconds
+            thisYear - 1 -> byMonthLastYear[date.month.number - 1] += seconds
+        }
+    }
+
+    val total = calendar.values.sum()
+    val weightSum = FIXTURE_HOUR_WEIGHTS.sum()
+    val byHourOfDay = FIXTURE_HOUR_WEIGHTS.map { weight -> total * weight / weightSum }
+
+    val activeDays = calendar.keys.sorted()
+    val topTitles = fixtureEntries
+        .filter { it.lastWatchedAt != null }
+        .mapIndexed { index, entry ->
+            ActivityTitle(
+                tmdbId = entry.tmdbId,
+                mediaType = entry.mediaType.wireName,
+                // Descending by construction so the leaderboard is visibly ranked.
+                seconds = (14 - index * 2).coerceAtLeast(2) * 3_600L,
+                title = entry.title,
+                posterPath = entry.posterPath,
+            )
+        }
+        .sortedByDescending(ActivityTitle::seconds)
+
+    return ActivityStats(
+        totalSeconds = total,
+        totalTitles = fixtureEntries.size,
+        currentStreak = fixtureStreakEndingToday(calendar.keys, today),
+        longestStreak = fixtureLongestStreak(activeDays),
+        avgSecondsPerActiveDay = if (activeDays.isEmpty()) 0 else total / activeDays.size,
+        titlesThisYear = topTitles.size,
+        thisYearSeconds = byYear[thisYear.toString()] ?: 0L,
+        lastYearSeconds = byYear[(thisYear - 1).toString()] ?: 0L,
+        byYear = byYear,
+        byMonthThisYear = byMonthThisYear,
+        byMonthLastYear = byMonthLastYear,
+        byDayOfWeek = byDayOfWeek,
+        byHourOfDay = byHourOfDay,
+        calendar = calendar,
+        titlesWatchedThisYear = topTitles,
+        rewatched = fixtureEntries
+            .filter { it.lastWatchedAt != null }
+            .take(4)
+            .mapIndexed { index, entry ->
+                TitlePlayCount(
+                    tmdbId = entry.tmdbId,
+                    mediaType = entry.mediaType.wireName,
+                    plays = 4 - index,
+                    title = entry.title,
+                    posterPath = entry.posterPath,
+                )
+            }
+            .filter { it.plays > 1 },
+    )
+}
+
+/** Consecutive active days counting back from today; zero if today itself is a gap. */
+private fun fixtureStreakEndingToday(active: Set<String>, today: kotlinx.datetime.LocalDate): Int {
+    var streak = 0
+    var cursor = today
+    while (active.contains(cursor.toString())) {
+        streak++
+        cursor = cursor.plus(-1, DateTimeUnit.DAY)
+    }
+    return streak
+}
+
+/** Longest run of consecutive days anywhere in the history. */
+private fun fixtureLongestStreak(sortedDates: List<String>): Int {
+    var longest = 0
+    var run = 0
+    var previous: kotlinx.datetime.LocalDate? = null
+    for (value in sortedDates) {
+        val date = kotlinx.datetime.LocalDate.parse(value)
+        run = if (previous != null && previous.plus(1, DateTimeUnit.DAY) == date) run + 1 else 1
+        if (run > longest) longest = run
+        previous = date
+    }
+    return longest
+}
+
+/**
+ * A taste profile that agrees with the fixture library.
+ *
+ * Genre scores are counted off the saved titles' own genre ids rather than invented, so the
+ * bars line up with what the fixture library actually contains. Keywords, people and
+ * studios have no fixture source to derive from, so those are written out — plausible for
+ * this library, and varied enough in magnitude that the ranked bars are visibly ranked.
+ */
+private val fixtureTaste: DiscoveryInsights by lazy { buildFixtureTaste() }
+
+private fun buildFixtureTaste(): DiscoveryInsights {
+    val catalog = fixtureMovies + fixtureTv
+    val savedById = fixtureEntries.associateBy { it.tmdbId }
+
+    fun genreScores(type: MediaType): List<DiscoveryTaste> =
+        catalog.filter { it.mediaType == type && it.id in savedById }
+            .flatMap { media ->
+                val entry = savedById.getValue(media.id)
+                // The same shape the real profile uses: status sets the base weight and a
+                // rating pushes it either way, so a dropped title lands negative.
+                val weight = when (entry.status) {
+                    LibraryStatus.Finished -> 2.0
+                    LibraryStatus.Watching -> 1.0
+                    LibraryStatus.WatchLater -> 0.25
+                    LibraryStatus.Dropped -> -2.0
+                } + (entry.rating?.let { (it - 2.5) * 1.5 } ?: 0.0)
+                media.genreIds.map { it to weight }
+            }
+            .groupBy({ it.first }, { it.second })
+            .map { (id, weights) -> DiscoveryTaste(id, FIXTURE_GENRE_NAMES[id].orEmpty(), weights.sum()) }
+            .filter { it.name.isNotEmpty() }
+            .sortedByDescending(DiscoveryTaste::score)
+
+    val movieGenres = genreScores(MediaType.Movie)
+    val tvGenres = genreScores(MediaType.Tv)
+    val disliked = (movieGenres + tvGenres).filter { it.score < 0 }.sortedBy(DiscoveryTaste::score)
+
+    fun contributors(positive: Boolean) = fixtureEntries
+        .map { entry ->
+            val weight = when (entry.status) {
+                LibraryStatus.Finished -> 2.4
+                LibraryStatus.Watching -> 1.2
+                LibraryStatus.WatchLater -> 0.3
+                LibraryStatus.Dropped -> -2.1
+            }
+            ContributingTitle(
+                tmdbId = entry.tmdbId,
+                mediaType = entry.mediaType.wireName,
+                title = entry.title,
+                posterPath = entry.posterPath,
+                weight = weight,
+            )
+        }
+        .filter { if (positive) it.weight > 0 else it.weight < 0 }
+        .sortedByDescending { if (positive) it.weight else -it.weight }
+
+    val engaged = catalog.filter { it.id in savedById }
+    val decades = engaged
+        .mapNotNull { (it.releaseDate ?: it.firstAirDate)?.take(4)?.toIntOrNull() }
+        .filter { it in 1870..2200 }
+        .groupingBy { it / 10 * 10 }.eachCount()
+        .entries.sortedWith(
+            compareByDescending<Map.Entry<Int, Int>> { it.value }.thenByDescending { it.key },
+        )
+        .map { DecadeCount(it.key, it.value) }
+    val languages = engaged
+        .groupingBy { FIXTURE_LANGUAGES[it.id] ?: "en" }.eachCount()
+        .entries.sortedWith(
+            compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key },
+        )
+        .map { LanguageCount(it.key, it.value) }
+
+    return DiscoveryInsights(
+        decades = decades,
+        languages = languages,
+        // A believable mix of feature films and hour-long drama episodes.
+        averageRuntimeMinutes = 78,
+        topMovieGenres = movieGenres.filter { it.score > 0 }.take(8),
+        topTvGenres = tvGenres.filter { it.score > 0 }.take(8),
+        dislikedGenres = disliked.take(6),
+        topKeywords = listOf(
+            DiscoveryTaste(1, "dystopia", 9.4),
+            DiscoveryTaste(2, "heist", 7.8),
+            DiscoveryTaste(3, "time travel", 6.9),
+            DiscoveryTaste(4, "anti-hero", 6.1),
+            DiscoveryTaste(5, "found family", 5.2),
+            DiscoveryTaste(6, "slow burn", 4.4),
+            DiscoveryTaste(7, "one-shot", 3.6),
+            DiscoveryTaste(8, "unreliable narrator", 2.8),
+            DiscoveryTaste(9, "small town", 2.1),
+        ),
+        topPeople = listOf(
+            DiscoveryTaste(101, "Bryan Cranston", 8.6),
+            DiscoveryTaste(102, "Denis Villeneuve", 7.4),
+            DiscoveryTaste(103, "Roger Deakins", 6.2),
+            DiscoveryTaste(104, "Tilda Swinton", 5.5),
+            DiscoveryTaste(105, "Hans Zimmer", 4.8),
+            DiscoveryTaste(106, "Greta Lee", 3.9),
+        ),
+        signalsUsed = fixtureEntries.size,
+        topStudios = listOf(
+            StudioEntry(201, "A24", 6),
+            StudioEntry(202, "HBO", 5),
+            StudioEntry(203, "Warner Bros.", 4),
+            StudioEntry(204, "Studio Ghibli", 3),
+            StudioEntry(205, "AMC", 2),
+            StudioEntry(206, "Netflix", 2),
+        ),
+        topContributors = contributors(positive = true),
+        negativeContributors = contributors(positive = false),
+    )
 }
 
 /** Small enough that scrolling the fixture grid reaches a second page and then the end. */
@@ -933,6 +1258,7 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     addons    = FixtureAddonRepository(),
     calendar  = FixtureCalendarRepository(),
     discovery = FixtureDiscoveryRepository(),
+    insights  = FixtureInsightsRepository(),
     account   = FixtureAccountRepository(),
     profiles  = FixtureProfileRepository(),
     trakt     = FixtureTraktRepository(),

@@ -22,6 +22,7 @@ import com.coveninja.cove.backend.content.TmdbClient
 import com.coveninja.cove.backend.content.resolveAppLocale
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.discovery.LocalDiscoveryRepository
+import com.coveninja.cove.backend.insights.LocalInsightsRepository
 import com.coveninja.cove.backend.http.CoreRouteServices
 import com.coveninja.cove.backend.http.LocalBackendHost
 import com.coveninja.cove.backend.http.RouteUpdater
@@ -47,6 +48,7 @@ import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.CalendarRepository
 import com.coveninja.cove.shared.data.DiscoveryRepository
+import com.coveninja.cove.shared.data.InsightsRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.shared.data.UnavailableDeviceRepository
@@ -87,6 +89,7 @@ class AndroidBackendRuntime private constructor(
     addons: AddonRepository,
     calendar: CalendarRepository,
     discovery: DiscoveryRepository,
+    insights: InsightsRepository,
     account: AccountRepository,
     trakt: TraktRepository,
     device: DeviceRepository,
@@ -106,6 +109,9 @@ class AndroidBackendRuntime private constructor(
         // Likewise discovery, now that DiscoveryService lives in commonMain: Explore is
         // the same page here as on the desktop, personalized rails included.
         discovery = discovery,
+        // Watch-time counters live in jvmSharedMain and the taste profile in commonMain, so
+        // the insights page is the same page here as on the desktop.
+        insights = insights,
         // Sync is the whole point of an account on a phone: the library, settings
         // and watch progress here are the ones the desktop already has.
         account = account,
@@ -409,7 +415,15 @@ class AndroidBackendRuntime private constructor(
                     )
                     AndroidBackendRuntime(
                         stores, client, untrustedClient, scope, media, routeServices, content, playback, addons,
-                        calendar, discovery, account, trakt, device,
+                        calendar, discovery,
+                        LocalInsightsRepository(
+                            activity = activity,
+                            discovery = discoveryService,
+                            database = stores.databaseHandle,
+                            session = stores.repositories.profileSession,
+                            trakt = traktService,
+                        ),
+                        account, trakt, device,
                         updateRepository,
                     )
                 }

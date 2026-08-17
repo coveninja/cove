@@ -15,6 +15,8 @@ class DesktopDatabaseMigrationTest {
             // A version-3 database is faked by creating the current schema and dropping
             // everything the later migrations add — so every new migration has to drop
             // its table here too, or that migration re-creates a table that exists.
+            driver.execute(null, "DROP TABLE insights_cache", 0)
+            driver.execute(null, "DROP TABLE title_plays", 0)
             driver.execute(null, "DROP TABLE calendar_cache", 0)
             driver.execute(null, "DROP TABLE auth_session", 0)
             driver.execute(null, "DROP TABLE client_session", 0)

@@ -36,6 +36,7 @@ fun createLiveAppGraph(
         addons   = LiveAddonRepository(api, scope),
         calendar = LiveCalendarRepository(api, library),
         discovery = LiveDiscoveryRepository(api),
+        insights = LiveInsightsRepository(api),
         account  = LiveAccountRepository(api, scope),
         profiles = LiveProfileRepository(api, scope),
         // Trakt linking and the mpv config file belong to the machine running the

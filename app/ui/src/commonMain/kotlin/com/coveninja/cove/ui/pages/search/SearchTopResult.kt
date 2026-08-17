@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -410,6 +411,9 @@ private fun TopResultButton(
     Row(
         modifier = Modifier
             .padding(bottom = lift)
+            // The primary Watch action on the top result: padding alone left it around
+            // 35 dp tall, short of a comfortable tap target.
+            .heightIn(min = if (hasPointerHover) 0.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale

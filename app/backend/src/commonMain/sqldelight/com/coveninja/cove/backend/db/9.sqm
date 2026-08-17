@@ -1,0 +1,14 @@
+CREATE TABLE title_plays (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    title_key TEXT NOT NULL,
+    plays INTEGER NOT NULL DEFAULT 1,
+    last_started_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, title_key)
+);
+
+CREATE TABLE insights_cache (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    payload TEXT NOT NULL DEFAULT '{}',
+    refreshed_at TEXT NOT NULL DEFAULT '',
+    signature TEXT NOT NULL DEFAULT ''
+);

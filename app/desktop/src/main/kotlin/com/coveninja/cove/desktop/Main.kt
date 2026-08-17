@@ -15,6 +15,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
@@ -36,6 +38,7 @@ import com.coveninja.cove.shared.fixture.FixtureAppGraph
 import com.coveninja.cove.shared.network.CoveApiConfig
 import com.coveninja.cove.ui.CoveApp
 import com.coveninja.cove.ui.CoveTheme
+import com.coveninja.cove.ui.tv.CoveTvApp
 import com.coveninja.cove.ui.state.FullscreenController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,7 +117,16 @@ fun main(args: Array<String>) {
                 androidx.compose.runtime.DisposableEffect(playerHost) {
                     onDispose { playerHost.dispose() }
                 }
+                // Also honoured as an environment variable so `make hot` can enter the TV
+                // shell: the hot-reload task owns its own process arguments.
+                val tvShell = options.tv ||
+                    System.getenv("COVE_UI").equals("tv", ignoreCase = true)
                 val windowState = rememberWindowState()
+                // A 16:9 window at television proportions, so the dev harness resolves the
+                // same TvDimens a real panel would rather than a desktop aspect ratio.
+                LaunchedEffect(tvShell) {
+                    if (tvShell) windowState.size = DpSize(1280.dp, 720.dp)
+                }
                 // Window placement is the desktop window's business, so the
                 // controller is built here and handed to :ui rather than :ui
                 // reaching for a window it cannot see.
@@ -122,15 +134,23 @@ fun main(args: Array<String>) {
                 Window(
                     onCloseRequest = ::exitApplication,
                     state = windowState,
-                    title = "Cove",
+                    title = if (tvShell) "Cove TV" else "Cove",
                 ) {
                     CoveTheme {
-                        CoveApp(
-                            graph,
-                            videoPlayerHost = playerHost,
-                            fullscreenController = fullscreen,
-                            onUpdateExitRequested = ::exitApplication,
-                        )
+                        if (tvShell) {
+                            CoveTvApp(
+                                graph = graph,
+                                videoPlayerHost = playerHost,
+                                onUpdateExitRequested = ::exitApplication,
+                            )
+                        } else {
+                            CoveApp(
+                                graph,
+                                videoPlayerHost = playerHost,
+                                fullscreenController = fullscreen,
+                                onUpdateExitRequested = ::exitApplication,
+                            )
+                        }
                     }
                 }
             }

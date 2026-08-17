@@ -144,12 +144,15 @@ private fun MyListReady(
     Column(modifier = modifier.fillMaxSize()) {
         // The switch sits beside the title where there is room and beneath it where there
         // is not; on a phone the two together are wider than the screen.
+        // A landscape phone has ~411.dp of height for everything; the title block's breathing
+        // room is the first thing that has to give.
+        val shortViewport = PageLayoutDefaults.Viewport.isShort
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
                     horizontal = PageLayoutDefaults.HorizontalPadding,
-                    vertical = 12.dp,
+                    vertical = if (shortViewport) 6.dp else 12.dp,
                 ),
         ) {
             val stacked = maxWidth < COMPACT_HEADER_WIDTH
@@ -270,31 +273,59 @@ private fun LibraryView(
         selection.clear()
     }
 
+    // The pills and the toolbar come to roughly 180.dp — a fifth of a portrait phone and most
+    // of a landscape one, permanently, before a single title is visible. A desktop window has
+    // the room and wants them pinned so a filter is always one click away; a phone scrolls them
+    // away with the content, the way Explore's shelves layout already does with its toolbar.
+    // An empty list is the exception: the controls have to stay put, or a filter that hides
+    // everything also hides the way to clear it.
+    //
+    // Height matters as much as width here. A phone in landscape is ~914.dp wide, so it is not
+    // "compact" by width at all, yet it has only ~411.dp of height to spend — the case where a
+    // pinned header leaves nothing visible. isShort is exactly that viewport.
+    val pinFilters = shouldPinListFilters(
+        compactWidth = PageLayoutDefaults.IsCompact,
+        shortViewport = PageLayoutDefaults.Viewport.isShort,
+        listEmpty = visible.isEmpty(),
+    )
+
+    val categoryPills: @Composable (Modifier) -> Unit = { pillModifier ->
+        MyListCategoryPills(
+            counts = counts,
+            total = rows.size,
+            selected = filters.category,
+            onSelect = { filters = filters.copy(category = it) },
+            modifier = pillModifier,
+        )
+    }
+    val listToolbar: @Composable (Modifier) -> Unit = { toolbarModifier ->
+        MyListToolbar(
+            filters = filters,
+            layout = layout,
+            selectionActive = selection.active,
+            onFiltersChange = { filters = it },
+            onLayoutChange = { layout = it },
+            onToggleSelection = { selection.setSelectionMode(!selection.active) },
+            modifier = toolbarModifier,
+        )
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            MyListCategoryPills(
-                counts = counts,
-                total = rows.size,
-                selected = filters.category,
-                onSelect = { filters = filters.copy(category = it) },
-                modifier = Modifier.padding(
-                    horizontal = PageLayoutDefaults.HorizontalPadding,
-                    vertical = 6.dp,
-                ),
-            )
-
-            MyListToolbar(
-                filters = filters,
-                layout = layout,
-                selectionActive = selection.active,
-                onFiltersChange = { filters = it },
-                onLayoutChange = { layout = it },
-                onToggleSelection = { selection.setSelectionMode(!selection.active) },
-                modifier = Modifier.padding(
-                    horizontal = PageLayoutDefaults.HorizontalPadding,
-                    vertical = 8.dp,
-                ),
-            )
+            if (pinFilters) {
+                categoryPills(
+                    Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                        vertical = 6.dp,
+                    ),
+                )
+                listToolbar(
+                    Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                        vertical = 8.dp,
+                    ),
+                )
+            }
 
             if (visible.isEmpty()) {
                 EmptyLibrary(
@@ -315,11 +346,24 @@ private fun LibraryView(
                         )
                     }
                 }
+                // The list's own contentPadding supplies the gutter here, so these carry only
+                // vertical spacing — padding them horizontally again would double the inset.
+                val headerContent: (@Composable () -> Unit)? = if (pinFilters) {
+                    heroContent
+                } else {
+                    {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            categoryPills(Modifier.padding(vertical = 6.dp))
+                            listToolbar(Modifier.padding(vertical = 8.dp))
+                            heroContent?.invoke()
+                        }
+                    }
+                }
                 val padding = PaddingValues(
                     start = PageLayoutDefaults.HorizontalPadding,
                     end = PageLayoutDefaults.HorizontalPadding,
                     top = 8.dp,
-                    bottom = 40.dp,
+                    bottom = 40.dp + PageLayoutDefaults.BottomClearance,
                 )
 
                 Box(modifier = Modifier.weight(1f)) {
@@ -330,7 +374,7 @@ private fun LibraryView(
                             mediaCard = mediaCard,
                             contentPadding = padding,
                             state = gridState,
-                            header = heroContent,
+                            header = headerContent,
                         )
 
                         MyListLayout.Rows -> MyListRows(
@@ -344,7 +388,7 @@ private fun LibraryView(
                             today = today,
                             contentPadding = padding,
                             state = listState,
-                            header = heroContent,
+                            header = headerContent,
                         )
                     }
 
@@ -470,7 +514,7 @@ private fun CalendarView(
                         start = PageLayoutDefaults.HorizontalPadding,
                         end = PageLayoutDefaults.HorizontalPadding,
                         top = 4.dp,
-                        bottom = 40.dp,
+                        bottom = 40.dp + PageLayoutDefaults.BottomClearance,
                     ),
                     onOpen = { item -> index.mediaFor(item, catalog)?.let(onOpenMedia) },
                     onPlay = { item ->

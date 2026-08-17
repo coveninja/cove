@@ -5,10 +5,16 @@ import com.coveninja.cove.backend.content.MediaCatalog
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalSettingsRepository
+import com.coveninja.cove.shared.model.ContributingTitle
+import com.coveninja.cove.shared.model.DecadeCount
+import com.coveninja.cove.shared.model.DiscoveryInsights
+import com.coveninja.cove.shared.model.DiscoveryTaste
+import com.coveninja.cove.shared.model.LanguageCount
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.StudioEntry
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
@@ -134,6 +140,9 @@ class DiscoveryService(
             ).take(12).map { StudioEntry(p.studioIds[it.key] ?: 0, it.key, it.value) },
             topContributors = p.contributors.filter { it.weight > 0 }.take(12),
             negativeContributors = p.contributors.filter { it.weight < 0 }.sortedBy { it.weight }.take(12),
+            decades = p.decades,
+            languages = p.languages.take(8),
+            averageRuntimeMinutes = p.averageRuntimeMinutes,
         )
     }
 
@@ -252,6 +261,13 @@ class DiscoveryService(
         val personNames = mutableMapOf<Int, String>()
         val studioCounts = mutableMapOf<String, Int>()
         val studioIds = mutableMapOf<String, Int>()
+        // Three more tallies off the same pass. The details behind each signal are already
+        // fetched to score genres and people, so decade, language and runtime cost nothing
+        // beyond the arithmetic — asking for them separately would double the request count
+        // for a profile that is already the expensive part of this page.
+        val decadeCounts = mutableMapOf<Int, Int>()
+        val languageCounts = mutableMapOf<String, Int>()
+        val runtimes = mutableListOf<Int>()
         var movieEngaged = 0
         var tvEngaged = 0
         signals.forEach { signal ->
@@ -282,6 +298,27 @@ class DiscoveryService(
                     studioCounts[studio.name] = (studioCounts[studio.name] ?: 0) + 1
                     studioIds[studio.name] = studio.id
                 }
+            signal.details?.let { details ->
+                // A film carries release_date and a series first_air_date; both answer the
+                // same question here.
+                val year = details.releaseDate.ifBlank { details.firstAirDate }
+                    .take(4).toIntOrNull()
+                if (year != null && year in 1870..2200) {
+                    val decade = year / 10 * 10
+                    decadeCounts[decade] = (decadeCounts[decade] ?: 0) + 1
+                }
+                details.originalLanguage.takeIf { it.isNotBlank() }?.let { code ->
+                    languageCounts[code] = (languageCounts[code] ?: 0) + 1
+                }
+                // For a series the comparable figure is one episode, not the whole run —
+                // averaging a 60-hour show against a 100-minute film says nothing.
+                val minutes = if (signal.type == MediaType.Movie) {
+                    details.runtime
+                } else {
+                    details.episodeRunTime.firstOrNull() ?: 0
+                }
+                if (minutes > 0) runtimes += minutes
+            }
         }
         val contributors = signals.map {
             ContributingTitle(it.tmdbId, it.type.wireName, it.title, it.posterPath, it.weight)
@@ -303,6 +340,13 @@ class DiscoveryService(
             favorites = favorites,
             excluded = excluded,
             movieShare = if (total == 0) 0.5 else movieEngaged.toDouble() / total,
+            decades = decadeCounts.entries.sortedWith(
+                compareByDescending<Map.Entry<Int, Int>> { it.value }.thenByDescending { it.key },
+            ).map { DecadeCount(it.key, it.value) },
+            languages = languageCounts.entries.sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key },
+            ).map { LanguageCount(it.key, it.value) },
+            averageRuntimeMinutes = if (runtimes.isEmpty()) 0 else runtimes.average().toInt(),
         )
     }
 
@@ -375,6 +419,9 @@ class DiscoveryService(
         val favorites: List<FavoriteSignal> = emptyList(),
         val excluded: Set<String> = emptySet(),
         val movieShare: Double = 0.5,
+        val decades: List<DecadeCount> = emptyList(),
+        val languages: List<LanguageCount> = emptyList(),
+        val averageRuntimeMinutes: Int = 0,
     )
 
     companion object {
@@ -382,9 +429,6 @@ class DiscoveryService(
         private val KID_BLOCKED_GENRES = setOf(27, 53, 10_752, 80)
     }
 }
-
-@Serializable
-data class DiscoveryTaste(val id: Int, val name: String, val score: Double)
 
 @Serializable
 data class FavoriteSignal(
@@ -395,31 +439,6 @@ data class FavoriteSignal(
     // title a rail after the thing that produced it — "Because you watched Fight Club"
     // cannot be assembled from an id alone without a second lookup.
     val title: String = "",
-)
-
-@Serializable
-data class StudioEntry(val id: Int, val name: String, val count: Int)
-
-@Serializable
-data class ContributingTitle(
-    @SerialName("tmdb_id") val tmdbId: Int,
-    @SerialName("media_type") val mediaType: String,
-    val title: String,
-    @SerialName("poster_path") val posterPath: String,
-    val weight: Double,
-)
-
-@Serializable
-data class DiscoveryInsights(
-    @SerialName("top_movie_genres") val topMovieGenres: List<DiscoveryTaste>,
-    @SerialName("top_tv_genres") val topTvGenres: List<DiscoveryTaste>,
-    @SerialName("disliked_genres") val dislikedGenres: List<DiscoveryTaste>,
-    @SerialName("top_keywords") val topKeywords: List<DiscoveryTaste>,
-    @SerialName("top_people") val topPeople: List<DiscoveryTaste>,
-    @SerialName("signals_used") val signalsUsed: Int,
-    @SerialName("top_studios") val topStudios: List<StudioEntry>,
-    @SerialName("top_contributors") val topContributors: List<ContributingTitle>,
-    @SerialName("negative_contributors") val negativeContributors: List<ContributingTitle>,
 )
 
 @Serializable

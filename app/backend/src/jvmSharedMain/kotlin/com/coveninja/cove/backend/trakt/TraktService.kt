@@ -10,6 +10,7 @@ import com.coveninja.cove.backend.store.LocalSettingsRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.TraktStats
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -262,6 +263,42 @@ class TraktService(
         flowStates[profileId] = "authorized"
         flowJobs.remove(profileId)?.takeIf { it != kotlinx.coroutines.currentCoroutineContext()[Job] }?.cancel()
         return TraktPollResponse(status, username)
+    }
+
+    /**
+     * Trakt's all-time totals for the linked account, or null if there is nothing to show.
+     *
+     * Every failure path returns null rather than throwing. This is a decorative extra on a
+     * page that is complete without it — an unlinked account, an expired token, a Trakt
+     * outage and a malformed response should all read the same way to the caller, which is
+     * "no Trakt section", not "the insights page is broken".
+     */
+    suspend fun stats(): TraktStats? {
+        val profileId = session.profileId.value
+        val token = runCatching { ensureValidToken(profileId) }.getOrNull() ?: return null
+        val response = runCatching { get("/users/me/stats", token.accessToken) }.getOrNull()
+            ?: return null
+        if (response.status != 200) return null
+        return runCatching {
+            val root = CoveJson.parseToJsonElement(response.body).jsonObject
+            fun section(name: String) = root[name]?.jsonObject
+            fun Int(section: kotlinx.serialization.json.JsonObject?, key: String): Int =
+                section?.get(key)?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            fun Long(section: kotlinx.serialization.json.JsonObject?, key: String): Long =
+                section?.get(key)?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+
+            val movies = section("movies")
+            val shows = section("shows")
+            val episodes = section("episodes")
+            TraktStats(
+                moviesWatched = Int(movies, "watched"),
+                movieMinutes = Long(movies, "minutes"),
+                showsWatched = Int(shows, "watched"),
+                episodesWatched = Int(episodes, "watched"),
+                episodeMinutes = Long(episodes, "minutes"),
+                ratings = Int(section("ratings"), "total"),
+            )
+        }.getOrNull()?.takeUnless { it.isEmpty }
     }
 
     private suspend fun fetchUsername(accessToken: String): String {

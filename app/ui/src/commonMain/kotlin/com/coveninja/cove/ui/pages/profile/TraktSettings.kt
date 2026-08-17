@@ -96,7 +96,7 @@ fun TraktConnectCard(modifier: Modifier = Modifier) {
 @Composable
 private fun PendingRow(userCode: String, verificationUrl: String, onCancel: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = RowPadding, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         SettingLabels(

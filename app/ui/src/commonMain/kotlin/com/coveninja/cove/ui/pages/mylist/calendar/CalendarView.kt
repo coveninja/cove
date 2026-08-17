@@ -66,6 +66,7 @@ import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalMotionPolicy
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.YearMonth
 
@@ -82,9 +83,12 @@ fun CalendarMonthBar(
 ) {
     val colors = MaterialTheme.colorScheme
 
+    val compactBar = PageLayoutDefaults.IsCompact
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        // Three 48.dp touch targets, the Today chip and the label have to share 328.dp on a
+        // 360.dp screen; at the desktop 10.dp gap they do not fit.
+        horizontalArrangement = Arrangement.spacedBy(if (compactBar) 6.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ToolbarIconButton(
@@ -107,14 +111,20 @@ fun CalendarMonthBar(
                 enter togetherWith exit
             },
             label = "CalendarMonthLabel",
+            // Desktop pins the label so the sliding month animation has a stable box to
+            // travel in. A phone cannot spare it: 170.dp plus two 48.dp arrows and the Today
+            // chip overflows a 360.dp screen, which squeezed the chip until its label wrapped
+            // one character per line. There it takes only the width it needs and yields.
+            modifier = if (compactBar) Modifier.weight(1f, fill = false) else Modifier,
         ) { value ->
             Text(
-                text = monthLabel(value),
-                modifier = Modifier.width(170.dp),
+                text = if (compactBar) monthLabelShort(value) else monthLabel(value),
+                modifier = if (compactBar) Modifier else Modifier.width(170.dp),
                 color = colors.onBackground,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
 
@@ -144,6 +154,8 @@ fun CalendarMonthBar(
                     color = colors.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
         }
@@ -340,16 +352,22 @@ private fun CalendarSectionHeader(
                 .graphicsLayer { rotationZ = chevronRotation },
             tint = if (accent) colors.tertiary else colors.onSurfaceVariant,
         )
+        // Both are short, fixed labels sharing a row with a weighted rule. If the rule ever
+        // collapses they must ellipsize, never stack a character per line.
         Text(
             text = title.uppercase(),
             color = if (accent) colors.tertiary else colors.onBackground,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            softWrap = false,
         )
         Text(
             text = detail,
             color = colors.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
         )
         Box(
             modifier = Modifier
@@ -430,17 +448,25 @@ private fun CalendarRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Only the episode name flexes. The marker and the waiting count are short,
+                // fixed and the first things worth reading, so they take their intrinsic
+                // width and the name ellipsizes into whatever is left. Letting the name take
+                // the row instead squeezed "26 waiting" to nothing, and with no line limit it
+                // wrapped one character per line down the page.
                 item.episodeMarker()?.let { marker ->
                     Text(
                         text = marker,
                         color = colors.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
                 item.episodeName.takeIf { it.isNotBlank() }?.let { name ->
                     Text(
                         text = name,
+                        modifier = Modifier.weight(1f, fill = false),
                         color = colors.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
@@ -453,6 +479,8 @@ private fun CalendarRow(
                         color = colors.tertiary,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }

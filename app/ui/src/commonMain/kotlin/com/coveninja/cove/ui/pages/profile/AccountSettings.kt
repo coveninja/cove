@@ -133,7 +133,7 @@ private fun SignedInCard(state: AccountState.SignedIn) {
 
     SettingsCard(title = "Cove account", iconName = "iconamoon:profile-circle") {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = RowPadding, vertical = 18.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -226,7 +226,7 @@ private fun SyncCard(sync: SyncStatus) {
     SettingsCard {
         Column {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 18.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = RowPadding, vertical = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -454,7 +454,7 @@ private fun SignInCard() {
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 24.dp, vertical = 18.dp)
+                .padding(horizontal = RowPadding, vertical = 18.dp)
                 .animateContentSize(spring(stiffness = Spring.StiffnessMediumLow)),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

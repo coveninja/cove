@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.shared.model.LabelledSegment
 import com.coveninja.cove.shared.model.SegmentKind
 import com.coveninja.cove.ui.components.menu.CMenuItem
@@ -37,6 +38,7 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.state.MediaChapter
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.VideoScaling
 import kotlin.math.abs
 import kotlin.math.roundToLong
@@ -600,10 +602,10 @@ private fun IntOffsetX(fraction: Double, trackWidth: Int) =
     androidx.compose.ui.unit.IntOffset((trackWidth * fraction).toInt(), 0)
 
 private fun SegmentKind.color(): Color = when (this) {
-    SegmentKind.Recap -> Color(0xFF7C6CF0)
-    SegmentKind.Intro -> Color(0xFFEFA33C)
-    SegmentKind.Credits -> Color(0xFF35B98A)
-    SegmentKind.Preview -> Color(0xFF3FA9D6)
+    SegmentKind.Recap -> CoveColors.Segment.Recap
+    SegmentKind.Intro -> CoveColors.Segment.Intro
+    SegmentKind.Credits -> CoveColors.Segment.Credits
+    SegmentKind.Preview -> CoveColors.Segment.Preview
 }
 
 private fun SegmentKind.label(): String = when (this) {
@@ -650,7 +652,8 @@ private fun PlayPauseButton(paused: Boolean, ended: Boolean, onClick: () -> Unit
 
     Box(
         modifier = Modifier
-            .size(44.dp)
+            // A finger in a dark room needs the full 48 dp; a cursor does not.
+            .size(if (hasPointerHover) 44.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -1069,7 +1072,7 @@ internal fun ControlButton(
 
     Box(
         modifier = Modifier
-            .size(38.dp)
+            .size(if (hasPointerHover) 38.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale

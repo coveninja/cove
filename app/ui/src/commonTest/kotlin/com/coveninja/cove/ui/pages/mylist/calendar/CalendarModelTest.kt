@@ -183,4 +183,28 @@ class CalendarModelTest {
         assertEquals("January 2027", monthLabel(YearMonth(2027, 1)))
         assertEquals("December 2025", monthLabel(YearMonth(2025, 12)))
     }
+
+    // Mutation applied to verify: pointed the short label at MONTHS_FULL → the abbreviations
+    // came back as full names and every assertion below failed.
+    @Test
+    fun `the compact month label abbreviates but keeps the year`() {
+        // The phone month bar has under 60.dp for this, so the year has to survive the
+        // shortening — an ellipsized full name would drop it.
+        assertEquals("Aug 2026", monthLabelShort(YearMonth(2026, 8)))
+        assertEquals("Jan 2027", monthLabelShort(YearMonth(2027, 1)))
+        assertEquals("Dec 2025", monthLabelShort(YearMonth(2025, 12)))
+    }
+
+    @Test
+    fun `the compact label is never longer than the full one`() {
+        // Guards the reason it exists: if a short name were ever longer, the compact bar would
+        // be worse off than the layout it replaces.
+        (1..12).forEach { month ->
+            val yearMonth = YearMonth(2026, month)
+            assertTrue(
+                monthLabelShort(yearMonth).length <= monthLabel(yearMonth).length,
+                "short label for month $month is longer than the full one",
+            )
+        }
+    }
 }

@@ -59,6 +59,7 @@ import com.coveninja.cove.ui.pages.common.StaggeredAppear
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalMotionPolicy
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import kotlinx.datetime.LocalDate
 import kotlin.math.roundToInt
 
@@ -81,7 +82,7 @@ fun MyListGrid(
 ) {
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(150.dp),
+        columns = GridCells.Adaptive(PageLayoutDefaults.PosterGridMinWidth),
         state = state,
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
@@ -318,6 +319,10 @@ private fun CategoryChip(category: MyListCategory) {
             color = category.accentColor,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Medium,
+            // Short label in a chip that shares a constrained row; without a line limit a
+            // squeeze wraps it one character per line rather than letting the chip clip.
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

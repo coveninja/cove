@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -73,12 +74,12 @@ fun ExploreGrid(
         start = PageLayoutDefaults.HorizontalPadding,
         end = PageLayoutDefaults.HorizontalPadding,
         top = 8.dp,
-        bottom = 48.dp,
+        bottom = 48.dp + PageLayoutDefaults.BottomClearance,
     )
     InfiniteScrollTrigger(state = state, itemCount = items.size, onLoadMore = onLoadMore)
 
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(150.dp),
+        columns = GridCells.Adaptive(PageLayoutDefaults.PosterGridMinWidth),
         state = state,
         modifier = modifier.fillMaxWidth(),
         contentPadding = resolvedContentPadding,
@@ -188,12 +189,20 @@ private fun GridFooter(
 
             // Poster-shaped rather than a spinner: the placeholders occupy the space the
             // next row is about to take, so nothing shifts when it arrives.
+            // Sized by weight rather than a fixed 150.dp each: three fixed blocks plus their
+            // spacing came to 478.dp and ran off both edges of a phone.
             loading -> Row(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 repeat(3) {
-                    ShimmerBlock(modifier = Modifier.width(150.dp).height(225.dp))
+                    ShimmerBlock(
+                        modifier = Modifier
+                            .weight(1f)
+                            .widthIn(max = 150.dp)
+                            .height(225.dp),
+                    )
                 }
             }
 

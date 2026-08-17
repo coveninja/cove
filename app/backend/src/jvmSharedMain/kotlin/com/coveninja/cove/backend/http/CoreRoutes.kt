@@ -3,6 +3,7 @@ package com.coveninja.cove.backend.http
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.addons.AddonCatalogPage
 import com.coveninja.cove.backend.activity.ActivityService
+import com.coveninja.cove.shared.model.InsightsRange
 import com.coveninja.cove.backend.auth.AuthService
 import com.coveninja.cove.backend.auth.ClientSessionStore
 import com.coveninja.cove.backend.auth.RegistrationOutcome
@@ -334,6 +335,19 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
         get("/status") {
             call.markLegacy(legacy)
             call.requireTrakt()?.let { call.respond(it.status()) }
+        }
+        // All-time totals for the linked account. 204 rather than an error when there is
+        // nothing to report: the insights page treats "no Trakt section" and "Trakt said
+        // nothing" identically, and neither is a failure worth an error body.
+        get("/stats") {
+            call.markLegacy(legacy)
+            val service = call.requireTrakt() ?: return@get
+            val stats = service.stats()
+            if (stats == null) {
+                call.respond(HttpStatusCode.NoContent)
+            } else {
+                call.respond(stats)
+            }
         }
         post("/unlink") {
             call.markLegacy(legacy)
@@ -971,7 +985,9 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
     services.activity?.let { activity ->
         get("/library/activity") {
             call.markLegacy(legacy)
-            call.respond(activity.stats())
+            call.respond(
+                activity.stats(InsightsRange.fromWire(call.request.queryParameters["range"])),
+            )
         }
     }
     services.calendar?.let { calendar ->

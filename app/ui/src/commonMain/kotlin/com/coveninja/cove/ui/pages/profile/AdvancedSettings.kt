@@ -90,7 +90,7 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
                 description = "Android reports that this device has limited working memory.",
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                    modifier = Modifier.padding(horizontal = RowPadding, vertical = 18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(
@@ -155,7 +155,7 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
             performanceError?.let { message ->
                 Text(
                     text = message,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                    modifier = Modifier.padding(horizontal = RowPadding, vertical = 12.dp),
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -168,7 +168,7 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
             description = "Passed straight to the player. An invalid option is ignored "
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                modifier = Modifier.padding(horizontal = RowPadding, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (config == null) {
@@ -245,7 +245,7 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
                     StatusPill(updateStatusPill(updateState))
                 }
                 Row(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                    modifier = Modifier.padding(horizontal = RowPadding, vertical = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -281,7 +281,7 @@ fun AdvancedSettings(modifier: Modifier = Modifier) {
             }
             Text(
                 text = "Made with love by arcady@coveninja",
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                modifier = Modifier.padding(horizontal = RowPadding, vertical = 18.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall,
             )

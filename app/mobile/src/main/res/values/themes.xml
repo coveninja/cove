@@ -2,9 +2,14 @@
 <resources>
     <style name="Theme.Cove" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowBackground">#111318</item>
-        <item name="android:navigationBarColor">#111318</item>
-        <item name="android:statusBarColor">#111318</item>
+        <!-- Matches CoveColors.background. A different dark here meets the app's own
+             background at a visible seam wherever the window shows through. -->
+        <item name="android:windowBackground">#0A0A0A</item>
+        <!-- Transparent so enableEdgeToEdge() is the only authority on bar colour. Opaque
+             values here are applied at window inflation, before onCreate runs, and flashed
+             a solid band over both bars on every cold start. -->
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>

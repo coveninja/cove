@@ -187,6 +187,35 @@ CREATE TABLE calendar_cache (
     signature TEXT NOT NULL DEFAULT ''
 );
 
+-- How many times each title has been started from the beginning.
+--
+-- Deliberately its own local table rather than a column on watch_progress. That table is
+-- pushed to Supabase, and adding a field to a synced model means an insert carrying a
+-- column the remote table may not have — which fails the whole push, not just the new
+-- field. A rewatch count is worth having but not worth risking the sync path for, and
+-- nothing outside this device needs it.
+CREATE TABLE title_plays (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    title_key TEXT NOT NULL,
+    plays INTEGER NOT NULL DEFAULT 1,
+    -- Guards against one restart being counted twice when several progress ticks arrive
+    -- from the same rewind.
+    last_started_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(profile_id, title_key)
+);
+
+-- The taste profile, whole, as serialized JSON — the same arrangement as calendar_cache
+-- and for the same reason. Building it costs one metadata request per saved title, so
+-- without this the insights page pays that on every launch.
+CREATE TABLE insights_cache (
+    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    payload TEXT NOT NULL DEFAULT '{}',
+    refreshed_at TEXT NOT NULL DEFAULT '',
+    -- The library the snapshot was built from; a mismatch means it is stale regardless
+    -- of age.
+    signature TEXT NOT NULL DEFAULT ''
+);
+
 selectMigrationMetadata:
 SELECT value FROM migration_metadata WHERE key = ?;
 
@@ -507,3 +536,23 @@ VALUES (?, ?, ?, ?);
 
 deleteCalendarCache:
 DELETE FROM calendar_cache;
+
+selectTitlePlays:
+SELECT * FROM title_plays WHERE profile_id = ?;
+
+selectTitlePlay:
+SELECT * FROM title_plays WHERE profile_id = ? AND title_key = ?;
+
+upsertTitlePlay:
+INSERT OR REPLACE INTO title_plays(profile_id, title_key, plays, last_started_at)
+VALUES (?, ?, ?, ?);
+
+selectInsightsCache:
+SELECT * FROM insights_cache WHERE profile_id = ?;
+
+upsertInsightsCache:
+INSERT OR REPLACE INTO insights_cache(profile_id, payload, refreshed_at, signature)
+VALUES (?, ?, ?, ?);
+
+deleteInsightsCache:
+DELETE FROM insights_cache;

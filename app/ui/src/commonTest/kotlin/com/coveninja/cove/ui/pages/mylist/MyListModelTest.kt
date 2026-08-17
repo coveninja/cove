@@ -10,7 +10,9 @@ import com.coveninja.cove.ui.model.MediaType
 import kotlinx.datetime.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MyListModelTest {
 
@@ -356,5 +358,39 @@ class MyListModelTest {
         assertNull(shortDateLabel("not a date", today))
         assertNull(shortDateLabel("", today))
         assertNull(shortDateLabel(null, today))
+    }
+
+    // Mutation applied to verify: dropped the shortViewport term → the landscape-phone case
+    // started reporting "pinned" and that assertion failed.
+    @Test
+    fun `filters pin only where there is height to spare`() {
+        // Desktop and tablet: room for them, and a filter stays one click away.
+        assertTrue(
+            shouldPinListFilters(compactWidth = false, shortViewport = false, listEmpty = false),
+        )
+
+        // Portrait phone: compact by width.
+        assertFalse(
+            shouldPinListFilters(compactWidth = true, shortViewport = false, listEmpty = false),
+        )
+
+        // Landscape phone: ~914.dp wide, so *not* compact by width, but only ~411.dp tall.
+        // This is the case a width-only rule gets wrong.
+        assertFalse(
+            shouldPinListFilters(compactWidth = false, shortViewport = true, listEmpty = false),
+        )
+    }
+
+    @Test
+    fun `an empty list keeps its filters reachable everywhere`() {
+        // Otherwise a filter that hides every row also scrolls away the control that clears it,
+        // and there are no rows left to scroll it back with.
+        // Mutation check: dropping the listEmpty term fails both of these.
+        assertTrue(
+            shouldPinListFilters(compactWidth = true, shortViewport = false, listEmpty = true),
+        )
+        assertTrue(
+            shouldPinListFilters(compactWidth = false, shortViewport = true, listEmpty = true),
+        )
     }
 }

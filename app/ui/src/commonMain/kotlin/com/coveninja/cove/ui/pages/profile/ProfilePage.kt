@@ -50,13 +50,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AccountState
 import com.coveninja.cove.shared.data.ProfilesState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
 import com.coveninja.cove.ui.pages.common.PageHeader
@@ -94,6 +94,9 @@ private val PageBlock = Modifier.fillMaxWidth().widthIn(max = PageMaxWidth)
 fun ProfilePage(
     profileName: String = "Cove",
     onNavigateBack: () -> Unit = {},
+    // Insights shows posters of the titles behind the numbers, and a poster the viewer
+    // cannot open is a dead end — this is the same details route every other page uses.
+    onOpenMedia: (Media) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
@@ -102,6 +105,9 @@ fun ProfilePage(
     // owns once a transition ends, so keeping this inside would quietly send you
     // back to the category list every time you looked at Insights.
     var openedCategory by remember { mutableStateOf<SettingsCategory?>(null) }
+    // Same reasoning as openedCategory: the tab AnimatedContent disposes whichever tab is
+    // not showing, and the insights fetches are far too expensive to repeat on every switch.
+    val insightsState = rememberInsightsState()
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
     val narrowSettingsLayout = PageLayoutDefaults.Viewport.width < RailBreakpoint
@@ -120,8 +126,12 @@ fun ProfilePage(
             .fillMaxSize()
             .verticalScroll(scrollState)
             .padding(
-                horizontal = PageLayoutDefaults.HorizontalPadding,
-                vertical = 12.dp,
+                start = PageLayoutDefaults.HorizontalPadding,
+                end = PageLayoutDefaults.HorizontalPadding,
+                top = 12.dp,
+                // Clears the floating bar and the system navigation area the page now
+                // paints into; the last settings card would otherwise sit under both.
+                bottom = 12.dp + PageLayoutDefaults.BottomClearance,
             ),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -166,7 +176,7 @@ fun ProfilePage(
                 label = "ProfileTab",
             ) { target ->
                 when (target) {
-                    ProfileTab.Insights -> InsightsTab()
+                    ProfileTab.Insights -> InsightsTab(state = insightsState, onOpenMedia = onOpenMedia)
                     // Drilling in or back on a narrow window would otherwise land
                     // you wherever the previous screen happened to be scrolled to.
                     ProfileTab.Settings -> SettingsTab(
@@ -487,56 +497,6 @@ private fun CategoryHeading(category: SettingsCategory) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium,
         )
-    }
-}
-
-// ── Insights ─────────────────────────────────────────────────────────────────
-
-/**
- * Placeholder. Nothing aggregates activity data yet — the backend keeps activity
- * hours and watch progress per profile, but no endpoint rolls them up — so this
- * says what is coming rather than inventing numbers.
- */
-@Composable
-private fun InsightsTab(modifier: Modifier = Modifier) {
-    SettingsCard(modifier = modifier) {
-        Column(
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 44.dp).fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(54.dp)
-                    .background(
-                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f),
-                        CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                IconifyIcon(
-                    icon = "lucide:chart-line",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.tertiary,
-                )
-            }
-            Text(
-                text = "Insights are coming",
-                modifier = Modifier.padding(top = 16.dp),
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Watch time, most-watched genres, and viewing streaks will " +
-                    "live here once the activity data is aggregated.",
-                modifier = Modifier
-                    .padding(top = 8.dp)
-                    .widthIn(max = 420.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center,
-            )
-        }
     }
 }
 

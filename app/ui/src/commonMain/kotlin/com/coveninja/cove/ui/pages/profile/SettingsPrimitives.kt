@@ -53,6 +53,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,6 +76,8 @@ import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.pages.common.ChoicePill
 import com.coveninja.cove.ui.pages.common.ChoicePillRow
+import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
+import com.coveninja.cove.ui.platform.hasPointerHover
 
 /**
  * The settings visual language, in one place.
@@ -85,7 +88,18 @@ import com.coveninja.cove.ui.pages.common.ChoicePillRow
  * instead of a stack of unrelated widgets.
  */
 private val CardShape = RoundedCornerShape(18.dp)
-private val RowPadding = 24.dp
+
+/**
+ * The gutter inside a settings card.
+ *
+ * A phone has already spent its page gutter reaching the card edge, so spending another
+ * 24 dp inside it leaves the text column too narrow to read comfortably. Desktop keeps the
+ * roomier value it has always had.
+ */
+internal val RowPadding: Dp
+    @Composable
+    @ReadOnlyComposable
+    get() = if (PageLayoutDefaults.IsCompact) 16.dp else 24.dp
 
 @Composable
 internal fun SettingsCard(
@@ -576,7 +590,7 @@ internal fun PrimaryButton(
 
     Box(
         modifier = modifier
-            .height(42.dp)
+            .height(if (hasPointerHover) 42.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -658,7 +672,7 @@ internal fun SecondaryButton(
 
     Box(
         modifier = modifier
-            .height(42.dp)
+            .height(if (hasPointerHover) 42.dp else 48.dp)
             .background(container, RoundedCornerShape(11.dp))
             .hoverable(interactionSource)
             .clickable(
@@ -814,7 +828,7 @@ internal fun SettingsIconAction(icon: String, onClick: () -> Unit, danger: Boole
 
     Box(
         modifier = Modifier
-            .size(34.dp)
+            .size(if (hasPointerHover) 34.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale

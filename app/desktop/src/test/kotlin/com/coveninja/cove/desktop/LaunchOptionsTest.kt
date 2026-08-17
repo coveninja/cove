@@ -21,6 +21,11 @@ class LaunchOptionsTest {
             LaunchOptions(backendMode = BackendMode.Kotlin),
         arrayOf("--export-legacy") to
             LaunchOptions(exportLegacy = true),
+        arrayOf("--tv") to
+            LaunchOptions(tv = true),
+        // The combination the TV shell is actually developed with.
+        arrayOf("--tv", "--backend-mode", "kotlin") to
+            LaunchOptions(tv = true, backendMode = BackendMode.Kotlin),
         // Multiple flags together
         arrayOf("--software-renderer", "--smoke-seconds", "5") to
             LaunchOptions(softwareRenderer = true, smokeSeconds = 5),
@@ -73,6 +78,21 @@ class LaunchOptionsTest {
             arrayOf("--export-legacy", "--api-base", "http://localhost:6969"),
         )) {
             assertFailsWith<IllegalArgumentException> { LaunchOptions.parse(args) }
+        }
+    }
+
+    // --play is a bare video window with no navigation shell and --export-legacy shows no
+    // window at all, so there is no UI for --tv to pick in either case. Accepting the
+    // combination would silently ignore one of the two flags.
+    @Test
+    fun `the tv shell rejects modes that have no navigation to show`() {
+        for (args in listOf(
+            arrayOf("--tv", "--play", "/tmp/movie.mkv"),
+            arrayOf("--tv", "--export-legacy"),
+        )) {
+            assertFailsWith<IllegalArgumentException>("expected rejection of ${args.toList()}") {
+                LaunchOptions.parse(args)
+            }
         }
     }
 

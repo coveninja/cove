@@ -7,12 +7,21 @@ data class LaunchOptions(
     val smokeSeconds: Int? = null,
     val backendMode: BackendMode? = null,
     val exportLegacy: Boolean = false,
+    /**
+     * Run the television shell in this window instead of the desktop app.
+     *
+     * A development harness, not a product mode: the TV UI is built for a remote, and arrow
+     * keys plus Enter and Escape are exactly a remote's vocabulary, so the whole shell can be
+     * exercised here without an emulator in the loop.
+     */
+    val tv: Boolean = false,
 ) {
     companion object {
         private val knownFlags = setOf(
             "--play", "--api-base", "--software-renderer", "--smoke-seconds",
             "--backend-mode",
             "--export-legacy",
+            "--tv",
         )
 
         fun parse(args: Array<String>): LaunchOptions {
@@ -22,6 +31,7 @@ data class LaunchOptions(
             var smokeSeconds: Int? = null
             var backendMode: BackendMode? = null
             var exportLegacy = false
+            var tv = false
 
             var i = 0
             while (i < args.size) {
@@ -32,6 +42,7 @@ data class LaunchOptions(
                 when (flag) {
                     "--software-renderer" -> softwareRenderer = true
                     "--export-legacy" -> exportLegacy = true
+                    "--tv" -> tv = true
                     else -> {
                         // All other known flags take exactly one argument.
                         val value = args.getOrNull(i + 1)
@@ -57,6 +68,11 @@ data class LaunchOptions(
             require(!exportLegacy || (playFile == null && apiBase == null)) {
                 "--export-legacy cannot be combined with playback or an external backend"
             }
+            // --play opens a bare video window with no navigation shell at all, and
+            // --export-legacy never shows a window, so neither has a UI for --tv to choose.
+            require(!tv || (playFile == null && !exportLegacy)) {
+                "--tv cannot be combined with --play or --export-legacy"
+            }
             return LaunchOptions(
                 playFile = playFile,
                 apiBase = apiBase,
@@ -64,6 +80,7 @@ data class LaunchOptions(
                 smokeSeconds = smokeSeconds,
                 backendMode = backendMode,
                 exportLegacy = exportLegacy,
+                tv = tv,
             )
         }
     }

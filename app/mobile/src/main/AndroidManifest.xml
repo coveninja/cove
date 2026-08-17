@@ -8,15 +8,22 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- This artifact is intentionally the shared touch UI. Android TV gets a
-         separate launcher/UI module instead of mode-switching this activity. -->
+    <!-- One artifact serves phones, tablets and televisions. MainActivity picks the touch
+         shell or the D-pad shell from the device at startup rather than the build, so a TV
+         and a phone install the same APK and share one update channel and one package
+         identity. Neither feature may be required: demanding a touchscreen makes the app
+         invisible to a television, and demanding leanback makes it invisible to a phone. -->
     <uses-feature
         android:name="android.hardware.touchscreen"
-        android:required="true" />
+        android:required="false" />
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
 
     <application
         android:name=".CoveMobileApplication"
         android:allowBackup="false"
+        android:banner="@drawable/tv_banner"
         android:enableOnBackInvokedCallback="true"
         android:icon="@drawable/ic_cove"
         android:label="@string/app_name"
@@ -35,6 +42,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <!-- A television's launcher only lists activities in this category, and it
+                     lists them by android:banner rather than by icon. -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
         <service
