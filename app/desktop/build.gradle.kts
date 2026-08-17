@@ -113,3 +113,22 @@ compose.desktop {
         }
     }
 }
+
+// libtorrent installs its own SIGSEGV handler once a torrent has been added, and
+// that is the handler HotSpot needs: JIT-compiled code omits null tests and lets
+// the CPU fault, then turns the fault into a NullPointerException. With libtorrent
+// owning it, the next null dereference anywhere in the process is fatal — on
+// whichever thread reaches one first, which is why the crash never landed near the
+// torrent code.
+//
+// libjsig is the JDK's answer: it interposes sigaction so both handlers live. It
+// has to be preloaded before the JVM installs its own handlers, though, so it
+// cannot be loaded from inside the app the way the libstdc++ fix is — hence this,
+// on the task that launches the JVM.
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+    val runtime = desktopJava.get().metadata.installationPath.asFile
+    val jsig = sequenceOf("lib/libjsig.so", "lib/libjsig.dylib")
+        .map { runtime.resolve(it) }
+        .firstOrNull { it.isFile }
+    if (jsig != null) environment("LD_PRELOAD", jsig.absolutePath)
+}

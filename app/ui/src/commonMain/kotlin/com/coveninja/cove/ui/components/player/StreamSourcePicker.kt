@@ -109,17 +109,18 @@ fun StreamSourcePicker(
                 }
             }
 
+            val rowKeys = remember(sources) { sources.rowKeys() }
             LazyColumn(
                 modifier = Modifier.padding(top = 16.dp).heightIn(max = 400.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                itemsIndexed(sources, key = { _, choice -> choice.source.rowKey() }) { index, choice ->
+                itemsIndexed(sources, key = { index, _ -> rowKeys[index] }) { index, choice ->
                     // Evaluated once per row instance rather than on every
                     // recomposition, so scrolling a row back into view does not
                     // replay its entrance — and so the set is not mutated from
                     // inside composition itself.
-                    val animateIn = remember(choice.source.rowKey()) {
-                        entered.add(choice.source.rowKey())
+                    val animateIn = remember(rowKeys[index]) {
+                        entered.add(rowKeys[index])
                     }
                     SourceRow(
                         choice = choice,
@@ -500,6 +501,26 @@ internal fun StreamSource.displayLabel(): String {
         ?.map(String::trim)
         ?.firstOrNull { it.isNotEmpty() }
         ?: "Unnamed source"
+}
+
+/**
+ * Row keys that stay unique when two addons offer the same release.
+ *
+ * The same torrent routinely comes back from several addons at once — the same
+ * info hash from a debrid addon and a plain one — so url and info hash alone are
+ * not unique across the list, and LazyColumn throws on a repeated key rather than
+ * rendering the duplicate. Repeats are suffixed by their occurrence, which leaves
+ * the first instance's key exactly what it was and keeps every row stable across
+ * reorders.
+ */
+private fun List<StreamChoice>.rowKeys(): List<String> {
+    val seen = mutableMapOf<String, Int>()
+    return map { choice ->
+        val base = choice.source.rowKey()
+        val occurrence = (seen[base] ?: 0) + 1
+        seen[base] = occurrence
+        if (occurrence == 1) base else "$base#$occurrence"
+    }
 }
 
 /** Stable across reorders; url or hash identifies a candidate, its position does not. */

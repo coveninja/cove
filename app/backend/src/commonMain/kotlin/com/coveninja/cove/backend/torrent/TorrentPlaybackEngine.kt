@@ -25,6 +25,17 @@ interface TorrentPlaybackEngine : AutoCloseable {
     suspend fun open(hash: String, season: Int?, episode: Int?, fileIndex: Int?): TorrentResource
     suspend fun write(resource: TorrentResource, start: Long, endInclusive: Long, output: ByteWriteChannel)
     fun progress(hash: String): TorrentProgress?
+
+    /**
+     * Brings the peer session up before anything is asked of it.
+     *
+     * Starting it costs a DHT bootstrap, and doing that lazily puts it on the
+     * critical path of the first play: the viewer waits through it with nothing on
+     * screen. Called when torrent sources are listed, which is the moment one is
+     * about to be picked. Idempotent, and a no-op where there is no session to warm.
+     */
+    suspend fun warmUp() {}
+
     suspend fun prefetch(hash: String, season: Int?, episode: Int?, fileIndex: Int?) {
         open(hash, season, episode, fileIndex)
     }

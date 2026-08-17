@@ -66,6 +66,14 @@ class MediaBoundary(
             }.isSuccess
         }
         streams.remember(accepted)
+        // Listing sources is the moment before one is played, so the peer session
+        // comes up now rather than on the click: its DHT bootstrap is otherwise the
+        // first thing a torrent play waits through, with nothing on screen. Only
+        // when a torrent is actually on offer — a title with no torrent sources
+        // starts no session at all.
+        if (accepted.any { it.infoHash.isNotBlank() }) {
+            torrentEngine?.let { engine -> scope.launch { runCatching { engine.warmUp() } } }
+        }
         return accepted
     }
 
@@ -112,7 +120,17 @@ class MediaBoundary(
         fileIndex: Int?,
     ) {
         val engine = torrentEngine ?: error("torrent playback is unavailable")
-        val resource = engine.open(hash, season, episode, fileIndex)
+        // The player only ever says "Failed to open <url>", which is the same
+        // sentence whether the hash was rejected, the swarm was empty or the file
+        // never appeared. The reason is worth one line on the way past.
+        val resource = try {
+            engine.open(hash, season, episode, fileIndex)
+        } catch (error: Throwable) {
+            System.err.println(
+                "Cove torrent: open failed for $hash — ${error::class.simpleName}: ${error.message}",
+            )
+            throw error
+        }
         val range = parseRange(call.request.headers[HttpHeaders.Range], resource.length)
         call.response.header(HttpHeaders.AcceptRanges, "bytes")
         call.response.header(

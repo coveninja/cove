@@ -112,7 +112,10 @@ jobs:
         run: |
           mkdir -p _pkg/bin _pkg/lib/cove _pkg/share/applications \
                    _pkg/share/icons/hicolor/scalable/apps compose-app
-          printf '#!/bin/sh\nexec /usr/lib/cove/Cove/bin/Cove "$@"\n' > _pkg/bin/cove
+          # libjsig is preloaded so libtorrent's signal handlers chain to the JVM's
+          # instead of replacing them — see flatpak/cove.sh for the full reasoning.
+          # Without it, the first null dereference after a torrent starts is fatal.
+          printf '#!/bin/sh\nJSIG=/usr/lib/cove/Cove/lib/runtime/lib/libjsig.so\n[ -f "$JSIG" ] && export LD_PRELOAD="${JSIG}${LD_PRELOAD:+:$LD_PRELOAD}"\nexec /usr/lib/cove/Cove/bin/Cove "$@"\n' > _pkg/bin/cove
           chmod +x _pkg/bin/cove
           cp -r app/desktop/build/compose/binaries/main/app/Cove _pkg/lib/cove/Cove
           cp -r app/desktop/build/compose/binaries/main/app/Cove compose-app/Cove

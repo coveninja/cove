@@ -45,6 +45,9 @@ kotlin {
                 implementation(libs.ktor.server.sse)
                 implementation(libs.ktor.server.status.pages)
                 implementation(libs.jlibtorrent)
+                // Only for FatalSignalHandlers: libtorrent takes SIGSEGV over from
+                // HotSpot, and sigaction() is how it is handed back.
+                implementation(libs.jna)
                 implementation(libs.graal.polyglot)
                 implementation(libs.graal.js)
                 val os = System.getProperty("os.name").lowercase()
