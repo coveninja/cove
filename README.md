@@ -64,7 +64,7 @@
 |---|---|---|---|
 | Linux | Available | AUR, Flatpak, tarball | `cove-bin` through `pacman`; Flatpak bundles and tarballs are replaced manually |
 | Windows | Available | Installer, portable ZIP | Verified in-app updates for both forms beginning with `1.0.0` |
-| Android phone/tablet | Preview | APK, Android 9+ | Verified APK through Android's package installer |
+| Android phone/tablet | Available | APK, Android 9+ | Verified APK through Android's package installer |
 | Android TV | Preview | Same APK, Android 9+ | Verified APK through Android's package installer |
 | macOS (Apple silicon) | Available | Signed and notarized DMG | Manual release replacement |
 
