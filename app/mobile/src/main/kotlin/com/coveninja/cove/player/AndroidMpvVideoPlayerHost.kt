@@ -31,7 +31,10 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import dev.jdtech.mpv.MPVLib
 import java.io.File
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +62,8 @@ class AndroidMpvVideoPlayerHost(
     private val appContext = context.applicationContext
     private val playerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val loadGeneration = AtomicLong()
+    /** One refresh attempt per process, however many extras are opened. */
+    private val ytDlpRefreshed = AtomicBoolean()
     private val main = Handler(Looper.getMainLooper())
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val audioFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -82,6 +87,8 @@ class AndroidMpvVideoPlayerHost(
     private var stoppedByUser = false
     private var playbackRequested = false
     private var fileLoaded = false
+    /** True between mpv's start-of-file for the load we asked for and its end. */
+    private var fileOpening = false
     private var pendingLoad: PendingLoad? = null
     private var pendingPreferences: PlaybackPreferences? = null
     private var pendingVolume: Double? = null
@@ -98,9 +105,43 @@ class AndroidMpvVideoPlayerHost(
     }
 
     override suspend fun prepareWebVideo(mayInstallHelper: Boolean): String? = withContext(Dispatchers.IO) {
-        runCatching { YoutubeDL.getInstance().init(appContext) }
-            .exceptionOrNull()
-            ?.let { "Could not initialize the bundled yt-dlp runtime: ${it.message ?: "unknown error"}" }
+        val failure = runCatching { YoutubeDL.getInstance().init(appContext) }.exceptionOrNull()
+        if (failure != null) {
+            return@withContext "Could not initialize the bundled yt-dlp runtime: " +
+                (failure.message ?: "unknown error")
+        }
+        val refresh = ytDlpRefreshFor(
+            installedVersion = runCatching { YoutubeDL.getInstance().version(appContext) }.getOrNull(),
+            today = LocalDate.now(),
+            mayInstallHelper = mayInstallHelper,
+        )
+        when (refresh) {
+            YtDlpRefresh.None -> Unit
+            // What is already here plays now, and the next extra opens with a newer one.
+            YtDlpRefresh.Background -> playerScope.launch { refreshYtDlp() }
+            YtDlpRefresh.Blocking -> {
+                onMain { _status.value = _status.value.copy(statusMessage = "Updating yt-dlp…") }
+                refreshYtDlp()
+            }
+        }
+        null
+    }
+
+    /**
+     * Replaces the copy of yt-dlp the app shipped with the current release.
+     *
+     * Never fatal: a refresh that cannot reach GitHub leaves the copy already on
+     * disk in place, and that copy is still the best chance the extra has. What
+     * went wrong belongs in the log rather than in front of the viewer, because
+     * the sentence that matters to them is the one [resolveWebVideo] writes when
+     * the extraction itself fails.
+     */
+    private fun refreshYtDlp() {
+        if (!ytDlpRefreshed.compareAndSet(false, true)) return
+        runCatching { YoutubeDL.getInstance().updateYoutubeDL(appContext, YoutubeDL.UpdateChannel.STABLE) }
+            .onFailure { error ->
+                Log.w(MPV_LOG_TAG, "Could not refresh yt-dlp; keeping the copy already installed", error)
+            }
     }
 
     override fun load(url: String, startPositionSeconds: Double) {
@@ -112,7 +153,12 @@ class AndroidMpvVideoPlayerHost(
         }
     }
 
-    private fun loadResolved(url: String, startPositionSeconds: Double, generation: Long) = onMain {
+    private fun loadResolved(
+        url: String,
+        startPositionSeconds: Double,
+        generation: Long,
+        headers: Map<String, String> = emptyMap(),
+    ) = onMain {
         if (generation != loadGeneration.get()) return@onMain
         if (!requestAudioFocus()) {
             _status.value = PlaybackStatus(error = "Another app currently owns audio playback.")
@@ -122,9 +168,12 @@ class AndroidMpvVideoPlayerHost(
         onPlaybackActiveChanged(true)
         playbackRequested = true
         fileLoaded = false
+        // Not opening yet: mpv ends the outgoing file before it starts this one, and
+        // that end-of-file must not be read as this load failing.
+        fileOpening = false
         pendingSeekSeconds = null
         previousPositionSeconds = startPositionSeconds.coerceAtLeast(0.0)
-        pendingLoad = PendingLoad(url, startPositionSeconds.coerceAtLeast(0.0))
+        pendingLoad = PendingLoad(url, startPositionSeconds.coerceAtLeast(0.0), headers)
         _status.value = PlaybackStatus(
             paused = false,
             statusMessage = "Opening stream…",
@@ -224,6 +273,7 @@ class AndroidMpvVideoPlayerHost(
         loadGeneration.incrementAndGet()
         stoppedByUser = true
         playbackRequested = false
+        fileOpening = false
         pendingLoad = null
         pendingSeekSeconds = null
         main.removeCallbacks(dispatchSeek)
@@ -346,6 +396,20 @@ class AndroidMpvVideoPlayerHost(
         setInitialOption("cache-pause-initial", "no")
         setInitialOption("cache-pause-wait", "2")
         setInitialOption("terminal", "no")
+        // mpv's ytdl_hook runs on load failure and shells out to a yt-dlp on PATH.
+        // An app sandbox has no PATH to put one on, so it can only ever fail — and
+        // when it does it replaces the real reason a stream would not open with
+        // "youtube-dl failed: not found or not enough permissions". Android resolves
+        // page URLs itself through youtubedl-android before mpv is handed anything,
+        // so the hook has no work here beyond hiding errors. Not setInitialOption:
+        // a libmpv built without the Lua script has no such option, and refusing to
+        // start the player over that would be worse than leaving the hook on.
+        if (MPVLib.setOptionString("ytdl", "no") < 0) {
+            Log.w(MPV_LOG_TAG, "This libmpv has no ytdl option; its hook stays on")
+        }
+        // Caps mpv's own stdout only. The client API log the LogObserver reads is a
+        // separate buffer whose level msg-level cannot lower — see
+        // isViewableMpvDiagnostic for the filter that stands in for it.
         setInitialOption("msg-level", "all=warn")
         setInitialOption(
             "screenshot-directory",
@@ -377,14 +441,18 @@ class AndroidMpvVideoPlayerHost(
                 val request = YoutubeDLRequest(url).apply {
                     addOption("-f", "best[protocol^=http][vcodec!=none][acodec!=none]/best")
                     addOption("--no-playlist")
+                    addOption("--extractor-args", YOUTUBE_PLAYER_CLIENTS)
                 }
-                YoutubeDL.getInstance().getInfo(request).url
-                    ?.takeIf(String::isNotBlank)
+                val info = YoutubeDL.getInstance().getInfo(request)
+                val stream = info.url?.takeIf(String::isNotBlank)
                     ?: error("yt-dlp returned no playable URL")
+                stream to info.httpHeaders.orEmpty()
             }
             if (generation != loadGeneration.get()) return@launch
             resolved.fold(
-                onSuccess = { loadResolved(it, startPositionSeconds, generation) },
+                onSuccess = { (stream, headers) ->
+                    loadResolved(stream, startPositionSeconds, generation, headers)
+                },
                 onFailure = { error ->
                     onMain {
                         if (generation != loadGeneration.get()) return@onMain
@@ -411,7 +479,34 @@ class AndroidMpvVideoPlayerHost(
         if (!initialized || !surfaceReady) return
         pendingLoad = null
         fileLoaded = false
+        applyRequestHeaders(load.headers)
         MPVLib.command(buildMpvLoadCommand(load.url, load.startPositionSeconds).toTypedArray())
+    }
+
+    /**
+     * Sends the extractor's headers with the stream it extracted.
+     *
+     * A yt-dlp URL is only half of what it returns: the CDN behind a web video
+     * answers 403 to a request that arrives without the User-Agent and friends the
+     * extraction was performed under. Desktop never had to think about this because
+     * mpv's own ytdl_hook copies those headers into mpv as it resolves; Android runs
+     * the extractor itself, so anything the resolver does not carry over is simply
+     * lost, and every trailer dies on a forbidden that reads as a broken link.
+     *
+     * Appended one at a time rather than joined: http-header-fields is a list mpv
+     * splits on commas, and Accept-Language alone routinely contains one.
+     *
+     * Always applied, with an empty map for ordinary streams — an addon's stream
+     * must never inherit the User-Agent a trailer set before it.
+     */
+    private fun applyRequestHeaders(headers: Map<String, String>) {
+        command("change-list", "http-header-fields", "clr", "")
+        // mpv owns the User-Agent separately; ffmpeg would otherwise send both it
+        // and the one in the header list.
+        MPVLib.setPropertyString("user-agent", mpvUserAgent(headers))
+        mpvHeaderFields(headers).forEach { field ->
+            command("change-list", "http-header-fields", "append", field)
+        }
     }
 
     override fun eventProperty(property: String) = Unit
@@ -485,6 +580,7 @@ class AndroidMpvVideoPlayerHost(
         when (eventId) {
             MPVLib.MPV_EVENT_START_FILE -> {
                 fileLoaded = false
+                fileOpening = true
                 _status.value = _status.value.copy(
                     hasMedia = false,
                     fileLoaded = false,
@@ -513,7 +609,14 @@ class AndroidMpvVideoPlayerHost(
                 if (fileLoaded) _status.value = _status.value.copy(hasMedia = true, waitingForData = false)
             }
             MPVLib.MPV_EVENT_END_FILE -> {
-                if (playbackRequested && !stoppedByUser && !fileLoaded) {
+                val failed = mpvEndOfFileIsFailure(
+                    fileOpening = fileOpening,
+                    playbackRequested = playbackRequested,
+                    stoppedByUser = stoppedByUser,
+                    fileLoaded = fileLoaded,
+                )
+                fileOpening = false
+                if (failed) {
                     _status.value = _status.value.copy(
                         error = "The selected stream could not be opened.",
                         statusMessage = "Playback failed",
@@ -532,7 +635,10 @@ class AndroidMpvVideoPlayerHost(
             level <= MPVLib.MPV_LOG_LEVEL_WARN -> Log.w(MPV_LOG_TAG, source + message)
             else -> Log.d(MPV_LOG_TAG, source + message)
         }
-        _status.value = _status.value.withMpvDiagnostic(message)
+        // Logcat takes everything; the screen only takes what reads as progress.
+        if (isViewableMpvDiagnostic(level)) {
+            _status.value = _status.value.withMpvDiagnostic(message)
+        }
     }
 
     private fun applyPreferencesNow(preferences: PlaybackPreferences) {
@@ -617,7 +723,11 @@ class AndroidMpvVideoPlayerHost(
         if (Looper.myLooper() == Looper.getMainLooper()) action() else main.post(action)
     }
 
-    private data class PendingLoad(val url: String, val startPositionSeconds: Double)
+    private data class PendingLoad(
+        val url: String,
+        val startPositionSeconds: Double,
+        val headers: Map<String, String> = emptyMap(),
+    )
 
     private companion object {
         const val MPV_LOG_TAG = "CoveMpv"
@@ -826,6 +936,135 @@ private fun PlaybackStatus.withTracks(tracks: List<MediaTrack>): PlaybackStatus 
  */
 internal fun PlaybackStatus.withMpvDiagnostic(message: String): PlaybackStatus =
     copy(statusMessage = message)
+
+/**
+ * Whether an mpv log line is worth showing to the viewer as opening commentary.
+ *
+ * The Android binding fixes the client API log level at "v": its native create()
+ * calls mpv_request_log_messages(ctx, "v") with the level hardcoded, and there is no
+ * Java entry point to lower it afterwards. Verbose is mpv's internal bookkeeping —
+ * a rotation alone emits "Set property: android-surface-size=1080x2400" once per size
+ * change, and a rotation produces several — while PlayerLayer prints statusMessage
+ * verbatim under the opening spinner, so those scroll past the viewer looking like
+ * progress. Desktop never sees them because it asks libmpv for "info" and up
+ * directly; this is the same cut, made after delivery rather than before it.
+ */
+internal fun isViewableMpvDiagnostic(level: Int): Boolean = level <= MPVLib.MPV_LOG_LEVEL_INFO
+
+/**
+ * Whether an mpv end-of-file means the stream the viewer asked for would not open.
+ *
+ * mpv ends the outgoing file before it starts the incoming one, so a load issued
+ * while something is still loaded produces an end-of-file that belongs to the file
+ * being replaced. stop() marks that case with stoppedByUser, but only until the next
+ * load clears the flag — and the event crosses from mpv's thread to the main thread
+ * by post, so a load that lands first turns the outgoing file's end into "The selected
+ * stream could not be opened." on a stream that is opening perfectly well. That is
+ * why the automatic path is the one that shows it: it starts playback the instant
+ * sources resolve, where the picker spends the window waiting for a human.
+ *
+ * [fileOpening] closes the hole, because mpv's event order is guaranteed: the end of
+ * the outgoing file arrives before the start of the incoming one, so an end seen
+ * before that start belongs to the file being replaced and never to this load.
+ */
+internal fun mpvEndOfFileIsFailure(
+    fileOpening: Boolean,
+    playbackRequested: Boolean,
+    stoppedByUser: Boolean,
+    fileLoaded: Boolean,
+): Boolean = fileOpening && playbackRequested && !stoppedByUser && !fileLoaded
+
+/**
+ * The YouTube clients whose URLs a media player can actually read.
+ *
+ * Left to itself yt-dlp answers from ANDROID_VR, and googlevideo serves those URLs
+ * only to a *bounded* range request: `Range: bytes=0-0` and `bytes=0-1048575` come
+ * back 206, while `bytes=0-` — what ffmpeg sends the moment it opens a stream — and
+ * a request with no Range at all both come back 403. There is no mpv or ffmpeg option
+ * that bounds the opening request, so a player can never read one of those URLs; the
+ * "Playback failed" was that 403, reached through a URL yt-dlp had extracted perfectly.
+ *
+ * MWEB and TVHTML5_SIMPLY serve the same itag 18 — muxed avc1 + mp4a, which is what
+ * the format selector above asks for and what mediacodec decodes — and answer an
+ * open-ended range with 206. Both need a JavaScript runtime to expose any format at
+ * all, which is exactly why youtubedl-android bundles QuickJS and passes it to yt-dlp
+ * as --js-runtimes; on a host without one they return storyboards and nothing else.
+ */
+internal const val YOUTUBE_PLAYER_CLIENTS = "youtube:player_client=mweb,tv_simply"
+
+/** The User-Agent mpv should send, or blank to leave mpv's own default alone. */
+internal fun mpvUserAgent(headers: Map<String, String>): String =
+    headers.entries
+        .firstOrNull { it.key.equals(USER_AGENT_HEADER, ignoreCase = true) }
+        ?.value
+        ?.takeIf(String::isNotBlank)
+        .orEmpty()
+
+/**
+ * The extractor's headers as mpv http-header-fields entries, User-Agent excluded.
+ *
+ * Excluded because [mpvUserAgent] sends that one through mpv's dedicated option,
+ * and ffmpeg would put both on the wire if it appeared in each place. Blank values
+ * are dropped rather than sent empty: yt-dlp emits a few of those, and a header with
+ * no value is not the same request as no header at all.
+ */
+internal fun mpvHeaderFields(headers: Map<String, String>): List<String> =
+    headers.entries
+        .filterNot { it.key.equals(USER_AGENT_HEADER, ignoreCase = true) }
+        .filter { it.key.isNotBlank() && it.value.isNotBlank() }
+        .map { "${it.key}: ${it.value}" }
+
+private const val USER_AGENT_HEADER = "User-Agent"
+
+/** What to do about the copy of yt-dlp on disk before opening a page URL. */
+internal enum class YtDlpRefresh { None, Background, Blocking }
+
+/**
+ * Whether the yt-dlp this app runs is current enough to extract a web video.
+ *
+ * Android runs yt-dlp itself, from a copy compiled into the youtubedl-android AAR;
+ * desktop hands the job to mpv's ytdl_hook over a copy YtDlpProvisioner downloads
+ * and keeps fresh. So the two hosts age differently: the desktop's yt-dlp is as new
+ * as its last provisioning run, while Android's is frozen at whatever the dependency
+ * shipped — 2025.11.12 for youtubedl-android 0.18.1 — and stays there for the life
+ * of the release. YouTube breaks extraction faster than that, which is why extras
+ * play on the desktop and not on the phone.
+ *
+ * [installedVersion] is null until the library's updater has run once, since it
+ * reads the version from the preference that updater writes; that null is exactly
+ * the "never refreshed, still on the bundled copy" case, so it is the one that
+ * waits. Otherwise a yt-dlp version string is its own release date, and the copy
+ * dates itself with nothing stored alongside it.
+ */
+internal fun ytDlpRefreshFor(
+    installedVersion: String?,
+    today: LocalDate,
+    mayInstallHelper: Boolean,
+): YtDlpRefresh {
+    if (!mayInstallHelper) return YtDlpRefresh.None
+    val released = parseYtDlpReleaseDate(installedVersion) ?: return YtDlpRefresh.Blocking
+    val age = ChronoUnit.DAYS.between(released, today)
+    return when {
+        age >= YTDLP_UNUSABLE_AGE_DAYS -> YtDlpRefresh.Blocking
+        age >= YTDLP_STALE_AGE_DAYS -> YtDlpRefresh.Background
+        else -> YtDlpRefresh.None
+    }
+}
+
+/** yt-dlp tags its releases by date: "2026.08.10", nightlies with a time after it. */
+internal fun parseYtDlpReleaseDate(version: String?): LocalDate? {
+    val parts = version?.trim()?.split('.') ?: return null
+    if (parts.size < 3) return null
+    return runCatching {
+        LocalDate.of(parts[0].toInt(), parts[1].toInt(), parts[2].toInt())
+    }.getOrNull()
+}
+
+/** Old enough to be worth replacing, new enough that it probably still works. */
+internal const val YTDLP_STALE_AGE_DAYS = 30L
+
+/** Old enough that YouTube has almost certainly outrun it; wait for the new one. */
+internal const val YTDLP_UNUSABLE_AGE_DAYS = 90L
 
 /** Interprets Android's observed eof-reached flag without promoting stop() to EOF. */
 internal fun PlaybackStatus.withMpvEof(
