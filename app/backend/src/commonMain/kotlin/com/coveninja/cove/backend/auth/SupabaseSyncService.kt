@@ -103,7 +103,16 @@ class SupabaseSyncService(
 
         val pushErrors = mutableListOf<String>()
         suspend fun push(label: String, operation: suspend () -> Unit) {
-            runCatching { operation() }.onFailure { pushErrors += "$label: ${it.message}" }
+            runCatching { operation() }.onFailure { failure ->
+                // A refused token is not a partial push. Every remaining push would
+                // fail the same way, and collecting them into a status line strands
+                // the caller with a report instead of the one exception that lets it
+                // refresh the session and run the whole sync again.
+                if (failure is SupabaseException && failure.statusCode == UNAUTHORIZED) {
+                    throw failure
+                }
+                pushErrors += "$label: ${failure.message}"
+            }
         }
         push("library") { pushLibrary(accessToken, profileId) }
         push("settings") { pushSettings(accessToken, profileId) }
@@ -383,6 +392,8 @@ class SupabaseSyncService(
          * from that host would drop them for every other device.
          */
         val SYNCED_PAYLOAD_KINDS = listOf("addons", "nuvio", "activity")
+
+        private const val UNAUTHORIZED = 401
 
         private fun tableFor(kind: String) = "profile_$kind"
     }

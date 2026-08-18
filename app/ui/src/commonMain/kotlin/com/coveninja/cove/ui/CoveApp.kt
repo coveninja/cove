@@ -55,6 +55,7 @@ import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.common.AppUpdateOverlay
+import com.coveninja.cove.ui.components.common.FixtureDataBadge
 import com.coveninja.cove.ui.components.media.card.MediaCard
 import com.coveninja.cove.ui.components.media.details.MediaDetailsSharedOverlay
 import com.coveninja.cove.ui.components.media.details.MediaSharedKey
@@ -264,6 +265,21 @@ fun CoveApp(
                     onUpdateExitRequested,
                 )
             }
+        }
+
+        // Outside the gate, so a fixtures run says so during the first-run flow as well as
+        // after it. The top end is the one corner nothing else claims: the nav bar floats
+        // top-centre on a desktop window and bottom-centre on a phone.
+        if (graph.fixtures) {
+            FixtureDataBadge(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(10.dp)
+                    // Above the details sheet and the player, which otherwise cover it for
+                    // as long as they are open.
+                    .zIndex(1000f),
+            )
         }
     }
 }

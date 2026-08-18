@@ -70,10 +70,7 @@ class AuthService(
 
     suspend fun refresh(): LoginResponse {
         val current = sessions.get() ?: throw IllegalStateException("no stored auth session")
-        require(current.refreshToken.isNotBlank()) { "stored auth session has no refresh token" }
-        val refreshed = client.refresh(current.refreshToken)
-        sessions.save(refreshed)
-        return loginResponse(refreshed)
+        return loginResponse(renew(current))
     }
 
     suspend fun synchronize(bearerToken: String): SyncResult {
@@ -91,16 +88,31 @@ class AuthService(
      * Syncs with the stored session, refreshing the access token first when it is
      * spent. Every other caller used to own that dance, and the periodic sync
      * would otherwise start failing an hour into a session.
+     *
+     * The expiry check alone is not enough, because it is arithmetic on the
+     * *device's* clock: `expires_at` is recorded as "now plus expires_in" at
+     * sign-in and compared against "now" here, so a machine whose clock is wrong
+     * — or, more often, one that was suspended and woke up hours later with a
+     * frozen clock, which is every emulator and every laptop lid — believes a
+     * token is fresh long after Supabase has stopped accepting it. That is what
+     * a permanent "Sync failed / JWT expired" is: not an expired session, just a
+     * device that never noticed. Supabase's 401 is the authority, so it triggers
+     * one refresh and one retry, which also covers a session stored without an
+     * expiry at all and a token invalidated on the server.
      */
     suspend fun syncNow(): SyncResult {
         val stored = sessions.get() ?: throw IllegalStateException("not signed in")
-        val session = if (isExpiring(stored)) {
-            require(stored.refreshToken.isNotBlank()) { "stored auth session has no refresh token" }
-            client.refresh(stored.refreshToken).also(sessions::save)
-        } else {
-            stored
+        val session = if (isExpiring(stored)) renew(stored) else stored
+        return try {
+            sync.reconcileAndSync(session.userId, session.accessToken)
+        } catch (rejected: SupabaseException) {
+            if (rejected.statusCode != UNAUTHORIZED) throw rejected
+            // Retried once, never in a loop: a refreshed token that is rejected
+            // again is not a token problem, and a sync that keeps renewing
+            // credentials to keep failing would hide whatever the real one is.
+            val renewed = renew(session)
+            sync.reconcileAndSync(renewed.userId, renewed.accessToken)
         }
-        return sync.reconcileAndSync(session.userId, session.accessToken)
     }
 
     suspend fun logout() {
@@ -130,6 +142,30 @@ class AuthService(
     private fun isExpiring(session: SupabaseSession): Boolean {
         val expiresAt = session.expiresAtEpochSeconds ?: return false
         return epochSeconds() + EXPIRY_MARGIN_SECONDS >= expiresAt
+    }
+
+    /**
+     * Trades the stored refresh token for a fresh session, and saves it.
+     *
+     * A refusal here is separated from every other failure because it is the one
+     * the user has to act on: a rejected refresh token cannot be recovered from
+     * by waiting or retrying, and reporting Supabase's own "Invalid Refresh
+     * Token: Refresh Token Not Found" would say nothing about what to do. The
+     * session is deliberately left in place — Supabase rotates refresh tokens,
+     * so two syncs overlapping can produce a spurious refusal, and signing the
+     * device out on one of those would be a worse failure than the one it fixes.
+     */
+    private suspend fun renew(session: SupabaseSession): SupabaseSession {
+        val refreshToken = session.refreshToken.takeIf(String::isNotBlank)
+            ?: throw SessionExpiredException()
+        return try {
+            client.refresh(refreshToken).also(sessions::save)
+        } catch (rejected: SupabaseException) {
+            if (rejected.statusCode in REFRESH_REFUSED) {
+                throw SessionExpiredException(rejected)
+            }
+            throw rejected
+        }
     }
 
     private suspend fun finishRegistration(session: SupabaseSession, profileName: String) {
@@ -166,8 +202,24 @@ class AuthService(
 
     private companion object {
         const val EXPIRY_MARGIN_SECONDS = 60L
+        const val UNAUTHORIZED = 401
+
+        /** Supabase answers a spent or unknown refresh token with either of these. */
+        val REFRESH_REFUSED = setOf(400, 401)
     }
 }
+
+/**
+ * The stored session can no longer be renewed, and only signing in again will fix it.
+ *
+ * Carries wording meant for the account page: everything else that goes wrong during a
+ * sync is reported in Supabase's words, which is right for "Invalid login credentials"
+ * and useless for a token the user never knew existed.
+ */
+class SessionExpiredException(cause: Throwable? = null) : RuntimeException(
+    "Your Cove session has expired. Sign in again to resume syncing.",
+    cause,
+)
 
 sealed interface RegistrationOutcome {
     data object ConfirmationRequired : RegistrationOutcome

@@ -20,6 +20,19 @@ class AppGraph(
     val trakt: TraktRepository = UnavailableTraktRepository,
     val device: DeviceRepository = UnavailableDeviceRepository,
     val updates: UpdateRepository = UnavailableUpdateRepository,
+    /**
+     * True when every repository above is a canned fixture rather than a live backend.
+     *
+     * The shells draw a marker from it, and that marker is not decoration: the fixtures
+     * carry real TMDB artwork and a real-looking library, so a fixtures run is
+     * indistinguishable from a real one right up until something asks the catalog a
+     * question it cannot answer — a search for a title outside the canned dozen comes
+     * back empty and reads as a broken search rather than as a harness.
+     *
+     * Defaulted, so only [com.coveninja.cove.shared.fixture.FixtureAppGraph] sets it and
+     * the live hosts need no change.
+     */
+    val fixtures: Boolean = false,
     private val onClose: () -> Unit = {},
 ) : AutoCloseable {
     override fun close() = onClose()

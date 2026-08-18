@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -35,6 +36,7 @@ import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.ui.components.common.AppUpdateOverlay
+import com.coveninja.cove.ui.components.common.FixtureDataBadge
 import com.coveninja.cove.ui.components.navigation.NavDestination
 import com.coveninja.cove.ui.onboarding.OnboardingGate
 import com.coveninja.cove.ui.tv.onboarding.TvOnboardingFlow
@@ -129,18 +131,37 @@ fun CoveTvApp(
             LocalPageBottomClearance provides dimens.overscanVertical,
         ) {
             TvTheme(dimens) {
-                OnboardingGate(
-                    graph = graph,
-                    forced = forceOnboarding,
-                    flow = { preview, onFinished ->
-                        TvOnboardingFlow(preview = preview, onFinished = onFinished)
-                    },
-                ) {
-                    TvAppContent(
-                        onFullscreenPlaybackVisibilityChanged =
-                            onFullscreenPlaybackVisibilityChanged,
-                        onUpdateExitRequested = onUpdateExitRequested,
-                    )
+                // The marker is a sibling of the whole shell rather than something a page
+                // draws, so it survives every destination, the details screen and the
+                // onboarding flow alike — a canned catalog is a property of the run.
+                Box(modifier = Modifier.fillMaxSize()) {
+                    OnboardingGate(
+                        graph = graph,
+                        forced = forceOnboarding,
+                        flow = { preview, onFinished ->
+                            TvOnboardingFlow(preview = preview, onFinished = onFinished)
+                        },
+                    ) {
+                        TvAppContent(
+                            onFullscreenPlaybackVisibilityChanged =
+                                onFullscreenPlaybackVisibilityChanged,
+                            onUpdateExitRequested = onUpdateExitRequested,
+                        )
+                    }
+
+                    if (graph.fixtures) {
+                        FixtureDataBadge(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(
+                                    top = dimens.overscanVertical,
+                                    end = dimens.overscanHorizontal,
+                                )
+                                // Above the player and the update overlay, the two layers
+                                // that would otherwise hide it for the rest of the run.
+                                .zIndex(1000f),
+                        )
+                    }
                 }
             }
         }

@@ -101,6 +101,88 @@ class LocalAccountRepositoryTest {
         }
     }
 
+    // Mutation applied to verify: had syncNow() rethrow the 401 instead of
+    // refreshing → this failed, which is the bug as reported: a device whose clock
+    // says the token is fine never recovers, and every sync from then on reads
+    // "Sync failed / JWT expired".
+    @Test
+    fun `an access token the server has stopped accepting is refreshed and the sync retried`() =
+        runTest {
+            fixture { graph ->
+                graph.account.signIn("a@b.c", "hunter2")
+                // No local clock change: the stored session still says it has an hour
+                // left, which is precisely the case a device with a wrong or frozen
+                // clock is in when Supabase has already stopped accepting the token.
+                graph.server.accepted -= "jwt-1"
+                graph.server.requests.clear()
+
+                graph.account.syncNow()
+
+                val status = graph.account.syncStatus.value
+                assertTrue(!status.failed, "sync gave up rather than refreshing: ${status.lastError}")
+                assertNull(status.lastError)
+                assertNotNull(status.lastSyncedAt)
+                assertTrue(
+                    graph.server.requests.any { it.url.encodedQuery.contains("grant_type=refresh_token") },
+                    "the refused token was never refreshed",
+                )
+                assertEquals(
+                    "Bearer jwt-2",
+                    graph.server.requests.last().headers[HttpHeaders.Authorization],
+                    "the retry went out with the token that had just been refused",
+                )
+            }
+        }
+
+    // Mutation applied to verify: let the push wrapper in SupabaseSyncService
+    // collect the 401 as a partial-push error again → this failed with the sync
+    // reporting rows it could not push, because a refused token never reaches the
+    // one caller that can do something about it.
+    @Test
+    fun `a token that dies mid-sync is refreshed rather than reported as a partial push`() =
+        runTest {
+            fixture { graph ->
+                graph.account.signIn("a@b.c", "hunter2")
+                graph.server.expireOnWrite = true
+
+                graph.account.syncNow()
+
+                val status = graph.account.syncStatus.value
+                assertTrue(!status.failed, "sync gave up: ${status.lastError}")
+                assertNull(
+                    status.lastError,
+                    "a refused token was reported as rows that could not be pushed",
+                )
+                assertNotNull(status.lastSyncedAt)
+            }
+        }
+
+    // Mutation applied to verify: had renew() rethrow Supabase's own exception
+    // rather than classifying it → this failed with "Invalid Refresh Token: Refresh
+    // Token Not Found" on the account page, which names a token the user has never
+    // seen and says nothing about signing in again.
+    @Test
+    fun `a refused refresh asks for a new sign-in and keeps the session`() = runTest {
+        fixture { graph ->
+            graph.account.signIn("a@b.c", "hunter2")
+            graph.server.accepted -= "jwt-1"
+            graph.server.refuseRefresh = true
+
+            graph.account.syncNow()
+
+            val status = graph.account.syncStatus.value
+            assertTrue(status.failed)
+            assertEquals(
+                "Your Cove session has expired. Sign in again to resume syncing.",
+                status.lastError,
+            )
+            // Still signed in: Supabase rotates refresh tokens, so two syncs overlapping
+            // can refuse a perfectly good session, and signing the device out over that
+            // would lose more than the failure it is reacting to.
+            assertIs<AccountState.SignedIn>(graph.account.account.value)
+        }
+    }
+
     // Mutation applied to verify: had signOut() leave _account untouched → this
     // failed, leaving the page claiming a session that had just been cleared.
     @Test
@@ -123,8 +205,9 @@ class LocalAccountRepositoryTest {
         DesktopDatabase.inMemory().use { database ->
             LegacyMigration(database.database, dataDir) { PROFILE_ID }.importIfNeeded()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val server = Server(signInStatus, failProfileUpsert)
             val http = HttpClient(MockEngine) {
-                engine { addHandler { request -> respond(request, signInStatus, failProfileUpsert) } }
+                engine { addHandler { request -> respond(request, server) } }
             }
             try {
                 var id = 0
@@ -149,7 +232,7 @@ class LocalAccountRepositoryTest {
                         now = now,
                     ),
                 )
-                test(TestGraph(LocalAccountRepository(auth, settings, library, scope)))
+                test(TestGraph(LocalAccountRepository(auth, settings, library, scope), server))
             } finally {
                 scope.cancel()
                 http.close()
@@ -159,29 +242,60 @@ class LocalAccountRepositoryTest {
 
     private fun io.ktor.client.engine.mock.MockRequestHandleScope.respond(
         request: HttpRequestData,
-        signInStatus: HttpStatusCode,
-        failProfileUpsert: Boolean,
+        server: Server,
     ) = when {
-        request.url.encodedPath.startsWith("/auth/v1/token") -> if (signInStatus.isSuccess()) {
-            json(
-                """{"access_token":"jwt-1","refresh_token":"refresh-1","expires_in":3600,
-                    "user":{"id":"user-1","email":"a@b.c"}}""",
-            )
-        } else {
-            json("""{"error_description":"Invalid login credentials"}""", signInStatus)
+        request.url.encodedPath.startsWith("/auth/v1/token") -> {
+            server.requests += request
+            when {
+                request.url.encodedQuery.contains("refresh_token") -> if (server.refuseRefresh) {
+                    json(
+                        """{"error_description":"Invalid Refresh Token: Refresh Token Not Found"}""",
+                        HttpStatusCode.BadRequest,
+                    )
+                } else {
+                    server.accepted += "jwt-2"
+                    json(
+                        """{"access_token":"jwt-2","refresh_token":"refresh-2","expires_in":3600,
+                            "user":{"id":"user-1","email":"a@b.c"}}""",
+                    )
+                }
+
+                server.signInStatus.isSuccess() -> json(
+                    """{"access_token":"jwt-1","refresh_token":"refresh-1","expires_in":3600,
+                        "user":{"id":"user-1","email":"a@b.c"}}""",
+                )
+
+                else -> json("""{"error_description":"Invalid login credentials"}""", server.signInStatus)
+            }
         }
 
-        request.url.encodedPath.endsWith("/profiles") -> when {
-            request.method == HttpMethod.Get ->
-                // Matching the local id keeps profile reconciliation on its
-                // early-return path, so the only failure is the push below.
-                json("""[{"id":"$PROFILE_ID","user_id":"user-1","name":"Cove","is_primary":true,"updated_at":"2026-01-01T00:00:00Z"}]""")
+        else -> {
+            server.requests += request
+            // A token dying mid-sync, which is what a rotated or revoked one does:
+            // the pull went through and the first write is refused.
+            if (server.expireOnWrite && request.method == HttpMethod.Post) {
+                server.accepted -= "jwt-1"
+            }
+            val bearer = request.headers[HttpHeaders.Authorization].orEmpty().removePrefix("Bearer ")
+            when {
+                bearer !in server.accepted ->
+                    json("""{"message":"JWT expired"}""", HttpStatusCode.Unauthorized)
 
-            failProfileUpsert -> json("""{"message":"denied"}""", HttpStatusCode.InternalServerError)
-            else -> json("[]")
+                request.url.encodedPath.endsWith("/profiles") -> when {
+                    request.method == HttpMethod.Get ->
+                        // Matching the local id keeps profile reconciliation on its
+                        // early-return path, so the only failure is the push below.
+                        json("""[{"id":"$PROFILE_ID","user_id":"user-1","name":"Cove","is_primary":true,"updated_at":"2026-01-01T00:00:00Z"}]""")
+
+                    server.failProfileUpsert ->
+                        json("""{"message":"denied"}""", HttpStatusCode.InternalServerError)
+
+                    else -> json("[]")
+                }
+
+                else -> json("[]")
+            }
         }
-
-        else -> json("[]")
     }
 
     private fun io.ktor.client.engine.mock.MockRequestHandleScope.json(
@@ -189,5 +303,23 @@ class LocalAccountRepositoryTest {
         status: HttpStatusCode = HttpStatusCode.OK,
     ) = respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
 
-    private data class TestGraph(val account: LocalAccountRepository)
+    private data class TestGraph(val account: LocalAccountRepository, val server: Server)
+
+    /**
+     * Supabase, as far as these tests are concerned: which access tokens it still
+     * honours, and what it does with a refresh.
+     *
+     * Mutable rather than parameterised because the interesting cases are changes of
+     * mind *during* a run — a token that was fine at sign-in and is refused an hour
+     * later is exactly the failure the retry exists for, and one that cannot be set up
+     * in advance.
+     */
+    private class Server(
+        val signInStatus: HttpStatusCode,
+        val failProfileUpsert: Boolean,
+        val accepted: MutableSet<String> = mutableSetOf("jwt-1"),
+        var refuseRefresh: Boolean = false,
+        var expireOnWrite: Boolean = false,
+        val requests: MutableList<HttpRequestData> = mutableListOf(),
+    )
 }

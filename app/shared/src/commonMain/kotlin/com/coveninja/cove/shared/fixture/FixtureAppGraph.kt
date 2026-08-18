@@ -1263,4 +1263,5 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     profiles  = FixtureProfileRepository(),
     trakt     = FixtureTraktRepository(),
     device    = FixtureDeviceRepository(),
+    fixtures  = true,
 )

@@ -9,7 +9,8 @@
 #   make tv-install # build and install the APK on a running TV emulator or device
 #   make onboarding # open the first-run flow on the desktop shell (design harness)
 #   make onboarding-tv      # the same flow in the television shell
-#   make onboarding-mobile  # build, install and open it on an Android device/emulator
+#   make onboarding-mobile  # build, install and open it on a phone/tablet device or emulator
+#   make onboarding-tv-install # the same, on an Android TV emulator or device
 #   make hot-onboarding     # hot-reload loop for the desktop flow
 #   make hot-onboarding-tv  # hot-reload loop for the television flow
 #   make test       # Kotlin test suites
@@ -28,7 +29,8 @@ TV_IMAGE    := system-images;android-36;android-tv;x86_64
 .PHONY: all build run dev hot app mobile test test-kotlin test-all test-build \
         test-workflows test-release-notes patch minor major clean \
         run-tv hot-tv tv-avd tv-install \
-        onboarding onboarding-tv onboarding-mobile hot-onboarding hot-onboarding-tv
+        onboarding onboarding-tv onboarding-mobile onboarding-tv-install \
+        hot-onboarding hot-onboarding-tv
 
 all: build
 
@@ -114,47 +116,33 @@ hot-onboarding:
 hot-onboarding-tv:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto --args="--backend-mode $(BACKEND) --tv --onboarding"
 
-## Build, install and open the flow on a connected Android device or emulator.
-##
-## Both extras are read only when BuildConfig.DEBUG is set, so nothing here is reachable from a
-## release build. The fixtures extra reuses the benchmark's FixtureAppGraph path, which is what
-## lets the preview run without a TMDB key compiled into the APK — pass FIXTURES=false to use
-## the real backend instead. One APK serves phones and televisions, so this opens whichever
-## shell the device reports.
-##
-## The APK is built for the connected device's own ABI rather than all four. mpv, FFmpeg,
-## jlibtorrent and the Python runtime come to ~200 MB of native code across arm64-v8a,
-## armeabi-v7a, x86 and x86_64, giving a 181 MB debug APK of which any one device uses a
-## quarter — enough to fail outright with INSTALL_FAILED_INSUFFICIENT_STORAGE on an emulator
-## with a few hundred MB free, since the install needs room for the old copy, the staged APK
-## and the extracted libraries at once. Narrowing to the one ABI that will actually run halves
-## the APK and makes the install fit. Override with ABI=arm64-v8a, or ABI=all for every one.
+# Installing the flow on a real Android device or emulator.
+#
+# One APK serves phones and televisions — MainActivity picks the shell at runtime from the
+# leanback feature — so which onboarding you see is decided entirely by which device adb talks
+# to. That is why these are two targets rather than a flag: with both emulators running, an
+# unqualified adb command fails outright, and each target knows which kind of device it wants.
+#
+# Both extras are read only when BuildConfig.DEBUG is set, so nothing here is reachable from a
+# release build. FIXTURES=false runs against the real backend instead of the canned catalog.
+# DEVICE=<serial> picks one when several of the same kind are attached, and ABI=all builds
+# native code for every architecture rather than only the target's.
 FIXTURES ?= true
 ABI ?=
+DEVICE ?=
+
+## Build, install and open the flow on a connected phone or tablet.
 onboarding-mobile:
-	@command -v adb >/dev/null 2>&1 || { echo "adb is not on PATH (Android SDK platform-tools)."; exit 1; }
-	@adb get-state >/dev/null 2>&1 || { echo "No device or emulator is connected — start one, then re-run."; exit 1; }
-	@abi="$(ABI)"; \
-	  if [ -z "$$abi" ]; then abi=$$(adb shell getprop ro.product.cpu.abi | tr -d '\r'); fi; \
-	  if [ "$$abi" = "all" ] || [ -z "$$abi" ]; then \
-	    echo "Building for every ABI."; \
-	    (cd $(KOTLIN_DIR) && ./gradlew :mobile:assembleDebug); \
-	  else \
-	    echo "Building for $$abi (the connected device's ABI)."; \
-	    (cd $(KOTLIN_DIR) && ./gradlew :mobile:assembleDebug -PcoveAbi="$$abi"); \
-	  fi
-	@apk=$(KOTLIN_DIR)/mobile/build/outputs/apk/debug/mobile-debug.apk; \
-	  adb install -r "$$apk" || { \
-	    echo ""; \
-	    echo "Install failed. If it was for storage, the emulator's /data is full:"; \
-	    adb shell df -h /data/user/0 2>/dev/null || true; \
-	    echo "Free some up with:  adb uninstall com.coveninja.cove"; \
-	    echo "or give the AVD a bigger data partition in Device Manager."; \
-	    exit 1; \
-	  }
-	adb shell am start -n com.coveninja.cove/.MainActivity \
-	  --ez com.coveninja.cove.SHOW_ONBOARDING true \
-	  --ez com.coveninja.cove.ONBOARDING_FIXTURES $(FIXTURES)
+	bash scripts/onboarding-install.sh --kind phone \
+	  --fixtures $(FIXTURES) --abi "$(ABI)" --device "$(DEVICE)"
+
+## The same, on a connected Android TV emulator or device — the television shell.
+##
+## Create the emulator once with `make tv-avd`, then start it with:
+##   emulator -avd $(TV_AVD) -gpu host
+onboarding-tv-install:
+	bash scripts/onboarding-install.sh --kind tv \
+	  --fixtures $(FIXTURES) --abi "$(ABI)" --device "$(DEVICE)"
 
 ## Kotlin (shared KMP + desktop JVM + Android host) test suite.
 test-kotlin:
