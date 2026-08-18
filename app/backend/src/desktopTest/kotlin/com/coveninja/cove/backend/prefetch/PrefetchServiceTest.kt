@@ -22,11 +22,19 @@ import io.ktor.serialization.kotlinx.json.json
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 
 class PrefetchServiceTest {
+    // Real time, not runTest: the mock responses arrive on a real dispatcher, so a virtual
+    // clock fast-forwards the moment this coroutine parks on one. That fires runCycle's
+    // 30s per-candidate timeout within milliseconds, cancelling the warm mid-flight and
+    // caching an empty result — green here, red on a slower CI runner.
     @Test
-    fun `cycle warms the same provider cache used by playback`() = runTest {
+    fun `cycle warms the same provider cache used by playback`() = runBlocking {
         var streamRequests = 0
         val http = HttpClient(MockEngine { request ->
             val body = when {
@@ -52,7 +60,7 @@ class PrefetchServiceTest {
             val session = ActiveProfileSession(store.database)
             var id = 0
             val now = { "2026-08-08T12:00:00Z" }
-            val scope = backgroundScope
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             val library = LocalLibraryRepository(store.database, session, scope, { "id-${++id}" }, now)
             val settings = LocalSettingsRepository(store.database, session, scope, now) { "token" }
             val catalog = TmdbClient(http, "key", baseUrl = "https://tmdb.test/3")
@@ -73,6 +81,9 @@ class PrefetchServiceTest {
             assertEquals(1, streamRequests)
             assertEquals(1, addons.streams(MediaType.Movie, "tt42").size)
             assertEquals(1, streamRequests)
+
+            // The service's startup/interval loops would otherwise outlive the test.
+            scope.cancel()
         }
         http.close()
     }
