@@ -74,7 +74,7 @@ class PlaybackService : Service() {
         val playAction = if (status.paused) "Play" else "Pause"
         val playIcon = if (status.paused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause
         return Notification.Builder(this, PLAYBACK_CHANNEL)
-            .setSmallIcon(R.drawable.ic_cove)
+            .setSmallIcon(R.drawable.ic_cove_notification)
             .setContentTitle("Cove")
             .setContentText(
                 when {
@@ -194,7 +194,7 @@ class RemoteAccessService : Service() {
     }
 
     private fun notification(): Notification = Notification.Builder(this, REMOTE_CHANNEL)
-        .setSmallIcon(R.drawable.ic_cove)
+        .setSmallIcon(R.drawable.ic_cove_notification)
         .setContentTitle("Cove remote access")
         .setContentText("Available on your local network at port ${AndroidBackendRuntime.REMOTE_API_PORT}")
         .setContentIntent(activityIntent())

@@ -4,24 +4,23 @@
     installer, the Flatpak and the README all draw from. Regenerate rather than hand-edit, so
     the mark cannot drift between where the app is installed from and what it looks like once
     it is installed.
-
-    The tile a television launcher shows for Cove. Android asks for 320x180; a vector holds
-    that shape at any panel density without shipping four bitmaps.
+-->
+<!--
+    The adaptive foreground. A launcher may mask this to a circle, a squircle or a rounded
+    square and may parallax it, so the mark is scaled into the 66dp safe zone of the 108dp
+    canvas rather than filling it — anything outside that can be cropped away.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="320dp"
-    android:height="180dp"
-    android:viewportWidth="320"
-    android:viewportHeight="180">
-    <path
-        android:fillColor="#0A0A0A"
-        android:pathData="M0,0h320v180h-320z" />
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
     <group
-        android:scaleX="0.26"
-        android:scaleY="0.26"
-        android:translateX="95"
-        android:translateY="25">
+        android:scaleX="0.12528"
+        android:scaleY="0.12528"
+        android:translateX="22.68"
+        android:translateY="22.68">
         <path android:pathData="M202.613 249.269C202.613 223.372 176.209 202.286 190.777 181.081C205.345 159.876 223.276 139.622 251.077 139.622C254.152 139.622 256.827 142.175 259.823 142.539C236.692 145.696 221.204 162.052 208.131 181.081C193.564 202.286 219.966 223.372 219.966 249.269C219.966 275.166 193.564 296.252 208.131 317.457C221.204 336.486 238.989 353.394 262.121 356.552C259.125 356.915 254.153 358.129 251.077 358.129C223.276 358.128 205.345 338.662 190.777 317.457C176.209 296.252 202.613 275.166 202.613 249.269Z">
             <aapt:attr name="android:fillColor">
                 <gradient

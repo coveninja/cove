@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -38,6 +39,7 @@ import com.coveninja.cove.shared.fixture.FixtureAppGraph
 import com.coveninja.cove.shared.network.CoveApiConfig
 import com.coveninja.cove.ui.CoveApp
 import com.coveninja.cove.ui.CoveTheme
+import com.coveninja.cove.ui.icons.CoveLogoVector
 import com.coveninja.cove.ui.tv.CoveTvApp
 import com.coveninja.cove.ui.state.FullscreenController
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -135,6 +137,11 @@ fun main(args: Array<String>) {
                     onCloseRequest = ::exitApplication,
                     state = windowState,
                     title = if (tvShell) "Cove TV" else "Cove",
+                    // The window's own icon — what a taskbar, a dock and an alt-tab switcher
+                    // show. Separate from the packaged icon, and left as the stock Java one
+                    // until now. Drawn from the same vector the UI uses, so there is no second
+                    // copy of the mark to keep in step.
+                    icon = rememberVectorPainter(CoveLogoVector),
                 ) {
                     CoveTheme {
                         if (tvShell) {

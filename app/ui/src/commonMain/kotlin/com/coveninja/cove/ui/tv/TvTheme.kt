@@ -54,6 +54,23 @@ data class TvDimens(
 
     /** Where page content starts once the rail has taken its share of the left edge. */
     val contentStart: Dp get() = railCollapsedWidth + overscanHorizontal
+
+    /**
+     * How many posters fit across the content area.
+     *
+     * A results page has no rows to organise itself into, so it borrows the row layout and
+     * fills it — chunking results into rows this wide gives a grid that a D-pad can cross in
+     * both directions, without a second layout to teach focus scrolling about.
+     *
+     * Floored at three: a panel narrow enough to want fewer than that would be showing posters
+     * wide enough to read from the next room, which is not the problem worth solving.
+     */
+    val posterColumns: Int
+        get() {
+            val usable = width - railCollapsedWidth - overscanHorizontal * 2 + cardSpacing
+            val step = posterWidth + cardSpacing
+            return (usable.value / step.value).toInt().coerceAtLeast(3)
+        }
 }
 
 /**
@@ -72,7 +89,7 @@ fun tvDimensFor(width: Dp, height: Dp): TvDimens {
         overscanHorizontal = (width.value * 0.05f).coerceIn(24f, 64f).dp,
         overscanVertical = (height.value * 0.05f).coerceIn(16f, 40f).dp,
         railCollapsedWidth = 84.dp,
-        railExpandedWidth = 248.dp,
+        railExpandedWidth = 272.dp,
         posterWidth = poster,
         wideCardWidth = poster * 2f,
         // Enough for artwork to establish the title without pushing the first row of cards

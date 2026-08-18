@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CoveColors.Neutral.Background. The mark is drawn for a dark ground; on a light one the
+         darker folds of the C disappear into it. -->
+    <color name="ic_launcher_background">#0A0A0A</color>
+</resources>

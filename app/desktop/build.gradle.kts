@@ -110,6 +110,15 @@ compose.desktop {
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)
             packageName    = "Cove"
             packageVersion = coveVersion
+
+            // The same mark the Windows installer, the Flatpak and the README already use.
+            // jpackage wants a different container per platform and silently falls back to a
+            // generic Java icon when one is missing, which is what every package shipped until
+            // now. All three are generated from packaging/icons/cove.svg.
+            val iconDir = rootProject.file("../packaging/icons")
+            linux { iconFile.set(iconDir.resolve("cove.png")) }
+            windows { iconFile.set(iconDir.resolve("cove.ico")) }
+            macOS { iconFile.set(iconDir.resolve("cove.icns")) }
         }
     }
 }

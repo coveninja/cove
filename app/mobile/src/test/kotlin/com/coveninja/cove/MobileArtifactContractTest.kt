@@ -49,6 +49,30 @@ class MobileArtifactContractTest {
         assertTrue(manifest.contains("android.intent.category.LAUNCHER"))
     }
 
+    // Every surface that shows a mark shows the same one, all generated from
+    // packaging/icons/cove.svg. The notification icon is the exception that proves it: Android
+    // draws those as a single-colour mask, so the full-colour logo would come out as a filled
+    // blob and it gets its own silhouette instead.
+    // Mutation applied to verify: pointed android:icon back at @drawable/ic_cove → test failed.
+    @Test
+    fun `the launcher wears Cove's own mark on every host`() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val services = File("src/main/kotlin/com/coveninja/cove/MobileServices.kt").readText()
+
+        assertTrue(manifest.contains("android:icon=\"@mipmap/ic_launcher\""))
+        assertTrue(manifest.contains("android:roundIcon=\"@mipmap/ic_launcher_round\""))
+        listOf(
+            "src/main/res/mipmap-anydpi-v26/ic_launcher.xml",
+            "src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml",
+            "src/main/res/drawable/ic_cove_foreground.xml",
+            "src/main/res/drawable/ic_cove_notification.xml",
+        ).forEach { path -> assertTrue(File(path).isFile, "missing $path") }
+
+        // A gradient in the status bar is a white blob; the mask has to be its own drawable.
+        assertTrue(services.contains("R.drawable.ic_cove_notification"))
+        assertFalse(services.contains("setSmallIcon(R.drawable.ic_cove)"))
+    }
+
     // A television launcher shows android:banner, not android:icon, and an app without one is
     // drawn as a blank tile rather than falling back to the icon.
     // Mutation applied to verify: removed android:banner from <application> → test failed.
