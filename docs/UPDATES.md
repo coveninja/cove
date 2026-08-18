@@ -3,8 +3,8 @@
 Cove's in-process updater is available for Windows installer and portable
 builds, and for the Android APK on phones, tablets, and televisions — one APK
 carries the updater and both shells wire the update overlay. AUR installs remain
-owned by `pacman`; standalone Flatpak bundles and tarballs are replaced manually.
-macOS does not currently ship an updater.
+owned by `pacman`; standalone Flatpak bundles, tarballs, and macOS DMG
+installations are replaced manually.
 
 Automatic updates are enabled per device by default. Cove checks shortly after
 launch and no more than once every 24 hours while the process remains open. It
@@ -75,3 +75,35 @@ the signing secret and `UPDATE_SIGNING_KEY_ID` with the next key while retaining
 both public entries. Remove the old public key only in a later next-key-signed
 release. A compromised key requires a manual package update for clients that did
 not receive a trusted bridge release.
+
+## Provider and macOS release configuration
+
+Release builds use the same repository secrets on Linux, Windows, macOS, and
+Android. Add each value once under **Settings → Secrets and variables → Actions**:
+
+| Secret | Purpose |
+|---|---|
+| `TMDB_API_KEY` | TMDB v3 client key used for catalog metadata |
+| `SUPABASE_URL` | Cove's Supabase project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Public/publishable Supabase client key |
+| `TRAKT_CLIENT_ID` | Trakt OAuth client id |
+| `TRAKT_CLIENT_SECRET` | Trakt OAuth client secret |
+
+The Gradle build reads those values directly from its environment and writes the
+client configuration into each package. Do not configure a Supabase service-role
+key or JWT secret: Cove clients neither need nor accept server authority.
+
+The Apple-silicon DMG additionally requires:
+
+| Secret | Purpose |
+|---|---|
+| `MACOS_CERTIFICATE_BASE64` | Base64 PKCS#12 containing a Developer ID Application certificate and private key |
+| `MACOS_CERTIFICATE_PASSWORD` | PKCS#12 export password |
+| `APPLE_NOTARIZATION_ID` | Apple account used by `notarytool` |
+| `APPLE_NOTARIZATION_PASSWORD` | App-specific Apple password |
+| `APPLE_TEAM_ID` | Apple Developer team identifier |
+
+The release job imports the certificate into an ephemeral runner keychain,
+signs the Compose app and bundled libmpv closure, notarizes the final DMG, and
+publishes it only after Apple's ticket validates. None of these values belongs
+in `.env`, source files, Gradle properties, or the Git history.

@@ -39,6 +39,18 @@ jobs:
           PUBLIC_KEYS="${TRUSTED:+$TRUSTED,}$KEY_ID=$PUBLIC"
           echo "key_id=$KEY_ID" >> "$GITHUB_OUTPUT"
           echo "public_keys=$PUBLIC_KEYS" >> "$GITHUB_OUTPUT"
+      - name: Validate client release configuration
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          for name in TMDB_API_KEY SUPABASE_URL SUPABASE_PUBLISHABLE_KEY TRAKT_CLIENT_ID TRAKT_CLIENT_SECRET; do
+            test -n "${!name}" || { echo "::error::$name is not configured"; exit 1; }
+          done
 
   kotlin:
     name: Kotlin desktop/mobile build and test
@@ -238,6 +250,116 @@ jobs:
             cove-windows-amd64-portable.zip
             cove-windows-amd64-portable.zip.sha256
 
+  package-macos:
+    name: Package signed macOS asset
+    needs: [update-key, kotlin]
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Install native packaging dependencies
+        run: brew install mpv dylibbundler
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$CERTIFICATE_BASE64" || { echo '::error::MACOS_CERTIFICATE_BASE64 is not configured'; exit 1; }
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          KEYCHAIN_PATH="$RUNNER_TEMP/cove-signing.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/cove-developer-id.p12"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | awk -F'"' '/Developer ID Application/{print $2; exit}')
+          test -n "$SIGNING_IDENTITY" || { echo '::error::The certificate contains no Developer ID Application identity'; exit 1; }
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+      - name: Build signed Compose application
+        working-directory: app
+        env:
+          UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+        run: >-
+          ./gradlew :desktop:createDistributable --no-daemon
+          -Pcompose.desktop.mac.sign=true
+          -Pcompose.desktop.mac.signing.identity="$SIGNING_IDENTITY"
+          -Pcompose.desktop.mac.signing.keychain="$KEYCHAIN_PATH"
+      - name: Bundle libmpv and verify native closure
+        run: |
+          set -euo pipefail
+          APP=app/desktop/build/compose/binaries/main/app/Cove.app
+          FRAMEWORKS="$APP/Contents/Frameworks"
+          mkdir -p "$FRAMEWORKS"
+          cp "$(brew --prefix mpv)/lib/libmpv.2.dylib" "$FRAMEWORKS/libmpv.2.dylib"
+          dylibbundler -of -cd -b -x "$FRAMEWORKS/libmpv.2.dylib" \
+            -d "$FRAMEWORKS" -p '@loader_path/'
+          # Homebrew's libmpv already carries this rpath. dylibbundler adds it
+          # again, and dyld rejects a Mach-O containing duplicate LC_RPATHs.
+          while [ "$(otool -l "$FRAMEWORKS/libmpv.2.dylib" \
+            | awk '/LC_RPATH/{getline; getline; if ($0 ~ /@loader_path\//) count++} END{print count+0}')" -gt 1 ]; do
+            install_name_tool -delete_rpath '@loader_path/' "$FRAMEWORKS/libmpv.2.dylib"
+          done
+          ln -s libmpv.2.dylib "$FRAMEWORKS/libmpv.dylib"
+          for library in "$FRAMEWORKS"/*.dylib; do
+            # The first listed path is the dylib's install id, not a dependency.
+            external=$(otool -L "$library" | tail -n +3 \
+              | awk '{print $1}' \
+              | grep -E '^(/opt/homebrew|/usr/local)' || true)
+            test -z "$external" || { echo "::error::$library still references $external"; exit 1; }
+          done
+          find "$FRAMEWORKS" -type f -name '*.dylib' -print0 \
+            | xargs -0 -n1 codesign --force --options runtime --timestamp \
+              --keychain "$KEYCHAIN_PATH" --sign "$SIGNING_IDENTITY"
+          python3 -c 'import ctypes,sys; ctypes.CDLL(sys.argv[1])' "$FRAMEWORKS/libmpv.2.dylib"
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/macos/entitlements.plist \
+            --keychain "$KEYCHAIN_PATH" \
+            --sign "$SIGNING_IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+      - name: Create and notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_NOTARIZATION_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_ID" || { echo '::error::APPLE_NOTARIZATION_ID is not configured'; exit 1; }
+          test -n "$APPLE_PASSWORD" || { echo '::error::APPLE_NOTARIZATION_PASSWORD is not configured'; exit 1; }
+          test -n "$APPLE_TEAM_ID" || { echo '::error::APPLE_TEAM_ID is not configured'; exit 1; }
+          mkdir dmg-root
+          ditto app/desktop/build/compose/binaries/main/app/Cove.app dmg-root/Cove.app
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname Cove -srcfolder dmg-root -ov -format UDZO cove-macos-arm64.dmg
+          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" \
+            --sign "$SIGNING_IDENTITY" cove-macos-arm64.dmg
+          xcrun notarytool submit cove-macos-arm64.dmg \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple cove-macos-arm64.dmg
+          xcrun stapler validate cove-macos-arm64.dmg
+          shasum -a 256 cove-macos-arm64.dmg > cove-macos-arm64.dmg.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-assets
+          if-no-files-found: error
+          path: |
+            cove-macos-arm64.dmg
+            cove-macos-arm64.dmg.sha256
+
   package-android:
     name: Package Android asset
     needs: [update-key, kotlin]
@@ -289,7 +411,7 @@ jobs:
 
   publish-release:
     name: Sign manifest and publish complete release
-    needs: [update-key, package-linux, package-windows, package-android]
+    needs: [update-key, package-linux, package-windows, package-macos, package-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:

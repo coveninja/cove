@@ -74,6 +74,36 @@ jobs:
           :mobile:assembleDebug
           --no-daemon
 
+  macos:
+    name: macOS native build and test
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Install libmpv
+        run: brew install mpv
+      - name: Test and build Apple-silicon application
+        working-directory: app
+        run: >-
+          ./gradlew
+          :backend:desktopTest
+          :ui:desktopTest
+          :desktop:test
+          :desktop:createDistributable
+          --no-daemon
+      - name: Verify application bundle
+        run: |
+          set -euo pipefail
+          APP=app/desktop/build/compose/binaries/main/app/Cove.app
+          test -x "$APP/Contents/MacOS/Cove"
+          test "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = io.github.coveninja.Cove
+          file "$APP/Contents/MacOS/Cove" | grep -q arm64
+
   android-smoke:
     name: Android phone launch smoke test
     needs: [kotlin]
