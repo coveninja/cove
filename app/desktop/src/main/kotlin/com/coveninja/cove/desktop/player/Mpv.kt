@@ -3,10 +3,12 @@ package com.coveninja.cove.desktop.player
 import com.sun.jna.Callback
 import com.sun.jna.Library
 import com.sun.jna.Native
+import com.sun.jna.NativeLibrary
 import com.sun.jna.Platform
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.ptr.PointerByReference
+import java.nio.file.Path
 
 internal object Mpv {
     // mpv_format enum values from client.h
@@ -52,6 +54,11 @@ internal object Mpv {
         val instance: MpvLibrary = load()
 
         private fun load(): MpvLibrary {
+            mpvLibrarySearchPaths(
+                osName = System.getProperty("os.name"),
+                environment = System.getenv(),
+                javaHome = System.getProperty("java.home"),
+            ).forEach { path -> NativeLibrary.addSearchPath("mpv", path) }
             // Windows ships the DLL as mpv-2; Linux/macOS as mpv.
             val candidates = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
                 listOf("mpv-2", "mpv")
@@ -73,6 +80,29 @@ internal object Mpv {
         }
     }
 }
+
+/**
+ * Finder-launched macOS apps do not inherit Homebrew's shell path. Add the two
+ * standard Homebrew prefixes explicitly while retaining an override for other
+ * package layouts. JNA still performs its normal system search afterwards.
+ */
+internal fun mpvLibrarySearchPaths(
+    osName: String,
+    environment: Map<String, String>,
+    javaHome: String = System.getProperty("java.home"),
+): List<String> = buildList {
+    environment["COVE_MPV_LIBRARY_DIR"]?.trim()?.takeIf(String::isNotEmpty)?.let(::add)
+    if (osName.startsWith("Mac", ignoreCase = true)) {
+        // jpackage puts the runtime at Cove.app/Contents/runtime/Contents/Home.
+        // Release builds place a self-contained libmpv closure beside it.
+        Path.of(javaHome).parent?.parent?.parent
+            ?.resolve("Frameworks")
+            ?.toString()
+            ?.let(::add)
+        add("/opt/homebrew/opt/mpv/lib")
+        add("/usr/local/opt/mpv/lib")
+    }
+}.distinct()
 
 private object NativeNumericLocale {
     private val lib: NativeLocaleLibrary by lazy {

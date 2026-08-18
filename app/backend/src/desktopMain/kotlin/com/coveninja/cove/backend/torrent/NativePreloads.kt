@@ -22,7 +22,10 @@ internal object NativePreloads {
     private var done = false
 
     @Synchronized
-    fun install() {
+    fun install(osName: String = System.getProperty("os.name")) {
+        // These mitigations target glibc/libstdc++ and Linux signal ownership.
+        // Darwin uses libc++ and different signal constants/structures.
+        if (!needsLinuxNativePreloads(osName)) return
         if (done) return
         done = true
         FatalSignalHandlers.guard()
@@ -52,3 +55,6 @@ internal object NativePreloads {
         }.onFailure { System.err.println("Cove torrent: could not preload libstdc++ (${it.message})") }
     }
 }
+
+internal fun needsLinuxNativePreloads(osName: String): Boolean =
+    osName.startsWith("Linux", ignoreCase = true)

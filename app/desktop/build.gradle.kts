@@ -81,10 +81,21 @@ dependencies {
     // Native JARs cannot be expressed in the version catalog (no classifier
     // support), so they are declared here with explicit coordinates.
     val joglVersion = libs.versions.jogl.get()
+    val osName = System.getProperty("os.name")
+    val osArch = System.getProperty("os.arch")
+    val joglNatives = when {
+        osName.startsWith("Mac", ignoreCase = true) -> "natives-macosx-universal"
+        osName.startsWith("Windows", ignoreCase = true) -> "natives-windows-amd64"
+        osName.startsWith("Linux", ignoreCase = true) &&
+            (osArch.equals("aarch64", ignoreCase = true) || osArch.equals("arm64", ignoreCase = true)) ->
+            "natives-linux-aarch64"
+        osName.startsWith("Linux", ignoreCase = true) -> "natives-linux-amd64"
+        else -> error("Unsupported desktop platform: $osName ($osArch)")
+    }
     implementation(libs.jogl.all)
-    runtimeOnly("org.jogamp.jogl:jogl-all:$joglVersion:natives-linux-amd64")
+    runtimeOnly("org.jogamp.jogl:jogl-all:$joglVersion:$joglNatives")
     implementation(libs.gluegen.rt)
-    runtimeOnly("org.jogamp.gluegen:gluegen-rt:$joglVersion:natives-linux-amd64")
+    runtimeOnly("org.jogamp.gluegen:gluegen-rt:$joglVersion:$joglNatives")
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
 }
@@ -110,7 +121,6 @@ compose.desktop {
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)
             packageName    = "Cove"
             packageVersion = coveVersion
-
             // The same mark the Windows installer, the Flatpak and the README already use.
             // jpackage wants a different container per platform and silently falls back to a
             // generic Java icon when one is missing, which is what every package shipped until
@@ -118,7 +128,13 @@ compose.desktop {
             val iconDir = rootProject.file("../packaging/icons")
             linux { iconFile.set(iconDir.resolve("cove.png")) }
             windows { iconFile.set(iconDir.resolve("cove.ico")) }
-            macOS { iconFile.set(iconDir.resolve("cove.icns")) }
+            macOS {
+                bundleID = "io.github.coveninja.Cove"
+                iconFile.set(iconDir.resolve("cove.icns"))
+                val entitlements = rootProject.file("../packaging/macos/entitlements.plist")
+                entitlementsFile.set(entitlements)
+                runtimeEntitlementsFile.set(entitlements)
+            }
         }
     }
 }

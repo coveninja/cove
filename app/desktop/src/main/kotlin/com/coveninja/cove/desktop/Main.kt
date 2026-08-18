@@ -49,6 +49,9 @@ import kotlinx.coroutines.delay
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
+    if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
+        System.setProperty("apple.awt.application.name", "Cove")
+    }
     val parsedOptions = LaunchOptions.parse(args)
     val environmentMode = System.getenv("COVE_BACKEND_MODE")
         ?.takeIf(String::isNotBlank)

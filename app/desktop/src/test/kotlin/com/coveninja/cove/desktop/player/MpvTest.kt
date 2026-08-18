@@ -19,6 +19,23 @@ import kotlin.test.assertFailsWith
  */
 class MpvTest {
 
+    @Test
+    fun `macOS searches both Homebrew libmpv prefixes`() {
+        assertEquals(
+            listOf(
+                "/custom/mpv",
+                "/Applications/Cove.app/Contents/Frameworks",
+                "/opt/homebrew/opt/mpv/lib",
+                "/usr/local/opt/mpv/lib",
+            ),
+            mpvLibrarySearchPaths(
+                osName = "Mac OS X",
+                environment = mapOf("COVE_MPV_LIBRARY_DIR" to "/custom/mpv"),
+                javaHome = "/Applications/Cove.app/Contents/runtime/Contents/Home",
+            ),
+        )
+    }
+
     // ---- lcNumericCategory ----
 
     @Test

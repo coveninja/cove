@@ -7,8 +7,8 @@
 
   <p>
     Cove brings a personal library, rich discovery, extensible sources, and
-    hardware-accelerated playback to Linux, Windows, and Android phones, tablets,
-    and televisions.
+    hardware-accelerated playback to Linux, Windows, macOS, and Android phones,
+    tablets, and televisions.
   </p>
 
   <p>
@@ -66,7 +66,7 @@
 | Windows | Available | Installer, portable ZIP | Verified in-app updates for both forms beginning with `1.0.0` |
 | Android phone/tablet | Preview | APK, Android 9+ | Verified APK through Android's package installer |
 | Android TV | Preview | Same APK, Android 9+ | Verified APK through Android's package installer |
-| macOS | Not available | — | No native build or packaging yet |
+| macOS (Apple silicon) | Available | Signed and notarized DMG | Manual release replacement |
 
 One APK serves both phones and televisions: `leanback` is declared optional, and
 the app selects the touch or ten-foot shell at runtime from `FEATURE_LEANBACK`.
@@ -128,6 +128,12 @@ Both distributions support signed, verified in-app updates beginning with
 > ZIP above and install it yourself; those older builds will not offer `1.0.0`
 > in-app, by design. Your library, profiles, and settings are preserved.
 
+### macOS
+
+Download `cove-macos-arm64.dmg`, open it, and drag Cove into Applications. The
+release bundle is signed, notarized, and includes libmpv and its native runtime
+dependencies; viewers do not need Homebrew or a separate API key.
+
 ### Android phone, tablet, and TV
 
 Download and install `cove-android.apk` on Android 9 (API 28) or newer. The same
@@ -145,7 +151,7 @@ release is signed with the same key and carries a higher version code.
 ### Prerequisites
 
 - JDK 21
-- libmpv (`mpv` on Arch/CachyOS or `libmpv-dev` on Debian/Ubuntu)
+- libmpv (`mpv` on Arch/CachyOS and Homebrew, or `libmpv-dev` on Debian/Ubuntu)
 - Android SDK platform and build-tools 36 for Android builds
 - A TMDB API key for live catalog data
 
@@ -177,6 +183,18 @@ Common development commands:
 | `make test` | Run the Kotlin test suites |
 | `make test-build` | Build the desktop image and Android debug APK |
 | `make test-all` | Run the broadest local approximation of CI |
+
+On macOS, Homebrew provides both required local dependencies and Gradle can
+create a native application bundle for the current Apple-silicon Mac:
+
+```sh
+brew install mpv
+brew install --cask temurin@21
+export JAVA_HOME="$(/usr/libexec/java_home -v 21)"
+cd app
+./gradlew :desktop:createDistributable --no-daemon
+open desktop/build/compose/binaries/main/app/Cove.app
+```
 
 Desktop configuration is loaded from environment variables, the nearest `.env`,
 and then bundled release properties. Android receives the same deployment values
