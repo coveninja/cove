@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.coveninja.Cove</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>GPL-3.0-or-later</project_license>
+  <project_license>AGPL-3.0-or-later</project_license>
   <name>Cove</name>
   <summary>Stream movies and TV shows</summary>
   <description>
@@ -12,9 +12,9 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.coveninja.Cove.desktop</launchable>
-  <url type="homepage">https://github.com/Arcadyi/cove</url>
+  <url type="homepage">https://github.com/coveninja/cove</url>
   <releases>
-    <release version="0.31.3" date="2026-08-03"/>
+    <release version="1.0.0" date="2026-08-18"/>
   </releases>
   <content_rating type="oars-1.1"/>
 </component>

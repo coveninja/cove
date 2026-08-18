@@ -1,9 +1,10 @@
 # Application updates
 
 Cove's in-process updater is available for Windows installer and portable
-builds, and for the Android phone/tablet APK. AUR installs remain owned by
-`pacman`; standalone Flatpak bundles are replaced manually. macOS and Android TV
-do not currently ship an updater.
+builds, and for the Android APK on phones, tablets, and televisions — one APK
+carries the updater and both shells wire the update overlay. AUR installs remain
+owned by `pacman`; standalone Flatpak bundles and tarballs are replaced manually.
+macOS does not currently ship an updater.
 
 Automatic updates are enabled per device by default. Cove checks shortly after
 launch and no more than once every 24 hours while the process remains open. It
@@ -28,8 +29,21 @@ mismatches. A staged payload is verified again after a process restart.
 On Windows, the verified detached NSIS helper waits for Cove to exit, backs up
 application-owned files, replaces them, and restarts Cove. A failed replacement
 rolls back before restart. Installed and portable distributions use distinct
-signed targets and marker files. A pre-`1.0.0` Windows installation needs one
-manual upgrade because those binaries do not contain the updater or mode marker.
+signed targets and marker files.
+
+A pre-`1.0.0` Windows installation must be upgraded by hand, and the release
+deliberately makes the old updater decline rather than try. Those builds shipped
+their own Go updater, which looked for an asset named exactly
+`cove-windows-amd64.zip` alongside a `.sha256` sibling and unpacked it over the
+install directory. That archive now holds a different application entirely — a
+Compose `Cove.exe` with `runtime/` and `app/`, rather than the Qt `cove_shell.exe`,
+the Go `cove.exe`, and `web/` — and the old shell's restart handshake
+(`cove.exe.new`, exit code 42) matches nothing in it, so applying it would leave
+an install that no longer starts. Publishing the portable archive as
+`cove-windows-amd64-portable.zip` means the old updater finds no matching asset
+and fails closed, which is why that name must not be changed back. The current
+updater is unaffected: it resolves the `windows-installer` and `windows-portable`
+targets from the signed manifest and never reads the portable archive.
 
 On Android, Cove additionally parses the APK before installation and requires a
 newer version code, the same package id, and exactly the installed signing
