@@ -4,6 +4,7 @@
 #   make run        # build, then launch the desktop app
 #   make mobile     # build the Android phone/tablet/TV APK (one artifact, all three)
 #   make run-tv     # launch the television shell in a desktop window (arrows = D-pad)
+#   make hot-tv     # the same, with hot reload — the loop for tweaking the TV UI
 #   make tv-avd     # create the Android TV emulator (once); then: emulator -avd cove-tv -gpu host
 #   make tv-install # build and install the APK on a running TV emulator or device
 #   make test       # Kotlin test suites
@@ -52,10 +53,12 @@ hot:
 run-tv:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:run --args="--backend-mode kotlin --tv"
 
-## Hot-reload loop for the television shell. hotRun owns its own process arguments, so the
-## shell is selected by environment variable rather than by --tv.
+## Hot-reload loop for the television shell: edit a Composable, save, see it on screen.
+## Passed as task arguments rather than an environment variable — hotRun forks its JVM from
+## the Gradle daemon, which inherits the environment the *daemon* started with, so an exported
+## COVE_UI is invisible to it on any warm daemon.
 hot-tv:
-	cd $(KOTLIN_DIR) && COVE_UI=tv ./gradlew :desktop:hotRun --auto
+	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto --args="--tv"
 
 ## Create the Android TV emulator once. Run it afterwards with:
 ##   emulator -avd $(TV_AVD) -gpu host
