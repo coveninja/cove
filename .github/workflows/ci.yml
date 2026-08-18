@@ -23,6 +23,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Test release-note filtering
         run: make test-release-notes
+      # release.yml only runs on a tag, so its key derivation, packaging and manifest steps
+      # are otherwise unexercised until the moment they matter. This rehearses them against a
+      # throwaway signing key and checks the results still satisfy the PKGBUILD, the Flatpak
+      # manifest, the NSIS script and the Kotlin updater's verifier.
+      - name: Rehearse the release workflow
+        run: make test-release
       - name: Install actionlint
         run: |
           curl -fsSL -o /tmp/actionlint.tar.gz \

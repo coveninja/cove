@@ -15,6 +15,8 @@
 #   make hot-onboarding-tv  # hot-reload loop for the television flow
 #   make test       # Kotlin test suites
 #   make test-all   # broad local CI approximation
+#   make test-release       # rehearse the release-only workflow steps locally
+#   make release-preflight  # the same, plus a GitHub secrets/variables check (needs gh)
 #   make patch      # bump patch version, stage all pending changes, commit, tag
 #                   # (optionally: make patch TITLE="..." MSG="..." to override the
 #                   # commit title / add a commit message body note)
@@ -27,7 +29,8 @@ TV_AVD      := cove-tv
 TV_IMAGE    := system-images;android-36;android-tv;x86_64
 
 .PHONY: all build run dev hot app mobile test test-kotlin test-all test-build \
-        test-workflows test-release-notes patch minor major clean \
+        test-workflows test-release-notes test-release release-preflight \
+        patch minor major clean \
         run-tv hot-tv tv-avd tv-install \
         onboarding onboarding-tv onboarding-mobile onboarding-tv-install \
         hot-onboarding hot-onboarding-tv
@@ -155,8 +158,24 @@ test: test-kotlin
 test-build:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:createDistributable :mobile:assembleDebug
 
+## Rehearse the release-only steps of .github/workflows/release.yml.
+##
+## ci.yml and release.yml share exactly one job. Key derivation, tarball and PKGBUILD
+## assembly, NSIS staging, and update-manifest generation and signing all run for the first
+## time when a tag is pushed — this runs them locally, against a throwaway signing key, and
+## checks their output still satisfies the PKGBUILD, the Flatpak manifest, the NSIS script
+## and the Kotlin updater's SignedManifestVerifier. Seconds, no build; run `make test-build`
+## first to check the real jpackage layout instead of a stub.
+test-release:
+	bash scripts/release-dry-run.sh
+
+## The same, plus GitHub secrets, variables and tag state. Needs an authenticated gh with
+## admin on the repo; run it before `make patch`.
+release-preflight:
+	bash scripts/release-dry-run.sh --remote
+
 ## Lint the GitHub Actions definitions.
-test-workflows: test-release-notes
+test-workflows: test-release-notes test-release
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required for full workflow linting (Arch: sudo pacman -S shellcheck)."; exit 1; }
 	@command -v actionlint >/dev/null 2>&1 || { echo "actionlint is required for workflow linting."; exit 1; }
 	bash scripts/workflow-local-actions_test.sh
