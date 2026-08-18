@@ -26,6 +26,16 @@ class LaunchOptionsTest {
         // The combination the TV shell is actually developed with.
         arrayOf("--tv", "--backend-mode", "kotlin") to
             LaunchOptions(tv = true, backendMode = BackendMode.Kotlin),
+        arrayOf("--onboarding") to
+            LaunchOptions(onboarding = true),
+        // What `make onboarding-tv` runs: the first-run flow, in the television shell,
+        // against fixtures so no TMDB key is needed to look at it.
+        arrayOf("--backend-mode", "fixtures", "--tv", "--onboarding") to
+            LaunchOptions(
+                backendMode = BackendMode.Fixtures,
+                tv = true,
+                onboarding = true,
+            ),
         // Multiple flags together
         arrayOf("--software-renderer", "--smoke-seconds", "5") to
             LaunchOptions(softwareRenderer = true, smokeSeconds = 5),
@@ -89,6 +99,21 @@ class LaunchOptionsTest {
         for (args in listOf(
             arrayOf("--tv", "--play", "/tmp/movie.mkv"),
             arrayOf("--tv", "--export-legacy"),
+        )) {
+            assertFailsWith<IllegalArgumentException>("expected rejection of ${args.toList()}") {
+                LaunchOptions.parse(args)
+            }
+        }
+    }
+
+    // Same reasoning as --tv: --play opens a bare video window with no navigation shell and
+    // --export-legacy opens no window at all, so neither has a UI for the onboarding flow to
+    // render in. Accepting the combination would silently ignore one of the two flags.
+    @Test
+    fun `the onboarding harness rejects modes that have no UI to show it in`() {
+        for (args in listOf(
+            arrayOf("--onboarding", "--play", "/tmp/movie.mkv"),
+            arrayOf("--onboarding", "--export-legacy"),
         )) {
             assertFailsWith<IllegalArgumentException>("expected rejection of ${args.toList()}") {
                 LaunchOptions.parse(args)

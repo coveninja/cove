@@ -123,6 +123,39 @@ object CoveColors {
         val Preview = Color(0xFF3FA9D6)
     }
 
+    /**
+     * The green ramp, deepest to palest.
+     *
+     * An ordered ramp rather than a set of roles, because nothing here means anything — it is
+     * the family the onboarding backdrop draws its wall of cards from, and what it needs is
+     * shades that read as *varied* while still reading as one colour. Cove is a green app; a
+     * backdrop cycling through seven unrelated hues looked like a colour test.
+     *
+     * Two of the six are the app's existing greens rather than near-misses of them:
+     * [Brand.Accent] and [Segment.Credits] sit at steps 4 and 3. Picking new values a few points
+     * away from those would have put three almost-identical greens in the palette with nothing
+     * to say which was which.
+     *
+     * Ordered by luminance, and `CoveColorsTest` holds that: a ramp that does not climb is not a
+     * ramp, and a consumer picking "two steps lighter" would silently get something darker.
+     */
+    object Seafoam {
+        /** Deep pine, nearly submerged against the page. */
+        val Deepest = Color(0xFF146B4A)
+        val Deep = Color(0xFF1E8E63)
+        /** The player's credits marker: green with the first hint of teal. */
+        val Mid = Segment.Credits
+        /** The brand accent itself. */
+        val Bright = Brand.Accent
+        /** Where the ramp turns properly seafoam. */
+        val Pale = Color(0xFF6EE7B7)
+        /** Pale mint; the lightest step that still has colour in it. */
+        val Palest = Color(0xFFA7F3D0)
+
+        /** The ramp in order, for anything that wants to walk or sample it. */
+        val ramp: List<Color> = listOf(Deepest, Deep, Mid, Bright, Pale, Palest)
+    }
+
     /** Scrim behind a modal surface. Artwork gradients build their own from this. */
     val Scrim = Color(0xFF000000)
 }

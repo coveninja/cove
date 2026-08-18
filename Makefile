@@ -7,6 +7,11 @@
 #   make hot-tv     # the same, with hot reload — the loop for tweaking the TV UI
 #   make tv-avd     # create the Android TV emulator (once); then: emulator -avd cove-tv -gpu host
 #   make tv-install # build and install the APK on a running TV emulator or device
+#   make onboarding # open the first-run flow on the desktop shell (design harness)
+#   make onboarding-tv      # the same flow in the television shell
+#   make onboarding-mobile  # build, install and open it on an Android device/emulator
+#   make hot-onboarding     # hot-reload loop for the desktop flow
+#   make hot-onboarding-tv  # hot-reload loop for the television flow
 #   make test       # Kotlin test suites
 #   make test-all   # broad local CI approximation
 #   make patch      # bump patch version, stage all pending changes, commit, tag
@@ -22,7 +27,8 @@ TV_IMAGE    := system-images;android-36;android-tv;x86_64
 
 .PHONY: all build run dev hot app mobile test test-kotlin test-all test-build \
         test-workflows test-release-notes patch minor major clean \
-        run-tv hot-tv tv-avd tv-install
+        run-tv hot-tv tv-avd tv-install \
+        onboarding onboarding-tv onboarding-mobile hot-onboarding hot-onboarding-tv
 
 all: build
 
@@ -77,6 +83,78 @@ tv-avd:
 ## Build the debug APK and install it on the running TV emulator or device.
 tv-install: mobile
 	adb install -r $(KOTLIN_DIR)/mobile/build/outputs/apk/debug/mobile-debug.apk
+
+# ── First-run onboarding ──────────────────────────────────────────────────────
+#
+# The flow only appears once per profile: `AppSettings.onboardingDone` is OR-merged on every
+# write path in LocalSettingsRepository, so once it is true nothing can put it back. That makes
+# a launch override the only way to look at the screen a second time, which is what
+# `--onboarding` is for. Choices made under it are still written; the flag itself is not, so the
+# harness stays repeatable.
+#
+# Fixtures by default, so no TMDB_API_KEY is needed to look at the layout. Pass BACKEND=kotlin
+# for real posters, real genres and an addon field that actually installs something:
+#
+#   make onboarding BACKEND=kotlin
+BACKEND ?= fixtures
+
+## The first-run flow in the desktop shell.
+onboarding:
+	cd $(KOTLIN_DIR) && ./gradlew :desktop:run --args="--backend-mode $(BACKEND) --onboarding"
+
+## The first-run flow in the television shell. Arrows are the D-pad, Enter is OK, Escape is Back.
+onboarding-tv:
+	cd $(KOTLIN_DIR) && ./gradlew :desktop:run --args="--backend-mode $(BACKEND) --tv --onboarding"
+
+## Hot-reload loop for the desktop flow — edit a step, save, see it.
+hot-onboarding:
+	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto --args="--backend-mode $(BACKEND) --onboarding"
+
+## Hot-reload loop for the television flow.
+hot-onboarding-tv:
+	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto --args="--backend-mode $(BACKEND) --tv --onboarding"
+
+## Build, install and open the flow on a connected Android device or emulator.
+##
+## Both extras are read only when BuildConfig.DEBUG is set, so nothing here is reachable from a
+## release build. The fixtures extra reuses the benchmark's FixtureAppGraph path, which is what
+## lets the preview run without a TMDB key compiled into the APK — pass FIXTURES=false to use
+## the real backend instead. One APK serves phones and televisions, so this opens whichever
+## shell the device reports.
+##
+## The APK is built for the connected device's own ABI rather than all four. mpv, FFmpeg,
+## jlibtorrent and the Python runtime come to ~200 MB of native code across arm64-v8a,
+## armeabi-v7a, x86 and x86_64, giving a 181 MB debug APK of which any one device uses a
+## quarter — enough to fail outright with INSTALL_FAILED_INSUFFICIENT_STORAGE on an emulator
+## with a few hundred MB free, since the install needs room for the old copy, the staged APK
+## and the extracted libraries at once. Narrowing to the one ABI that will actually run halves
+## the APK and makes the install fit. Override with ABI=arm64-v8a, or ABI=all for every one.
+FIXTURES ?= true
+ABI ?=
+onboarding-mobile:
+	@command -v adb >/dev/null 2>&1 || { echo "adb is not on PATH (Android SDK platform-tools)."; exit 1; }
+	@adb get-state >/dev/null 2>&1 || { echo "No device or emulator is connected — start one, then re-run."; exit 1; }
+	@abi="$(ABI)"; \
+	  if [ -z "$$abi" ]; then abi=$$(adb shell getprop ro.product.cpu.abi | tr -d '\r'); fi; \
+	  if [ "$$abi" = "all" ] || [ -z "$$abi" ]; then \
+	    echo "Building for every ABI."; \
+	    (cd $(KOTLIN_DIR) && ./gradlew :mobile:assembleDebug); \
+	  else \
+	    echo "Building for $$abi (the connected device's ABI)."; \
+	    (cd $(KOTLIN_DIR) && ./gradlew :mobile:assembleDebug -PcoveAbi="$$abi"); \
+	  fi
+	@apk=$(KOTLIN_DIR)/mobile/build/outputs/apk/debug/mobile-debug.apk; \
+	  adb install -r "$$apk" || { \
+	    echo ""; \
+	    echo "Install failed. If it was for storage, the emulator's /data is full:"; \
+	    adb shell df -h /data/user/0 2>/dev/null || true; \
+	    echo "Free some up with:  adb uninstall com.coveninja.cove"; \
+	    echo "or give the AVD a bigger data partition in Device Manager."; \
+	    exit 1; \
+	  }
+	adb shell am start -n com.coveninja.cove/.MainActivity \
+	  --ez com.coveninja.cove.SHOW_ONBOARDING true \
+	  --ez com.coveninja.cove.ONBOARDING_FIXTURES $(FIXTURES)
 
 ## Kotlin (shared KMP + desktop JVM + Android host) test suite.
 test-kotlin:

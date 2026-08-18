@@ -15,6 +15,15 @@ data class LaunchOptions(
      * exercised here without an emulator in the loop.
      */
     val tv: Boolean = false,
+    /**
+     * Open the first-run flow, whatever this profile's settings say.
+     *
+     * A design harness, like [tv]. `onboardingDone` is OR-merged on every write path in
+     * `LocalSettingsRepository`, so once a profile has completed onboarding nothing can put the
+     * flag back — this flag is the only way to see the screen a second time against a real
+     * backend. Choices made in this mode are still written; the flag itself is not.
+     */
+    val onboarding: Boolean = false,
 ) {
     companion object {
         private val knownFlags = setOf(
@@ -22,6 +31,7 @@ data class LaunchOptions(
             "--backend-mode",
             "--export-legacy",
             "--tv",
+            "--onboarding",
         )
 
         fun parse(args: Array<String>): LaunchOptions {
@@ -32,6 +42,7 @@ data class LaunchOptions(
             var backendMode: BackendMode? = null
             var exportLegacy = false
             var tv = false
+            var onboarding = false
 
             var i = 0
             while (i < args.size) {
@@ -43,6 +54,7 @@ data class LaunchOptions(
                     "--software-renderer" -> softwareRenderer = true
                     "--export-legacy" -> exportLegacy = true
                     "--tv" -> tv = true
+                    "--onboarding" -> onboarding = true
                     else -> {
                         // All other known flags take exactly one argument.
                         val value = args.getOrNull(i + 1)
@@ -73,6 +85,11 @@ data class LaunchOptions(
             require(!tv || (playFile == null && !exportLegacy)) {
                 "--tv cannot be combined with --play or --export-legacy"
             }
+            // Same reasoning as --tv: --play is a bare video window with no navigation shell
+            // and --export-legacy never opens one, so neither has a UI to show onboarding in.
+            require(!onboarding || (playFile == null && !exportLegacy)) {
+                "--onboarding cannot be combined with --play or --export-legacy"
+            }
             return LaunchOptions(
                 playFile = playFile,
                 apiBase = apiBase,
@@ -81,6 +98,7 @@ data class LaunchOptions(
                 backendMode = backendMode,
                 exportLegacy = exportLegacy,
                 tv = tv,
+                onboarding = onboarding,
             )
         }
     }

@@ -69,8 +69,19 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         val mobileApplication = application as CoveMobileApplication
-        val fixtureMode = BuildConfig.BENCHMARK_FIXTURE &&
-            intent.getBooleanExtra(BENCHMARK_FIXTURE_EXTRA, false)
+        // Debug-only design harnesses, mirroring the desktop's --onboarding flag. Gated on
+        // BuildConfig.DEBUG rather than shipped behind a preference: nothing here should be
+        // reachable in a release build, and a flag that only exists in debug cannot be.
+        val forceOnboarding = BuildConfig.DEBUG &&
+            intent.getBooleanExtra(SHOW_ONBOARDING_EXTRA, false)
+        val onboardingFixtures = BuildConfig.DEBUG &&
+            intent.getBooleanExtra(ONBOARDING_FIXTURES_EXTRA, false)
+        // Reuses the benchmark's fixture path so a preview needs no TMDB key baked into the
+        // APK — the flow's poster wall wants artwork, not a live catalog.
+        val fixtureMode = (
+            BuildConfig.BENCHMARK_FIXTURE &&
+                intent.getBooleanExtra(BENCHMARK_FIXTURE_EXTRA, false)
+            ) || onboardingFixtures
         val fixtureLowPerformance = fixtureMode &&
             intent.getBooleanExtra(BENCHMARK_LOW_PERFORMANCE_EXTRA, false)
         if (!fixtureMode) mobileApplication.initializeBackend()
@@ -83,11 +94,12 @@ class MainActivity : ComponentActivity() {
                         reportFullyDrawn()
                     }
                     if (isTelevision) {
-                        CoveTvApp(graph = graph)
+                        CoveTvApp(graph = graph, forceOnboarding = forceOnboarding)
                     } else {
                         CoveApp(
                             graph = graph,
                             navBarPlacement = NavBarPlacement.Bottom,
+                            forceOnboarding = forceOnboarding,
                         )
                     }
                 } else {
@@ -111,6 +123,7 @@ class MainActivity : ComponentActivity() {
                                     videoPlayerHost = host,
                                     onFullscreenPlaybackVisibilityChanged =
                                         ::setFullscreenPlaybackVisible,
+                                    forceOnboarding = forceOnboarding,
                                 )
                             } else {
                                 CoveApp(
@@ -119,6 +132,7 @@ class MainActivity : ComponentActivity() {
                                     navBarPlacement = NavBarPlacement.Bottom,
                                     onDetailsOverlayVisibilityChanged = ::setDetailsOverlayVisible,
                                     onFullscreenPlaybackVisibilityChanged = ::setFullscreenPlaybackVisible,
+                                    forceOnboarding = forceOnboarding,
                                 )
                             }
                         }
@@ -159,8 +173,15 @@ class MainActivity : ComponentActivity() {
         // Picture-in-picture is a phone gesture. Leaving Cove on a television means pressing
         // Home on a remote, where a shrinking window in the corner of someone's living room
         // is a surprise rather than a convenience.
+        // `::playerHost.isInitialized` is not belt-and-braces: a fixture run never builds one,
+        // and playback can still report itself fullscreen there because PlaybackSession does not
+        // need a host to open. Reaching for `playerHost` then throws
+        // UninitializedPropertyAccessException on the way out of the app. Previously that was
+        // only reachable from a benchmark build; the onboarding preview brings the fixture path
+        // into ordinary debug builds, so the guard has to be real.
         if (!isTelevision && Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-            fullscreenPlaybackVisible && playerHost.status.value.hasMedia
+            fullscreenPlaybackVisible && ::playerHost.isInitialized &&
+            playerHost.status.value.hasMedia
         ) {
             enterPictureInPictureMode(pictureInPictureParams())
         }
@@ -218,5 +239,11 @@ class MainActivity : ComponentActivity() {
         const val BENCHMARK_FIXTURE_EXTRA = "com.coveninja.cove.BENCHMARK_FIXTURE"
         const val BENCHMARK_LOW_PERFORMANCE_EXTRA =
             "com.coveninja.cove.BENCHMARK_LOW_PERFORMANCE"
+
+        /** Debug-only: re-open the first-run flow. See `make onboarding-mobile`. */
+        const val SHOW_ONBOARDING_EXTRA = "com.coveninja.cove.SHOW_ONBOARDING"
+
+        /** Debug-only: run that preview against fixtures, so no TMDB key is needed. */
+        const val ONBOARDING_FIXTURES_EXTRA = "com.coveninja.cove.ONBOARDING_FIXTURES"
     }
 }

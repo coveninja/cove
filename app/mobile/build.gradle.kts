@@ -62,6 +62,28 @@ android {
         versionName = coveVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // Opt-in ABI narrowing for local installs: -PcoveAbi=x86_64 (or a comma-separated
+        // list) builds native code for those ABIs alone.
+        //
+        // Nothing is filtered by default, so release builds and CI keep shipping all four.
+        // The reason this exists is install size on an emulator: mpv, FFmpeg, jlibtorrent and
+        // the Python runtime come to ~200 MB of .so across arm64-v8a, armeabi-v7a, x86 and
+        // x86_64, which is a 181 MB debug APK of which an emulator can use a quarter. That is
+        // enough to fail with INSTALL_FAILED_INSUFFICIENT_STORAGE on an AVD with several
+        // hundred MB free — the install needs room for the old copy, the staged APK and the
+        // extracted libraries at the same time.
+        val requestedAbis = (findProperty("coveAbi") as String?)
+            ?.split(',')
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            .orEmpty()
+        if (requestedAbis.isNotEmpty()) {
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(requestedAbis)
+            }
+        }
+
         buildConfigField("boolean", "BENCHMARK_FIXTURE", "false")
         manifestPlaceholders["benchmarkControlEnabled"] = "false"
         buildConfigField("String", "TMDB_API_KEY", quotedBuildConfig(deploymentValue("TMDB_API_KEY")))

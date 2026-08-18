@@ -36,6 +36,8 @@ import com.coveninja.cove.shared.data.HomeState
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.ui.components.common.AppUpdateOverlay
 import com.coveninja.cove.ui.components.navigation.NavDestination
+import com.coveninja.cove.ui.onboarding.OnboardingGate
+import com.coveninja.cove.ui.tv.onboarding.TvOnboardingFlow
 import com.coveninja.cove.ui.model.toPerson
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.pages.common.LocalPageBottomClearance
@@ -102,6 +104,9 @@ fun CoveTvApp(
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
     // Desktop closes its graph after a verified detached updater starts.
     onUpdateExitRequested: () -> Unit = {},
+    // Re-opens the first-run flow on a device that has already been through it — the
+    // `--onboarding` harness, and nothing else.
+    forceOnboarding: Boolean = false,
 ) {
     val performance by graph.device.performance.collectAsState()
     LaunchedEffect(graph.updates) { graph.updates.start() }
@@ -124,10 +129,19 @@ fun CoveTvApp(
             LocalPageBottomClearance provides dimens.overscanVertical,
         ) {
             TvTheme(dimens) {
-                TvAppContent(
-                    onFullscreenPlaybackVisibilityChanged = onFullscreenPlaybackVisibilityChanged,
-                    onUpdateExitRequested = onUpdateExitRequested,
-                )
+                OnboardingGate(
+                    graph = graph,
+                    forced = forceOnboarding,
+                    flow = { preview, onFinished ->
+                        TvOnboardingFlow(preview = preview, onFinished = onFinished)
+                    },
+                ) {
+                    TvAppContent(
+                        onFullscreenPlaybackVisibilityChanged =
+                            onFullscreenPlaybackVisibilityChanged,
+                        onUpdateExitRequested = onUpdateExitRequested,
+                    )
+                }
             }
         }
     }

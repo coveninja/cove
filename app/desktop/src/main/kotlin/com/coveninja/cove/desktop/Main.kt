@@ -149,6 +149,7 @@ fun main(args: Array<String>) {
                                 graph = graph,
                                 videoPlayerHost = playerHost,
                                 onUpdateExitRequested = ::exitApplication,
+                                forceOnboarding = options.onboarding,
                             )
                         } else {
                             CoveApp(
@@ -156,6 +157,7 @@ fun main(args: Array<String>) {
                                 videoPlayerHost = playerHost,
                                 fullscreenController = fullscreen,
                                 onUpdateExitRequested = ::exitApplication,
+                                forceOnboarding = options.onboarding,
                             )
                         }
                     }

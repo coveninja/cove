@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -50,6 +51,42 @@ class CoveColorsTest {
         assertEquals(CoveColors.Status.Danger, CoveColors.Category.Dropped)
         assertEquals(CoveColors.Status.Info, CoveColors.Category.Watching)
         assertEquals(CoveColors.Status.Warning, CoveColors.Category.WatchLater)
+    }
+
+    @Test
+    fun `the green ramp climbs`() {
+        // A ramp that does not climb is not a ramp. Anything reaching for "two steps lighter"
+        // would silently get something darker, and the onboarding backdrop leans on the spread
+        // for the sense of depth in its wall of cards.
+        // Mutation check: swapping Seafoam.Pale and Seafoam.Deep fails the ordering.
+        CoveColors.Seafoam.ramp.zipWithNext { darker, lighter ->
+            assertTrue(
+                darker.luminance() < lighter.luminance(),
+                "expected $darker to be darker than $lighter",
+            )
+        }
+    }
+
+    @Test
+    fun `the green ramp stays one hue family`() {
+        // The point of the ramp is that six shades read as one colour. Green has to dominate in
+        // every step, or a "shade" has drifted into being a different hue and the backdrop is
+        // back to looking like a colour test.
+        // Mutation check: pointing any step at Status.Warning or Segment.Recap fails this.
+        CoveColors.Seafoam.ramp.forEach { shade ->
+            assertTrue(shade.green > shade.red, "$shade is not green-dominant")
+            assertTrue(shade.green > shade.blue, "$shade is not green-dominant")
+        }
+    }
+
+    @Test
+    fun `the green ramp reuses the greens Cove already has`() {
+        // Two steps are the app's existing greens rather than near-misses of them. New values a
+        // few points away would put three almost-identical greens in the palette with nothing to
+        // say which was which — and the backdrop would drift away from the brand as either moved.
+        // Mutation check: giving Seafoam.Bright its own hex fails this.
+        assertEquals(CoveColors.Brand.Accent, CoveColors.Seafoam.Bright)
+        assertEquals(CoveColors.Segment.Credits, CoveColors.Seafoam.Mid)
     }
 
     @Test

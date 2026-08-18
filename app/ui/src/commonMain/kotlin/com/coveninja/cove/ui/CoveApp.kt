@@ -73,6 +73,8 @@ import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.Person
 import com.coveninja.cove.ui.model.toMedia
 import com.coveninja.cove.ui.model.toUiMedia
+import com.coveninja.cove.ui.onboarding.OnboardingFlow
+import com.coveninja.cove.ui.onboarding.OnboardingGate
 import com.coveninja.cove.ui.pages.explore.ExplorePage
 import com.coveninja.cove.ui.pages.explore.rememberExploreController
 import com.coveninja.cove.ui.pages.explore.rememberExplorePageState
@@ -212,6 +214,9 @@ fun CoveApp(
     // Desktop closes its graph and releases the single-instance lock after a verified
     // detached updater has started. Android's PackageInstaller does not use this.
     onUpdateExitRequested: () -> Unit = {},
+    // Re-opens the first-run flow on a device that has already been through it — the
+    // `--onboarding` harness, and nothing else. See OnboardingController's `preview`.
+    forceOnboarding: Boolean = false,
 ) {
     val performance by graph.device.performance.collectAsState()
     LaunchedEffect(graph.updates) { graph.updates.start() }
@@ -245,12 +250,20 @@ fun CoveApp(
                 0.dp
             },
         ) {
-            CoveAppContent(
-                resolvedPlacement,
-                onDetailsOverlayVisibilityChanged,
-                onFullscreenPlaybackVisibilityChanged,
-                onUpdateExitRequested,
-            )
+            OnboardingGate(
+                graph = graph,
+                forced = forceOnboarding,
+                flow = { preview, onFinished ->
+                    OnboardingFlow(preview = preview, onFinished = onFinished)
+                },
+            ) {
+                CoveAppContent(
+                    resolvedPlacement,
+                    onDetailsOverlayVisibilityChanged,
+                    onFullscreenPlaybackVisibilityChanged,
+                    onUpdateExitRequested,
+                )
+            }
         }
     }
 }
