@@ -94,6 +94,9 @@ fun InlineVideoPlayer(
     // filling the room, and hunting for a hidden bar inside it is worse than
     // giving up the last few pixels of it.
     val chromeVisible = hovered || status.paused || !status.hasMedia
+    // An extra's URL is handed over the moment the slot opens, so the bar is on screen well
+    // before there is anything behind it to control.
+    val start = rememberPlaybackStart(status, request.extra?.url)
 
     Box(
         modifier = modifier
@@ -141,8 +144,10 @@ fun InlineVideoPlayer(
                             .fillMaxSize()
                             .pointerInput(Unit) {
                                 detectTapGestures(
-                                    onTap = { host.togglePause() },
-                                    // The convention every embedded player follows.
+                                    onTap = { if (start.started) host.togglePause() },
+                                    // The convention every embedded player follows, and the
+                                    // one thing here that is about the slot rather than the
+                                    // file — so it works while the file is still opening.
                                     onDoubleTap = {
                                         session.expandToFullscreen()
                                     },
@@ -185,7 +190,9 @@ fun InlineVideoPlayer(
                 }
 
                 AnimatedVisibility(
-                    visible = chromeVisible,
+                    // The close button above stays; the transport waits for something to
+                    // transport. Until then the slot is the thumbnail and a spinner.
+                    visible = chromeVisible && start.started,
                     modifier = Modifier.align(Alignment.BottomCenter),
                     enter = fadeIn(tween(120)),
                     exit = fadeOut(tween(180)),

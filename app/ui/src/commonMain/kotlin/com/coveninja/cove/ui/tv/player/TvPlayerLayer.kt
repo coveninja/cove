@@ -60,6 +60,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import com.coveninja.cove.shared.model.SegmentKind
 import com.coveninja.cove.ui.components.player.PlayerBackdrop
+import com.coveninja.cove.ui.components.player.rememberPlaybackStart
 import com.coveninja.cove.ui.components.player.PulsingLogo
 import com.coveninja.cove.ui.state.nextEpisodeAfter
 import com.coveninja.cove.ui.state.showUpNext
@@ -112,6 +113,15 @@ internal fun TvPlayerLayer(
     var activityPulse by remember { mutableStateOf(0) }
     var seekFeedback by remember { mutableStateOf<SeekFeedback?>(null) }
     var lastSeekAt by remember { mutableStateOf<TimeMark?>(null) }
+
+    // The phase turns Playing when the URL is handed over, which on a torrent is a long way
+    // before the first frame. Both the chrome and the remote wait for this.
+    val start = rememberPlaybackStart(
+        status,
+        request.media.id,
+        request.season,
+        request.episode,
+    )
 
     // Re-requested on every phase change rather than once: the layer composes while sources
     // are still resolving, so an early request can be taken back by whatever had focus on the
@@ -211,7 +221,22 @@ internal fun TvPlayerLayer(
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 activityPulse++
-                when (val action = tvKeyAction(event.key)) {
+                val action = tvKeyAction(event.key)
+                // Nothing below can be done to a file that is still opening: there is no
+                // position to seek, nothing to pause, and a bar summoned over the opening
+                // stage would take focus and answer to nothing. What is on screen then is
+                // that stage's own Cancel button, so centre and Back are handed down to it
+                // — while the arrows stay swallowed rather than going to the focus engine,
+                // which would walk focus onto the page hidden behind the overlay. Only the
+                // opening window: the earlier phases put a list on screen and are the focus
+                // engine's to arbitrate.
+                if (phase is PlaybackPhase.Playing && !start.started) {
+                    return@onPreviewKeyEvent when (action) {
+                        null, TvKeyAction.Select, TvKeyAction.Back -> false
+                        else -> true
+                    }
+                }
+                when (action) {
                     is TvKeyAction.Move -> when (
                         tvPlayerArrowOutcome(action.direction, controlsVisible, barHasFocus)
                     ) {
@@ -314,20 +339,10 @@ internal fun TvPlayerLayer(
             )
 
             is PlaybackPhase.Playing -> {
-                // Latched, because mpv drops hasMedia again at the end of a file and briefly
-                // whenever it reloads. Without the latch the opening stage slides back over a
-                // session that is playing perfectly well and hides the controls behind it.
-                var hasOpened by remember(request.media.id, request.season, request.episode) {
-                    mutableStateOf(false)
-                }
-                // Latched from an effect rather than during composition, which would be a write
-                // to state the same pass is reading. The frame it costs is invisible: while
-                // hasMedia is true the stage is hidden by the other half of the condition.
-                LaunchedEffect(status.hasMedia) {
-                    if (status.hasMedia) hasOpened = true
-                }
-
-                if (!status.hasMedia && !hasOpened) {
+                // The latch, not the live status alone: mpv drops hasMedia again at the end of
+                // a file and briefly whenever it reloads, and without it the opening stage
+                // slides back over a session that is playing perfectly well.
+                if (!status.hasMedia && !start.opened) {
                     TvStartingStage(
                         media = request.media,
                         source = phase.source,
@@ -390,7 +405,10 @@ internal fun TvPlayerLayer(
         }
 
         AnimatedVisibility(
-            visible = controlsVisible && phase is PlaybackPhase.Playing,
+            // Absent rather than disabled while the file opens. A bar on a television is
+            // reached by moving focus onto it, and focus parked on a dead button is a remote
+            // that has stopped working as far as the room can tell.
+            visible = controlsVisible && phase is PlaybackPhase.Playing && start.started,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn(tween(180)),
             exit = fadeOut(tween(160)) + slideOutVertically { it / 4 },

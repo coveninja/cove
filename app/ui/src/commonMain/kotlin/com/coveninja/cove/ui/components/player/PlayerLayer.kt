@@ -65,6 +65,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -158,6 +159,22 @@ fun PlayerLayer(
     // menu while it is being read.
     var controlsHeld by remember { mutableStateOf(false) }
 
+    // What a tap means depends on how the picture looked when the finger landed,
+    // and on whether it was a finger at all — both are recorded at press time,
+    // because the press itself wakes the controls long before the tap resolves.
+    var pressWasTouch by remember { mutableStateOf(false) }
+    var controlsShownAtPress by remember { mutableStateOf(true) }
+
+    // Nothing here can drive a file that has not opened yet, and the phase turns Playing
+    // the moment the URL is handed over — many seconds before the first frame on a
+    // torrent. Everything that acts on the player is gated on this.
+    val start = rememberPlaybackStart(
+        status,
+        request.media.id,
+        request.season,
+        request.episode,
+    )
+
     val settings = (LocalAppGraph.current.settings.settings.value as? SettingsState.Ready)?.settings
     val segments = session.timestamps.labelled()
     val currentSegment = segmentAt(status.positionSeconds, segments)
@@ -174,27 +191,45 @@ fun PlayerLayer(
     var statsVisible by remember { mutableStateOf(false) }
     var shortcutsVisible by remember { mutableStateOf(false) }
 
+    // Every command the player takes passes through here, and none of them is a
+    // question a file that is still opening can answer: there is no position to seek,
+    // no track to choose, nothing to pause. Gating the commands rather than the keys
+    // that carry them is what leaves the keys falling through as before — Tab and
+    // Enter still reach the Cancel button on the opening stage. Returns true so a key
+    // branch can be written as one call: the press was ours whether or not it did
+    // anything, and must not also reach the page underneath.
+    val onPlayer: (() -> Unit) -> Boolean = { action ->
+        if (start.started) action()
+        true
+    }
+
     // One place every jump goes through, so the burst on screen and the seek sent to
     // the player can never disagree about what happened.
     val jump: (Double) -> Unit = { delta ->
-        seekFeedback = accumulateSeekFeedback(
-            current = seekFeedback,
-            deltaSeconds = delta,
-            withinWindow = lastSeekAt?.elapsedNow()
-                ?.let { it < SEEK_FEEDBACK_WINDOW_MILLIS.milliseconds } == true,
-        )
-        lastSeekAt = TimeSource.Monotonic.markNow()
-        host?.seekRelative(delta)
+        onPlayer {
+            seekFeedback = accumulateSeekFeedback(
+                current = seekFeedback,
+                deltaSeconds = delta,
+                withinWindow = lastSeekAt?.elapsedNow()
+                    ?.let { it < SEEK_FEEDBACK_WINDOW_MILLIS.milliseconds } == true,
+            )
+            lastSeekAt = TimeSource.Monotonic.markNow()
+            host?.seekRelative(delta)
+        }
     }
 
     val changeVolume: (Double) -> Unit = { delta ->
-        host?.setVolume((status.volume + delta).coerceIn(0.0, 100.0))
-        volumePulse++
+        onPlayer {
+            host?.setVolume((status.volume + delta).coerceIn(0.0, 100.0))
+            volumePulse++
+        }
     }
 
     val toggleTransport: () -> Unit = {
-        host?.togglePause()
-        transportPulse++
+        onPlayer {
+            host?.togglePause()
+            transportPulse++
+        }
     }
 
     // The burst clears itself; nothing else is watching to take it away.
@@ -225,6 +260,12 @@ fun PlayerLayer(
         if (!skipped.add(segment.identity())) return@LaunchedEffect
         skipTarget(segment, status.positionSeconds, status.durationSeconds)
             ?.let { host?.seek(it) }
+    }
+    // A long open outlasts the auto-hide timer, so by the time there is something to
+    // control the timer has usually run out on a bar that was never on screen. One pulse
+    // puts it up at the moment it becomes worth showing, and restarts the timer with it.
+    LaunchedEffect(start.started) {
+        if (start.started) activityPulse++
     }
     LaunchedEffect(activityPulse, phase, controlsHeld) {
         controlsVisible = true
@@ -263,8 +304,8 @@ fun PlayerLayer(
                     }
                     Key.Spacebar, Key.K -> { toggleTransport(); true }
                     Key.F -> { fullscreen?.toggle(); true }
-                    Key.M -> {
-                        host?.setMuted(!status.muted); volumePulse++; true
+                    Key.M -> onPlayer {
+                        host?.setMuted(!status.muted); volumePulse++
                     }
                     // Relative, not position + step: the position here is whatever the
                     // last poll reported, so two presses inside one interval would both
@@ -280,24 +321,23 @@ fun PlayerLayer(
                     Key.DirectionDown -> { changeVolume(-VOLUME_STEP); true }
                     // Frame stepping only makes sense against a still picture, and
                     // mpv pauses itself on the first step anyway.
-                    Key.Comma -> { host?.stepFrame(-1); true }
-                    Key.Period -> { host?.stepFrame(1); true }
-                    Key.LeftBracket -> { host?.setSpeed(stepSpeed(status.speed, -1)); true }
-                    Key.RightBracket -> { host?.setSpeed(stepSpeed(status.speed, 1)); true }
-                    Key.Backspace -> { host?.setSpeed(1.0); true }
-                    Key.PageUp -> { host?.stepChapter(-1); true }
-                    Key.PageDown -> { host?.stepChapter(1); true }
-                    Key.MoveHome -> { host?.seek(0.0); true }
+                    Key.Comma -> onPlayer { host?.stepFrame(-1) }
+                    Key.Period -> onPlayer { host?.stepFrame(1) }
+                    Key.LeftBracket -> onPlayer { host?.setSpeed(stepSpeed(status.speed, -1)) }
+                    Key.RightBracket -> onPlayer { host?.setSpeed(stepSpeed(status.speed, 1)) }
+                    Key.Backspace -> onPlayer { host?.setSpeed(1.0) }
+                    Key.PageUp -> onPlayer { host?.stepChapter(-1) }
+                    Key.PageDown -> onPlayer { host?.stepChapter(1) }
+                    Key.MoveHome -> onPlayer { host?.seek(0.0) }
                     // The clamp inside the host keeps this clear of the last frame,
                     // which is the whole reason End is safe to offer at all.
-                    Key.MoveEnd -> { host?.seek(status.durationSeconds); true }
-                    Key.C -> { host?.selectSubtitleTrack(cycleTrack(status.subtitleTracks, status.selectedSubtitleId, allowOff = true)); true }
-                    Key.A -> {
+                    Key.MoveEnd -> onPlayer { host?.seek(status.durationSeconds) }
+                    Key.C -> onPlayer { host?.selectSubtitleTrack(cycleTrack(status.subtitleTracks, status.selectedSubtitleId, allowOff = true)) }
+                    Key.A -> onPlayer {
                         cycleTrack(status.audioTracks, status.selectedAudioId, allowOff = false)
                             ?.let { host?.selectAudioTrack(it) }
-                        true
                     }
-                    Key.S -> { host?.takeScreenshot(); true }
+                    Key.S -> onPlayer { host?.takeScreenshot() }
                     Key.I -> { statsVisible = !statsVisible; true }
                     // Bound to the key rather than to the shifted character. `?` is
                     // Shift+/ on some layouts, AltGr+something on others, and its own
@@ -305,10 +345,11 @@ fun PlayerLayer(
                     // is one fewer layout to be wrong about.
                     Key.Slash -> { shortcutsVisible = !shortcutsVisible; true }
                     else -> percentJumpFor(event.key)?.let { fraction ->
-                        if (status.durationSeconds > 0.0) {
-                            host?.seek(status.durationSeconds * fraction)
+                        onPlayer {
+                            if (status.durationSeconds > 0.0) {
+                                host?.seek(status.durationSeconds * fraction)
+                            }
                         }
-                        true
                     } ?: false
                 }
                 if (handled) activityPulse++
@@ -329,6 +370,10 @@ fun PlayerLayer(
                         // had it before.
                         if (event.type == PointerEventType.Press) {
                             takeFocus()
+                            pressWasTouch = event.changes.any {
+                                it.type == PointerType.Touch || it.type == PointerType.Stylus
+                            }
+                            controlsShownAtPress = controlsVisible || controlsHeld
                             // A phone has no hover movement to wake hidden controls.
                             // Treat the touch itself as activity before the tap is
                             // interpreted as pause, seek, or another player action.
@@ -381,11 +426,17 @@ fun PlayerLayer(
                             // detectTapGestures resolves this itself: onTap only
                             // fires once the double-tap window has closed, so a
                             // double tap never pauses on its way past.
-                            onTap = { toggleTransport() },
+                            onTap = {
+                                if (tapTogglesPause(pressWasTouch, controlsShownAtPress)) {
+                                    toggleTransport()
+                                }
+                            },
                             onDoubleTap = { offset ->
                                 when {
                                     offset.x < size.width * EDGE_TAP_FRACTION -> jump(-seekStep)
                                     offset.x > size.width * (1f - EDGE_TAP_FRACTION) -> jump(seekStep)
+                                    // Framing the window is not a player command, so unlike
+                                    // the two above it works while the file is still opening.
                                     else -> fullscreen?.toggle()
                                 }
                             },
@@ -489,26 +540,12 @@ fun PlayerLayer(
             }
 
             is PlaybackPhase.Playing -> {
-                // Latched once the file has opened. mpv drops hasMedia again at the
-                // end of a file — and briefly whenever it reloads — and without this
-                // the opening overlay would slide back over a session that is playing
-                // perfectly well, hiding the controls behind it. Anything that goes
-                // wrong after the first frame is the error banner's to report.
-                var hasOpened by remember(request.media.id, request.season, request.episode) {
-                    mutableStateOf(false)
-                }
-                // Latched from an effect rather than assigned during composition,
-                // which would be a write to state the same pass is reading. The frame
-                // it costs is invisible: while hasMedia is true the overlay is hidden
-                // by the first half of the condition anyway.
-                LaunchedEffect(status.hasMedia) {
-                    if (status.hasMedia) hasOpened = true
-                }
-
                 // mpv reports no media until the stream opens, which for a torrent
                 // means waiting on the first pieces. Without this the window is
-                // simply black for as long as that takes.
-                if (!status.hasMedia && !hasOpened) {
+                // simply black for as long as that takes. Anything that goes wrong
+                // after the first frame is the error banner's to report, which is why
+                // this asks the latch rather than the live status alone.
+                if (!status.hasMedia && !start.opened) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
@@ -775,7 +812,10 @@ fun PlayerLayer(
                 }
 
                 AnimatedVisibility(
-                    visible = controlsVisible,
+                    // Nothing to show until there is something to control: a transport
+                    // over a file that has not opened has no position to draw, no tracks
+                    // to list and nothing to pause.
+                    visible = controlsVisible && start.started,
                     modifier = Modifier.align(Alignment.BottomCenter),
                     enter = fadeIn(tween(120)) + slideInVertically { it / 4 },
                     exit = fadeOut(tween(220)) + slideOutVertically { it / 4 },
@@ -785,7 +825,7 @@ fun PlayerLayer(
                         status = status,
                         segments = segments,
                         onTogglePause = toggleTransport,
-                        onSeek = { host?.seek(it) },
+                        onSeek = { seconds -> onPlayer { host?.seek(seconds) } },
                         onShowShortcuts = { shortcutsVisible = !shortcutsVisible },
                         onSetVolume = { host?.setVolume(it) },
                         onSetMuted = { host?.setMuted(it) },

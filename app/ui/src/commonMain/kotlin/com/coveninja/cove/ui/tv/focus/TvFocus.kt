@@ -5,7 +5,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,12 +15,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -38,8 +39,8 @@ object TvFocusDefaults {
      */
     val RingWidth = 3.dp
 
-    /** The halo behind the ring. Colour plus lift is what separates focus from a mere border. */
-    val GlowElevation = 14.dp
+    /** The halo around the ring: the same accent, wider and fainter. */
+    val HaloWidth = 10.dp
 
     /** A poster grows noticeably; a button in a row of buttons only nudges. */
     const val CardScale = 1.08f
@@ -84,15 +85,33 @@ fun Modifier.tvFocusVisuals(
             scaleX = animatedScale
             scaleY = animatedScale
         }
-        .shadow(
-            elevation = TvFocusDefaults.GlowElevation * ringAlpha,
-            shape = shape,
-            clip = false,
-            ambientColor = ringColor,
-            spotColor = ringColor,
-        )
-        .border(TvFocusDefaults.RingWidth, ringColor.copy(alpha = ringAlpha), shape)
+        // Drawn after the content, not before it. `Modifier.border` paints at its own position
+        // in the chain, so anything a call site adds afterwards — a clip and a background, which
+        // is exactly what a card adds — fills the same rounded rect and buries the ring under
+        // the poster. Stroking the outline in drawWithContent puts it on top whatever follows.
+        .drawWithContent {
+            drawContent()
+            if (ringAlpha <= 0.01f) return@drawWithContent
+            val outline = shape.createOutline(size, layoutDirection, this)
+            // The halo is a wider, fainter stroke of the same accent rather than a shadow.
+            // Modifier.shadow only honours ambientColor/spotColor on newer Android and is
+            // unreliable even there — it rendered as an ordinary black drop shadow, which was
+            // the only part of "focus" that could actually be seen.
+            drawOutline(
+                outline = outline,
+                color = ringColor.copy(alpha = HALO_ALPHA * ringAlpha),
+                style = Stroke(width = TvFocusDefaults.HaloWidth.toPx()),
+            )
+            drawOutline(
+                outline = outline,
+                color = ringColor.copy(alpha = ringAlpha),
+                style = Stroke(width = TvFocusDefaults.RingWidth.toPx()),
+            )
+        }
 }
+
+/** Faint enough to read as light around the ring rather than as a second edge. */
+private const val HALO_ALPHA = 0.3f
 
 /**
  * A focusable, selectable surface: the standard unit the TV shell is built out of.

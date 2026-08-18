@@ -38,6 +38,7 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.state.MediaChapter
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.platform.hasHardwareKeyboard
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.VideoScaling
 import kotlin.math.abs
@@ -235,7 +236,8 @@ fun PlayerControls(
                 }
                 // The keyboard map, which is otherwise reachable only by pressing the
                 // key that opens it — which is the thing it exists to tell you about.
-                if (!compact) {
+                // Nothing to tell a touch screen, which has no keys to press.
+                if (!compact && hasHardwareKeyboard) {
                     ControlButton(icon = "lucide:keyboard", onClick = onShowShortcuts)
                 }
 

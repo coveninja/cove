@@ -148,7 +148,7 @@ internal fun TvSideRail(
             modifier = Modifier.padding(start = RailInset, end = 10.dp),
             horizontalAlignment = Alignment.Start,
         ) {
-            TvRailMark(expanded = expanded)
+            TvRailMark()
             Spacer(modifier = Modifier.height(18.dp))
 
             Box {
@@ -203,34 +203,18 @@ internal fun TvSideRail(
 /**
  * Cove's mark, at the head of the rail.
  *
- * Small, and the only thing here that is not a control. A rail that is nothing but five icons
- * reads as a toolbar; one thing that says whose app this is turns it into a place.
+ * Centred over the same column the destination icons occupy, so it sits directly above them and
+ * — like them — does not move when the rail opens. No wordmark: the rail is five glyphs and a
+ * logo, and a name beside it only appears when the rail is expanded, which means the one fixed
+ * thing at the top of the navigation would change shape every time navigation was entered.
  */
 @Composable
-private fun TvRailMark(expanded: Boolean) {
-    val reducedMotion = LocalMotionPolicy.current.reducedMotion
-    val labelAlpha by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = if (reducedMotion) snap() else tween(durationMillis = 180, delayMillis = 60),
-        label = "TvRailMarkLabel",
-    )
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier.size(RowHeight),
-            contentAlignment = Alignment.Center,
-        ) {
-            CoveLogo(modifier = Modifier.size(30.dp))
-        }
-        if (expanded) {
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Cove",
-                style = MaterialTheme.typography.titleMedium,
-                color = CoveColors.Neutral.Text,
-                modifier = Modifier.graphicsLayer { alpha = labelAlpha },
-            )
-        }
+private fun TvRailMark() {
+    Box(
+        modifier = Modifier.size(RowHeight),
+        contentAlignment = Alignment.Center,
+    ) {
+        CoveLogo(modifier = Modifier.size(32.dp))
     }
 }
 

@@ -278,6 +278,7 @@ class AndroidMpvVideoPlayerHost(
             MPVLib.setPropertyString("vo", "gpu")
             surfaceReady = true
             performPendingLoad()
+            refreshStillFrame()
         }.onFailure { error ->
             surfaceReady = false
             _status.value = _status.value.copy(
@@ -291,6 +292,7 @@ class AndroidMpvVideoPlayerHost(
     internal fun onSurfaceChanged(width: Int, height: Int) = onMain {
         if (initialized && surfaceReady) {
             MPVLib.setPropertyString("android-surface-size", "${width.coerceAtLeast(1)}x${height.coerceAtLeast(1)}")
+            refreshStillFrame()
         }
     }
 
@@ -299,6 +301,31 @@ class AndroidMpvVideoPlayerHost(
         surfaceReady = false
         runCatching { MPVLib.setPropertyString("vo", "null") }
         runCatching { MPVLib.detachSurface() }
+    }
+
+    /**
+     * Put the paused picture back on screen after the surface geometry changes.
+     *
+     * A rotation hands the SurfaceView freshly allocated buffers whose contents are
+     * undefined, and mpv writes into them only when it has a frame to show — which,
+     * while paused, never happens. The image stays torn until playback resumes. A
+     * rotation also arrives as several size changes in a row, hence the debounce.
+     */
+    private fun refreshStillFrame() {
+        main.removeCallbacks(redrawStillFrame)
+        main.postDelayed(redrawStillFrame, STILL_FRAME_DELAY_MILLIS)
+    }
+
+    /**
+     * An exact seek of zero, which is the cheapest way to make mpv render again: it
+     * re-displays the frame already on screen without moving the position, and the
+     * demuxer answers it from the cache it has already read. Only while paused —
+     * playback redraws itself, and a seek would interrupt it for nothing.
+     */
+    private val redrawStillFrame = Runnable {
+        if (!initialized || !surfaceReady || !fileLoaded) return@Runnable
+        if (!_status.value.paused || _status.value.endReached) return@Runnable
+        command("seek", "0", "exact")
     }
 
     private fun ensureInitialized() {
@@ -595,6 +622,9 @@ class AndroidMpvVideoPlayerHost(
     private companion object {
         const val MPV_LOG_TAG = "CoveMpv"
         const val SEEK_DEBOUNCE_MILLIS = 40L
+
+        /** Long enough for a rotation's burst of surface changes to settle. */
+        const val STILL_FRAME_DELAY_MILLIS = 120L
         val SYSTEM_FONTS = listOf(
             "/system/fonts/Roboto-Regular.ttf",
             "/system/fonts/NotoSans-Regular.ttf",

@@ -8,3 +8,6 @@ package com.coveninja.cove.ui.platform
  * treating a mouse-equipped tablet as touch-only merely shows them all the time.
  */
 actual val hasPointerHover: Boolean = false
+
+/** True only where a keyboard is part of the device, which on Android it never is. */
+actual val hasHardwareKeyboard: Boolean = false

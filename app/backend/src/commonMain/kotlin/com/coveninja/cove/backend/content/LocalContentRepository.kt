@@ -63,7 +63,7 @@ class LocalContentRepository(
             _home.value = HomeState.Ready(movieItems + tvItems)
             _explore.value = ExploreState.Ready(movieItems, tvItems)
         } catch (error: Exception) {
-            val message = error.message ?: "Unknown error loading discover"
+            val message = describeContentFailure(error, "Unknown error loading discover")
             _home.value = HomeState.Failed(message)
             _explore.value = ExploreState.Failed(message)
         }
@@ -82,7 +82,8 @@ class LocalContentRepository(
                 people = results.people,
             )
         } catch (error: Exception) {
-            _searchResults.value = SearchState.Failed(error.message ?: "Unknown error searching")
+            _searchResults.value =
+                SearchState.Failed(describeContentFailure(error, "Unknown error searching"))
         }
     }
 
