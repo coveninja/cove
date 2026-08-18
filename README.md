@@ -7,7 +7,8 @@
 
   <p>
     Cove brings a personal library, rich discovery, extensible sources, and
-    hardware-accelerated playback to Linux, Windows, and Android phones and tablets.
+    hardware-accelerated playback to Linux, Windows, and Android phones, tablets,
+    and televisions.
   </p>
 
   <p>
@@ -61,11 +62,14 @@
 
 | Platform | Status | Distribution | Update path |
 |---|---|---|---|
-| Linux | Available | AUR, Flatpak | `cove-bin` through `pacman`; standalone Flatpak bundles are manual |
+| Linux | Available | AUR, Flatpak, tarball | `cove-bin` through `pacman`; Flatpak bundles and tarballs are replaced manually |
 | Windows | Available | Installer, portable ZIP | Verified in-app updates for both forms beginning with `1.0.0` |
 | Android phone/tablet | Preview | APK, Android 9+ | Verified APK through Android's package installer |
-| Android TV | Planned | — | Dedicated ten-foot/D-pad host is not packaged yet |
+| Android TV | Preview | Same APK, Android 9+ | Verified APK through Android's package installer |
 | macOS | Not available | — | No native build or packaging yet |
+
+One APK serves both phones and televisions: `leanback` is declared optional, and
+the app selects the touch or ten-foot shell at runtime from `FEATURE_LEANBACK`.
 
 ## Installation
 
@@ -93,23 +97,48 @@ flatpak run io.github.coveninja.Cove
 
 Standalone Flatpak bundles are replaced manually when a new version is released.
 
+### Other Linux distributions
+
+Download `cove-linux-amd64.tar.gz` from the latest release. It carries its own
+Java runtime and expects `mpv` and `yt-dlp` from your distribution. The bundled
+`bin/cove` launcher resolves the application through an absolute
+`/usr/lib/cove` path, so `/usr` is the only prefix it works under:
+
+```sh
+sudo tar -xzf cove-linux-amd64.tar.gz -C /usr
+cove
+```
+
+Tarball installations are replaced manually when a new version is released.
+
 ### Windows
 
 Download one of the following from the latest release:
 
 - `cove-windows-amd64-setup.exe` for a conventional installation.
-- `cove-windows-amd64.zip` for a self-contained portable copy.
+- `cove-windows-amd64-portable.zip` for a self-contained portable copy.
 
 Both distributions support signed, verified in-app updates beginning with
-`1.0.0`. Older Windows builds need one manual installer or ZIP update to enter
-the new update path.
+`1.0.0`.
 
-### Android phone/tablet
+> [!IMPORTANT]
+> Upgrading to `1.0.0` from a pre-`1.0.0` Windows build is a manual step.
+> `1.0.0` replaced the previous Qt and Go application with a single native one,
+> so the two installations share no layout. Download the installer or portable
+> ZIP above and install it yourself; those older builds will not offer `1.0.0`
+> in-app, by design. Your library, profiles, and settings are preserved.
 
-Download and install `cove-android.apk` on Android 9 (API 28) or newer. Android
-may ask you to allow installs from Cove when applying the first in-app update.
-Cove verifies the package name, version, release manifest, payload checksum, and
-installed signing certificate before handing the APK to the system installer.
+### Android phone, tablet, and TV
+
+Download and install `cove-android.apk` on Android 9 (API 28) or newer. The same
+APK serves phones, tablets, and televisions, and picks the touch or ten-foot
+shell to match the device it lands on. Android may ask you to allow installs
+from Cove when applying the first in-app update. Cove verifies the package name,
+version, release manifest, payload checksum, and installed signing certificate
+before handing the APK to the system installer.
+
+Upgrading from a pre-`1.0.0` APK works in place and keeps your data, because the
+release is signed with the same key and carries a higher version code.
 
 ## Building from source
 
@@ -120,23 +149,31 @@ installed signing certificate before handing the APK to the system installer.
 - Android SDK platform and build-tools 36 for Android builds
 - A TMDB API key for live catalog data
 
-Clone the repository, create your local configuration, and launch the desktop app:
+Clone the repository, create your local configuration, and launch the desktop app
+against the real backend:
 
 ```sh
 git clone https://github.com/coveninja/cove.git
 cd cove
 cp .env.example .env
 # Set TMDB_API_KEY in .env
-make run
+cd app && ./gradlew :desktop:run --args="--backend-mode kotlin"
 ```
+
+> [!NOTE]
+> `--backend-mode kotlin` is what selects the real in-process backend. With no
+> `--backend-mode` the desktop app falls back to a canned fixture library, so
+> `make run` on its own will not show live data no matter how `.env` is set. A
+> fixtures run labels itself with a **Fixture data** badge in the top corner.
 
 Common development commands:
 
 | Command | Purpose |
 |---|---|
-| `make run` | Build and launch the desktop application |
-| `make mobile` | Build the Android phone/tablet debug APK |
-| `make hot` | Start the Compose hot-reload development loop |
+| `make run` | Build and launch the desktop application with fixture data |
+| `make mobile` | Build the Android debug APK (phone, tablet, and TV) |
+| `make hot` | Start the Compose hot-reload loop against the real backend |
+| `make run-tv` | Launch the television shell in a desktop window |
 | `make test` | Run the Kotlin test suites |
 | `make test-build` | Build the desktop image and Android debug APK |
 | `make test-all` | Run the broadest local approximation of CI |
