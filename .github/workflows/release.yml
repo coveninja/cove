@@ -251,7 +251,7 @@ jobs:
             cove-windows-amd64-portable.zip.sha256
 
   package-macos:
-    name: Package signed macOS asset
+    name: Package macOS asset (ad-hoc signed)
     needs: [update-key, kotlin]
     runs-on: macos-15
     if: startsWith(github.ref, 'refs/tags/v')
@@ -264,28 +264,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
       - name: Install native packaging dependencies
         run: brew install mpv dylibbundler
-      - name: Import Developer ID certificate
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          test -n "$CERTIFICATE_BASE64" || { echo '::error::MACOS_CERTIFICATE_BASE64 is not configured'; exit 1; }
-          KEYCHAIN_PASSWORD=$(uuidgen)
-          KEYCHAIN_PATH="$RUNNER_TEMP/cove-signing.keychain-db"
-          CERTIFICATE_PATH="$RUNNER_TEMP/cove-developer-id.p12"
-          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
-            | awk -F'"' '/Developer ID Application/{print $2; exit}')
-          test -n "$SIGNING_IDENTITY" || { echo '::error::The certificate contains no Developer ID Application identity'; exit 1; }
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
-      - name: Build signed Compose application
+      - name: Build Compose application
         working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
@@ -294,11 +273,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: >-
-          ./gradlew :desktop:createDistributable --no-daemon
-          -Pcompose.desktop.mac.sign=true
-          -Pcompose.desktop.mac.signing.identity="$SIGNING_IDENTITY"
-          -Pcompose.desktop.mac.signing.keychain="$KEYCHAIN_PATH"
+        run: ./gradlew :desktop:createDistributable --no-daemon
       - name: Bundle libmpv and verify native closure
         run: |
           set -euo pipefail
@@ -322,35 +297,26 @@ jobs:
               | grep -E '^(/opt/homebrew|/usr/local)' || true)
             test -z "$external" || { echo "::error::$library still references $external"; exit 1; }
           done
+          # Ad-hoc signatures, NOT Developer ID. arm64 macOS refuses to execute a
+          # Mach-O carrying no signature at all, so this is the minimum that runs;
+          # it is not a Gatekeeper credential and does not avoid the quarantine
+          # prompt. Hardened runtime and entitlements are deliberately omitted:
+          # they exist to satisfy notarization, and with no real identity they add
+          # only library-validation failure modes. Restoring Developer ID means
+          # putting back --options runtime, the entitlements and notarytool
+          # together — see docs/UPDATES.md.
           find "$FRAMEWORKS" -type f -name '*.dylib' -print0 \
-            | xargs -0 -n1 codesign --force --options runtime --timestamp \
-              --keychain "$KEYCHAIN_PATH" --sign "$SIGNING_IDENTITY"
+            | xargs -0 -n1 codesign --force --timestamp=none --sign -
           python3 -c 'import ctypes,sys; ctypes.CDLL(sys.argv[1])' "$FRAMEWORKS/libmpv.2.dylib"
-          codesign --force --options runtime --timestamp \
-            --entitlements packaging/macos/entitlements.plist \
-            --keychain "$KEYCHAIN_PATH" \
-            --sign "$SIGNING_IDENTITY" "$APP"
+          codesign --force --timestamp=none --sign - "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-      - name: Create and notarize DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_NOTARIZATION_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Create DMG
         run: |
           set -euo pipefail
-          test -n "$APPLE_ID" || { echo '::error::APPLE_NOTARIZATION_ID is not configured'; exit 1; }
-          test -n "$APPLE_PASSWORD" || { echo '::error::APPLE_NOTARIZATION_PASSWORD is not configured'; exit 1; }
-          test -n "$APPLE_TEAM_ID" || { echo '::error::APPLE_TEAM_ID is not configured'; exit 1; }
           mkdir dmg-root
           ditto app/desktop/build/compose/binaries/main/app/Cove.app dmg-root/Cove.app
           ln -s /Applications dmg-root/Applications
           hdiutil create -volname Cove -srcfolder dmg-root -ov -format UDZO cove-macos-arm64.dmg
-          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" \
-            --sign "$SIGNING_IDENTITY" cove-macos-arm64.dmg
-          xcrun notarytool submit cove-macos-arm64.dmg \
-            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple cove-macos-arm64.dmg
-          xcrun stapler validate cove-macos-arm64.dmg
           shasum -a 256 cove-macos-arm64.dmg > cove-macos-arm64.dmg.sha256
       - uses: actions/upload-artifact@v4
         with:
