@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.playback
 
+import com.coveninja.cove.backend.backendScope
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
 import com.coveninja.cove.backend.http.ProbeStreamResult
@@ -71,7 +72,7 @@ internal class AndroidPlaybackMediaHost private constructor(
     val baseUrl: String,
 ) : RouteMediaBoundary, AutoCloseable {
     private val streams = StreamRegistry()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = backendScope("playback")
     private val prefetchInFlight = AtomicBoolean()
 
     override suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {

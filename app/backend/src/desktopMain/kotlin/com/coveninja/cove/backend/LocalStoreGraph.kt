@@ -113,7 +113,7 @@ class LocalStoreGraph private constructor(
             try {
                 val migration = LegacyMigration(database.database, dataDirectory, clock)
                     .importIfNeeded()
-                val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                val scope = backendScope("stores")
                 val now = { Instant.now(clock).toString() }
                 val random = SecureRandom()
                 val token = {

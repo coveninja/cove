@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.http
 
+import com.coveninja.cove.backend.backendScope
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
@@ -18,7 +19,7 @@ class LocalBackendHost(
     private val remoteHost: String = "0.0.0.0",
     private val remotePort: Int = port + 1,
 ) : AutoCloseable {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = backendScope("http host")
     private var loopbackServer: EmbeddedServer<*, *>? = null
     private var remoteServer: EmbeddedServer<*, *>? = null
     private var closed = false

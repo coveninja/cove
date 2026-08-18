@@ -41,7 +41,7 @@ class AndroidStoreGraph private constructor(
                     dataDirectory = appContext.filesDir,
                     now = now,
                 ).importIfNeeded()
-                val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                val scope = backendScope("stores")
                 val random = SecureRandom()
                 val repositories = createLocalRepositoryGraph(
                     database = database.database,

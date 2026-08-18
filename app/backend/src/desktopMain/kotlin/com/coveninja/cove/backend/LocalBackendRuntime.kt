@@ -144,7 +144,7 @@ class LocalBackendRuntime private constructor(
                 install(ContentNegotiation) { json(CoveJson) }
                 install(HttpTimeout) { requestTimeoutMillis = 25_000 }
             }
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val scope = backendScope("runtime")
             try {
                 val systemLocale = MutableStateFlow(Locale.getDefault().toLanguageTag())
                 val localeProvider = {

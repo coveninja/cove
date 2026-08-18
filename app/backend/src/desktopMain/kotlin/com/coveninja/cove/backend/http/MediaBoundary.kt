@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.http
 
+import com.coveninja.cove.backend.backendScope
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
 import com.coveninja.cove.backend.torrent.TorrentPlaybackEngine
@@ -54,7 +55,7 @@ class MediaBoundary(
 ) : RouteMediaBoundary, AutoCloseable {
     private val streams = StreamRegistry(nowMillis = nowMillis)
     private val images = TmdbImageCache(httpClient, imageCacheDirectory)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = backendScope("media boundary")
     private val prefetchInFlight = AtomicBoolean()
 
     override suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {

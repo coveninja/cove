@@ -208,7 +208,7 @@ class AndroidBackendRuntime private constructor(
                     install(HttpTimeout) { requestTimeoutMillis = 25_000 }
                 }
             }
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val scope = backendScope("runtime")
             var openedMedia: LazyAndroidPlaybackMediaHost? = null
             try {
                 return tracedStartup("Cove startup repositories") {
