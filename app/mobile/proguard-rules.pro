@@ -33,3 +33,15 @@
     <fields>;
     <methods>;
 }
+
+# jlibtorrent is a SWIG-generated JNI binding, and its native->Java direction is invisible to R8.
+# libtorrent's C++ calls back into Java through SWIG "directors": swig_module_init() resolves every
+# SwigDirector_* stub on libtorrent_jni by name with GetStaticMethodID while the class initializes,
+# and each stub forwards to the director class it is named for. Nothing in Java calls either half,
+# so R8 deleted all eight stubs and all four director classes (alert_notify_callback, posix_wrapper,
+# add_files_listener, set_piece_hashes_listener) outright. The first lookup then fails, <clinit>
+# throws NoSuchMethodError, and every later touch is met with "Rejecting re-init on previously-failed
+# class" -- which reaches the viewer as a torrent stream whose loopback /play route answers 500 and
+# an mpv "The selected stream could not be opened." Keeping members is not enough on its own: native
+# resolves these by name, so the package must also stay unrenamed.
+-keep class com.frostwire.jlibtorrent.swig.** { *; }
