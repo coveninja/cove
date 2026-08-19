@@ -7,6 +7,7 @@ import com.coveninja.cove.shared.data.CachedCalendar
 import com.coveninja.cove.shared.data.LibraryRepository
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.network.CoveJson
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.builtins.ListSerializer
 
 /**
@@ -21,8 +22,9 @@ class LocalCalendarRepository(
     private val database: CoveDatabase,
     private val session: ActiveProfileSession,
     library: LibraryRepository,
+    scope: CoroutineScope,
     localeProvider: () -> String = { "en" },
-) : BaseCalendarRepository(library, cacheVariant = localeProvider) {
+) : BaseCalendarRepository(library, scope, cacheVariant = localeProvider) {
 
     override suspend fun fetchCalendar(): List<CalendarItem> = service.calendar()
 

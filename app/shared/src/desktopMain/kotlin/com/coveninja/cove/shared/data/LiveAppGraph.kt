@@ -34,7 +34,7 @@ fun createLiveAppGraph(
         settings = LiveSettingsRepository(api, scope),
         playback = LivePlaybackRepository(api),
         addons   = LiveAddonRepository(api, scope),
-        calendar = LiveCalendarRepository(api, library),
+        calendar = LiveCalendarRepository(api, library, scope),
         discovery = LiveDiscoveryRepository(api),
         insights = LiveInsightsRepository(api),
         account  = LiveAccountRepository(api, scope),
