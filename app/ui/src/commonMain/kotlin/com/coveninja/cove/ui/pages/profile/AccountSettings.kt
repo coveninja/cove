@@ -51,7 +51,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AccountState
-import com.coveninja.cove.shared.data.AuthOutcome
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.SyncStatus
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -427,22 +426,24 @@ private fun SignInCard() {
                 else -> graph.account.sendOtp(email)
             }
             busy = false
-            when (outcome) {
-                AuthOutcome.Success -> if (mode == AuthMode.Code && !awaitingToken) {
-                    // Sending the code succeeds long before signing in does.
-                    awaitingToken = true
-                    notice = "Enter the code sent to $email."
-                } else {
+            // Sending a code succeeds long before signing in does, which is the distinction
+            // authFollowUp exists to make; see AccountModel.kt.
+            when (val followUp = authFollowUp(mode, awaitingToken, outcome)) {
+                AuthFollowUp.SignedIn -> {
                     password = ""
                     token = ""
                 }
 
-                AuthOutcome.ConfirmationRequired -> {
+                AuthFollowUp.AwaitToken -> {
                     awaitingToken = true
-                    notice = "Enter the code sent to $email to finish setting up."
+                    notice = if (mode == AuthMode.Code) {
+                        "Enter the code sent to $email."
+                    } else {
+                        "Enter the code sent to $email to finish setting up."
+                    }
                 }
 
-                is AuthOutcome.Failure -> error = outcome.message
+                is AuthFollowUp.Failed -> error = followUp.message
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.pages.profile
 
+import com.coveninja.cove.shared.data.AuthOutcome
 import com.coveninja.cove.shared.data.SyncStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -144,6 +145,76 @@ class AccountModelTest {
                 "$mode submitted with no email",
             )
         }
+    }
+
+    // Mutation applied to verify: mapped every Success to SignedIn, which is what
+    // the onboarding step used to do → this failed on the emailed code, where the
+    // viewer would be told they had an account while the app stayed signed out and
+    // the code that was sitting in their inbox was never asked for.
+    @Test
+    fun `an emailed code is only sent, not signed in`() {
+        assertEquals(
+            AuthFollowUp.AwaitToken,
+            authFollowUp(AuthMode.Code, awaitingToken = false, outcome = AuthOutcome.Success),
+        )
+        // The same Success, once the code has come back, is the real thing.
+        assertEquals(
+            AuthFollowUp.SignedIn,
+            authFollowUp(AuthMode.Code, awaitingToken = true, outcome = AuthOutcome.Success),
+        )
+    }
+
+    // Mutation applied to verify: dropped the mode check, so any first Success
+    // asked for a code → this failed; an ordinary password sign-in would sit there
+    // waiting for a token nobody had been sent.
+    @Test
+    fun `a password sign-in is never waiting on a code`() {
+        assertEquals(
+            AuthFollowUp.SignedIn,
+            authFollowUp(AuthMode.SignIn, awaitingToken = false, outcome = AuthOutcome.Success),
+        )
+        assertEquals(
+            AuthFollowUp.SignedIn,
+            authFollowUp(AuthMode.Register, awaitingToken = false, outcome = AuthOutcome.Success),
+        )
+    }
+
+    // Mutation applied to verify: folded ConfirmationRequired in with Success →
+    // this failed; a registration awaiting its emailed token would be reported as
+    // a finished sign-in.
+    @Test
+    fun `a registration awaiting confirmation asks for the code whatever the mode`() {
+        AuthMode.entries.forEach { mode ->
+            assertEquals(
+                AuthFollowUp.AwaitToken,
+                authFollowUp(mode, awaitingToken = false, AuthOutcome.ConfirmationRequired),
+                "$mode did not ask for the emailed code",
+            )
+        }
+    }
+
+    // Mutation applied to verify: had Failure carry a fixed string rather than the
+    // server's → this failed, replacing "Invalid login credentials" with wording
+    // that says nothing about what to change.
+    @Test
+    fun `a failure carries the server's own message and changes nothing else`() {
+        assertEquals(
+            AuthFollowUp.Failed("Invalid login credentials"),
+            authFollowUp(
+                AuthMode.SignIn,
+                awaitingToken = false,
+                AuthOutcome.Failure("Invalid login credentials"),
+            ),
+        )
+        // A refused code leaves the form asking for it, rather than starting over.
+        assertEquals(
+            AuthFollowUp.Failed("Token has expired or is invalid"),
+            authFollowUp(
+                AuthMode.Code,
+                awaitingToken = true,
+                AuthOutcome.Failure("Token has expired or is invalid"),
+            ),
+        )
     }
 
     private fun detail(at: Instant) = syncDetail(SyncStatus(lastSyncedAt = at), now)

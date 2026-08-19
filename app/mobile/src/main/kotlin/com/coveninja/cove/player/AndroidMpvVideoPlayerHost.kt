@@ -107,6 +107,9 @@ class AndroidMpvVideoPlayerHost(
     override suspend fun prepareWebVideo(mayInstallHelper: Boolean): String? = withContext(Dispatchers.IO) {
         val failure = runCatching { YoutubeDL.getInstance().init(appContext) }.exceptionOrNull()
         if (failure != null) {
+            // A minified build reports these as a bare class name, so the sentence below says
+            // nothing on its own. The stack trace is the only way back to the real cause.
+            Log.w(MPV_LOG_TAG, "Could not initialize the bundled yt-dlp runtime", failure)
             return@withContext "Could not initialize the bundled yt-dlp runtime: " +
                 (failure.message ?: "unknown error")
         }
@@ -454,6 +457,7 @@ class AndroidMpvVideoPlayerHost(
                     loadResolved(stream, startPositionSeconds, generation, headers)
                 },
                 onFailure = { error ->
+                    Log.w(MPV_LOG_TAG, "Could not resolve the web video at $url", error)
                     onMain {
                         if (generation != loadGeneration.get()) return@onMain
                         onPlaybackActiveChanged(false)

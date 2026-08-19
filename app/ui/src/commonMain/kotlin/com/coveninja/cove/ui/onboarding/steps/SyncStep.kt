@@ -33,7 +33,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AccountState
-import com.coveninja.cove.shared.data.AuthOutcome
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.onboarding.OnboardingController
@@ -41,8 +40,10 @@ import com.coveninja.cove.ui.onboarding.OnboardingGhostButton
 import com.coveninja.cove.ui.onboarding.OnboardingPrimaryButton
 import com.coveninja.cove.ui.onboarding.normalizedProfileName
 import com.coveninja.cove.ui.pages.common.ChoicePill
+import com.coveninja.cove.ui.pages.profile.AuthFollowUp
 import com.coveninja.cove.ui.pages.profile.AuthMode
 import com.coveninja.cove.ui.pages.profile.SettingsTextField
+import com.coveninja.cove.ui.pages.profile.authFollowUp
 import com.coveninja.cove.ui.pages.profile.canSubmitAuth
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalMotionPolicy
@@ -51,10 +52,14 @@ import kotlinx.coroutines.launch
 /**
  * Signing in, optionally.
  *
- * The form is the settings page's form: [AuthMode] and [canSubmitAuth] are imported rather than
- * re-derived, so the three sign-in paths behave identically in both places and a fix to either
- * lands in both. What differs is the framing — here it is an offer with a visible way past it,
- * not a settings card.
+ * The form is the settings page's form: [AuthMode], [canSubmitAuth] and [authFollowUp] are
+ * imported rather than re-derived, so the three sign-in paths behave identically in both places
+ * and a fix to either lands in both. What differs is the framing — here it is an offer with a
+ * visible way past it, not a settings card.
+ *
+ * Reading the outcome used to be the exception, and it was wrong: an emailed code reports
+ * success for having been *sent*, so this step declared the viewer signed in, never asked for
+ * the code, and left them in an app with no account behind it.
  *
  * The profile name from step two pre-fills registration. Asking for it twice in the same flow
  * is the kind of thing that makes an onboarding feel like paperwork.
@@ -117,16 +122,21 @@ internal fun SyncStep(
                 else -> repository.sendOtp(email)
             }
             busy = false
-            when (outcome) {
-                AuthOutcome.Success -> {
+            when (val followUp = authFollowUp(mode, awaitingToken, outcome)) {
+                AuthFollowUp.SignedIn -> {
                     awaitingToken = false
+                    token = ""
                     controller.update { copy(signedIn = true) }
                 }
-                AuthOutcome.ConfirmationRequired -> {
+                AuthFollowUp.AwaitToken -> {
                     awaitingToken = true
-                    message = "Check your email — we've sent a code to confirm it's you."
+                    message = if (mode == AuthMode.Code) {
+                        "Check your email — we've sent a code to $email."
+                    } else {
+                        "Check your email — we've sent a code to confirm it's you."
+                    }
                 }
-                is AuthOutcome.Failure -> message = outcome.message
+                is AuthFollowUp.Failed -> message = followUp.message
             }
         }
     }

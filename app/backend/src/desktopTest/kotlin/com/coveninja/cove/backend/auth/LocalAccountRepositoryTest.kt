@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.auth
 
+import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.db.DesktopDatabase
 import com.coveninja.cove.backend.migration.LegacyMigration
 import com.coveninja.cove.backend.store.ActiveProfileSession
@@ -24,10 +25,16 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 
 private const val PROFILE_ID = "local-primary"
@@ -183,6 +190,43 @@ class LocalAccountRepositoryTest {
         }
     }
 
+    // Mutation applied to verify: ran attempt() on the caller's coroutine again,
+    // as it used to → this failed with the account still signed out, which is the
+    // bug as reported: the onboarding step's scope dies the moment the viewer
+    // presses Continue, and it took the accepted session with it.
+    @Test
+    fun `a caller that goes away mid sign-in still ends up signed in`() = runTest {
+        fixture { graph ->
+            val held = CompletableDeferred<Unit>()
+            graph.server.holdSignIn = held
+            // A caller of its own, standing in for the composition scope behind the form.
+            val form = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+            form.launch { graph.account.signIn("a@b.c", "hunter2") }
+            graph.server.signInReached.await()
+            // Supabase has the request; the screen holding it is torn down before the answer.
+            form.cancel()
+            held.complete(Unit)
+
+            // Real time, not the test scheduler's: the work being waited on is on a
+            // dispatcher of its own, and virtual time would expire the timeout the moment
+            // this coroutine went idle.
+            withContext(Dispatchers.Default) {
+                withTimeout(10.seconds) {
+                    graph.account.account.first { it is AccountState.SignedIn }
+                    // And the first sync it carries: the attempt has to run to the end on
+                    // its own, not merely far enough to record the session. Waiting for it
+                    // also keeps the fixture from closing the database underneath it.
+                    graph.account.syncStatus.first { !it.running && it.lastSyncedAt != null }
+                }
+            }
+            assertNotNull(
+                AuthSessionStore(graph.database, { "" }).get(),
+                "the session Supabase accepted was never stored",
+            )
+        }
+    }
+
     // Mutation applied to verify: had signOut() leave _account untouched → this
     // failed, leaving the page claiming a session that had just been cleared.
     @Test
@@ -232,7 +276,13 @@ class LocalAccountRepositoryTest {
                         now = now,
                     ),
                 )
-                test(TestGraph(LocalAccountRepository(auth, settings, library, scope), server))
+                test(
+                    TestGraph(
+                        LocalAccountRepository(auth, settings, library, scope),
+                        server,
+                        database.database,
+                    ),
+                )
             } finally {
                 scope.cancel()
                 http.close()
@@ -240,7 +290,7 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    private fun io.ktor.client.engine.mock.MockRequestHandleScope.respond(
+    private suspend fun io.ktor.client.engine.mock.MockRequestHandleScope.respond(
         request: HttpRequestData,
         server: Server,
     ) = when {
@@ -260,10 +310,14 @@ class LocalAccountRepositoryTest {
                     )
                 }
 
-                server.signInStatus.isSuccess() -> json(
-                    """{"access_token":"jwt-1","refresh_token":"refresh-1","expires_in":3600,
-                        "user":{"id":"user-1","email":"a@b.c"}}""",
-                )
+                server.signInStatus.isSuccess() -> {
+                    server.signInReached.complete(Unit)
+                    server.holdSignIn?.await()
+                    json(
+                        """{"access_token":"jwt-1","refresh_token":"refresh-1","expires_in":3600,
+                            "user":{"id":"user-1","email":"a@b.c"}}""",
+                    )
+                }
 
                 else -> json("""{"error_description":"Invalid login credentials"}""", server.signInStatus)
             }
@@ -303,7 +357,11 @@ class LocalAccountRepositoryTest {
         status: HttpStatusCode = HttpStatusCode.OK,
     ) = respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
 
-    private data class TestGraph(val account: LocalAccountRepository, val server: Server)
+    private data class TestGraph(
+        val account: LocalAccountRepository,
+        val server: Server,
+        val database: CoveDatabase,
+    )
 
     /**
      * Supabase, as far as these tests are concerned: which access tokens it still
@@ -321,5 +379,9 @@ class LocalAccountRepositoryTest {
         var refuseRefresh: Boolean = false,
         var expireOnWrite: Boolean = false,
         val requests: MutableList<HttpRequestData> = mutableListOf(),
+        /** Completed once a sign-in request has arrived, so a test can act while one is open. */
+        val signInReached: CompletableDeferred<Unit> = CompletableDeferred(),
+        /** Held closed to keep that request open; null lets sign-ins answer immediately. */
+        var holdSignIn: CompletableDeferred<Unit>? = null,
     )
 }
