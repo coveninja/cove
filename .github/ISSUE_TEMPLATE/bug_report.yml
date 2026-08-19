@@ -98,18 +98,14 @@ body:
     attributes:
       label: Logs (console output / logcat)
       description: |
-        **Desktop:** Cove writes no log file — everything (app, backend, mpv) goes to the console, so it is only captured if you start Cove from a terminal. Launch it the way below, reproduce the problem, then copy what was printed.
+        **Desktop:** Cove writes everything (app, backend, mpv) to `cove.log`, next to its database:
 
-        - **Windows** — in Command Prompt (the installer puts Cove in `Program Files`; for the portable ZIP, use the folder you extracted):
-          ```
-          "C:\Program Files\Cove\Cove.exe" > "%USERPROFILE%\Desktop\cove-log.txt" 2>&1
-          ```
-          Cove runs as usual; quit it, then attach `cove-log.txt` from your Desktop.
-        - **Linux (tarball / AUR):** run `cove` in a terminal
-        - **Linux (Flatpak):** run `flatpak run io.github.coveninja.Cove`
-        - **macOS:** run `/Applications/Cove.app/Contents/MacOS/Cove` in Terminal
+        - **Windows:** press `Win+R`, paste `%APPDATA%\cove\logs`, press Enter
+        - **Linux:** `~/.config/cove/logs/`
+        - **Flatpak:** `~/.var/app/io.github.coveninja.Cove/config/cove/logs/`
+        - **macOS:** `~/Library/Application Support/cove/logs/`
 
-        If Cove vanished without a window or message, look for an `hs_err_pid*.log` next to it — that is a JVM crash and the file is the whole story.
+        `cove.log` is the run you are in now; `cove.log.1` is the run before it, and so on. If you restarted Cove after hitting the problem, the one you want is `cove.log.1`.
 
         **Android / Android TV:** logs go to the system log. If you have `adb` set up, reproduce the problem, then run `adb logcat -d > cove-log.txt` and attach the file. If you can't use adb, skip this field and describe the problem as precisely as you can.
 
