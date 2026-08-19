@@ -81,7 +81,11 @@ class NuvioManager internal constructor(
         val repo = current.repos.firstOrNull { it.id == repoId } ?: error("repo not found")
         val scraper = repo.scrapers.firstOrNull { it.id == scraperId } ?: error("scraper not found")
         val updatedScraper = when {
-            !enabled -> scraper.copy(enabled = false)
+            // Dropping the source rather than keeping it against a possible re-enable:
+            // the whole store is one row, and on Android a row has a hard size limit it
+            // must not reach (see AndroidDatabase). Turning a scraper back on refetches
+            // below, because that branch already treats blank code as "not fetched yet".
+            !enabled -> scraper.copy(enabled = false, code = "", codeFetchedAt = null, codeErr = "")
             scraper.code.isNotBlank() && scraper.codeErr.isBlank() -> scraper.copy(enabled = true)
             else -> runCatching {
                 val code = fetchRaw(repo.owner, repo.repo, repo.branch, scraper.filename)

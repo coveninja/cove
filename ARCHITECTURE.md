@@ -21,6 +21,14 @@ exposes the stable `/api/v1` namespace. The former `/api` namespace delegates to
 the same handlers and returns `Deprecation`, `Sunset`, and successor-version
 headers.
 
+Disk retention is deliberately not one of those boundaries. Cache measurement,
+manual clearing, and the retention sweep all run in-process through
+`StorageRepository`, the same way `DeviceRepository` serves the mpv config: the
+caches sit on whichever machine is running the backend, so a compatibility
+client pointed at it over `--api-base` gets `UnavailableStorageRepository` and no
+storage screen rather than the ability to delete somebody else's files. No route
+was added to `/api/v1` for any of it.
+
 Optional LAN access is a separate listener. It starts only when the persisted
 setting enables it and a non-empty token exists. Remote requests use a
 constant-time token check; loopback CORS is allow-listed. User-supplied addon,

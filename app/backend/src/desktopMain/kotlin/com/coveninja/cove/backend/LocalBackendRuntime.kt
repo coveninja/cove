@@ -44,6 +44,12 @@ import com.coveninja.cove.shared.data.TraktRepository
 import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.backend.auth.LocalAccountRepository
 import com.coveninja.cove.backend.platform.LocalDeviceRepository
+import com.coveninja.cove.backend.storage.CacheDirectories
+import com.coveninja.cove.backend.storage.CacheStorageService
+import com.coveninja.cove.backend.storage.LocalStorageRepository
+import com.coveninja.cove.backend.storage.TorrentCacheJournal
+import com.coveninja.cove.shared.data.StorageRepository
+import com.coveninja.cove.shared.data.TorrentCachePolicy
 import com.coveninja.cove.backend.trakt.LocalTraktRepository
 import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.shared.data.LivePlaybackRepository
@@ -90,6 +96,7 @@ class LocalBackendRuntime private constructor(
     traktRepository: TraktRepository,
     deviceRepository: DeviceRepository,
     private val updateRepository: UpdateRepository,
+    storageRepository: StorageRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
@@ -105,6 +112,7 @@ class LocalBackendRuntime private constructor(
         trakt = traktRepository,
         device = deviceRepository,
         updates = updateRepository,
+        storage = storageRepository,
         onClose = ::close,
     )
 
@@ -188,16 +196,46 @@ class LocalBackendRuntime private constructor(
                     urlPolicy = DesktopAddonUrlPolicy,
                 )
                 val quality = QualityService(catalog, addons)
+                val deviceSettings = DeviceSettingsService(dataDirectory)
+                val torrentDirectory = dataDirectory.resolve("torrents")
+                val imageCacheDirectory = dataDirectory.resolve("image-cache")
+                val cacheJournal = TorrentCacheJournal(torrentDirectory)
+                // One holder shared by the engine and the repository below. The engine consults
+                // it per piece and must not touch the disk to do so; the repository owns writing
+                // it back. See LocalStorageRepository for why it is passed in rather than made
+                // there.
+                val cachePolicy = MutableStateFlow(
+                    runCatching(deviceSettings::read).getOrDefault(TorrentCachePolicy()),
+                )
+                val torrentEngine = JlibtorrentPlaybackEngine(
+                    downloadDirectory = torrentDirectory,
+                    policy = cachePolicy::value,
+                    journal = cacheJournal,
+                )
+                val storageRepository = LocalStorageRepository(
+                    service = CacheStorageService(
+                        directories = CacheDirectories(
+                            torrents = torrentDirectory,
+                            images = imageCacheDirectory,
+                            tools = dataDirectory.resolve("tools"),
+                        ),
+                        journal = cacheJournal,
+                        activeHashes = torrentEngine::activeHashes,
+                        release = torrentEngine::release,
+                    ),
+                    store = deviceSettings,
+                    state = cachePolicy,
+                ).also { it.start(scope) }
                 val media = MediaBoundary(
                     httpClient = untrustedClient,
-                    imageCacheDirectory = dataDirectory.resolve("image-cache"),
+                    imageCacheDirectory = imageCacheDirectory,
                     publicUrlPolicy = DesktopAddonUrlPolicy,
                     allowLanStreamSources = {
                         (stores.settings.settings.value as? SettingsState.Ready)
                             ?.settings
                             ?.allowLanStreamSources == true
                     },
-                    torrentEngine = JlibtorrentPlaybackEngine(dataDirectory.resolve("torrents")),
+                    torrentEngine = torrentEngine,
                 )
                 val nuvio = NuvioManager(
                     database = stores.databaseHandle,
@@ -234,7 +272,6 @@ class LocalBackendRuntime private constructor(
                     httpClient = client,
                     scope = scope,
                 )
-                val deviceSettings = DeviceSettingsService(dataDirectory)
                 stores.progressEvents.subscribe { progress ->
                     activity.record(progress)
                     prefetch.notifyProgressChanged()
@@ -353,6 +390,7 @@ class LocalBackendRuntime private constructor(
                     LocalTraktRepository(trakt, scope),
                     LocalDeviceRepository(deviceSettings, DesktopBackendEnvironment.appVersion()),
                     updateRepository,
+                    storageRepository,
                 )
             } catch (error: Throwable) {
                 scope.cancel()

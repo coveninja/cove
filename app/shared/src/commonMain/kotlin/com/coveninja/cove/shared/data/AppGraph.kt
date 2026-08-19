@@ -20,6 +20,7 @@ class AppGraph(
     val trakt: TraktRepository = UnavailableTraktRepository,
     val device: DeviceRepository = UnavailableDeviceRepository,
     val updates: UpdateRepository = UnavailableUpdateRepository,
+    val storage: StorageRepository = UnavailableStorageRepository,
     /**
      * True when every repository above is a canned fixture rather than a live backend.
      *

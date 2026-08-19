@@ -826,6 +826,17 @@ internal val CoveIcons: Map<String, IconSpec> = mapOf(
             fillEvenOdd = false,
         ),
     )),
+    "lucide:hard-drive" to IconSpec(24f, 24f, listOf(
+        IconPath(
+            pathData    = "M10 16h.01m-7.798-4.423a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zm19.734.436H2.054M6 16h.01",
+            fill        = null,
+            stroke      = "currentColor",
+            strokeWidth = 2f,
+            strokeCap   = "round",
+            strokeJoin  = "round",
+            fillEvenOdd = false,
+        ),
+    )),
     "lucide:heart" to IconSpec(24f, 24f, listOf(
         IconPath(
             pathData    = "M2 9.5a5.5 5.5 0 0 1 9.591-3.676a.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5",

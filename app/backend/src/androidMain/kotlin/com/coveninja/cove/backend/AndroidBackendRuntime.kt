@@ -34,6 +34,14 @@ import com.coveninja.cove.backend.playback.AndroidPlaybackMediaHost
 import com.coveninja.cove.backend.playback.AndroidPlaybackRepository
 import com.coveninja.cove.backend.playback.LazyAndroidPlaybackMediaHost
 import com.coveninja.cove.backend.platform.AndroidDeviceRepository
+import com.coveninja.cove.backend.platform.AndroidTorrentCachePolicyStore
+import com.coveninja.cove.backend.storage.CacheDirectories
+import com.coveninja.cove.backend.storage.CacheStorageService
+import com.coveninja.cove.backend.storage.LocalStorageRepository
+import com.coveninja.cove.backend.storage.TorrentCacheJournal
+import com.coveninja.cove.backend.torrent.TorrentPlaybackEngine
+import com.coveninja.cove.shared.data.StorageRepository
+import com.coveninja.cove.shared.data.TorrentCachePolicy
 import com.coveninja.cove.backend.prefetch.PrefetchService
 import com.coveninja.cove.backend.quality.QualityService
 import com.coveninja.cove.backend.torrent.AndroidJlibtorrentPlaybackEngine
@@ -94,6 +102,7 @@ class AndroidBackendRuntime private constructor(
     trakt: TraktRepository,
     device: DeviceRepository,
     private val updateRepository: UpdateRepository,
+    storage: StorageRepository,
 ) : AutoCloseable {
     private var closed = false
     private var remoteHost: LocalBackendHost? = null
@@ -119,6 +128,9 @@ class AndroidBackendRuntime private constructor(
         trakt = trakt,
         device = device,
         updates = updateRepository,
+        // Android keeps torrent downloads under filesDir, which the system never reclaims, so
+        // the storage screen is if anything more load-bearing here than on the desktop.
+        storage = storage,
         onClose = ::close,
     )
 
@@ -260,6 +272,17 @@ class AndroidBackendRuntime private constructor(
                         scope = scope,
                         nuvio = NuvioAddonService(nuvio),
                     )
+                    val torrentDirectory = context.filesDir.resolve("torrents").toPath()
+                    val cacheJournal = TorrentCacheJournal(torrentDirectory)
+                    val cachePolicyStore = AndroidTorrentCachePolicyStore(context)
+                    val cachePolicy = MutableStateFlow(
+                        runCatching(cachePolicyStore::read).getOrDefault(TorrentCachePolicy()),
+                    )
+                    // Late-bound on purpose: the engine is built inside the lazy media host, and
+                    // forcing it up front would start a torrent session on every launch just so
+                    // the storage screen could ask what is playing. Until it exists nothing can
+                    // be playing, which is exactly what an absent reference reports.
+                    val engineRef = java.util.concurrent.atomic.AtomicReference<TorrentPlaybackEngine?>()
                     val media = LazyAndroidPlaybackMediaHost {
                         AndroidPlaybackMediaHost.start(
                             httpClient = untrustedClient,
@@ -270,10 +293,28 @@ class AndroidBackendRuntime private constructor(
                                     ?.allowLanStreamSources == true
                             },
                             torrentEngine = AndroidJlibtorrentPlaybackEngine(
-                                context.filesDir.resolve("torrents").toPath(),
-                            ),
+                                downloadDirectory = torrentDirectory,
+                                policy = cachePolicy::value,
+                                journal = cacheJournal,
+                            ).also(engineRef::set),
                         )
                     }.also { openedMedia = it }
+                    val storage = LocalStorageRepository(
+                        service = CacheStorageService(
+                            // Torrents only, and both omissions are deliberate. yt-dlp is
+                            // bundled in the APK here rather than downloaded, so there is no
+                            // tools directory at all. Artwork is Coil's own disk cache: it is
+                            // already capped, it sits in cacheDir where the system can reclaim
+                            // it, and it is journalled — deleting its files from underneath it
+                            // is not the same operation as clearing it.
+                            directories = CacheDirectories(torrents = torrentDirectory),
+                            journal = cacheJournal,
+                            activeHashes = { engineRef.get()?.activeHashes().orEmpty() },
+                            release = { hash -> engineRef.get()?.release(hash) ?: true },
+                        ),
+                        store = cachePolicyStore,
+                        state = cachePolicy,
+                    ).also { it.start(scope) }
                     val playback = AndroidPlaybackRepository(catalog, addonManager, media, nuvio)
                     val calendarService = CalendarService(
                         database = stores.databaseHandle,
@@ -425,6 +466,7 @@ class AndroidBackendRuntime private constructor(
                         ),
                         account, trakt, device,
                         updateRepository,
+                        storage,
                     )
                 }
             } catch (error: Throwable) {

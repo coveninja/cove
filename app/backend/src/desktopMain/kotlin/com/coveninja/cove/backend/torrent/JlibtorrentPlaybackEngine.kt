@@ -8,6 +8,8 @@ import com.frostwire.jlibtorrent.TorrentFlags
 import com.frostwire.jlibtorrent.TorrentHandle
 import com.frostwire.jlibtorrent.TorrentInfo
 import com.frostwire.jlibtorrent.swig.settings_pack
+import com.coveninja.cove.backend.storage.TorrentCacheJournal
+import com.coveninja.cove.shared.data.TorrentCachePolicy
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.writeFully
 import java.io.RandomAccessFile
@@ -16,6 +18,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -28,6 +32,13 @@ class JlibtorrentPlaybackEngine(
     private val downloadDirectory: Path,
     private val metadataTimeoutSeconds: Int = 45,
     private val pieceTimeoutMillis: Long = 120_000,
+    /**
+     * Read fresh on every use rather than captured: the viewer can change the download-ahead
+     * allowance mid-episode, and a value copied at construction would go on applying the old
+     * one until the app was restarted.
+     */
+    private val policy: () -> TorrentCachePolicy = { TorrentCachePolicy() },
+    private val journal: TorrentCacheJournal? = null,
 ) : TorrentPlaybackEngine {
     private val startMutex = Mutex()
     private val torrentMutex = Mutex()
@@ -68,8 +79,15 @@ class JlibtorrentPlaybackEngine(
         val path = torrent.saveDirectory.resolve(selected.path).normalize()
         require(path.startsWith(torrent.saveDirectory)) { "torrent file escaped download directory" }
         val id = "$canonical:${selected.index}"
-        val managed = ManagedResource(torrent, selected, path)
-        resources[id] = managed
+        // Reused rather than rebuilt, because this runs on every range request and mpv opens a
+        // new one on every seek: the resource carries how far the download window has already
+        // been advanced, and a fresh object would re-issue every piece priority behind it.
+        val managed = resources.computeIfAbsent(id) { ManagedResource(torrent, selected, path) }
+        // File priority alone means the whole file, which is what kept downloading the rest of an
+        // episode after the viewer quit five minutes in. Everything past the opening window is
+        // parked once, by whichever reader gets here first, and raised again as the reader
+        // advances — so the download follows the player instead of outrunning it.
+        if (managed.parked.compareAndSet(false, true)) parkPiecesBeyondWindow(managed)
         log("$canonical: serving file ${selected.index} (${selected.size} bytes) ${selected.path}")
         TorrentResource(id, path.fileName.toString(), selected.size, contentType(path.fileName.toString()))
     }
@@ -86,33 +104,45 @@ class JlibtorrentPlaybackEngine(
         }
         var cursor = start
         val buffer = ByteArray(1024 * 1024)
-        // libtorrent allocates sparsely: until it flushes the first piece covering
-        // this file, nothing exists on disk — not the file, not even the directory
-        // holding it. Opening before that wait throws FileNotFoundException for
-        // every freshly added torrent, and because respondBytesWriter has already
-        // sent the 206 by then, the player sees a stream that dies at byte zero.
-        awaitPieces(managed, cursor, cursor)
-        awaitTorrentFile(managed.path, pieceTimeoutMillis)
-        RandomAccessFile(managed.path.toFile(), "r").use { input ->
-            while (cursor <= endInclusive) {
-                // A piece at a time, not a megabyte: the player is handed bytes the
-                // moment the piece under the cursor lands, rather than waiting for
-                // every piece of a megabyte to be complete before any of it moves.
-                // The read-ahead in awaitPieces is what keeps the pipe full, so the
-                // smaller step costs nothing in throughput and removes the stall the
-                // viewer actually sees — the one before the picture first appears.
-                val chunkEnd = min(min(endInclusive, pieceEndOffset(managed, cursor)), cursor + buffer.size - 1)
-                awaitPieces(managed, cursor, chunkEnd)
-                input.seek(cursor)
-                var remaining = (chunkEnd - cursor + 1).toInt()
-                while (remaining > 0) {
-                    val count = input.read(buffer, 0, min(buffer.size, remaining))
-                    check(count > 0) { "torrent file ended before advertised size" }
-                    output.writeFully(buffer, 0, count)
-                    cursor += count
-                    remaining -= count
+        // Dates the cache entry. Cheap by design — it writes memory and flushes at most once a
+        // minute — because it sits on the path every served byte takes.
+        journal?.touch(managed.torrent.hash)
+        // Marks the torrent as being read for as long as this response is being written, which is
+        // what stops the sweep releasing it underneath the player. Incremented before the first
+        // wait and released in a finally, so an aborted range request — the player seeking, or
+        // closing — does not leave the torrent pinned for the rest of the session.
+        managed.torrent.readers.incrementAndGet()
+        try {
+            // libtorrent allocates sparsely: until it flushes the first piece covering
+            // this file, nothing exists on disk — not the file, not even the directory
+            // holding it. Opening before that wait throws FileNotFoundException for
+            // every freshly added torrent, and because respondBytesWriter has already
+            // sent the 206 by then, the player sees a stream that dies at byte zero.
+            awaitPieces(managed, cursor, cursor)
+            awaitTorrentFile(managed.path, pieceTimeoutMillis)
+            RandomAccessFile(managed.path.toFile(), "r").use { input ->
+                while (cursor <= endInclusive) {
+                    // A piece at a time, not a megabyte: the player is handed bytes the
+                    // moment the piece under the cursor lands, rather than waiting for
+                    // every piece of a megabyte to be complete before any of it moves.
+                    // The read-ahead in awaitPieces is what keeps the pipe full, so the
+                    // smaller step costs nothing in throughput and removes the stall the
+                    // viewer actually sees — the one before the picture first appears.
+                    val chunkEnd = min(min(endInclusive, pieceEndOffset(managed, cursor)), cursor + buffer.size - 1)
+                    awaitPieces(managed, cursor, chunkEnd)
+                    input.seek(cursor)
+                    var remaining = (chunkEnd - cursor + 1).toInt()
+                    while (remaining > 0) {
+                        val count = input.read(buffer, 0, min(buffer.size, remaining))
+                        check(count > 0) { "torrent file ended before advertised size" }
+                        output.writeFully(buffer, 0, count)
+                        cursor += count
+                        remaining -= count
+                    }
                 }
             }
+        } finally {
+            managed.torrent.readers.decrementAndGet()
         }
     }
 
@@ -137,7 +167,31 @@ class JlibtorrentPlaybackEngine(
         )
     }
 
+    override fun activeHashes(): Set<String> =
+        torrents.values.filter { it.readers.get() > 0 }.mapTo(mutableSetOf()) { it.hash }
+
+    override fun release(hash: String): Boolean {
+        val canonical = hash.lowercase()
+        val torrent = torrents[canonical] ?: return true
+        if (torrent.readers.get() > 0) return false
+        // Removed from the map first: a read that begins between here and the session removal
+        // would otherwise pin a torrent that is already on its way out, and the resource it looks
+        // up would point at files about to be deleted. A new open() after this re-adds it.
+        torrents.remove(canonical, torrent)
+        if (torrent.readers.get() > 0) {
+            torrents[canonical] = torrent
+            return false
+        }
+        resources.entries.removeIf { it.value.torrent === torrent }
+        runCatching { manager?.remove(torrent.handle) }
+        log("$canonical: released from the session so its files can be removed")
+        return true
+    }
+
     override fun close() {
+        // Before the maps are cleared, so the last read times of everything this session played
+        // reach disk and the next sweep evicts by use rather than by file timestamp.
+        journal?.flush()
         resources.clear()
         torrents.clear()
         manager?.stop()
@@ -203,7 +257,7 @@ class JlibtorrentPlaybackEngine(
             TorrentFile(index, storage.filePath(index), storage.fileSize(index))
         }
         log("$hash: ready — ${files.size} files, ${info.numPieces()} pieces of ${info.pieceLength()} bytes")
-        return ManagedTorrent(info, handle, files, torrentDirectory)
+        return ManagedTorrent(info, handle, files, torrentDirectory, hash)
     }
 
     /**
@@ -315,18 +369,74 @@ class JlibtorrentPlaybackEngine(
      * is what the demuxer actually needs to open the file.
      */
     private fun prioritizeIndexTail(torrent: ManagedTorrent, file: TorrentFile) {
-        val info = torrent.info
-        val pieceLength = info.pieceLength().toLong()
-        val fileOffset = info.files().fileOffset(file.index)
-        val tailStart = (file.size - INDEX_TAIL_BYTES).coerceAtLeast(0)
-        val firstPiece = ((fileOffset + tailStart) / pieceLength).toInt()
-        val lastPiece = ((fileOffset + file.size - 1) / pieceLength).toInt()
-            .coerceAtMost(info.numPieces() - 1)
-        for (piece in firstPiece..lastPiece) {
+        val tail = indexTailRange(torrent, file)
+        for (piece in tail.first..tail.last) {
             if (torrent.handle.havePiece(piece)) continue
             torrent.handle.piecePriority(piece, Priority.SEVEN)
             torrent.handle.setPieceDeadline(piece, INDEX_TAIL_DEADLINE_MILLIS)
         }
+    }
+
+    /** The container index at the end of the file — wanted up front however small the window. */
+    private fun indexTailRange(torrent: ManagedTorrent, file: TorrentFile): PieceRange {
+        val info = torrent.info
+        return pieceRangeOf(
+            fileOffset = info.files().fileOffset(file.index),
+            pieceLength = info.pieceLength().toLong(),
+            start = (file.size - INDEX_TAIL_BYTES).coerceAtLeast(0),
+            endInclusive = (file.size - 1).coerceAtLeast(0),
+            numPieces = info.numPieces(),
+        )
+    }
+
+    /**
+     * Tells libtorrent not to fetch anything past the opening window.
+     *
+     * The index tail is exempt: the demuxer cannot open the file without it, so it is wanted up
+     * front no matter how tight the allowance. A window of zero means the viewer asked for the
+     * whole file, and nothing is parked at all.
+     */
+    private fun parkPiecesBeyondWindow(resource: ManagedResource) {
+        val ahead = policy().downloadAheadBytes
+        if (ahead <= 0) return
+        val torrent = resource.torrent
+        val info = torrent.info
+        val fileOffset = info.files().fileOffset(resource.file.index)
+        val pieceLength = info.pieceLength().toLong()
+        val file = filePieceRange(fileOffset, resource.file.size, pieceLength, info.numPieces())
+        val window = downloadWindow(fileOffset, resource.file.size, pieceLength, 0, ahead, info.numPieces())
+        val tail = indexTailRange(torrent, resource.file)
+        for (piece in (window.last + 1)..file.last) {
+            if (piece in tail) continue
+            if (torrent.handle.havePiece(piece)) continue
+            torrent.handle.piecePriority(piece, Priority.IGNORE)
+        }
+    }
+
+    /**
+     * Opens the window as the reader advances, releasing pieces parked by [parkPiecesBeyondWindow].
+     *
+     * Only ever forward, from where the last call left off: a backward seek re-reads pieces that
+     * are already on disk or already requested, and re-issuing priorities behind the furthest
+     * point reached would cost a JNI call per piece for every chunk served.
+     */
+    private fun extendDownloadWindow(resource: ManagedResource, cursor: Long) {
+        val ahead = policy().downloadAheadBytes
+        if (ahead <= 0) return
+        val handle = resource.torrent.handle
+        val info = resource.torrent.info
+        val window = downloadWindow(
+            fileOffset = info.files().fileOffset(resource.file.index),
+            fileSize = resource.file.size,
+            pieceLength = info.pieceLength().toLong(),
+            cursor = cursor,
+            aheadBytes = ahead,
+            numPieces = info.numPieces(),
+        )
+        for (piece in maxOf(resource.raisedTo + 1, window.first)..window.last) {
+            if (!handle.havePiece(piece)) handle.piecePriority(piece, Priority.NORMAL)
+        }
+        if (window.last > resource.raisedTo) resource.raisedTo = window.last
     }
 
     /** The last byte, in file coordinates, of the piece holding [offset]. */
@@ -363,6 +473,10 @@ class JlibtorrentPlaybackEngine(
         for (piece in (lastPiece + 1)..readAheadLast) {
             if (!handle.havePiece(piece)) handle.piecePriority(piece, Priority.SIX)
         }
+        // Past the urgent read-ahead, out to whatever the viewer allows the download to run to.
+        // This is the only thing that releases the pieces parked when the file was opened, so a
+        // reader that stops advancing leaves the download stopped where it stood.
+        extendDownloadWindow(resource, start)
         val started = System.currentTimeMillis()
         var reportedAt = started
         withTimeout(pieceTimeoutMillis) {
@@ -390,13 +504,27 @@ class JlibtorrentPlaybackEngine(
         val handle: TorrentHandle,
         val files: List<TorrentFile>,
         val saveDirectory: Path,
-    )
+        val hash: String,
+    ) {
+        /** How many responses are being written from this torrent right now. */
+        val readers = AtomicInteger(0)
+    }
 
     private data class ManagedResource(
         val torrent: ManagedTorrent,
         val file: TorrentFile,
         val path: Path,
-    )
+    ) {
+        /** Set once the pieces past the opening window have been parked. */
+        val parked = AtomicBoolean(false)
+
+        /**
+         * The furthest piece the window has been opened to, so an advancing reader only ever
+         * issues priorities for ground it has not already covered. -1 before the first read.
+         */
+        @Volatile
+        var raisedTo: Int = -1
+    }
 }
 
 /** How much further ahead of the served chunk pieces are asked for. */

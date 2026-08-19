@@ -69,6 +69,12 @@ enum class SettingsCategory(
         headline = "Sharing and network",
         blurb = "Upload behaviour and access from other devices.",
     ),
+    Storage(
+        label = "Storage",
+        icon = "lucide:hard-drive",
+        headline = "Storage",
+        blurb = "What Cove keeps on this device, and when it lets go of it.",
+    ),
     Trakt(
         label = "Trakt",
         icon = "iconamoon:history",
@@ -141,6 +147,8 @@ fun SettingsCategoryContent(
             SettingsCategory.Addons -> AddonSettings()
 
             SettingsCategory.Advanced -> AdvancedSettings()
+
+            SettingsCategory.Storage -> StorageSettings()
 
             SettingsCategory.Playback -> {
                 SettingsCard {

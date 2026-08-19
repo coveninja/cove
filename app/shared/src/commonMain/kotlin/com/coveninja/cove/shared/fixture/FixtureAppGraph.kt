@@ -1250,6 +1250,59 @@ private class FixtureDeviceRepository : DeviceRepository {
     }
 }
 
+/**
+ * A plausible cache, so the storage screen is a screen rather than four zeroes.
+ *
+ * The sizes are the shape of a real install — one big torrent cache and small everything else —
+ * because a fixtures run is what the layout is judged on, and a row reading "0 bytes" hides the
+ * wrapping problem that a row reading "18.4 GiB" reveals.
+ */
+private class FixtureStorageRepository : StorageRepository {
+    override val available: Boolean = true
+
+    private val _policy = MutableStateFlow(
+        TorrentCachePolicy(
+            limitBytes = 20L * 1024 * 1024 * 1024,
+            downloadAheadBytes = 512L * 1024 * 1024,
+            deleteAfterWatching = false,
+            maxAgeDays = 30,
+        ),
+    )
+    override val policy: StateFlow<TorrentCachePolicy> = _policy
+
+    private val sizes = mutableMapOf(
+        CacheKind.TorrentDownloads to CacheEntry(CacheKind.TorrentDownloads, 18_412_773_376, 7),
+        CacheKind.TorrentMetadata to CacheEntry(CacheKind.TorrentMetadata, 61_440, 24),
+        CacheKind.Images to CacheEntry(CacheKind.Images, 41_128_755, 812),
+        CacheKind.Tools to CacheEntry(CacheKind.Tools, 40_894_464, 1),
+    )
+
+    private val _usage = MutableStateFlow<StorageUsageState>(StorageUsageState.Loading)
+    override val usage: StateFlow<StorageUsageState> = _usage
+
+    override suspend fun refresh() {
+        val entries = sizes.values.sortedByDescending { it.bytes }
+        _usage.value = StorageUsageState.Ready(
+            StorageUsage(
+                entries = entries,
+                totalBytes = entries.sumOf { it.bytes },
+                freeDiskBytes = 214_748_364_800,
+            ),
+        )
+    }
+
+    override suspend fun setPolicy(policy: TorrentCachePolicy) {
+        _policy.value = policy
+    }
+
+    override suspend fun clear(kind: CacheKind): ClearResult {
+        val freed = sizes[kind]?.bytes ?: 0
+        sizes[kind] = CacheEntry(kind, 0, 0)
+        refresh()
+        return ClearResult(freedBytes = freed, keptInUse = 0)
+    }
+}
+
 fun FixtureAppGraph(): AppGraph = AppGraph(
     content   = FixtureContentRepository(),
     library   = FixtureLibraryRepository(),
@@ -1263,5 +1316,6 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     profiles  = FixtureProfileRepository(),
     trakt     = FixtureTraktRepository(),
     device    = FixtureDeviceRepository(),
+    storage   = FixtureStorageRepository(),
     fixtures  = true,
 )
