@@ -112,4 +112,45 @@ class YtDlpProvisionerTest {
         assertTrue(YTDL_FORMAT.contains("ba[acodec^=mp4a]"), YTDL_FORMAT)
         assertTrue(YTDL_FORMAT.endsWith("/b"), YTDL_FORMAT)
     }
+
+    // Naming no client at all is what leaves yt-dlp on ANDROID_VR, whose URLs 403
+    // the open-ended range ffmpeg opens with. A client must always be asked for,
+    // and it must be one that needs no JavaScript when there is none to run.
+    // Mutation applied to verify: returned "" for the null case → test failed, the
+    // options carried no player_client and mpv was back on the 403 streams.
+    @Test
+    fun `a player client is always named, and needs no javascript unless there is some`() {
+        val without = ytdlRawOptions(null)
+        assertTrue(without.contains("youtube:player_client=android"), without)
+        assertTrue(!without.contains("js-runtimes"), without)
+
+        val with = ytdlRawOptions("deno")
+        assertTrue(with.contains("youtube:player_client=web_embedded"), with)
+        assertTrue(with.contains("js-runtimes=deno"), with)
+    }
+
+    // mpv splits ytdl-raw-options on commas, so a second pair may be added but a
+    // client list may never be: yt-dlp merges the formats of every client named and
+    // then picks on quality, letting a 403 stream outbid the one that plays.
+    // Mutation applied to verify: returned "…player_client=web_embedded,android" for
+    // the null case → test failed, because that is exactly what mpv would have done
+    // with it: "android" split off as a pair of its own carrying no "=" at all.
+    @Test
+    fun `the options name one client and stay parseable as mpv key-value pairs`() {
+        JS_RUNTIMES.map(::ytdlRawOptions).plus(ytdlRawOptions(null)).forEach { options ->
+            val pairs = options.split(",")
+            assertEquals(1, pairs.count { it.startsWith("extractor-args=") }, options)
+            assertTrue(pairs.all { it.contains("=") }, options)
+            assertEquals(1, Regex("player_client=").findAll(options).count(), options)
+        }
+    }
+
+    // yt-dlp only accepts these four names, and the three kept here are the ones
+    // whose runtime name is also the program to look for on the PATH.
+    // Mutation applied to verify: added "quickjs" → test failed, its binary is qjs
+    // and the PATH probe would never have found it.
+    @Test
+    fun `every js runtime offered is one yt-dlp accepts under that name`() {
+        assertEquals(listOf("deno", "node", "bun"), JS_RUNTIMES)
+    }
 }

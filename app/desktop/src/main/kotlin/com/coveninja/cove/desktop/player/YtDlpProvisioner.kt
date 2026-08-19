@@ -224,3 +224,38 @@ internal fun needsRefresh(installedAt: Instant, now: Instant, interval: Duration
  */
 internal const val YTDL_FORMAT =
     "bv*[vcodec^=avc1][height<=?1080]+ba[acodec^=mp4a]/b[height<=?1080]/b"
+
+/**
+ * JavaScript runtimes yt-dlp can be told to drive, in its own order of preference.
+ *
+ * These are the names `--js-runtimes` accepts *and* the programs to look for on
+ * PATH, which is only true because they coincide; quickjs is left out because its
+ * binary is named `qjs` and the two would have to be tracked separately.
+ */
+internal val JS_RUNTIMES = listOf("deno", "node", "bun")
+
+/**
+ * The flags mpv's ytdl hook should pass yt-dlp, formatted as mpv's
+ * `ytdl-raw-options` takes them: `key=value` pairs separated by commas.
+ *
+ * Left to itself yt-dlp answers from its ANDROID_VR client, and googlevideo serves
+ * those URLs only to a *bounded* range request: `Range: bytes=0-` — what ffmpeg
+ * sends the moment it opens a stream — comes back 403, as does a request with no
+ * Range at all. Both the video and the audio stream then fail to open, and mpv
+ * ends the load with "No video or audio streams selected", which reads as a broken
+ * player rather than as a rejected request.
+ *
+ * Which client to ask for instead turns on whether yt-dlp can run JavaScript, since
+ * YouTube's newer clients expose no format at all until a JS challenge is solved —
+ * without a runtime they answer with storyboards and nothing else. WEB_EMBEDDED
+ * needs one and earns it, reaching 1080p; ANDROID needs nothing and is capped at the
+ * muxed 360p stream, which is still a trailer that plays.
+ *
+ * One client, never a list: yt-dlp merges the formats of every client named here and
+ * the format selector then chooses on quality alone, so a client whose streams 403
+ * can outbid the one whose streams play.
+ */
+internal fun ytdlRawOptions(jsRuntime: String?): String = when (jsRuntime) {
+    null -> "extractor-args=youtube:player_client=android"
+    else -> "extractor-args=youtube:player_client=web_embedded,js-runtimes=$jsRuntime"
+}

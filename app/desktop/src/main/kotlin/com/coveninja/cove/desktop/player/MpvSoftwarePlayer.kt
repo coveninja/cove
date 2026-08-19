@@ -40,6 +40,8 @@ class MpvSoftwarePlayer(
     private val ytdlSearchPath: String? = null,
     /** What the hook asks yt-dlp for; null leaves mpv's default. See [YTDL_FORMAT]. */
     private val ytdlFormat: String? = null,
+    /** Flags the hook passes yt-dlp itself; null passes none. See [ytdlRawOptions]. */
+    private val ytdlRawOptions: String? = null,
     private val frameConsumer: (BufferedImage) -> Unit,
 ) : DesktopPlayer {
     private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
@@ -91,12 +93,15 @@ class MpvSoftwarePlayer(
             // Costs nothing for ordinary streams: the hook runs on load failure,
             // not on load. See MpvVideoPlayerHost.playsWebVideos.
             setOption(library, created, "ytdl", "yes")
-            // Both are set before initialize because ytdl_hook reads them when the
-            // script loads. The search path names the managed copy first and then
+            // All three are set before initialize because ytdl_hook reads them when
+            // the script loads. The search path names the managed copy first and then
             // the names mpv would have tried anyway; the format string is there
-            // because mpv's own default picks streams YouTube answers with 403.
+            // because mpv's own default picks streams YouTube answers with 403, and
+            // the raw options are there because the *client* yt-dlp asks by default
+            // hands back streams that 403 whatever format is chosen.
             ytdlSearchPath?.let { setOption(library, created, "script-opts", "ytdl_hook-ytdl_path=$it") }
             ytdlFormat?.let { setOption(library, created, "ytdl-format", it) }
+            ytdlRawOptions?.let { setOption(library, created, "ytdl-raw-options", it) }
             setOption(
                 library,
                 created,
