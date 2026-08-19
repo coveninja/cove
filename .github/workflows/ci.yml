@@ -62,9 +62,8 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0"
       - name: Build and test
-        working-directory: app
         run: >-
-          ./gradlew
+          scripts/gradle-retry.sh
           :shared:build
           :backend:build
           :ui:build
@@ -88,9 +87,8 @@ jobs:
       - name: Install libmpv
         run: brew install mpv
       - name: Test and build Apple-silicon application
-        working-directory: app
         run: >-
-          ./gradlew
+          scripts/gradle-retry.sh
           :backend:desktopTest
           :ui:desktopTest
           :desktop:test

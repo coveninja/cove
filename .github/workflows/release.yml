@@ -77,11 +77,10 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0"
       - name: Build and test
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
         run: >-
-          ./gradlew
+          scripts/gradle-retry.sh
           :shared:build
           :backend:build
           :ui:build
@@ -111,7 +110,6 @@ jobs:
           sudo flatpak install --system -y --noninteractive flathub \
             org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08
       - name: Build Compose Desktop distributable
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -119,7 +117,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: ./gradlew :desktop:createDistributable --no-daemon
+        run: scripts/gradle-retry.sh :desktop:createDistributable --no-daemon
       - name: Assemble tarball and PKGBUILD
         run: |
           mkdir -p _pkg/bin _pkg/lib/cove _pkg/share/applications \
@@ -265,7 +263,6 @@ jobs:
       - name: Install native packaging dependencies
         run: brew install mpv dylibbundler
       - name: Build Compose application
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -273,7 +270,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: ./gradlew :desktop:createDistributable --no-daemon
+        run: scripts/gradle-retry.sh :desktop:createDistributable --no-daemon
       - name: Bundle libmpv and verify native closure
         run: |
           set -euo pipefail
@@ -350,7 +347,6 @@ jobs:
           test -n "$KEYSTORE" || { echo '::error::ANDROID_KEYSTORE_BASE64 is not configured'; exit 1; }
           printf '%s' "$KEYSTORE" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/cove-release.jks"
       - name: Build signed release APK
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/cove-release.jks
@@ -362,7 +358,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: ./gradlew :mobile:lintDebug :mobile:testDebugUnitTest :mobile:assembleRelease --no-daemon
+        run: scripts/gradle-retry.sh :mobile:lintDebug :mobile:testDebugUnitTest :mobile:assembleRelease --no-daemon
       - name: Stage and checksum APK
         run: |
           cp app/mobile/build/outputs/apk/release/mobile-release.apk cove-android.apk
@@ -463,9 +459,18 @@ jobs:
           pacman -Sy --noconfirm git openssh base-devel curl
           useradd -m builder
       - name: Configure AUR key
+        env:
+          # Via env rather than inline ${{ }}: the key never becomes part of the script text,
+          # so nothing in it can be read as shell syntax.
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
           install -d -m 700 -o builder -g builder /home/builder/.ssh
-          printf '%s' "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > /home/builder/.ssh/aur
+          # printf '%s' wrote the key with no trailing newline, and OpenSSH rejects a private
+          # key whose final -----END----- line is unterminated with exactly the message the
+          # v1.0.0 release died on: 'Load key ".../aur": invalid format'. The GitHub secrets
+          # UI strips the trailing newline on save, so the stored value never carries one.
+          # A doubled newline is harmless, so this is safe whichever way the secret was saved.
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
           chmod 600 /home/builder/.ssh/aur
           chown builder:builder /home/builder/.ssh/aur
           ssh-keyscan -H aur.archlinux.org > /home/builder/.ssh/known_hosts
