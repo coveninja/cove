@@ -18,6 +18,7 @@ jobs:
     name: Prepare update verification key
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       public_keys: ${{ steps.key.outputs.public_keys }}
       key_id: ${{ steps.key.outputs.key_id }}
@@ -63,9 +64,8 @@ jobs:
       - name: Verify tag and source version agree
         run: test "${GITHUB_REF_NAME#v}" = "$(tr -d '\r\n' < VERSION)"
       - name: Install libmpv
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libmpv-dev
+        timeout-minutes: 10
+        run: scripts/apt-install.sh libmpv-dev
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -94,6 +94,7 @@ jobs:
     name: Package Linux assets
     needs: [update-key, kotlin]
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -103,9 +104,9 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v5
       - name: Install libmpv and Flatpak tooling
+        timeout-minutes: 20
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libmpv-dev flatpak flatpak-builder
+          scripts/apt-install.sh libmpv-dev flatpak flatpak-builder
           sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y --noninteractive flathub \
             org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08
@@ -163,6 +164,7 @@ jobs:
     name: Package Windows assets
     needs: [update-key, kotlin]
     runs-on: windows-latest
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -252,6 +254,7 @@ jobs:
     name: Package macOS asset (ad-hoc signed)
     needs: [update-key, kotlin]
     runs-on: macos-15
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -327,6 +330,7 @@ jobs:
     name: Package Android asset
     needs: [update-key, kotlin]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -375,6 +379,7 @@ jobs:
     name: Sign manifest and publish complete release
     needs: [update-key, package-linux, package-windows, package-macos, package-android]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -451,6 +456,7 @@ jobs:
     name: Publish to AUR
     needs: [publish-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: startsWith(github.ref, 'refs/tags/v')
     container: archlinux:base
     steps:

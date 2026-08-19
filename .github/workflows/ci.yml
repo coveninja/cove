@@ -53,9 +53,10 @@ jobs:
       - name: Install libmpv
         # The desktop app links libmpv in-process through JNA, so the shared
         # library must be present for the JVM to load it at test time.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libmpv-dev
+        # scripts/apt-install.sh, not apt-get directly — see its header for why a
+        # bare `apt-get update -qq` here cost the v1.1.0 release twelve silent minutes.
+        timeout-minutes: 10
+        run: scripts/apt-install.sh libmpv-dev
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -146,6 +147,7 @@ jobs:
     name: Dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
