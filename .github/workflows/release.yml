@@ -149,7 +149,7 @@ jobs:
           upload-artifact: false
       - name: Checksum Flatpak bundle
         run: sha256sum cove-linux-amd64.flatpak > cove-linux-amd64.flatpak.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-release-assets
           if-no-files-found: error
@@ -238,7 +238,7 @@ jobs:
             $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
             "$hash  $f" | Out-File "$f.sha256" -Encoding ascii -NoNewline
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-release-assets
           if-no-files-found: error
@@ -318,7 +318,7 @@ jobs:
           ln -s /Applications dmg-root/Applications
           hdiutil create -volname Cove -srcfolder dmg-root -ov -format UDZO cove-macos-arm64.dmg
           shasum -a 256 cove-macos-arm64.dmg > cove-macos-arm64.dmg.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-release-assets
           if-no-files-found: error
@@ -367,7 +367,7 @@ jobs:
         run: |
           cp app/mobile/build/outputs/apk/release/mobile-release.apk cove-android.apk
           sha256sum cove-android.apk > cove-android.apk.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-release-assets
           if-no-files-found: error
