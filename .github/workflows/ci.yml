@@ -2,8 +2,13 @@ name: CI checks
 
 on:
   push:
+    # Deliberately not tags. `make patch` commits the version bump to master and tags the
+    # same commit, so a tag build here re-runs, on an identical tree, work that has already
+    # run twice: once for the master push and once as release.yml's `kotlin` job, which
+    # executes this job's exact task list. The three ran concurrently and hit Maven Central
+    # hard enough that it answered 429 and cost the v1.0.2 Android asset — see
+    # scripts/gradle-retry.sh. A tag is still fully built and tested by release.yml.
     branches: [master]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
