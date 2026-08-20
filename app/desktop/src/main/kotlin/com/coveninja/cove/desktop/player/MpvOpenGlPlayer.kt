@@ -399,6 +399,12 @@ class MpvOpenGlPlayer(
                     val text = log.message()
                     if (text.isNotBlank()) {
                         _snapshot.value = _snapshot.value.copy(lastMessage = text)
+                        // The snapshot holds only the latest line, and the UI shows
+                        // even that one just while a load is in flight. mpv's
+                        // commentary is the whole account of why a file would not
+                        // open, so it also goes to the log file, where a bug report
+                        // can carry it.
+                        System.err.println("Cove mpv: [${log.source()}] $text")
                     }
                 }
             }

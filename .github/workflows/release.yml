@@ -70,7 +70,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
@@ -102,7 +102,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install libmpv and Flatpak tooling
         timeout-minutes: 20
         run: |
@@ -149,7 +149,7 @@ jobs:
           upload-artifact: false
       - name: Checksum Flatpak bundle
         run: sha256sum cove-linux-amd64.flatpak > cove-linux-amd64.flatpak.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-release-assets
           if-no-files-found: error
@@ -172,7 +172,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Download mpv DLL
         shell: bash
         env:
@@ -238,7 +238,7 @@ jobs:
             $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
             "$hash  $f" | Out-File "$f.sha256" -Encoding ascii -NoNewline
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-release-assets
           if-no-files-found: error
@@ -262,7 +262,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install native packaging dependencies
         run: brew install mpv dylibbundler
       - name: Build Compose application
@@ -318,7 +318,7 @@ jobs:
           ln -s /Applications dmg-root/Applications
           hdiutil create -volname Cove -srcfolder dmg-root -ov -format UDZO cove-macos-arm64.dmg
           shasum -a 256 cove-macos-arm64.dmg > cove-macos-arm64.dmg.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-release-assets
           if-no-files-found: error
@@ -338,7 +338,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
@@ -367,7 +367,7 @@ jobs:
         run: |
           cp app/mobile/build/outputs/apk/release/mobile-release.apk cove-android.apk
           sha256sum cove-android.apk > cove-android.apk.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-release-assets
           if-no-files-found: error

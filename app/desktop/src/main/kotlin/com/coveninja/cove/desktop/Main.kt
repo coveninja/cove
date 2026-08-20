@@ -73,6 +73,15 @@ fun main(args: Array<String>) {
         exitProcess(1)
     }
 
+    // Before anything else can print, and after the lock rather than before it: a
+    // packaged launcher has no console to print to, so without this every
+    // diagnostic the run produces goes to a stream that discards it. The streams
+    // are teed, so a terminal launch prints exactly as it always did. A second
+    // launch that loses the lock installs nothing, or a double-clicked icon would
+    // rotate the running instance's log out from under it and leave a bug report
+    // carrying the empty file it started instead.
+    DesktopLog.install(args)
+
     // Kotlin owns stores, integrations, and the compatibility media boundary
     // in-process. Fixtures and an explicit API URL remain available for UI work.
     val kotlinRuntime = if (

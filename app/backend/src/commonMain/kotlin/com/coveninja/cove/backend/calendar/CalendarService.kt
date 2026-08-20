@@ -4,6 +4,8 @@ import com.coveninja.cove.backend.content.MediaCatalog
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.db.Library_entries
 import com.coveninja.cove.backend.store.ActiveProfileSession
+import com.coveninja.cove.shared.data.pendingEpisodes
+import com.coveninja.cove.shared.model.AiredSeason
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaDetails
@@ -125,11 +127,12 @@ class CalendarService(
 
         if (entry.status == LibraryStatus.Watching.wireName) {
             details.lastEpisodeToAir?.let { aired ->
-                val backlog = airedBacklog(seasons, aired.seasonNumber, aired.episodeNumber, completed)
-                if (backlog.waiting > 0) {
-                    val episode = runCatching { catalog.episodes(id, backlog.season) }
+                val airedSeasons = airedSeasons(seasons, aired.seasonNumber, aired.episodeNumber)
+                val pending = pendingEpisodes(airedSeasons, completed)
+                pending.firstOrNull()?.let { (nextSeason, nextEpisode) ->
+                    val episode = runCatching { catalog.episodes(id, nextSeason) }
                         .getOrDefault(emptyList())
-                        .firstOrNull { it.episodeNumber == backlog.episode }
+                        .firstOrNull { it.episodeNumber == nextEpisode }
                     result += CalendarItem(
                         date = episode?.airDate?.takeIf(String::isNotBlank) ?: entry.last_air_date,
                         kind = "available",
@@ -137,11 +140,12 @@ class CalendarService(
                         mediaType = MediaType.Tv.wireName,
                         title = title,
                         posterPath = poster,
-                        seasonNumber = backlog.season,
-                        episodeNumber = backlog.episode,
+                        seasonNumber = nextSeason,
+                        episodeNumber = nextEpisode,
                         episodeName = episode?.name.orEmpty(),
                         stillPath = episode?.stillPath.orEmpty(),
-                        waitingCount = backlog.waiting,
+                        waitingCount = pending.size,
+                        airedSeasons = airedSeasons,
                     )
                 }
             }
@@ -200,34 +204,27 @@ class CalendarService(
         )
     }
 
-    private fun airedBacklog(
+    /**
+     * How much of the show has aired, as episode counts per season.
+     *
+     * The season TMDB is currently airing is clamped to the episode that has actually gone
+     * out; everything before it counts whole. This travels with the calendar entry so the
+     * backlog can be re-counted against watch progress later without asking TMDB again.
+     */
+    private fun airedSeasons(
         seasons: List<TvSeason>,
         airedSeason: Int,
         airedEpisode: Int,
-        completed: Set<Pair<Int, Int>>,
-    ): Backlog {
-        var nextSeason = 0
-        var nextEpisode = 0
-        var waiting = 0
-        seasons.takeWhile { it.seasonNumber <= airedSeason }.forEach { season ->
-            val last = if (season.seasonNumber == airedSeason) {
+    ): List<AiredSeason> = seasons.takeWhile { it.seasonNumber <= airedSeason }.map { season ->
+        AiredSeason(
+            seasonNumber = season.seasonNumber,
+            episodeCount = if (season.seasonNumber == airedSeason) {
                 minOf(season.episodeCount, airedEpisode)
             } else {
                 season.episodeCount
-            }
-            (1..last).forEach { episode ->
-                if ((season.seasonNumber to episode) in completed) return@forEach
-                if (waiting == 0) {
-                    nextSeason = season.seasonNumber
-                    nextEpisode = episode
-                }
-                waiting++
-            }
-        }
-        return Backlog(nextSeason, nextEpisode, waiting)
+            },
+        )
     }
-
-    private data class Backlog(val season: Int, val episode: Int, val waiting: Int)
 
     private fun String.toDateOrNull(): LocalDate? =
         takeIf(String::isNotBlank)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }

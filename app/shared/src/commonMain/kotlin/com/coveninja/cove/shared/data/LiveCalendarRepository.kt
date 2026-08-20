@@ -2,6 +2,7 @@ package com.coveninja.cove.shared.data
 
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.network.CoveApi
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -14,7 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 class LiveCalendarRepository(
     private val api: CoveApi,
     library: LibraryRepository,
-) : BaseCalendarRepository(library) {
+    scope: CoroutineScope,
+) : BaseCalendarRepository(library, scope) {
 
     override suspend fun fetchCalendar(): List<CalendarItem> = api.libraryCalendar()
 }

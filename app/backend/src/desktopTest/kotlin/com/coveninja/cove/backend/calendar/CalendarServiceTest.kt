@@ -4,6 +4,7 @@ import com.coveninja.cove.backend.content.MediaCatalog
 import com.coveninja.cove.backend.db.DesktopDatabase
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.shared.model.AiredEpisode
+import com.coveninja.cove.shared.model.AiredSeason
 import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
@@ -63,6 +64,12 @@ class CalendarServiceTest {
             assertEquals(1, backlog.seasonNumber)
             assertEquals(2, backlog.episodeNumber)
             assertEquals(2, backlog.waitingCount)
+            // The five-episode season is counted only as far as the third episode, which is
+            // what has aired. Travelling with the entry is what lets the count be redone
+            // later against watch progress without asking TMDB again.
+            // Mutation applied to verify: left the field off the entry → test failed, the
+            // snapshot carried nothing to recount and the backlog could only go stale.
+            assertEquals(listOf(AiredSeason(1, 3)), backlog.airedSeasons)
             assertEquals(listOf("2026-08-10", "2026-08-17"), items.filter { it.kind == "episode" }.map { it.date })
         }
     }
