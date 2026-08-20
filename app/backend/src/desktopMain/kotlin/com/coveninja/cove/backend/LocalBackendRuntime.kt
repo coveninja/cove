@@ -349,6 +349,7 @@ class LocalBackendRuntime private constructor(
                     database = stores.databaseHandle,
                     session = stores.profileSession,
                     library = stores.library,
+                    scope = scope,
                     localeProvider = localeProvider,
                 )
                 // In-process like the calendar, not over loopback like playback: discovery

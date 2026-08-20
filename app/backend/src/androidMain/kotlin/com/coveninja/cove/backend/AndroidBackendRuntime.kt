@@ -326,6 +326,7 @@ class AndroidBackendRuntime private constructor(
                         database = stores.databaseHandle,
                         session = stores.repositories.profileSession,
                         library = stores.repositories.library,
+                        scope = scope,
                         localeProvider = localeProvider,
                     )
                     // The custom-algorithm hook is user-controlled network input, so it uses
