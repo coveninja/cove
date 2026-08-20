@@ -13,7 +13,7 @@
 
   <p align="center">
     <a href="https://buymeacoffee.com/coveninja">
-      <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=coveninja&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy Me A Coffee" />
+      <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&slug=coveninja&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy Me A Coffee" />
     </a>
   </p>
 
