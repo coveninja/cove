@@ -76,8 +76,13 @@ private class AndroidUpdatePlatform(private val context: Context) : UpdatePlatfo
         ) { "Unable to save update preferences" }
     }
 
-    override fun isMeteredConnection(): Boolean =
-        context.getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered != false
+    // ConnectivityService enforces ACCESS_NETWORK_STATE by throwing, and the caller reports a
+    // throw here as a failed update rather than as a prompt. An unreadable network state
+    // therefore counts as metered: the viewer is asked to approve the download instead of being
+    // shown a SecurityException where the new version should be.
+    override fun isMeteredConnection(): Boolean = runCatching {
+        context.getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered
+    }.getOrNull() != false
 
     override fun canResumePermissionRequest(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()

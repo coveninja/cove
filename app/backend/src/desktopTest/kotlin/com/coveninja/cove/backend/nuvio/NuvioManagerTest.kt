@@ -69,4 +69,56 @@ class NuvioManagerTest {
         }
         http.close()
     }
+
+    @Test
+    fun disablingAScraperDropsItsSourceAndReEnablingFetchesItAgain() = runTest {
+        var codeFetches = 0
+        val http = HttpClient(MockEngine { request ->
+            val body = when {
+                request.url.encodedPath.endsWith("manifest.json") -> """{"scrapers":[{
+                    "id":"one","name":"One","filename":"one.js","supportedTypes":["movie"]
+                }]}"""
+                request.url.encodedPath.endsWith("one.js") -> {
+                    codeFetches++
+                    "module.exports.getStreams = () => []"
+                }
+                else -> error("unexpected ${'$'}{request.url}")
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/plain"))
+        })
+        val sandbox = object : NuvioSandbox {
+            override suspend fun run(invocation: NuvioInvocation): List<NuvioScrapedStream> = emptyList()
+        }
+        val dir = Files.createTempDirectory("cove-nuvio")
+        DesktopDatabase.inMemory().use { database ->
+            LegacyMigration(database.database, dir) { "primary" }.importIfNeeded()
+            val manager = NuvioManager(
+                database.database,
+                ActiveProfileSession(database.database),
+                http,
+                { "2026-08-19T00:00:00Z" },
+                sandbox,
+                BasicAddonUrlPolicy,
+            )
+
+            val repo = manager.add("https://github.com/owner/plugins")
+            manager.setRepoEnabled(repo.id, true)
+            manager.setScraperEnabled(repo.id, "one", true)
+            assertEquals(1, codeFetches)
+            assertTrue(manager.repos().single().scrapers.single().code.isNotBlank())
+
+            // The whole store is one SQLite row, and on Android a row has a size ceiling it
+            // must not reach. Retaining the source of every scraper the viewer ever tried is
+            // what walks it towards that ceiling, so switching one off releases its code.
+            manager.setScraperEnabled(repo.id, "one", false)
+            assertEquals("", manager.repos().single().scrapers.single().code)
+
+            // Which is only safe because the enable path treats blank code as "never
+            // fetched" and goes back to the repo for it.
+            manager.setScraperEnabled(repo.id, "one", true)
+            assertEquals(2, codeFetches)
+            assertTrue(manager.repos().single().scrapers.single().code.isNotBlank())
+        }
+        http.close()
+    }
 }

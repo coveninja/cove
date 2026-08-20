@@ -18,6 +18,7 @@ jobs:
     name: Prepare update verification key
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       public_keys: ${{ steps.key.outputs.public_keys }}
       key_id: ${{ steps.key.outputs.key_id }}
@@ -63,25 +64,23 @@ jobs:
       - name: Verify tag and source version agree
         run: test "${GITHUB_REF_NAME#v}" = "$(tr -d '\r\n' < VERSION)"
       - name: Install libmpv
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libmpv-dev
+        timeout-minutes: 10
+        run: scripts/apt-install.sh libmpv-dev
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0"
       - name: Build and test
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
         run: >-
-          ./gradlew
+          scripts/gradle-retry.sh
           :shared:build
           :backend:build
           :ui:build
@@ -95,6 +94,7 @@ jobs:
     name: Package Linux assets
     needs: [update-key, kotlin]
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -102,16 +102,15 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install libmpv and Flatpak tooling
+        timeout-minutes: 20
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libmpv-dev flatpak flatpak-builder
+          scripts/apt-install.sh libmpv-dev flatpak flatpak-builder
           sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y --noninteractive flathub \
             org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08
       - name: Build Compose Desktop distributable
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -119,7 +118,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: ./gradlew :desktop:createDistributable --no-daemon
+        run: scripts/gradle-retry.sh :desktop:createDistributable --no-daemon
       - name: Assemble tarball and PKGBUILD
         run: |
           mkdir -p _pkg/bin _pkg/lib/cove _pkg/share/applications \
@@ -150,7 +149,7 @@ jobs:
           upload-artifact: false
       - name: Checksum Flatpak bundle
         run: sha256sum cove-linux-amd64.flatpak > cove-linux-amd64.flatpak.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-release-assets
           if-no-files-found: error
@@ -165,6 +164,7 @@ jobs:
     name: Package Windows assets
     needs: [update-key, kotlin]
     runs-on: windows-latest
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -172,7 +172,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Download mpv DLL
         shell: bash
         env:
@@ -238,7 +238,7 @@ jobs:
             $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
             "$hash  $f" | Out-File "$f.sha256" -Encoding ascii -NoNewline
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-release-assets
           if-no-files-found: error
@@ -251,9 +251,10 @@ jobs:
             cove-windows-amd64-portable.zip.sha256
 
   package-macos:
-    name: Package signed macOS asset
+    name: Package macOS asset (ad-hoc signed)
     needs: [update-key, kotlin]
     runs-on: macos-15
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -261,32 +262,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install native packaging dependencies
         run: brew install mpv dylibbundler
-      - name: Import Developer ID certificate
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          test -n "$CERTIFICATE_BASE64" || { echo '::error::MACOS_CERTIFICATE_BASE64 is not configured'; exit 1; }
-          KEYCHAIN_PASSWORD=$(uuidgen)
-          KEYCHAIN_PATH="$RUNNER_TEMP/cove-signing.keychain-db"
-          CERTIFICATE_PATH="$RUNNER_TEMP/cove-developer-id.p12"
-          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
-            | awk -F'"' '/Developer ID Application/{print $2; exit}')
-          test -n "$SIGNING_IDENTITY" || { echo '::error::The certificate contains no Developer ID Application identity'; exit 1; }
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
-      - name: Build signed Compose application
-        working-directory: app
+      - name: Build Compose application
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -294,11 +273,7 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: >-
-          ./gradlew :desktop:createDistributable --no-daemon
-          -Pcompose.desktop.mac.sign=true
-          -Pcompose.desktop.mac.signing.identity="$SIGNING_IDENTITY"
-          -Pcompose.desktop.mac.signing.keychain="$KEYCHAIN_PATH"
+        run: scripts/gradle-retry.sh :desktop:createDistributable --no-daemon
       - name: Bundle libmpv and verify native closure
         run: |
           set -euo pipefail
@@ -322,37 +297,28 @@ jobs:
               | grep -E '^(/opt/homebrew|/usr/local)' || true)
             test -z "$external" || { echo "::error::$library still references $external"; exit 1; }
           done
+          # Ad-hoc signatures, NOT Developer ID. arm64 macOS refuses to execute a
+          # Mach-O carrying no signature at all, so this is the minimum that runs;
+          # it is not a Gatekeeper credential and does not avoid the quarantine
+          # prompt. Hardened runtime and entitlements are deliberately omitted:
+          # they exist to satisfy notarization, and with no real identity they add
+          # only library-validation failure modes. Restoring Developer ID means
+          # putting back --options runtime, the entitlements and notarytool
+          # together — see docs/UPDATES.md.
           find "$FRAMEWORKS" -type f -name '*.dylib' -print0 \
-            | xargs -0 -n1 codesign --force --options runtime --timestamp \
-              --keychain "$KEYCHAIN_PATH" --sign "$SIGNING_IDENTITY"
+            | xargs -0 -n1 codesign --force --timestamp=none --sign -
           python3 -c 'import ctypes,sys; ctypes.CDLL(sys.argv[1])' "$FRAMEWORKS/libmpv.2.dylib"
-          codesign --force --options runtime --timestamp \
-            --entitlements packaging/macos/entitlements.plist \
-            --keychain "$KEYCHAIN_PATH" \
-            --sign "$SIGNING_IDENTITY" "$APP"
+          codesign --force --timestamp=none --sign - "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-      - name: Create and notarize DMG
-        env:
-          APPLE_ID: ${{ secrets.APPLE_NOTARIZATION_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_NOTARIZATION_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Create DMG
         run: |
           set -euo pipefail
-          test -n "$APPLE_ID" || { echo '::error::APPLE_NOTARIZATION_ID is not configured'; exit 1; }
-          test -n "$APPLE_PASSWORD" || { echo '::error::APPLE_NOTARIZATION_PASSWORD is not configured'; exit 1; }
-          test -n "$APPLE_TEAM_ID" || { echo '::error::APPLE_TEAM_ID is not configured'; exit 1; }
           mkdir dmg-root
           ditto app/desktop/build/compose/binaries/main/app/Cove.app dmg-root/Cove.app
           ln -s /Applications dmg-root/Applications
           hdiutil create -volname Cove -srcfolder dmg-root -ov -format UDZO cove-macos-arm64.dmg
-          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" \
-            --sign "$SIGNING_IDENTITY" cove-macos-arm64.dmg
-          xcrun notarytool submit cove-macos-arm64.dmg \
-            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple cove-macos-arm64.dmg
-          xcrun stapler validate cove-macos-arm64.dmg
           shasum -a 256 cove-macos-arm64.dmg > cove-macos-arm64.dmg.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-release-assets
           if-no-files-found: error
@@ -364,6 +330,7 @@ jobs:
     name: Package Android asset
     needs: [update-key, kotlin]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v7
@@ -371,7 +338,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
@@ -384,7 +351,6 @@ jobs:
           test -n "$KEYSTORE" || { echo '::error::ANDROID_KEYSTORE_BASE64 is not configured'; exit 1; }
           printf '%s' "$KEYSTORE" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/cove-release.jks"
       - name: Build signed release APK
-        working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/cove-release.jks
@@ -396,12 +362,12 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: ./gradlew :mobile:lintDebug :mobile:testDebugUnitTest :mobile:assembleRelease --no-daemon
+        run: scripts/gradle-retry.sh :mobile:lintDebug :mobile:testDebugUnitTest :mobile:assembleRelease --no-daemon
       - name: Stage and checksum APK
         run: |
           cp app/mobile/build/outputs/apk/release/mobile-release.apk cove-android.apk
           sha256sum cove-android.apk > cove-android.apk.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-release-assets
           if-no-files-found: error
@@ -413,6 +379,7 @@ jobs:
     name: Sign manifest and publish complete release
     needs: [update-key, package-linux, package-windows, package-macos, package-android]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
@@ -489,6 +456,7 @@ jobs:
     name: Publish to AUR
     needs: [publish-release]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: startsWith(github.ref, 'refs/tags/v')
     container: archlinux:base
     steps:
@@ -497,9 +465,18 @@ jobs:
           pacman -Sy --noconfirm git openssh base-devel curl
           useradd -m builder
       - name: Configure AUR key
+        env:
+          # Via env rather than inline ${{ }}: the key never becomes part of the script text,
+          # so nothing in it can be read as shell syntax.
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
           install -d -m 700 -o builder -g builder /home/builder/.ssh
-          printf '%s' "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > /home/builder/.ssh/aur
+          # printf '%s' wrote the key with no trailing newline, and OpenSSH rejects a private
+          # key whose final -----END----- line is unterminated with exactly the message the
+          # v1.0.0 release died on: 'Load key ".../aur": invalid format'. The GitHub secrets
+          # UI strips the trailing newline on save, so the stored value never carries one.
+          # A doubled newline is harmless, so this is safe whichever way the secret was saved.
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
           chmod 600 /home/builder/.ssh/aur
           chown builder:builder /home/builder/.ssh/aur
           ssh-keyscan -H aur.archlinux.org > /home/builder/.ssh/known_hosts

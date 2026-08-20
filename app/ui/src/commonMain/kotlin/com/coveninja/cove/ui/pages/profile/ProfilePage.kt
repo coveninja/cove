@@ -78,6 +78,7 @@ private val SelfContainedCategories = setOf(
     SettingsCategory.Account,
     SettingsCategory.Addons,
     SettingsCategory.Advanced,
+    SettingsCategory.Storage,
 )
 
 /** Below this the rail would leave too little room for the settings themselves. */
@@ -224,6 +225,7 @@ private fun SettingsTab(
                 when (shown) {
                     SettingsCategory.Addons -> AddonSettings(modifier = bodyModifier)
                     SettingsCategory.Advanced -> AdvancedSettings(modifier = bodyModifier)
+                    SettingsCategory.Storage -> StorageSettings(modifier = bodyModifier)
                     else -> Column(
                         modifier = bodyModifier,
                         verticalArrangement = Arrangement.spacedBy(14.dp),

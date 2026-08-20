@@ -11,6 +11,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -200,13 +201,28 @@ class LocalAccountRepository(
         }
     }
 
-    private inline fun attempt(block: () -> AuthOutcome): AuthOutcome = try {
-        block()
-    } catch (cancellation: CancellationException) {
-        throw cancellation
-    } catch (error: Throwable) {
-        AuthOutcome.Failure(error.readableMessage())
-    }
+    /**
+     * Runs one auth attempt on this repository's scope rather than the caller's.
+     *
+     * The caller is a form, and forms go away. The onboarding step is unmounted the instant
+     * someone presses Continue, and on the caller's own scope that cancels the attempt
+     * wherever it had got to — including after Supabase accepted the credentials but before
+     * [refreshAccountState] had run, which leaves an account that exists everywhere except on
+     * the device that just signed into it. Detached, the worst case is a sign-in the viewer
+     * stops watching: it still finishes, and [account] still reports it.
+     *
+     * It also moves the work off the caller's dispatcher, which is the composition's — every
+     * one of these ends in SQLite writes and a full sync, on the UI thread.
+     */
+    private suspend fun attempt(block: suspend () -> AuthOutcome): AuthOutcome = scope.async {
+        try {
+            block()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            AuthOutcome.Failure(error.readableMessage())
+        }
+    }.await()
 }
 
 private fun Throwable.readableMessage(): String = when (this) {

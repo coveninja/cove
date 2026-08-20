@@ -26,6 +26,15 @@ data class CalendarItem(
     @SerialName("still_path") val stillPath: String = "",
     /** How many aired episodes are still unwatched, for a backlog entry. */
     @SerialName("waiting_count") val waitingCount: Int = 0,
+    /**
+     * The aired seasons [waitingCount] was counted from; empty on anything but a TV
+     * backlog entry.
+     *
+     * Carried so the count can be redone against watch progress without rebuilding the
+     * snapshot from TMDB — see `applyWatchProgress`. Without it a finished episode goes on
+     * waiting until the whole calendar is refetched.
+     */
+    @SerialName("aired_seasons") val airedSeasons: List<AiredSeason> = emptyList(),
 ) {
     val type: MediaType?
         get() = when (mediaType) {
@@ -62,3 +71,17 @@ data class CalendarItem(
         const val KIND_EPISODE = "episode"
     }
 }
+
+/**
+ * How much of one season had aired when a calendar snapshot was built.
+ *
+ * The aired episodes are `1..episodeCount` of [seasonNumber]: the last aired season is
+ * clamped to the episode that aired, earlier ones run whole. Four bytes of arithmetic per
+ * season is all a backlog entry needs to be re-counted, which is why the entry carries this
+ * rather than the episodes themselves.
+ */
+@Serializable
+data class AiredSeason(
+    @SerialName("season_number") val seasonNumber: Int,
+    @SerialName("episode_count") val episodeCount: Int,
+)

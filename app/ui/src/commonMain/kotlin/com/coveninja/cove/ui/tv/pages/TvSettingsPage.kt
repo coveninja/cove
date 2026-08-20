@@ -25,13 +25,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AddonsState
+import com.coveninja.cove.shared.data.CacheKind
+import com.coveninja.cove.shared.data.StorageUsageState
 import com.coveninja.cove.shared.data.ProfilesState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.Addon
 import com.coveninja.cove.shared.model.NuvioRepoSummary
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.ui.CoveColors
+import com.coveninja.cove.ui.components.common.formatUpdateBytes
+import com.coveninja.cove.ui.state.CacheAgeChoices
+import com.coveninja.cove.ui.state.CacheLimitChoices
+import com.coveninja.cove.ui.state.DownloadAheadChoices
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.cacheAgeLabel
+import com.coveninja.cove.ui.state.cacheLimitLabel
+import com.coveninja.cove.ui.state.downloadAheadLabel
+import com.coveninja.cove.ui.state.withCurrent
 import com.coveninja.cove.ui.state.SettingsEditor
 import com.coveninja.cove.ui.state.rememberSettingsEditor
 import com.coveninja.cove.ui.tv.TvTheme
@@ -96,9 +106,15 @@ internal fun TvSettingsPage(
     val nuvioRepos = (addonsState as? AddonsState.Ready)?.nuvioRepos.orEmpty()
     // The scrapers block is dropped rather than shown empty on a host with no Nuvio sandbox:
     // an always-empty section is a focus stop that never has anything in it.
-    val sections = remember(nuvioRepos, graph.addons.supportsNuvio) {
-        TvSettingsSection.entries.filter {
-            it != TvSettingsSection.Scrapers || graph.addons.supportsNuvio
+    val sections = remember(nuvioRepos, graph.addons.supportsNuvio, graph.storage.available) {
+        TvSettingsSection.entries.filter { section ->
+            when (section) {
+                TvSettingsSection.Scrapers -> graph.addons.supportsNuvio
+                // Same reasoning: a host with no caches of its own would contribute a heading,
+                // a focus stop and nothing to do once you reached it.
+                TvSettingsSection.Storage -> graph.storage.available
+                else -> true
+            }
         }
     }
 
@@ -148,6 +164,7 @@ internal fun TvSettingsPage(
                         TvSettingsSection.Subtitles -> SubtitleRows(settings, editor)
                         TvSettingsSection.Providers -> ProviderRows(addons)
                         TvSettingsSection.Scrapers -> ScraperRows(nuvioRepos)
+                        TvSettingsSection.Storage -> StorageRows()
                     }
                 }
             }
@@ -269,6 +286,131 @@ private fun SubtitleRows(settings: AppSettings, editor: SettingsEditor) {
         value = onOff(settings.subtitleBackground),
         highlighted = settings.subtitleBackground,
         onActivate = { editor.edit { copy(subtitleBackground = !subtitleBackground) } },
+    )
+}
+
+/**
+ * Storage, reduced to what a remote can change.
+ *
+ * A television is where this matters most and where it is hardest to reach: set-top boxes ship
+ * with a few gigabytes, nothing on Android reclaims the app's own files, and there is no file
+ * manager to go and look. So the usage line comes first, as a row that reports rather than
+ * responds, and the clear arms on one press and commits on the second — the D-pad reading of the
+ * confirm step the pointer shells get.
+ */
+@Composable
+private fun StorageRows() {
+    val graph = LocalAppGraph.current
+    val scope = rememberCoroutineScope()
+    val storage = graph.storage
+    val policy by storage.policy.collectAsState()
+    val usage by storage.usage.collectAsState()
+    var armed by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(storage) { storage.refresh() }
+
+    val downloads = (usage as? StorageUsageState.Ready)
+        ?.usage
+        ?.entries
+        ?.firstOrNull { it.kind == CacheKind.TorrentDownloads }
+
+    TvSettingRow(
+        label = "Downloads on this device",
+        detail = result ?: (usage as? StorageUsageState.Failed)?.message,
+        value = when {
+            downloads != null -> formatUpdateBytes(downloads.bytes)
+            usage is StorageUsageState.Failed -> "Unknown"
+            usage is StorageUsageState.Ready -> formatUpdateBytes(0)
+            else -> "Measuring…"
+        },
+        // Not a focus stop: there is nothing to press, and a remote that stopped here would be
+        // asking the viewer to work out why nothing happened.
+        enabled = false,
+        onActivate = {},
+    )
+    TvSettingRow(
+        label = "Keep at most",
+        detail = "Past this, the downloads you watched longest ago go first.",
+        value = cacheLimitLabel(policy.limitBytes),
+        onActivate = {
+            scope.launch {
+                storage.setPolicy(
+                    policy.copy(
+                        limitBytes = cycleOption(
+                            withCurrent(CacheLimitChoices, policy.limitBytes, 0),
+                            policy.limitBytes,
+                        ),
+                    ),
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Download ahead",
+        detail = "How far past what you are watching a torrent keeps fetching.",
+        value = downloadAheadLabel(policy.downloadAheadBytes),
+        onActivate = {
+            scope.launch {
+                storage.setPolicy(
+                    policy.copy(
+                        downloadAheadBytes = cycleOption(
+                            withCurrent(DownloadAheadChoices, policy.downloadAheadBytes, 0),
+                            policy.downloadAheadBytes,
+                        ),
+                    ),
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Keep downloads for",
+        detail = "Anything unplayed for longer is removed.",
+        value = cacheAgeLabel(policy.maxAgeDays),
+        onActivate = {
+            scope.launch {
+                storage.setPolicy(
+                    policy.copy(
+                        maxAgeDays = cycleOption(
+                            withCurrent(CacheAgeChoices, policy.maxAgeDays, 0),
+                            policy.maxAgeDays,
+                        ),
+                    ),
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Delete after watching",
+        detail = "Removes each download a few minutes after you stop.",
+        value = onOff(policy.deleteAfterWatching),
+        highlighted = policy.deleteAfterWatching,
+        onActivate = {
+            scope.launch {
+                storage.setPolicy(policy.copy(deleteAfterWatching = !policy.deleteAfterWatching))
+            }
+        },
+    )
+    TvSettingRow(
+        label = if (armed) "Press again to delete every download" else "Clear downloads now",
+        detail = "Anything playing right now is left alone.",
+        value = if (armed) "Confirm" else "Clear",
+        highlighted = armed,
+        onActivate = {
+            if (!armed) {
+                armed = true
+                return@TvSettingRow
+            }
+            armed = false
+            scope.launch {
+                val cleared = storage.clear(CacheKind.TorrentDownloads)
+                result = buildString {
+                    append("Freed ")
+                    append(formatUpdateBytes(cleared.freedBytes))
+                    if (cleared.keptInUse > 0) append(" — one kept, still playing")
+                }
+            }
+        },
     )
 }
 
@@ -423,4 +565,5 @@ private enum class TvSettingsSection(
     Subtitles("Subtitles", null, "lucide:captions"),
     Providers("Providers", "Where streams are found. Managed on a desktop.", "lucide:blocks"),
     Scrapers("Community scrapers", "Third-party code, off unless you turn it on.", "lucide:blocks"),
+    Storage("Storage", "What streaming has left on this device.", "lucide:hard-drive"),
 }

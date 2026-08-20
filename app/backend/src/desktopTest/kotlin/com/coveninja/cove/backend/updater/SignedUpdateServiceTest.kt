@@ -28,6 +28,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
+import org.bouncycastle.asn1.ASN1ObjectIdentifier
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -54,6 +57,50 @@ class SignedUpdateServiceTest {
             SignedManifestVerifier(mapOf("another-key" to publicKeys.getValue(KEY_ID)))
                 .verify(bytes, sign(bytes))
         }
+    }
+
+    @Test
+    fun `verifier rejects embedded keys that are not Ed25519`() {
+        val bytes = manifest().bytes()
+        val signature = sign(bytes)
+
+        // The key is read straight out of the SubjectPublicKeyInfo rather than through a JCA
+        // KeyFactory, so the algorithm OID has to be checked explicitly. X25519 is the case that
+        // matters: it is the other half of RFC 8410 and its key data is also 32 bytes, so the
+        // length check alone would wave it through and Ed25519Signer would treat an agreement
+        // key as a verification key.
+        // Asserting the message matters here: an unchecked X25519 key would be rejected anyway,
+        // but as a failed signature, which is indistinguishable from a tampered manifest.
+        val x25519 = KeyPairGenerator.getInstance("X25519", provider).generateKeyPair()
+        val wrongType = assertFailsWith<SecurityException> {
+            SignedManifestVerifier(mapOf(KEY_ID to Base64.getEncoder().encodeToString(x25519.public.encoded)))
+                .verify(bytes, signature)
+        }
+        assertEquals("embedded update public key is not an Ed25519 key", wrongType.message)
+        assertFailsWith<SecurityException> {
+            SignedManifestVerifier(mapOf(KEY_ID to Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3))))
+                .verify(bytes, signature)
+        }
+
+        // Trailing bytes after the SubjectPublicKeyInfo must not be ignored.
+        val trailing = keyPair.public.encoded + byteArrayOf(0)
+        assertFailsWith<SecurityException> {
+            SignedManifestVerifier(mapOf(KEY_ID to Base64.getEncoder().encodeToString(trailing)))
+                .verify(bytes, signature)
+        }
+
+        // Correct OID, wrong key length: Ed25519PublicKeyParameters reads a fixed 32 bytes out of
+        // the array, so without the length check this leaves the verifier by way of an
+        // ArrayIndexOutOfBoundsException instead of a fail-closed SecurityException.
+        val truncated = SubjectPublicKeyInfo(
+            AlgorithmIdentifier(ASN1ObjectIdentifier("1.3.101.112")),
+            keyPair.public.encoded.copyOfRange(keyPair.public.encoded.size - 8, keyPair.public.encoded.size),
+        ).encoded
+        val wrongLength = assertFailsWith<SecurityException> {
+            SignedManifestVerifier(mapOf(KEY_ID to Base64.getEncoder().encodeToString(truncated)))
+                .verify(bytes, signature)
+        }
+        assertEquals("embedded update public key has the wrong length", wrongLength.message)
     }
 
     @Test

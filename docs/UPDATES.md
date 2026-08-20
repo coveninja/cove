@@ -76,7 +76,7 @@ both public entries. Remove the old public key only in a later next-key-signed
 release. A compromised key requires a manual package update for clients that did
 not receive a trusted bridge release.
 
-## Provider and macOS release configuration
+## Provider and platform release configuration
 
 Release builds use the same repository secrets on Linux, Windows, macOS, and
 Android. Add each value once under **Settings → Secrets and variables → Actions**:
@@ -93,17 +93,31 @@ The Gradle build reads those values directly from its environment and writes the
 client configuration into each package. Do not configure a Supabase service-role
 key or JWT secret: Cove clients neither need nor accept server authority.
 
-The Apple-silicon DMG additionally requires:
+None of these values belongs in `.env`, source files, Gradle properties, or the
+Git history.
 
-| Secret | Purpose |
-|---|---|
-| `MACOS_CERTIFICATE_BASE64` | Base64 PKCS#12 containing a Developer ID Application certificate and private key |
-| `MACOS_CERTIFICATE_PASSWORD` | PKCS#12 export password |
-| `APPLE_NOTARIZATION_ID` | Apple account used by `notarytool` |
-| `APPLE_NOTARIZATION_PASSWORD` | App-specific Apple password |
-| `APPLE_TEAM_ID` | Apple Developer team identifier |
+### The macOS DMG is ad-hoc signed, not Developer ID signed
 
-The release job imports the certificate into an ephemeral runner keychain,
-signs the Compose app and bundled libmpv closure, notarizes the final DMG, and
-publishes it only after Apple's ticket validates. None of these values belongs
-in `.env`, source files, Gradle properties, or the Git history.
+`package-macos` needs no Apple secrets. It ad-hoc signs the bundled libmpv
+closure and the app (`codesign --sign -`) and ships the DMG unnotarized, because
+the project has no Apple Developer Program identity. Ad-hoc signing is not a
+Gatekeeper credential — it is the minimum that *executes*, since arm64 macOS
+refuses to run a Mach-O carrying no signature at all. Users get the "Apple could
+not verify" prompt and must approve Cove once under System Settings → Privacy &
+Security; the README documents that.
+
+Hardened runtime (`--options runtime`) and `packaging/macos/entitlements.plist`
+are deliberately **not** applied. They exist to satisfy notarization, and under
+an ad-hoc signature they only add library-validation failure modes for the JNA
+and JNI libraries Cove loads. The entitlements file is kept in the tree for the
+day a real identity exists.
+
+To restore Developer ID signing, all of these move together — none of them works
+alone: configure `MACOS_CERTIFICATE_BASE64` (base64 PKCS#12 holding a Developer
+ID Application certificate and key), `MACOS_CERTIFICATE_PASSWORD`,
+`APPLE_NOTARIZATION_ID`, `APPLE_NOTARIZATION_PASSWORD` and `APPLE_TEAM_ID`; import
+the certificate into an ephemeral runner keychain; re-add `--options runtime`
+with the entitlements to every `codesign` call; and submit the DMG through
+`xcrun notarytool submit --wait` followed by `stapler staple`. `make
+release-preflight` scrapes secret names straight out of `release.yml`, so it
+starts demanding those five the moment the workflow references them again.

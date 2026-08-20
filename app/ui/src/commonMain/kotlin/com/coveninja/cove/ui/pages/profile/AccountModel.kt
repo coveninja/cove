@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.pages.profile
 
+import com.coveninja.cove.shared.data.AuthOutcome
 import com.coveninja.cove.shared.data.SyncStatus
 import kotlin.time.Instant
 
@@ -99,4 +100,41 @@ internal fun canSubmitAuth(
         AuthMode.Register -> password.isNotBlank() && profileName.isNotBlank()
         AuthMode.Code -> true
     }
+}
+
+/**
+ * What one finished auth attempt leaves the form doing.
+ *
+ * Shared by the account card and the onboarding step because deriving it twice is how the
+ * two came apart: [AuthOutcome.Success] answers the *request*, not the question the form is
+ * asking, and for [AuthMode.Code] the first request only emails a code. The onboarding step
+ * read that success as a sign-in — the code field never appeared, the flow reported an account
+ * the viewer did not have, and the app behind it stayed signed out with nothing on screen
+ * saying so.
+ */
+internal sealed interface AuthFollowUp {
+    /** The server sent a code and is waiting for it back. */
+    data object AwaitToken : AuthFollowUp
+
+    /** Signed in: there is an account behind this device now. */
+    data object SignedIn : AuthFollowUp
+
+    /** Nothing changed. The message is the server's own. */
+    data class Failed(val message: String) : AuthFollowUp
+}
+
+/**
+ * [awaitingToken] is the state the form was in when it submitted, not the one it is moving to:
+ * the only [AuthMode.Code] success that means "signed in" is the one that comes back from
+ * verifying a token, which is submitted with the flag already set.
+ */
+internal fun authFollowUp(
+    mode: AuthMode,
+    awaitingToken: Boolean,
+    outcome: AuthOutcome,
+): AuthFollowUp = when (outcome) {
+    is AuthOutcome.Failure -> AuthFollowUp.Failed(outcome.message)
+    AuthOutcome.ConfirmationRequired -> AuthFollowUp.AwaitToken
+    AuthOutcome.Success ->
+        if (mode == AuthMode.Code && !awaitingToken) AuthFollowUp.AwaitToken else AuthFollowUp.SignedIn
 }

@@ -34,15 +34,17 @@ fun createLiveAppGraph(
         settings = LiveSettingsRepository(api, scope),
         playback = LivePlaybackRepository(api),
         addons   = LiveAddonRepository(api, scope),
-        calendar = LiveCalendarRepository(api, library),
+        calendar = LiveCalendarRepository(api, library, scope),
         discovery = LiveDiscoveryRepository(api),
         insights = LiveInsightsRepository(api),
         account  = LiveAccountRepository(api, scope),
         profiles = LiveProfileRepository(api, scope),
-        // Trakt linking and the mpv config file belong to the machine running the
-        // backend, not to whoever is pointed at it over the network.
+        // Trakt linking, the mpv config file and the disk the caches sit on all belong to the
+        // machine running the backend, not to whoever is pointed at it over the network. A
+        // storage screen here would be offering to delete somebody else's files.
         trakt    = UnavailableTraktRepository,
         device   = UnavailableDeviceRepository,
+        storage  = UnavailableStorageRepository,
         onClose  = {
             scope.cancel()
             client.close()

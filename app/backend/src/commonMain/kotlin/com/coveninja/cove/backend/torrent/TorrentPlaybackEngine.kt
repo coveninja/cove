@@ -27,6 +27,33 @@ interface TorrentPlaybackEngine : AutoCloseable {
     fun progress(hash: String): TorrentProgress?
 
     /**
+     * Info hashes the session currently holds open.
+     *
+     * The cache sweep asks before deleting anything: a torrent being streamed right now is still
+     * a file the player has open, and removing it mid-frame is the one failure a retention policy
+     * must never cause. Empty is the right answer for an engine with no session up — nothing can
+     * be playing through one that was never started — which is also why it is the default.
+     *
+     * "Active" means being read, not merely loaded. A torrent stays in the session after playback
+     * ends so a rewatch is instant, and counting those would mean nothing played since the app
+     * started could ever be swept — which is most of what a retention policy is for.
+     */
+    fun activeHashes(): Set<String> = emptySet()
+
+    /**
+     * Drops a torrent from the peer session so its files can be deleted.
+     *
+     * The sweep must call this before removing a directory. libtorrent keeps the file open and
+     * goes on writing pieces into it, so deleting underneath a live handle either fails outright
+     * or frees space the session immediately starts refilling.
+     *
+     * Returns false if the torrent is being read, in which case the caller must leave it alone.
+     * That check happens here rather than at the call site because only the engine can make it
+     * atomically against a read that is starting at the same moment.
+     */
+    fun release(hash: String): Boolean = true
+
+    /**
      * Brings the peer session up before anything is asked of it.
      *
      * Starting it costs a DHT bootstrap, and doing that lazily puts it on the

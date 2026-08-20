@@ -6,8 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a bug! The log file is the single
-        most useful thing you can attach — please don't skip that field.
+        Thanks for taking the time to report a bug! Console output (desktop) or
+        logcat (Android) is the single most useful thing you can attach — please
+        don't skip that field.
 
   - type: textarea
     id: what-happened
@@ -41,8 +42,8 @@ body:
     id: version
     attributes:
       label: Cove version
-      description: Shown in Settings, or the version of the installer/release you downloaded.
-      placeholder: e.g. 0.23.4
+      description: Settings → Advanced → About, or the version of the installer/release you downloaded.
+      placeholder: e.g. 1.1.0
     validations:
       required: true
 
@@ -53,6 +54,7 @@ body:
       options:
         - Desktop — Windows
         - Desktop — Linux
+        - Desktop — macOS (Apple Silicon)
         - Android (phone / tablet)
         - Android TV
     validations:
@@ -64,9 +66,11 @@ body:
       label: How did you install Cove?
       options:
         - Windows installer (.exe)
-        - Windows zip / auto-updater
+        - Windows portable ZIP
         - Flatpak
         - Arch package (PKGBUILD/AUR)
+        - Linux tarball (.tar.gz)
+        - macOS disk image (.dmg)
         - Android APK (GitHub release / in-app updater)
         - Built from source
     validations:
@@ -76,7 +80,7 @@ body:
     id: os
     attributes:
       label: Operating system
-      placeholder: e.g. Windows 11 24H2, Arch Linux, Android 14, Google TV 12
+      placeholder: e.g. Windows 11 24H2, Arch Linux, macOS 15, Android 14, Google TV 12
     validations:
       required: true
 
@@ -85,22 +89,25 @@ body:
     attributes:
       label: Hardware
       description: On desktop, mainly the GPU — rendering issues are often driver-specific (mention if it's a laptop with hybrid graphics). On Android/Android TV, the exact device model — playback issues are usually specific to the SoC/GPU.
-      placeholder: e.g. RX 7700XT + Ryzen 5 3600, Pixel 8, Chromecast with Google TV 4K
+      placeholder: e.g. RX 7700XT + Ryzen 5 3600, MacBook Air M2, Pixel 8, Chromecast with Google TV 4K
     validations:
       required: false
 
   - type: textarea
     id: logs
     attributes:
-      label: Logs (shell.log / logcat)
+      label: Logs (console output / logcat)
       description: |
-        **Desktop:** Cove writes everything (shell, backend, mpv) to `shell.log`. **It is wiped on every launch**, so reproduce the problem first, then grab the file *before* starting Cove again.
+        **Desktop:** Cove writes everything (app, backend, mpv) to `cove.log`, next to its database:
 
-        - **Windows:** press `Win+R`, paste `%APPDATA%\cove\shell.log`, press Enter
-        - **Linux:** `~/.config/cove/shell.log`
-        - **Flatpak:** `~/.var/app/io.github.coveninja.Cove/config/cove/shell.log`
+        - **Windows:** press `Win+R`, paste `%APPDATA%\cove\logs`, press Enter
+        - **Linux:** `~/.config/cove/logs/`
+        - **Flatpak:** `~/.var/app/io.github.coveninja.Cove/config/cove/logs/`
+        - **macOS:** `~/Library/Application Support/cove/logs/`
 
-        **Android / Android TV:** there is no log file — logs go to the system log. If you have `adb` set up, reproduce the problem, then run `adb logcat -d > cove-log.txt` and attach the file. If you can't use adb, skip this field and describe the problem as precisely as you can.
+        `cove.log` is the run you are in now; `cove.log.1` is the run before it, and so on. If you restarted Cove after hitting the problem, the one you want is `cove.log.1`.
+
+        **Android / Android TV:** logs go to the system log. If you have `adb` set up, reproduce the problem, then run `adb logcat -d > cove-log.txt` and attach the file. If you can't use adb, skip this field and describe the problem as precisely as you can.
 
         Paste the contents below (it will be formatted automatically), or drag the file into the issue.
       render: text

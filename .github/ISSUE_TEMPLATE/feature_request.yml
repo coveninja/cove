@@ -10,7 +10,7 @@ body:
       multiple: true
       options:
         - All platforms
-        - Desktop (Windows / Linux)
+        - Desktop (Windows / Linux / macOS)
         - Android (phone / tablet)
         - Android TV
     validations:

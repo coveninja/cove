@@ -11,6 +11,12 @@
     tablets, and televisions.
   </p>
 
+  <p align="center">
+    <a href="https://buymeacoffee.com/coveninja">
+      <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&slug=coveninja&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy Me A Coffee" />
+    </a>
+  </p>
+
   <p>
     <a href="#installation">Installation</a> ·
     <a href="#building-from-source">Build from source</a> ·
@@ -64,9 +70,9 @@
 |---|---|---|---|
 | Linux | Available | AUR, Flatpak, tarball | `cove-bin` through `pacman`; Flatpak bundles and tarballs are replaced manually |
 | Windows | Available | Installer, portable ZIP | Verified in-app updates for both forms beginning with `1.0.0` |
-| Android phone/tablet | Preview | APK, Android 9+ | Verified APK through Android's package installer |
+| Android phone/tablet | Available | APK, Android 9+ | Verified APK through Android's package installer |
 | Android TV | Preview | Same APK, Android 9+ | Verified APK through Android's package installer |
-| macOS (Apple silicon) | Available | Signed and notarized DMG | Manual release replacement |
+| macOS (Apple silicon) | Available | Ad-hoc signed DMG, not notarized | Manual release replacement |
 
 One APK serves both phones and televisions: `leanback` is declared optional, and
 the app selects the touch or ten-foot shell at runtime from `FEATURE_LEANBACK`.
@@ -130,9 +136,39 @@ Both distributions support signed, verified in-app updates beginning with
 
 ### macOS
 
-Download `cove-macos-arm64.dmg`, open it, and drag Cove into Applications. The
-release bundle is signed, notarized, and includes libmpv and its native runtime
-dependencies; viewers do not need Homebrew or a separate API key.
+`cove-macos-arm64.dmg` is an Apple-silicon build that bundles libmpv and its
+native runtime dependencies, so you need neither Homebrew nor a separate API key.
+Intel Macs are not supported.
+
+The DMG is ad-hoc signed rather than notarized, because Cove has no Apple
+Developer ID. macOS attaches its quarantine flag to whatever a *browser*
+downloads, and that flag is what triggers Gatekeeper — so fetching the DMG from a
+terminal avoids the whole thing:
+
+```sh
+curl -LO https://github.com/coveninja/cove/releases/latest/download/cove-macos-arm64.dmg
+open cove-macos-arm64.dmg
+```
+
+Drag Cove into Applications and it launches normally, with no prompt to approve.
+
+> [!NOTE]
+> Downloading the DMG in a browser instead is fine, but Gatekeeper will then
+> refuse the first launch with "Apple could not verify 'Cove' is free of
+> malware." Clear the flag and it starts:
+>
+> ```sh
+> xattr -dr com.apple.quarantine /Applications/Cove.app
+> ```
+>
+> Or approve it once under **System Settings → Privacy & Security**, scrolling to
+> the message naming Cove and choosing **Open Anyway**. On macOS 15 and newer
+> that is the only click-through route left — right-click → Open no longer
+> bypasses the check.
+>
+> Ad-hoc signing is not a trust credential; it is what lets the binaries execute
+> at all on Apple silicon, which refuses to run a wholly unsigned one. macOS gets
+> no in-app updates either way, so replace the DMG by hand.
 
 ### Android phone, tablet, and TV
 

@@ -3,11 +3,11 @@ package com.coveninja.cove.backend.updater
 import com.coveninja.cove.shared.model.UPDATE_MANIFEST_SCHEMA_VERSION
 import com.coveninja.cove.shared.model.UpdateManifest
 import com.coveninja.cove.shared.network.CoveJson
-import java.security.KeyFactory
-import java.security.Signature
-import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
-import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.bouncycastle.asn1.ASN1ObjectIdentifier
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 
 internal class SignedManifestVerifier(
     private val encodedPublicKeys: Map<String, String>,
@@ -29,13 +29,10 @@ internal class SignedManifestVerifier(
             Base64.getDecoder().decode(encodedSignature.decodeToString().trim())
         }.getOrElse { throw SecurityException("update manifest signature is malformed", it) }
 
-        val provider = BouncyCastleProvider()
-        val publicKey = KeyFactory.getInstance("Ed25519", provider)
-            .generatePublic(X509EncodedKeySpec(keyBytes))
-        val verifier = Signature.getInstance("Ed25519", provider)
-        verifier.initVerify(publicKey)
-        verifier.update(manifestBytes)
-        if (!verifier.verify(signatureBytes)) {
+        val verifier = Ed25519Signer()
+        verifier.init(false, ed25519PublicKey(keyBytes))
+        verifier.update(manifestBytes, 0, manifestBytes.size)
+        if (!verifier.verifySignature(signatureBytes)) {
             throw SecurityException("update manifest signature is invalid")
         }
 
@@ -71,6 +68,34 @@ internal class SignedManifestVerifier(
         private val ASSET_NAME = Regex("[a-zA-Z0-9._-]{1,128}")
         private val SHA256 = Regex("[0-9a-f]{64}")
     }
+}
+
+private val ED25519_OID = ASN1ObjectIdentifier("1.3.101.112")
+
+/**
+ * Reads an RFC 8410 SubjectPublicKeyInfo through BouncyCastle's lightweight API rather than
+ * the JCA, because the JCA path cannot survive R8.
+ *
+ * `BouncyCastleProvider`'s constructor registers each algorithm family by loading a
+ * `<Family>$Mappings` class *by name* and swallowing any failure, so R8 -- which sees no call
+ * site for `asymmetric.EdEC$Mappings` -- deletes it and the provider comes up with no Ed25519
+ * at all. Nothing fails at build time; the release APK simply answers every update check with
+ * "no such algorithm: Ed25519 for provider BC" while every unminified build works. Signer and
+ * key parameters below are ordinary references R8 can follow, and they behave identically on
+ * both hosts.
+ */
+private fun ed25519PublicKey(keyBytes: ByteArray): Ed25519PublicKeyParameters {
+    val info = runCatching { SubjectPublicKeyInfo.getInstance(keyBytes) }
+        .getOrElse { throw SecurityException("embedded update public key is malformed", it) }
+    if (info.algorithm.algorithm != ED25519_OID) {
+        throw SecurityException("embedded update public key is not an Ed25519 key")
+    }
+    val raw = runCatching { info.publicKeyData.octets }
+        .getOrElse { throw SecurityException("embedded update public key is malformed", it) }
+    if (raw.size != Ed25519PublicKeyParameters.KEY_SIZE) {
+        throw SecurityException("embedded update public key has the wrong length")
+    }
+    return Ed25519PublicKeyParameters(raw, 0)
 }
 
 internal data class StableVersion(val major: Int, val minor: Int, val patch: Int) : Comparable<StableVersion> {

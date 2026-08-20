@@ -415,6 +415,7 @@ class MpvVideoPlayerHost(
         hardwareDecoding = !softwareDecoding,
         ytdlSearchPath = ytDlp?.let { ytdlSearchPath(it.managedPath, System.getProperty("os.name").orEmpty()) },
         ytdlFormat = ytDlp?.let { YTDL_FORMAT },
+        ytdlRawOptions = ytDlp?.let { ytdlRawOptions(firstOnPath(JS_RUNTIMES)) },
         frameConsumer = { frame -> frames.value = frame },
     ).also {
         it.start()
@@ -587,16 +588,24 @@ private fun parseChapters(json: String): List<MediaChapter> {
 }
 
 /**
- * Whether one of the programs mpv's ytdl hook looks for is on the PATH.
- *
- * The names are the hook's own defaults, in its order of preference. PATH is read
- * rather than a process being started: this runs on a click, and spawning yt-dlp
- * just to ask whether it exists costs more than the answer is worth.
+ * Whether one of the programs mpv's ytdl hook looks for is on the PATH. The names
+ * are the hook's own defaults, in its order of preference.
  */
-private fun streamExtractorInstalled(): Boolean {
+private fun streamExtractorInstalled(): Boolean = firstOnPath(STREAM_EXTRACTORS) != null
+
+/**
+ * The first of [names] that is on the PATH, or null if none of them is.
+ *
+ * PATH is read rather than a process being started: this runs on a click, and
+ * spawning a program just to ask whether it exists costs more than the answer is
+ * worth. The names are tried in their own order rather than the PATH's, so the
+ * caller's order of preference is what decides.
+ */
+private fun firstOnPath(names: List<String>): String? {
     val entries = System.getenv("PATH")?.split(File.pathSeparatorChar).orEmpty()
-    return entries.any { entry ->
-        entry.isNotBlank() && STREAM_EXTRACTORS.any { name ->
+        .filter(String::isNotBlank)
+    return names.firstOrNull { name ->
+        entries.any { entry ->
             val program = File(entry, name)
             program.isFile && program.canExecute()
         }
