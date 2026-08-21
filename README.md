@@ -39,6 +39,41 @@
 > the addons and plugins you configure and for following the laws that apply in
 > your jurisdiction.
 
+## Screenshots
+
+<p align="center">
+  <a href="docs/screenshots/desktop-home.png">
+    <img src="docs/screenshots/desktop-home.png" alt="Cove desktop home screen with continue-watching and up-late shelves" width="100%" />
+  </a>
+  <br />
+  <sub>Pick up where you left off from the desktop home screen.</sub>
+</p>
+
+<p align="center">
+  <a href="docs/screenshots/desktop-title-details.png">
+    <img src="docs/screenshots/desktop-title-details.png" alt="Cove desktop title details with overview and video extras" width="49%" />
+  </a>
+  <a href="docs/screenshots/desktop-discover.png">
+    <img src="docs/screenshots/desktop-discover.png" alt="Cove desktop discovery screen with personalized recommendations" width="49%" />
+  </a>
+  <br />
+  <sub>Rich title details and personalized discovery on desktop.</sub>
+</p>
+
+<p align="center">
+  <a href="docs/screenshots/android-home.jpg">
+    <img src="docs/screenshots/android-home.jpg" alt="Cove Android home screen" width="30%" />
+  </a>
+  <a href="docs/screenshots/android-discover.jpg">
+    <img src="docs/screenshots/android-discover.jpg" alt="Cove Android discovery screen" width="30%" />
+  </a>
+  <a href="docs/screenshots/android-library.jpg">
+    <img src="docs/screenshots/android-library.jpg" alt="Cove Android library screen" width="30%" />
+  </a>
+  <br />
+  <sub>Home, discovery, and your library on Android.</sub>
+</p>
+
 ## Features
 
 ### Discovery and organization
