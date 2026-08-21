@@ -3,6 +3,7 @@ package com.coveninja.cove.shared.network
 import com.coveninja.cove.shared.model.*
 import io.ktor.client.*
 import io.ktor.client.call.*
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -214,6 +215,10 @@ class CoveApi(
     ): List<StreamSource> =
         httpClient.get("${config.baseUrl}/api/streams") {
             applyAuthHeaders()
+            // Nuvio waits up to 25 seconds so it can return streams from
+            // providers that completed before the aggregate deadline. Keep a
+            // small transport margin beyond that backend-owned timeout.
+            timeout { requestTimeoutMillis = STREAMS_REQUEST_TIMEOUT_MILLIS }
             parameter("id", id)
             parameter("type", type.wireName)
             season?.let { parameter("season", it) }
@@ -604,3 +609,5 @@ class CoveApi(
         }.requireSuccess()
     }
 }
+
+private const val STREAMS_REQUEST_TIMEOUT_MILLIS = 30_000L

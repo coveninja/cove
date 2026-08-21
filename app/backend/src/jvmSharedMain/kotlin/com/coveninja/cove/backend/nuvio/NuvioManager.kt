@@ -13,9 +13,13 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -36,6 +40,7 @@ class NuvioManager internal constructor(
 ) {
     private val mutation = Mutex()
     private val cache = ConcurrentHashMap<String, CachedStreams>()
+    private val inFlight = ConcurrentHashMap<String, CompletableDeferred<List<AddonStream>>>()
 
     suspend fun repos(): List<NuvioRepo> = load().repos
 
@@ -150,6 +155,35 @@ class NuvioManager internal constructor(
     ): List<AddonStream> {
         val key = "${mediaType.wireName}|$tmdbId|${season ?: "-"}|${episode ?: "-"}"
         cache[key]?.takeIf { System.currentTimeMillis() < it.expiresAt }?.let { return it.streams }
+        val attempt = CompletableDeferred<List<AddonStream>>()
+        inFlight.putIfAbsent(key, attempt)?.let { return it.await() }
+        return try {
+            // The previous attempt can finish between the first cache read and our
+            // putIfAbsent. Recheck after becoming the owner before starting workers.
+            val streams = cache[key]
+                ?.takeIf { System.currentTimeMillis() < it.expiresAt }
+                ?.streams
+                ?: runScrapers(key, mediaType, tmdbId, imdbId, title, year, season, episode)
+            attempt.complete(streams)
+            streams
+        } catch (error: Throwable) {
+            attempt.completeExceptionally(error)
+            throw error
+        } finally {
+            inFlight.remove(key, attempt)
+        }
+    }
+
+    private suspend fun runScrapers(
+        key: String,
+        mediaType: MediaType,
+        tmdbId: Int,
+        imdbId: String,
+        title: String,
+        year: Int,
+        season: Int?,
+        episode: Int?,
+    ): List<AddonStream> {
         val enabled = load().repos.filter(NuvioRepo::enabled).flatMap { repo ->
             repo.scrapers.filter { scraper ->
                 scraper.enabled && scraper.code.isNotBlank() &&
@@ -158,13 +192,14 @@ class NuvioManager internal constructor(
         }
         if (enabled.isEmpty()) return emptyList()
         val semaphore = Semaphore(12)
-        val streams = withTimeoutOrNull(25_000) {
+        val completed = ConcurrentHashMap<Int, ScraperExecution>()
+        val allFinished = withTimeoutOrNull(25_000) {
             coroutineScope {
-                enabled.map { scraper ->
+                enabled.mapIndexed { index, scraper ->
                     async {
                         semaphore.withPermit {
-                            runCatching {
-                                sandbox.run(NuvioInvocation(
+                            val execution = try {
+                                val streams = sandbox.run(NuvioInvocation(
                                     scraper.id,
                                     scraper.code,
                                     tmdbId,
@@ -175,13 +210,45 @@ class NuvioManager internal constructor(
                                     season,
                                     episode,
                                 )).mapNotNull(NuvioScrapedStream::toAddonStream)
-                            }.getOrDefault(emptyList())
+                                ScraperExecution(scraper.id, streams)
+                            } catch (error: CancellationException) {
+                                // A ProcessNuvioSandbox owns a shorter timeout than the
+                                // aggregate request. Its TimeoutCancellationException is a
+                                // failure of that scraper only; the surrounding async is still
+                                // active and other scrapers' results remain usable. Preserve
+                                // cancellation from the aggregate request (or its caller),
+                                // where this context is no longer active.
+                                currentCoroutineContext().ensureActive()
+                                ScraperExecution(scraper.id, emptyList(), error)
+                            } catch (error: Throwable) {
+                                ScraperExecution(scraper.id, emptyList(), error)
+                            }
+                            completed[index] = execution
                         }
                     }
-                }.awaitAll().flatten()
+                }.awaitAll()
             }
-        }.orEmpty()
-        cache[key] = CachedStreams(streams, System.currentTimeMillis() + 15 * 60_000)
+            true
+        } == true
+        val executions = completed.entries.sortedBy { it.key }.map { it.value }
+        if (!allFinished) logNuvio(
+            "timed out while running ${enabled.size} scraper(s) for $key; " +
+                "kept ${executions.size} completed result(s)",
+        )
+        val failures = executions.filter { it.error != null }
+        failures.forEach { execution ->
+            logNuvio(
+                "scraper ${execution.scraperId} failed for $key: " +
+                    execution.error?.message.orEmpty().ifBlank { execution.error?.javaClass?.simpleName.orEmpty() },
+            )
+        }
+        val streams = executions.flatMap(ScraperExecution::streams)
+        // A legitimate no-results response is cacheable. A runtime failure is not: caching
+        // that as an empty result made a transient or compatibility error look like a healthy
+        // provider response for fifteen minutes and hid recovery after the first request.
+        if (allFinished && failures.isEmpty()) {
+            cache[key] = CachedStreams(streams, System.currentTimeMillis() + 15 * 60_000)
+        }
         return streams
     }
 
@@ -292,7 +359,15 @@ class NuvioManager internal constructor(
     )
 
     private data class CachedStreams(val streams: List<AddonStream>, val expiresAt: Long)
+
+    private data class ScraperExecution(
+        val scraperId: String,
+        val streams: List<AddonStream>,
+        val error: Throwable? = null,
+    )
 }
+
+private fun logNuvio(message: String) = System.err.println("Cove Nuvio: $message")
 
 private fun List<NuvioRepo>.replaceScraper(repoId: String, scraper: NuvioScraper): List<NuvioRepo> = map { repo ->
     if (repo.id != repoId) repo else repo.copy(

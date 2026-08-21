@@ -2,6 +2,7 @@ package com.coveninja.cove.backend.nuvio
 
 import com.coveninja.cove.backend.addons.validateResolvedPublicUrl
 import com.coveninja.cove.shared.network.CoveJson
+import io.ktor.http.HttpStatusCode
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -140,10 +141,51 @@ internal object NuvioSandboxWorker {
         return """
             globalThis.console = { log(){}, info(){}, debug(){}, warn(){}, error(){} };
             globalThis.logger = console;
+            globalThis.global = globalThis;
+            globalThis.window = globalThis;
             globalThis.atob = value => __bridge.base64Decode(String(value));
             globalThis.btoa = value => __bridge.base64Encode(String(value));
             globalThis.base64Decode = globalThis.atob;
             globalThis.base64Encode = globalThis.btoa;
+            if (typeof globalThis.setTimeout !== 'function') {
+              globalThis.setTimeout = (callback, _delay, ...args) => {
+                callback(...args);
+                return 0;
+              };
+              globalThis.clearTimeout = () => {};
+            }
+            if (typeof globalThis.URLSearchParams !== 'function') {
+              globalThis.URLSearchParams = class {
+                constructor(input = '') {
+                  this.pairs = [];
+                  if (typeof input === 'string') {
+                    const value = input.startsWith('?') ? input.slice(1) : input;
+                    if (value) value.split('&').forEach(part => {
+                      const separator = part.indexOf('=');
+                      const name = separator < 0 ? part : part.slice(0, separator);
+                      const entry = separator < 0 ? '' : part.slice(separator + 1);
+                      this.append(decodeURIComponent(name.replace(/\+/g, ' ')), decodeURIComponent(entry.replace(/\+/g, ' ')));
+                    });
+                  } else if (input && typeof input[Symbol.iterator] === 'function') {
+                    for (const pair of input) this.append(pair[0], pair[1]);
+                  } else if (input) {
+                    Object.keys(input).forEach(name => this.append(name, input[name]));
+                  }
+                }
+                append(name, value) { this.pairs.push([String(name), String(value)]); }
+                delete(name) { name = String(name); this.pairs = this.pairs.filter(pair => pair[0] !== name); }
+                get(name) { name = String(name); const pair = this.pairs.find(value => value[0] === name); return pair ? pair[1] : null; }
+                getAll(name) { name = String(name); return this.pairs.filter(value => value[0] === name).map(value => value[1]); }
+                has(name) { name = String(name); return this.pairs.some(value => value[0] === name); }
+                set(name, value) { this.delete(name); this.append(name, value); }
+                entries() { return this.pairs[Symbol.iterator](); }
+                keys() { return this.pairs.map(value => value[0])[Symbol.iterator](); }
+                values() { return this.pairs.map(value => value[1])[Symbol.iterator](); }
+                forEach(callback, self) { this.pairs.forEach(value => callback.call(self, value[1], value[0], this)); }
+                [Symbol.iterator]() { return this.entries(); }
+                toString() { return this.pairs.map(value => encodeURIComponent(value[0]).replace(/%20/g, '+') + '=' + encodeURIComponent(value[1]).replace(/%20/g, '+')).join('&'); }
+              };
+            }
             const __factories = {$moduleFactories};
             const __moduleCache = {};
             globalThis.require = name => {
@@ -155,12 +197,31 @@ internal object NuvioSandboxWorker {
               factory(loaded, loaded.exports);
               return loaded.exports;
             };
+            const __coveHeaders = rawHeaders => {
+              const raw = rawHeaders || {};
+              const result = Object.assign({}, raw);
+              const normalized = {};
+              Object.keys(raw).forEach(name => { normalized[name.toLowerCase()] = String(raw[name]); });
+              Object.defineProperties(result, {
+                get: { value: name => normalized[String(name).toLowerCase()] ?? null },
+                has: { value: name => Object.prototype.hasOwnProperty.call(normalized, String(name).toLowerCase()) },
+                forEach: { value: callback => Object.keys(normalized).forEach(name => callback(normalized[name], name)) },
+                entries: { value: () => Object.entries(normalized)[Symbol.iterator]() },
+                keys: { value: () => Object.keys(normalized)[Symbol.iterator]() },
+                values: { value: () => Object.values(normalized)[Symbol.iterator]() },
+                [Symbol.iterator]: { value: () => Object.entries(normalized)[Symbol.iterator]() }
+              });
+              return result;
+            };
             globalThis.fetch = async (url, options = {}) => {
               const payload = JSON.parse(__bridge.request(String(url), JSON.stringify(options || {})));
               return {
                 ok: payload.status >= 200 && payload.status < 300,
                 status: payload.status,
-                headers: payload.headers,
+                statusText: payload.statusText || '',
+                url: payload.url || String(url),
+                redirected: payload.redirected === true,
+                headers: __coveHeaders(payload.headers),
                 text: async () => payload.body,
                 json: async () => JSON.parse(payload.body)
               };
@@ -195,7 +256,12 @@ internal object NuvioSandboxWorker {
     ) { "missing Nuvio module $name" }.bufferedReader().use { it.readText() }
 }
 
-private class FetchBridge {
+/**
+ * Graal can expose annotated methods only when their declaring JVM class is public. Kotlin
+ * `private` compiles this top-level class package-private, which made every guest `fetch()` fail
+ * with `Unknown identifier: request` even though the method itself was annotated and public.
+ */
+internal class FetchBridge {
     private val client = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NEVER)
@@ -216,6 +282,7 @@ private class FetchBridge {
             "unsupported fetch method $method"
         }
         var current = URI(url)
+        var redirected = false
         repeat(6) { redirectCount ->
             require(current.scheme == "http" || current.scheme == "https") {
                 "fetch URL must use HTTP or HTTPS"
@@ -228,31 +295,53 @@ private class FetchBridge {
                 .method(method, body)
                 .header("User-Agent", "Cove Nuvio Sandbox")
             options.headers.forEach { (name, value) ->
-                require(name.lowercase() !in setOf("host", "content-length", "connection")) {
-                    "forbidden fetch header $name"
+                // Browser fetch implementations own these transport headers. Providers often
+                // include them in copied browser header sets, so omit them instead of rejecting
+                // the whole scraper invocation.
+                if (name.lowercase() !in setOf("host", "content-length", "connection")) {
+                    builder.header(name, value)
                 }
-                builder.header(name, value)
             }
             val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
             response.body().use { input ->
                 if (response.statusCode() in 300..399) {
+                    if (options.redirect.equals("error", ignoreCase = true)) {
+                        throw IllegalArgumentException("fetch redirect is not allowed")
+                    }
+                    if (options.redirect.equals("manual", ignoreCase = true)) {
+                        return encodeFetchResponse(response, input.readNBytes(20 * 1024 * 1024 + 1), current, redirected)
+                    }
                     require(redirectCount < 5) { "too many fetch redirects" }
                     val location = response.headers().firstValue("location").orElseThrow {
                         IllegalArgumentException("fetch redirect has no location")
                     }
                     current = current.resolve(location)
+                    redirected = true
                     return@repeat
                 }
                 val bytes = input.readNBytes(20 * 1024 * 1024 + 1)
-                require(bytes.size <= 20 * 1024 * 1024) { "fetch response exceeds 20 MiB" }
-                return CoveJson.encodeToString(FetchResponse(
-                    response.statusCode(),
-                    response.headers().map().mapValues { it.value.joinToString(", ") },
-                    String(bytes),
-                ))
+                return encodeFetchResponse(response, bytes, current, redirected)
             }
         }
         error("too many fetch redirects")
+    }
+
+    private fun encodeFetchResponse(
+        response: HttpResponse<java.io.InputStream>,
+        bytes: ByteArray,
+        current: URI,
+        redirected: Boolean,
+    ): String {
+        require(bytes.size <= 20 * 1024 * 1024) { "fetch response exceeds 20 MiB" }
+        val status = response.statusCode()
+        return CoveJson.encodeToString(FetchResponse(
+            status = status,
+            statusText = runCatching { HttpStatusCode.fromValue(status).description }.getOrDefault(""),
+            headers = response.headers().map().mapValues { it.value.joinToString(", ") },
+            body = String(bytes),
+            url = current.toString(),
+            redirected = redirected,
+        ))
     }
 }
 
@@ -261,11 +350,15 @@ private data class FetchOptions(
     val method: String = "GET",
     val headers: Map<String, String> = emptyMap(),
     val body: String = "",
+    val redirect: String = "follow",
 )
 
 @Serializable
 private data class FetchResponse(
     val status: Int,
+    val statusText: String = "",
     val headers: Map<String, String>,
     val body: String,
+    val url: String = "",
+    val redirected: Boolean = false,
 )
