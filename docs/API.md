@@ -27,7 +27,7 @@ All paths below are relative to `/api/v1`.
 |---|---|
 | Health/session | `GET /ping`; `GET`, `POST`, `DELETE /client-session` |
 | Auth/sync | `POST /auth/register`, `/register/confirm`, `/login`, `/otp`, `/verify-otp`, `/refresh`, `/logout`, `/sync`; `GET /auth/me` |
-| Trakt | `POST /trakt/device-code`, `/poll`, `/unlink`, `/scrobble`, `/sync`; `GET /trakt/status` |
+| Trakt | `POST /trakt/device-code`, `/poll`, `/unlink`, `/scrobble`, `/sync`; `GET /trakt/status`, `/stats` |
 | TMDB/content | `GET /discover`, `/browse`, `/search/multi`, `/search`, `/keywords`, `/media`, `/details`, `/images`, `/logos`, `/videos`, `/similar`, `/imdb`, `/person`, `/provider`, `/genres`, `/tv/seasons`, `/tv/episodes` |
 | Personalized discovery | `GET /discover/genres`, `/keywords`, `/people`, `/genre`, `/keyword`, `/person`, `/similar-to`, `/favorites`, `/insights`; `POST /discover/algorithm/test` |
 | Sources | `GET /streams`, `/subtitles`, `/watch-options`, `/timestamps`, `/quality/batch` |

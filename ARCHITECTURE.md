@@ -2,24 +2,29 @@
 
 ## Runtime topology
 
-Cove has two application hosts over the same Kotlin Multiplatform graph.
+Cove has two platform hosts over the same Kotlin Multiplatform graph.
 `app/desktop` owns the desktop window, mpv player, single-instance lock, and
 `LocalBackendRuntime`; `app/mobile` owns the Android activity/lifecycle and
-`AndroidBackendRuntime`. Both construct repositories in-process, pass the same
-`AppGraph` into the same `CoveApp` Compose root, and avoid serializing ordinary
-UI operations through localhost HTTP.
+`AndroidBackendRuntime`. Both construct repositories in-process and pass the
+same `AppGraph` into Compose. Desktop and Android phone/tablet use the adaptive
+`CoveApp` root; Android TV uses the separate D-pad-oriented `CoveTvApp` root,
+which is also available on desktop through `--tv` as a development harness.
+Ordinary UI operations never need to be serialized through localhost HTTP.
 
-The mobile artifact requires a touchscreen and has no Leanback launcher. This
-is a deliberate product boundary: phone/tablet and desktop share the adaptive
-Compose presentation, while a future Android TV host will provide a separate
-ten-foot/D-pad UI and reuse only shared domain/backend contracts.
+One Android APK serves phones, tablets, and televisions. Its touchscreen and
+Leanback features are both optional, and `MainActivity` selects the touch or TV
+root from `FEATURE_LEANBACK` and the current UI mode. The manifest includes both
+the ordinary launcher and `LEANBACK_LAUNCHER`, with TV banner artwork.
 
-On desktop, an embedded Ktor server still listens on loopback for boundaries
-that require a URL: mpv stream/torrent access, subtitle and image proxies,
-download progress, speed tests, diagnostics, and compatibility clients. It
-exposes the stable `/api/v1` namespace. The former `/api` namespace delegates to
-the same handlers and returns `Deprecation`, `Sunset`, and successor-version
-headers.
+On desktop, an embedded Ktor server listens on loopback for boundaries that
+require a URL: mpv stream/torrent access, subtitle and image proxies, download
+progress, speed tests, diagnostics, and compatibility clients. Android lazily
+starts a narrow, ephemeral loopback media host only when playback needs a URL.
+When Android remote access is enabled, its connected-device foreground service
+also starts the full compatibility route graph on loopback port 6969 and LAN
+port 6970. The full API exposes the stable `/api/v1` namespace; the former
+`/api` namespace delegates to the same handlers and returns `Deprecation`,
+`Sunset`, and successor-version headers.
 
 Disk retention is deliberately not one of those boundaries. Cache measurement,
 manual clearing, and the retention sweep all run in-process through
@@ -41,19 +46,21 @@ stream-source preference permits them.
 | Module | Responsibility |
 |---|---|
 | `app/shared` | Domain models, repository interfaces, app graph, HTTP compatibility client |
-| `app/backend` common | TMDB client, addon manager, profile/settings/library repositories, Supabase auth and cross-device sync |
-| `app/backend` desktop | SQLite, migration, Ktor, media/torrent, Nuvio sandbox, Trakt, discovery, prefetch |
-| `app/backend` Android | Android SQLite driver, upgrade migration, OkHttp, and mobile runtime composition |
-| `app/ui` | Shared desktop/mobile Compose presentation and platform interaction seams |
+| `app/backend` common/JVM-shared | TMDB, addons, auth/sync, calendar, discovery, activity, Trakt, storage, Ktor routes, and shared service logic |
+| `app/backend` desktop | SQLite JDBC, CIO clients/servers, desktop jlibtorrent, GraalJS sandbox, updater, and runtime composition |
+| `app/backend` Android | Android SQLite, OkHttp, Android jlibtorrent, QuickJS sandbox, updater, playback media host, and runtime composition |
+| `app/ui` | Shared adaptive Compose presentation, separate TV root, and platform interaction seams |
 | `app/desktop` | Desktop composition root, lifecycle, packaging, and mpv surfaces |
-| `app/mobile` | Android phone/tablet composition root, manifest, lifecycle, and APK packaging |
+| `app/mobile` | Android phone/tablet/TV composition roots, services, manifest, lifecycle, native mpv, and APK packaging |
+| `app/benchmark` | Android Macrobenchmark tests and generated baseline/startup profiles |
 
 Portable code stays in `commonMain`. Desktop implementations live in
-`desktopMain`; Android drivers and lifecycle adapters live in `androidMain` or
-`app/mobile`. Pointer-only secondary-click behavior is an expect/actual seam;
-touch keeps the shared long-press and drag interactions. TV-specific focus,
-navigation, density, and screen composition must not be added as mode switches
-inside the shared touch UI.
+`desktopMain`; shared JVM services used by both targets live in `jvmSharedMain`;
+Android drivers and lifecycle adapters live in `androidMain` or `app/mobile`.
+Pointer-only secondary-click behavior is an expect/actual seam; touch keeps the
+shared long-press and drag interactions. TV-specific focus, navigation, density,
+and screen composition belong in `CoveTvApp`, not as mode switches throughout
+the shared touch UI.
 
 ## Persistence
 
@@ -68,18 +75,19 @@ Migration runs before repositories become visible. Desktop `LegacyMigration`
 parses and backs up all known JSON inputs first, then replaces/imports their
 state in one database transaction. Android's migration uses the same package ID
 and app-private `filesDir` as the former app; it imports profiles, settings,
-library/progress/dismissal state and preserves session/addon/Nuvio/Trakt/
-activity JSON as opaque payloads until mobile adapters consume it. Both record
-versioned markers. Structured legacy export is currently a desktop-only
-`--export-legacy` recovery path.
+library/progress/dismissal state and initially preserves session/addon/Nuvio/
+Trakt/activity JSON as opaque payloads. The current services import or merge
+those payloads when they initialize. Both migrations record versioned markers.
+Structured legacy export is currently a desktop-only `--export-legacy`
+recovery path.
 
 ## Integrations and discovery
 
-The Android runtime currently exposes the services used by the shared UI:
-localized TMDB content plus profile-scoped settings and library persistence.
-The richer desktop service graph remains desktop-only until each service gets a
-mobile-safe adapter; preserved legacy payloads prevent those future adapters
-from losing upgrade data.
+Desktop and Android expose the same application-level services: localized TMDB
+content, profile-scoped persistence, addons, Nuvio, discovery, calendar,
+insights, account sync, Trakt, prefetch, playback, updates, and cache policy.
+Their repository contracts and most service logic are shared; native and
+security-sensitive implementations remain platform-owned.
 
 - `TmdbClient` owns localized metadata. It uses the selected UI language,
   performs English fallback for missing presentation fields, and resolves TMDB
@@ -99,11 +107,14 @@ from losing upgrade data.
 
 ## Nuvio isolation
 
-Community scraper code never executes in the application JVM. Each invocation
-starts a disposable child JVM with a 128 MiB heap and a parent-enforced timeout.
-GraalJS receives no host-class lookup, host IO, process/native access, or thread
-creation. The bundled compatibility resources are stored beside the sandbox in
-`app/backend/src/desktopMain/resources`. Repository and scraper activation remain
+Community scraper code never executes with application-process authority. On
+desktop, each invocation starts a disposable child JVM with a 128 MiB heap and
+a parent-enforced timeout; GraalJS receives no host-class lookup, host IO,
+process/native access, or thread creation. Android runs QuickJS in an
+`isolatedProcess` service and brokers bounded, public-address-only fetches
+through the main process. Both hosts load the vendored CommonJS compatibility
+modules from `app/backend/src/desktopMain/resources`; the Android build packages
+that directory as assets. Repository and scraper activation remain
 profile-scoped and opt-in.
 
 ## Playback and media boundary
@@ -111,30 +122,38 @@ profile-scoped and opt-in.
 Direct HTTP sources are probed and proxied only when headers or compatibility
 handling require it. Redirects are validated one hop at a time, and credentials
 are stripped when authority changes. Subtitle responses can be converted from
-SRT to WebVTT. Torrent requests are registered with the embedded server and
-served from jlibtorrent while SSE exposes progress. The torrent engine chooses
-the requested or largest playable video file and owns cleanup on runtime close.
+SRT to WebVTT. Torrent requests are registered with the platform media host and
+served from jlibtorrent while progress remains observable. Each platform engine
+chooses the requested or largest playable video file and owns cleanup on
+runtime close.
 
 Desktop mpv stays in-process through JNA. The OpenGL path retains GPU rendering
 and hardware decoding; software rendering remains the controlled fallback.
-Native Android playback and torrent/media-boundary adapters are intentionally
-separate future platform work; the shared UI does not pretend desktop JNA or
-jlibtorrent binaries are Android-compatible.
+Android uses its native libmpv surface host, a media-playback foreground service,
+picture-in-picture on touch devices, decoder capability probing, and its own
+jlibtorrent/media-boundary implementations. The shared UI sees both through the
+same `VideoPlayerHost` and `PlaybackRepository` contracts without pretending the
+native binaries or surface lifecycles are interchangeable.
 
 ## Configuration and release
 
 Desktop configuration precedence is environment, nearest `.env`, then bundled
 release properties. Android reads the same deployment values into `BuildConfig`
 at APK build time. Release jobs inject deployment keys into desktop resources,
-build the Compose distributables plus libmpv, and publish a separately signed
-`cove-android.apk`. CI compiles/lints/tests both hosts and launches the mobile
-artifact on a phone emulator. There is no backend sidecar, private-source
-injection, or Go toolchain in active CI/release paths.
+build platform Compose distributables and native dependencies, and publish a
+separately signed `cove-android.apk`. CI compiles, lints, and tests the shared,
+desktop, and Android modules on Linux; creates and verifies an Apple-silicon app
+on macOS; and launches the Android artifact on a phone emulator. There is no
+backend sidecar, private-source injection, or Go toolchain in active CI/release
+paths.
 
-Self-replacement is intentionally disabled. `/update/check` reports the current
-version and `/update/apply` directs users to Flatpak, AUR, or the Windows
-installer, keeping updates atomic under the platform package manager.
+The HTTP compatibility API intentionally cannot drive application updates:
+`/update/check` reports only the current version and `/update/apply` declines the
+request. Signed update checking and staging are device-local repositories.
+Windows installer/portable builds and Android APK builds can update in-app;
+AUR, Flatpak, Linux tarball, and macOS installations remain package-manager or
+manual replacements.
 
-The retired implementation remains in Git history; a local ignored cutover copy
-may exist under `legacy/go-backend`. It is excluded from builds and packages and
-must not receive new behavior.
+The retired Go/Qt/WebView implementation remains available in Git history, but
+its source is no longer kept in the working tree or included in any build or
+package.

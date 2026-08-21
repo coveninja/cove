@@ -300,19 +300,22 @@ Never call `graph.settings.update()` with a hand-built `AppSettings`.
 
 ### Image URLs
 
-Backend endpoints are inconsistent: most return absolute proxied URLs
-(`http://127.0.0.1:6969/api/img/w500/abc.jpg`), a few return raw TMDB paths
-(`/abc.jpg`). Two helpers cover it — do not concatenate URLs by hand:
+Models can contain a raw TMDB path (`/abc.jpg`), a TMDB CDN URL, a legacy
+loopback proxy URL (`http://127.0.0.1:6969/api/img/w500/abc.jpg`), or unrelated
+absolute artwork. Two helpers normalize those forms — do not concatenate URLs
+by hand:
 
 ```kotlin
-displayImageUrl(path, "w500")      // raw path → absolute; absolute → unchanged
-tmdbImageSize(existingUrl, "w1280") // rewrite the size segment of an existing URL
+displayImageUrl(path, "w500")        // model path/URL → loadable URL at this size
+tmdbImageSize(existingUrl, "w1280")  // normalize an existing URL at another size
 ```
 
-`displayImageUrl` is for a path off a model. `tmdbImageSize` is for a URL you
-already have and want at a different resolution — it handles both the TMDB
-`/t/p/<size>/` and the proxy `/api/img/<size>/` layouts. Double-wrapping an
-already-absolute URL yields a 400 from the backend.
+Both use `resolveTmdbImageUrl`: raw paths become direct TMDB CDN URLs, TMDB URLs
+have their size rewritten, and old loopback `/api/img` or `/api/v1/img` URLs are
+recovered as stable TMDB paths after migration. Unrelated absolute URLs, such as
+addon artwork and YouTube thumbnails, pass through unchanged. `displayImageUrl`
+is the clearer name when starting from a model path; `tmdbImageSize` communicates
+that an existing display URL is being resized.
 
 ### Icons
 

@@ -140,8 +140,10 @@ Standalone Flatpak bundles are replaced manually when a new version is released.
 ### Other Linux distributions
 
 Download `cove-linux-amd64.tar.gz` from the latest release. It carries its own
-Java runtime and expects `mpv` and `yt-dlp` from your distribution. The bundled
-`bin/cove` launcher resolves the application through an absolute
+Java runtime and expects libmpv from your distribution. An installed `yt-dlp`
+is preferred for YouTube extras; when none is available, Cove can download and
+maintain its own copy unless that setting is disabled. The bundled `bin/cove`
+launcher resolves the application through an absolute
 `/usr/lib/cove` path, so `/usr` is the only prefix it works under:
 
 ```sh
@@ -248,7 +250,7 @@ Common development commands:
 |---|---|
 | `make run` | Build and launch the desktop application with fixture data |
 | `make mobile` | Build the Android debug APK (phone, tablet, and TV) |
-| `make hot` | Start the Compose hot-reload loop against the real backend |
+| `make hot` | Start the Compose hot-reload loop with fixture data |
 | `make run-tv` | Launch the television shell in a desktop window |
 | `make test` | Run the Kotlin test suites |
 | `make test-build` | Build the desktop image and Android debug APK |
@@ -283,6 +285,7 @@ application graph:
 - `app/ui` contains the shared adaptive Compose presentation.
 - `app/desktop` owns the desktop window, native mpv surfaces, lifecycle, and packaging.
 - `app/mobile` owns Android lifecycle, system integration, native playback, and APK packaging.
+- `app/benchmark` generates Android startup and baseline profiles; it is not an application host.
 
 Ordinary UI operations stay in-process. An embedded, authenticated Ktor boundary
 is retained only where URL semantics are required—for example media proxying,

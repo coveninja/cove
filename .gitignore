@@ -22,8 +22,4 @@ hs_err_pid*.log
 replay_pid*.log
 core.[0-9]*
 
-# Local, reversible copy made during the Kotlin cutover. The retired sources
-# remain in Git history; only the explanatory marker is part of new checkouts.
-/legacy/go-backend/**
-!/legacy/go-backend/README.md
 /.claude/

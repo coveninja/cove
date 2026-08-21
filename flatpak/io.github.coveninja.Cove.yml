@@ -119,7 +119,6 @@ modules:
           - .env
           - .git
           - .flatpak-builder
-          - legacy
           - node_modules
           - cove-linux-amd64.flatpak
           - app/desktop/build

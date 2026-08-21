@@ -48,8 +48,8 @@ targets from the signed manifest and never reads the portable archive.
 On Android, Cove additionally parses the APK before installation and requires a
 newer version code, the same package id, and exactly the installed signing
 certificate. Android's package installer retains its normal confirmation flow.
-The `0.31.3` APK can upgrade directly when it was signed with the same production
-keystore.
+Pre-`1.0.0` APKs can upgrade in place when they were signed with the same
+production keystore; Android rejects a build from a different certificate.
 
 ## Release key setup
 
@@ -93,8 +93,11 @@ The Gradle build reads those values directly from its environment and writes the
 client configuration into each package. Do not configure a Supabase service-role
 key or JWT secret: Cove clients neither need nor accept server authority.
 
-None of these values belongs in `.env`, source files, Gradle properties, or the
-Git history.
+For release CI, keep these values in GitHub Actions secrets rather than source
+files or Gradle properties. Local development may put the client configuration
+in the ignored repository `.env` (as `.env.example` documents), but it must never
+enter Git history. Never use a Supabase service-role key or JWT secret in either
+place.
 
 ### The macOS DMG is ad-hoc signed, not Developer ID signed
 

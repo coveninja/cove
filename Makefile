@@ -44,7 +44,7 @@ build: app mobile
 app:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:build
 
-## Android phone/tablet app using the same Compose UI as desktop.
+## Android phone/tablet/TV app; the device selects the touch or ten-foot shell.
 mobile:
 	cd $(KOTLIN_DIR) && ./gradlew :mobile:assembleDebug
 
@@ -55,7 +55,7 @@ run: app
 ## Alias for `make run`.
 dev: run
 
-## Tight Compose UI loop with the in-process Kotlin backend.
+## Tight Compose UI loop with fixture data (no TMDB key required).
 hot:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto
 
