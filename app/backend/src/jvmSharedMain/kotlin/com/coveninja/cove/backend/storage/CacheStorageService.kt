@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.storage
 
+import com.coveninja.cove.backend.torrent.TorrentCacheLifecycle
 import com.coveninja.cove.shared.data.CacheEntry
 import com.coveninja.cove.shared.data.CacheKind
 import com.coveninja.cove.shared.data.ClearResult
@@ -24,10 +25,11 @@ import kotlinx.coroutines.withContext
  */
 class CacheStorageService(
     private val directories: CacheDirectories,
+    private val torrentLifecycle: TorrentCacheLifecycle,
     private val journal: TorrentCacheJournal? = null,
     private val activeHashes: () -> Set<String> = { emptySet() },
     /**
-     * Drops a torrent from the peer session, refusing while it is being read.
+     * Drops a torrent from the peer session while [torrentLifecycle] owns its deletion gate.
      *
      * Deleting the files of a torrent libtorrent still holds is not a deletion: the handle keeps
      * the file open and the session carries on writing pieces into it, so the space comes back
@@ -109,13 +111,24 @@ class CacheStorageService(
         val removed = mutableListOf<String>()
         for (torrent in torrents) {
             if (!isDeletableTorrentDirectory(root, torrent.path)) continue
-            // The last word on whether this is safe, and it is the engine's rather than the
-            // plan's: a read can begin between the sweep choosing a torrent and reaching it.
-            if (!runCatching { release(torrent.hash) }.getOrDefault(false)) continue
-            freed += deleteTree(torrent.path)
-            removed += torrent.hash
-            // Metadata is a few kilobytes and saves a DHT lookup on the next play, so it outlives
-            // the content it describes on purpose — clearing it is its own row on the screen.
+            // The plan's active snapshot is advisory: a read can begin after it. This exclusive
+            // gate is the last word and spans both peer-session removal and filesystem deletion,
+            // so a new stream either wins first (and this sweep skips it) or waits and reopens
+            // after the old files are completely gone.
+            runCatching {
+                torrentLifecycle.tryDelete(torrent.hash) {
+                    if (!runCatching { release(torrent.hash) }.getOrDefault(false)) {
+                        false
+                    } else {
+                        freed += deleteTree(torrent.path)
+                        removed += torrent.hash
+                        // Metadata is a few kilobytes and saves a DHT lookup on the next play, so
+                        // it outlives the content it describes on purpose — clearing it is its own
+                        // row on the screen.
+                        true
+                    }
+                }
+            }
         }
         journal?.forget(removed)
         return freed
@@ -198,7 +211,8 @@ class CacheStorageService(
     }
 
     private fun canonicalActiveHashes(): Set<String> =
-        runCatching { activeHashes() }.getOrDefault(emptySet()).mapTo(mutableSetOf()) { it.lowercase() }
+        (runCatching { activeHashes() }.getOrDefault(emptySet()) + torrentLifecycle.activeHashes())
+            .mapTo(mutableSetOf()) { it.lowercase() }
 
     private fun freeSpace(): Long {
         val probe = CacheKind.entries

@@ -39,6 +39,7 @@ import com.coveninja.cove.backend.storage.CacheDirectories
 import com.coveninja.cove.backend.storage.CacheStorageService
 import com.coveninja.cove.backend.storage.LocalStorageRepository
 import com.coveninja.cove.backend.storage.TorrentCacheJournal
+import com.coveninja.cove.backend.torrent.TorrentCacheLifecycle
 import com.coveninja.cove.backend.torrent.TorrentPlaybackEngine
 import com.coveninja.cove.shared.data.StorageRepository
 import com.coveninja.cove.shared.data.TorrentCachePolicy
@@ -283,6 +284,7 @@ class AndroidBackendRuntime private constructor(
                     // the storage screen could ask what is playing. Until it exists nothing can
                     // be playing, which is exactly what an absent reference reports.
                     val engineRef = java.util.concurrent.atomic.AtomicReference<TorrentPlaybackEngine?>()
+                    val torrentLifecycle = TorrentCacheLifecycle()
                     val media = LazyAndroidPlaybackMediaHost {
                         AndroidPlaybackMediaHost.start(
                             httpClient = untrustedClient,
@@ -294,6 +296,7 @@ class AndroidBackendRuntime private constructor(
                             },
                             torrentEngine = AndroidJlibtorrentPlaybackEngine(
                                 downloadDirectory = torrentDirectory,
+                                lifecycle = torrentLifecycle,
                                 policy = cachePolicy::value,
                                 journal = cacheJournal,
                             ).also(engineRef::set),
@@ -308,6 +311,7 @@ class AndroidBackendRuntime private constructor(
                             // it, and it is journalled — deleting its files from underneath it
                             // is not the same operation as clearing it.
                             directories = CacheDirectories(torrents = torrentDirectory),
+                            torrentLifecycle = torrentLifecycle,
                             journal = cacheJournal,
                             activeHashes = { engineRef.get()?.activeHashes().orEmpty() },
                             release = { hash -> engineRef.get()?.release(hash) ?: true },

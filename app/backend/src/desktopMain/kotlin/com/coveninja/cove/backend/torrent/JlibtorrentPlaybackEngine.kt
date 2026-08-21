@@ -30,6 +30,7 @@ import kotlinx.coroutines.sync.withLock
 
 class JlibtorrentPlaybackEngine(
     private val downloadDirectory: Path,
+    private val lifecycle: TorrentCacheLifecycle,
     private val metadataTimeoutSeconds: Int = 45,
     private val pieceTimeoutMillis: Long = 120_000,
     /**
@@ -47,6 +48,15 @@ class JlibtorrentPlaybackEngine(
     private val resources = ConcurrentHashMap<String, ManagedResource>()
 
     override suspend fun open(
+        hash: String,
+        season: Int?,
+        episode: Int?,
+        fileIndex: Int?,
+    ): TorrentResource = lifecycle.withUse(hash.lowercase()) {
+        openWithinLease(hash, season, episode, fileIndex)
+    }
+
+    private suspend fun openWithinLease(
         hash: String,
         season: Int?,
         episode: Int?,
@@ -97,6 +107,15 @@ class JlibtorrentPlaybackEngine(
         start: Long,
         endInclusive: Long,
         output: ByteWriteChannel,
+    ) = lifecycle.withUse(resource.id.substringBefore(':').lowercase()) {
+        writeWithinLease(resource, start, endInclusive, output)
+    }
+
+    private suspend fun writeWithinLease(
+        resource: TorrentResource,
+        start: Long,
+        endInclusive: Long,
+        output: ByteWriteChannel,
     ) = withContext(Dispatchers.IO) {
         val managed = resources[resource.id] ?: error("torrent resource is no longer available")
         require(start in 0 until managed.file.size && endInclusive in start until managed.file.size) {
@@ -107,10 +126,8 @@ class JlibtorrentPlaybackEngine(
         // Dates the cache entry. Cheap by design — it writes memory and flushes at most once a
         // minute — because it sits on the path every served byte takes.
         journal?.touch(managed.torrent.hash)
-        // Marks the torrent as being read for as long as this response is being written, which is
-        // what stops the sweep releasing it underneath the player. Incremented before the first
-        // wait and released in a finally, so an aborted range request — the player seeking, or
-        // closing — does not leave the torrent pinned for the rest of the session.
+        // Kept as a local session guard as well as the cross-component lifecycle lease. The
+        // latter spans Ktor's delayed producer and the eventual filesystem deletion.
         managed.torrent.readers.incrementAndGet()
         try {
             // libtorrent allocates sparsely: until it flushes the first piece covering
@@ -146,6 +163,24 @@ class JlibtorrentPlaybackEngine(
         }
     }
 
+    override suspend fun stream(
+        hash: String,
+        season: Int?,
+        episode: Int?,
+        fileIndex: Int?,
+        start: Long,
+        endInclusive: Long,
+        output: ByteWriteChannel,
+    ) {
+        lifecycle.withUse(hash.lowercase()) {
+            // Ktor invokes its response producer later. Reopening here makes a deletion that won
+            // the gap harmless, while the outer lease keeps this new resource alive through the
+            // complete write.
+            val resource = openWithinLease(hash, season, episode, fileIndex)
+            writeWithinLease(resource, start, endInclusive, output)
+        }
+    }
+
     override suspend fun warmUp() {
         withContext(Dispatchers.IO) { runCatching { session() } }
     }
@@ -167,16 +202,15 @@ class JlibtorrentPlaybackEngine(
         )
     }
 
-    override fun activeHashes(): Set<String> =
-        torrents.values.filter { it.readers.get() > 0 }.mapTo(mutableSetOf()) { it.hash }
+    override fun activeHashes(): Set<String> = lifecycle.activeHashes()
 
     override fun release(hash: String): Boolean {
         val canonical = hash.lowercase()
         val torrent = torrents[canonical] ?: return true
+        if (canonical in lifecycle.activeHashes()) return false
         if (torrent.readers.get() > 0) return false
-        // Removed from the map first: a read that begins between here and the session removal
-        // would otherwise pin a torrent that is already on its way out, and the resource it looks
-        // up would point at files about to be deleted. A new open() after this re-adds it.
+        // The cache service holds the lifecycle's exclusive deletion gate through this removal
+        // and the filesystem delete. A new open waits at that gate, then re-adds a clean torrent.
         torrents.remove(canonical, torrent)
         if (torrent.readers.get() > 0) {
             torrents[canonical] = torrent

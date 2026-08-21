@@ -208,7 +208,7 @@ internal class AndroidPlaybackMediaHost private constructor(
             status = if (range.partial) HttpStatusCode.PartialContent else HttpStatusCode.OK,
             contentLength = range.endInclusive - range.start + 1,
         ) {
-            torrentEngine.write(resource, range.start, range.endInclusive, this)
+            torrentEngine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
         }
     }
 

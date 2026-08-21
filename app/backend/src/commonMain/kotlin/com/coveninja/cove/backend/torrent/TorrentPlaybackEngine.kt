@@ -24,6 +24,27 @@ data class TorrentProgress(
 interface TorrentPlaybackEngine : AutoCloseable {
     suspend fun open(hash: String, season: Int?, episode: Int?, fileIndex: Int?): TorrentResource
     suspend fun write(resource: TorrentResource, start: Long, endInclusive: Long, output: ByteWriteChannel)
+
+    /**
+     * Opens and writes a range when Ktor's delayed response producer actually starts.
+     *
+     * [open] is still called beforehand to build the response headers. A cache sweep may run after
+     * that call but before the producer, so JVM engines override this to reopen and hold one cache
+     * use lease through the complete write. The default keeps lightweight test and non-cache
+     * engines source-compatible.
+     */
+    suspend fun stream(
+        hash: String,
+        season: Int?,
+        episode: Int?,
+        fileIndex: Int?,
+        start: Long,
+        endInclusive: Long,
+        output: ByteWriteChannel,
+    ) {
+        write(open(hash, season, episode, fileIndex), start, endInclusive, output)
+    }
+
     fun progress(hash: String): TorrentProgress?
 
     /**
@@ -48,8 +69,9 @@ interface TorrentPlaybackEngine : AutoCloseable {
      * or frees space the session immediately starts refilling.
      *
      * Returns false if the torrent is being read, in which case the caller must leave it alone.
-     * That check happens here rather than at the call site because only the engine can make it
-     * atomically against a read that is starting at the same moment.
+     * JVM callers additionally hold their shared cache lifecycle's exclusive deletion lease from
+     * before this call until filesystem deletion finishes. That closes the otherwise unavoidable
+     * gap where a new read could start after this method returned.
      */
     fun release(hash: String): Boolean = true
 

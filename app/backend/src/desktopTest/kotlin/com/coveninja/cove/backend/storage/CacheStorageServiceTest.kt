@@ -1,15 +1,22 @@
 package com.coveninja.cove.backend.storage
 
+import com.coveninja.cove.backend.torrent.TorrentCacheLifecycle
 import com.coveninja.cove.shared.data.CacheKind
 import com.coveninja.cove.shared.data.TorrentCachePolicy
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeBytes
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 
 /**
@@ -41,10 +48,12 @@ class CacheStorageServiceTest {
 
     private fun temporaryRoot(): Path = Files.createTempDirectory("cove-cache-test")
 
+    private fun lifecycle(): TorrentCacheLifecycle = TorrentCacheLifecycle()
+
     @Test
     fun `usage reports each cache separately and omits directories this host lacks`() = runTest {
         val root = temporaryRoot()
-        val usage = CacheStorageService(cache(root)).usage()
+        val usage = CacheStorageService(cache(root), torrentLifecycle = lifecycle()).usage()
         val byKind = usage.entries.associateBy { it.kind }
 
         // Downloads are counted per torrent over the hash directories only. Fails if the walk
@@ -65,7 +74,11 @@ class CacheStorageServiceTest {
     fun `clearing downloads leaves the torrent that is playing and its metadata alone`() = runTest {
         val root = temporaryRoot()
         val directories = cache(root)
-        val service = CacheStorageService(directories, activeHashes = { setOf(hashA) })
+        val service = CacheStorageService(
+            directories,
+            torrentLifecycle = lifecycle(),
+            activeHashes = { setOf(hashA) },
+        )
 
         val result = service.clear(CacheKind.TorrentDownloads)
 
@@ -86,7 +99,11 @@ class CacheStorageServiceTest {
     fun `an active hash is matched whatever case it is reported in`() = runTest {
         val root = temporaryRoot()
         val directories = cache(root)
-        val service = CacheStorageService(directories, activeHashes = { setOf(hashA.uppercase()) })
+        val service = CacheStorageService(
+            directories,
+            torrentLifecycle = lifecycle(),
+            activeHashes = { setOf(hashA.uppercase()) },
+        )
 
         service.clear(CacheKind.TorrentDownloads)
 
@@ -117,7 +134,12 @@ class CacheStorageServiceTest {
             directories.torrents!!.resolve(hashA),
             java.nio.file.attribute.FileTime.fromMillis(2_000),
         )
-        val service = CacheStorageService(directories, journal = journal, clock = { 3_000L })
+        val service = CacheStorageService(
+            directories,
+            torrentLifecycle = lifecycle(),
+            journal = journal,
+            clock = { 3_000L },
+        )
 
         service.enforce(TorrentCachePolicy(limitBytes = 4_000))
 
@@ -138,7 +160,12 @@ class CacheStorageServiceTest {
         val now = 1_800_000_000_000
         val journal = TorrentCacheJournal(directories.torrents!!) { now }
 
-        CacheStorageService(directories, journal = journal, clock = { now })
+        CacheStorageService(
+            directories,
+            torrentLifecycle = lifecycle(),
+            journal = journal,
+            clock = { now },
+        )
             .enforce(TorrentCachePolicy(maxAgeDays = 30))
 
         // The upgrade case, and the one that would cost a viewer gigabytes without warning:
@@ -157,7 +184,8 @@ class CacheStorageServiceTest {
         val root = temporaryRoot()
         val directories = cache(root)
 
-        val result = CacheStorageService(directories).enforce(TorrentCachePolicy())
+        val result = CacheStorageService(directories, torrentLifecycle = lifecycle())
+            .enforce(TorrentCachePolicy())
 
         // The default on a host that has never opened the storage screen. Fails if an unset
         // limit reads as a limit of zero, which would delete every download at first launch.
@@ -173,6 +201,7 @@ class CacheStorageServiceTest {
         val refused = mutableListOf<String>()
         val service = CacheStorageService(
             directories = directories,
+            torrentLifecycle = lifecycle(),
             // Nothing is reported as being read, but the engine declines when actually asked —
             // the race the gate exists for, where playback starts between the sweep choosing a
             // torrent and reaching it.
@@ -192,6 +221,43 @@ class CacheStorageServiceTest {
     }
 
     @Test
+    fun `a new stream cannot enter between session release and file deletion`() = runTest {
+        val root = temporaryRoot()
+        val torrents = root.resolve("torrents")
+        val torrent = torrents.resolve(hashA)
+        torrent.createDirectories()
+        torrent.resolve("episode.mkv").writeBytes(ByteArray(4_000))
+        val lifecycle = lifecycle()
+        val releaseStarted = CountDownLatch(1)
+        val allowReleaseToFinish = CountDownLatch(1)
+        val useEntered = CompletableDeferred<Unit>()
+        val service = CacheStorageService(
+            directories = CacheDirectories(torrents = torrents),
+            torrentLifecycle = lifecycle,
+            release = {
+                releaseStarted.countDown()
+                check(allowReleaseToFinish.await(5, TimeUnit.SECONDS))
+                true
+            },
+        )
+
+        val clear = async(Dispatchers.Default) { service.clear(CacheKind.TorrentDownloads) }
+        assertTrue(releaseStarted.await(5, TimeUnit.SECONDS))
+        val newUse = async(start = CoroutineStart.UNDISPATCHED) {
+            lifecycle.withUse(hashA) {
+                assertFalse(Files.exists(torrent))
+                useEntered.complete(Unit)
+            }
+        }
+        assertFalse(useEntered.isCompleted)
+
+        allowReleaseToFinish.countDown()
+        assertEquals(4_000, clear.await().freedBytes)
+        newUse.await()
+        assertTrue(useEntered.isCompleted)
+    }
+
+    @Test
     fun `the sweep releases a torrent from the session before deleting it`() = runTest {
         val root = temporaryRoot()
         val directories = cache(root)
@@ -202,6 +268,7 @@ class CacheStorageServiceTest {
 
         CacheStorageService(
             directories = directories,
+            torrentLifecycle = lifecycle(),
             journal = journal,
             release = { released += it; true },
             clock = { 1_000L },
@@ -224,7 +291,12 @@ class CacheStorageServiceTest {
         journal.touch(hashB)
         journal.flush()
 
-        CacheStorageService(directories, journal = journal, activeHashes = { setOf(hashA) })
+        CacheStorageService(
+            directories,
+            torrentLifecycle = lifecycle(),
+            journal = journal,
+            activeHashes = { setOf(hashA) },
+        )
             .clear(CacheKind.TorrentDownloads)
 
         val reloaded = TorrentCacheJournal(directories.torrents!!)
