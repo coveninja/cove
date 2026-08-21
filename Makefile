@@ -29,7 +29,7 @@ TV_AVD      := cove-tv
 TV_IMAGE    := system-images;android-36;android-tv;x86_64
 
 .PHONY: all build run dev hot app mobile test test-kotlin test-all test-build \
-        test-workflows test-release-notes test-release release-preflight \
+        test-workflows test-release-notes test-site-docs test-release release-preflight \
         patch minor major clean \
         run-tv hot-tv tv-avd tv-install \
         onboarding onboarding-tv onboarding-mobile onboarding-tv-install \
@@ -175,7 +175,7 @@ release-preflight:
 	bash scripts/release-dry-run.sh --remote
 
 ## Lint the GitHub Actions definitions.
-test-workflows: test-release-notes test-release
+test-workflows: test-release-notes test-site-docs test-release
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required for full workflow linting (Arch: sudo pacman -S shellcheck)."; exit 1; }
 	@command -v actionlint >/dev/null 2>&1 || { echo "actionlint is required for workflow linting."; exit 1; }
 	bash scripts/workflow-local-actions_test.sh
@@ -184,6 +184,10 @@ test-workflows: test-release-notes test-release
 ## Verify that generated release notes contain only user-facing fixes/features.
 test-release-notes:
 	bash scripts/release-notes_test.sh
+
+## Validate the versioned user-documentation contract consumed by cove.ninja.
+test-site-docs:
+	node scripts/validate-site-docs.mjs
 
 ## Broadest local approximation of CI.
 test-all: test-workflows test test-build
