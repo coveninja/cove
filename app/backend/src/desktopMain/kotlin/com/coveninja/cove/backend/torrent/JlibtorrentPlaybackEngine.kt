@@ -2,6 +2,7 @@ package com.coveninja.cove.backend.torrent
 
 import com.frostwire.jlibtorrent.Priority
 import com.frostwire.jlibtorrent.SessionManager
+import com.frostwire.jlibtorrent.SessionParams
 import com.frostwire.jlibtorrent.SettingsPack
 import com.frostwire.jlibtorrent.Sha1Hash
 import com.frostwire.jlibtorrent.TorrentFlags
@@ -336,7 +337,7 @@ class JlibtorrentPlaybackEngine(
         NativePreloads.install()
         manager ?: run {
             SessionManager(false).also {
-                it.start()
+                startTorrentSession(it, System.getProperty("os.name"))
                 it.applySettings(streamingSettings())
                 manager = it
                 log("session started, running=${it.isRunning}")
@@ -526,6 +527,25 @@ class JlibtorrentPlaybackEngine(
         var raisedTo: Int = -1
     }
 }
+
+internal fun startTorrentSession(
+    manager: SessionManager,
+    osName: String,
+    paramsFactory: () -> SessionParams = ::SessionParams,
+) {
+    if (needsPosixTorrentDiskIo(osName)) {
+        // libtorrent's mmap backend installs process-wide SIGSEGV/SIGBUS handlers.
+        // On macOS and Linux they displace HotSpot's handlers, so faults the JVM normally
+        // handles can terminate the process.
+        manager.start(paramsFactory().apply { setPosixDiskIO() })
+    } else {
+        manager.start()
+    }
+}
+
+internal fun needsPosixTorrentDiskIo(osName: String): Boolean =
+    osName.startsWith("Mac", ignoreCase = true) ||
+        osName.startsWith("Linux", ignoreCase = true)
 
 /** How much further ahead of the served chunk pieces are asked for. */
 private const val READ_AHEAD_BYTES = 32L * 1024 * 1024
