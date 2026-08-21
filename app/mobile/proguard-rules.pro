@@ -3,6 +3,12 @@
     native <methods>;
 }
 
+# QuickJs.set() reflects over these interfaces and publishes their Java method names directly to
+# guest JavaScript. The bootstrap calls those names as strings, which R8 cannot see; renaming them
+# makes only release builds lose the fetch, logging and invocation bridges.
+-keep interface com.coveninja.cove.backend.nuvio.AndroidNuvioWorkerService$InvocationHostApi { *; }
+-keep interface com.coveninja.cove.backend.nuvio.AndroidNuvioWorkerService$JavascriptBridgeApi { *; }
+
 # Retain metadata used by serialization and service/provider discovery while still allowing
 # R8 to optimize the implementations themselves.
 -keepattributes Signature,*Annotation*,InnerClasses,EnclosingMethod

@@ -41,6 +41,23 @@ class NuvioSandboxTest {
     }
 
     @Test
+    fun guestCanReachFetchBridgeAndBrowserCompatibilityGlobals() = runTest {
+        val streams = ProcessNuvioSandbox(timeoutMillis = 15_000).run(invocation("""
+            module.exports.getStreams = async function() {
+              if (typeof __bridge.request !== 'function') throw new Error('fetch bridge is hidden');
+              if (global !== globalThis || window !== globalThis) throw new Error('global aliases are missing');
+              const query = new URLSearchParams({title: 'Cove test'});
+              let timerRan = false;
+              await new Promise(resolve => setTimeout(() => { timerRan = true; resolve(); }, 10));
+              if (!timerRan) throw new Error('timer did not run');
+              return [{name: query.toString(), url: 'https://cdn.example/video.mkv'}];
+            };
+        """.trimIndent()))
+
+        assertEquals("title=Cove+test", streams.single().name)
+    }
+
+    @Test
     fun runawayGuestIsKilledAtTheProcessBoundary() = runTest {
         val started = System.nanoTime()
         assertFailsWith<Exception> {
