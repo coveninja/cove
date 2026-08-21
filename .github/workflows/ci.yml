@@ -92,9 +92,13 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
-      - name: Install libmpv
-        run: brew install mpv
+      - name: Install native mpv build dependencies
+        run: brew install mpv meson ninja
+      - name: Build libmpv with the CoreAudio hotplug lifetime fix
+        run: scripts/build-patched-mpv-macos.sh "$RUNNER_TEMP/cove-mpv"
       - name: Test and build Apple-silicon application
+        env:
+          COVE_MPV_LIBRARY_DIR: ${{ runner.temp }}/cove-mpv/lib
         run: >-
           scripts/gradle-retry.sh
           :backend:desktopTest
