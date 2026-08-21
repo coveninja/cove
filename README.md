@@ -22,6 +22,7 @@
     <a href="#building-from-source">Build from source</a> ·
     <a href="#architecture">Architecture</a> ·
     <a href="#documentation">Documentation</a> ·
+    <a href="https://cove.ninja/docs">User guides</a> ·
     <a href="CONTRIBUTING.md">Contributing</a>
   </p>
 

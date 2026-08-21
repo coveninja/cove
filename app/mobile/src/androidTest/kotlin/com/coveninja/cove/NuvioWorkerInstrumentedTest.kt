@@ -100,7 +100,7 @@ class NuvioWorkerInstrumentedTest {
         val INVOCATION = """
             {
               "scraperId":"smoke",
-              "code":"module.exports.getStreams = async () => { const response = await fetch('https://example.test/streams'); const stream = await response.json(); return [stream]; };",
+              "code":"module.exports.getStreams = () => new Promise((resolve, reject) => { fetch('https://example.test/streams', {headers: {Connection: 'keep-alive'}}).then(response => response.json()).then(stream => resolve([stream]), reject); });",
               "tmdbId":1,
               "mediaType":"movie",
               "title":"Smoke",

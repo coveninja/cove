@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Validate website documentation
+        run: make test-site-docs
       - name: Test release-note filtering
         run: make test-release-notes
       # release.yml only runs on a tag, so its key derivation, packaging and manifest steps

@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "pages": [
+    {
+      "slug": "getting-started",
+      "title": "Getting started",
+      "summary": "Install Cove, complete first-run setup, and understand what works locally.",
+      "section": "Start here",
+      "order": 10,
+      "source_path": "docs/site/guides/getting-started.md",
+      "keywords": ["first run", "onboarding", "profiles"]
+    },
+    {
+      "slug": "install/linux",
+      "title": "Install on Linux",
+      "summary": "Choose the AUR package, Flatpak bundle, or portable tarball.",
+      "section": "Install",
+      "order": 20,
+      "source_path": "docs/site/guides/install/linux.md",
+      "keywords": ["arch", "cachyos", "aur", "flatpak", "tarball"]
+    },
+    {
+      "slug": "install/windows",
+      "title": "Install on Windows",
+      "summary": "Choose the standard installer or a self-contained portable copy.",
+      "section": "Install",
+      "order": 30,
+      "source_path": "docs/site/guides/install/windows.md",
+      "keywords": ["installer", "portable", "exe", "zip"]
+    },
+    {
+      "slug": "install/macos",
+      "title": "Install on macOS",
+      "summary": "Install the Apple-silicon DMG and handle Gatekeeper safely.",
+      "section": "Install",
+      "order": 40,
+      "source_path": "docs/site/guides/install/macos.md",
+      "keywords": ["apple silicon", "dmg", "gatekeeper", "quarantine"]
+    },
+    {
+      "slug": "install/android-tv",
+      "title": "Install on Android and TV",
+      "summary": "Sideload the shared APK on Android phones, tablets, and televisions.",
+      "section": "Install",
+      "order": 50,
+      "source_path": "docs/site/guides/install/android-tv.md",
+      "keywords": ["apk", "android 9", "phone", "tablet", "television", "sideload"]
+    },
+    {
+      "slug": "updates",
+      "title": "Update Cove",
+      "summary": "Know which installations update in-app and which are replaced manually.",
+      "section": "Use Cove",
+      "order": 60,
+      "source_path": "docs/site/guides/updates.md",
+      "keywords": ["upgrade", "automatic update", "checksum", "signature"]
+    },
+    {
+      "slug": "accounts-and-sync",
+      "title": "Accounts and sync",
+      "summary": "Understand optional accounts, profiles, cloud data, and cross-device sync.",
+      "section": "Use Cove",
+      "order": 70,
+      "source_path": "docs/site/guides/accounts-and-sync.md",
+      "keywords": ["supabase", "profile", "sign in", "cloud", "trakt"]
+    },
+    {
+      "slug": "addons-and-sources",
+      "title": "Addons and sources",
+      "summary": "Configure compatible addons and understand Cove's source boundaries.",
+      "section": "Use Cove",
+      "order": 80,
+      "source_path": "docs/site/guides/addons-and-sources.md",
+      "keywords": ["stremio", "nuvio", "streams", "subtitles", "catalogs"]
+    },
+    {
+      "slug": "playback-and-subtitles",
+      "title": "Playback and subtitles",
+      "summary": "Choose streams, control decoding, and troubleshoot subtitle playback.",
+      "section": "Use Cove",
+      "order": 90,
+      "source_path": "docs/site/guides/playback-and-subtitles.md",
+      "keywords": ["mpv", "hardware decoding", "software decoding", "audio", "subtitles"]
+    },
+    {
+      "slug": "troubleshooting",
+      "title": "Troubleshooting",
+      "summary": "Resolve common installation, update, sync, and playback problems.",
+      "section": "Get help",
+      "order": 100,
+      "source_path": "docs/site/guides/troubleshooting.md",
+      "keywords": ["logs", "logcat", "bug report", "crash", "support"]
+    },
+    {
+      "slug": "data-and-privacy",
+      "title": "Data and privacy",
+      "summary": "See what stays local, what optional integrations receive, and how deletion works.",
+      "section": "Get help",
+      "order": 110,
+      "source_path": "docs/site/guides/data-and-privacy.md",
+      "keywords": ["local data", "account deletion", "email", "cloud data"]
+    },
+    {
+      "slug": "faq",
+      "title": "Frequently asked questions",
+      "summary": "Quick answers about platforms, content sources, accounts, and updates.",
+      "section": "Get help",
+      "order": 120,
+      "source_path": "docs/site/guides/faq.md",
+      "keywords": ["questions", "support", "platforms"]
+    }
+  ]
+}

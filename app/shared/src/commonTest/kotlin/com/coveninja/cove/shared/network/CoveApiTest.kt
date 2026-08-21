@@ -3,6 +3,7 @@ package com.coveninja.cove.shared.network
 import com.coveninja.cove.shared.model.MediaType
 import io.ktor.client.*
 import io.ktor.client.engine.mock.*
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -117,6 +118,25 @@ class CoveApiTest {
         assertTrue(capturedUrl!!.contains("type=movie"), "Expected type=movie in '$capturedUrl'")
         assertFalse(capturedUrl!!.contains("season"),    "season should be absent for movies")
         assertFalse(capturedUrl!!.contains("episode"),   "episode should be absent for movies")
+    }
+
+    @Test
+    fun `streams request outlives the backend Nuvio aggregate timeout`() = runTest {
+        var capturedTimeoutMillis: Long? = null
+        val client = HttpClient(MockEngine { request ->
+            capturedTimeoutMillis = request
+                .getCapabilityOrNull(HttpTimeoutCapability)
+                ?.requestTimeoutMillis
+            jsonResponse("[]")
+        }) {
+            install(ContentNegotiation) { json(testJson) }
+            install(HttpTimeout) { requestTimeoutMillis = 20_000 }
+        }
+        val api = CoveApi(client, CoveApiConfig())
+
+        api.streams(id = 969681, type = MediaType.Movie)
+
+        assertEquals(30_000, capturedTimeoutMillis)
     }
 
     // ── Error mapping ────────────────────────────────────────────────────────

@@ -147,14 +147,18 @@ internal class AndroidNuvioSandbox(
         val method = options.method.uppercase()
         require(method in ALLOWED_METHODS) { "unsupported fetch method $method" }
         var current = URI(rawUrl)
+        var redirected = false
         repeat(6) { redirectCount ->
             urlPolicy.validate(current.toString())
             val response = httpClient.request(current.toString()) {
                 this.method = HttpMethod.parse(method)
                 header(HttpHeaders.UserAgent, "Cove Nuvio Sandbox")
                 options.headers.forEach { (name, value) ->
-                    require(name.lowercase() !in FORBIDDEN_HEADERS) { "forbidden fetch header $name" }
-                    header(name, value)
+                    // Browser fetch implementations silently own transport headers. Nuvio
+                    // providers commonly include Connection or Content-Length in a copied
+                    // browser header set, so rejecting the whole request is needlessly
+                    // incompatible; omit those values while retaining the sandbox boundary.
+                    if (name.lowercase() !in FORBIDDEN_HEADERS) header(name, value)
                 }
                 if (options.body.isNotEmpty()) setBody(options.body)
             }
@@ -163,6 +167,7 @@ internal class AndroidNuvioSandbox(
                 val location = response.headers[HttpHeaders.Location]
                     ?: error("fetch redirect has no location")
                 current = current.resolve(location)
+                redirected = true
                 return@repeat
             }
             val declaredLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
@@ -173,8 +178,11 @@ internal class AndroidNuvioSandbox(
             require(bytes.size <= MAX_FETCH_BYTES) { "fetch response exceeds 20 MiB" }
             return NuvioFetchResponse(
                 status = response.status.value,
+                statusText = response.status.description,
                 headers = response.headers.entries().associate { it.key to it.value.joinToString(", ") },
                 body = bytes.decodeToString(),
+                url = current.toString(),
+                redirected = redirected,
             )
         }
         error("too many fetch redirects")
@@ -226,13 +234,17 @@ class AndroidNuvioWorkerService : Service() {
 
     private fun executeQuickJs(invocation: NuvioInvocation, broker: IBinder): List<NuvioScrapedStream> {
         QuickJs.create().use { quickJs ->
-            quickJs.set("__bridge", JavascriptBridgeApi::class.java, JavascriptBridge(broker))
+            quickJs.set(
+                "__bridge",
+                JavascriptBridgeApi::class.java,
+                JavascriptBridge(broker, invocation.scraperId),
+            )
             quickJs.set("__invocationHost", InvocationHostApi::class.java, InvocationHost(
                 CoveJson.encodeToString(invocation),
             ))
             quickJs.evaluate(bootstrap(), "cove-nuvio-bootstrap.js")
-            quickJs.evaluate(synchronousScraperSource(invocation.code), "${invocation.scraperId}.js")
-            quickJs.evaluate(INVOKE_SCRIPT, "cove-nuvio-invoke.js")
+            quickJs.evaluate(synchronousNuvioScraperSource(invocation.code), "${invocation.scraperId}.js")
+            quickJs.evaluate(ANDROID_NUVIO_INVOKE_SCRIPT, "cove-nuvio-invoke.js")
             check(quickJs.evaluate("globalThis.__coveDone === true") == true) {
                 "scraper did not finish"
             }
@@ -243,19 +255,6 @@ class AndroidNuvioWorkerService : Service() {
         }
     }
 
-    /**
-     * The guest fetch bridge is intentionally blocking: all network I/O runs in
-     * the privileged process and the isolated process waits on a pipe. Cash's
-     * compact QuickJS binding does not expose the pending-job queue, so normalize
-     * the async/await syntax used by Nuvio scrapers onto that synchronous bridge.
-     */
-    private fun synchronousScraperSource(source: String): String = source
-        .replace(Regex("\\bfor\\s+await\\s*\\("), "for (")
-        .replace(Regex("\\basync\\s+function\\b"), "function")
-        .replace(Regex("\\basync\\s*(?=\\([^)]*\\)\\s*=>)"), "")
-        .replace(Regex("\\basync\\s+(?=[A-Za-z_$][A-Za-z0-9_$]*\\s*=>)"), "")
-        .replace(Regex("\\bawait\\s+"), "")
-
     private fun bootstrap(): String {
         val modules = mapOf(
             "crypto-js" to assets.open("crypto-js.js").bufferedReader().use { it.readText() },
@@ -265,7 +264,7 @@ class AndroidNuvioWorkerService : Service() {
         val factories = modules.entries.joinToString(",") { (name, source) ->
             "${CoveJson.encodeToString(name)}: function(module, exports) {\n$source\n}"
         }
-        return BOOTSTRAP_PREFIX.replace("__COVE_MODULE_FACTORIES__", factories)
+        return androidNuvioBootstrap(factories)
     }
 
     private interface InvocationHostApi {
@@ -280,9 +279,15 @@ class AndroidNuvioWorkerService : Service() {
         fun base64Encode(value: String): String
         fun base64Decode(value: String): String
         fun request(url: String, optionsJson: String): String
+        fun log(level: String, message: String)
     }
 
-    private class JavascriptBridge(private val broker: IBinder) : JavascriptBridgeApi {
+    private class JavascriptBridge(
+        private val broker: IBinder,
+        private val scraperId: String,
+    ) : JavascriptBridgeApi {
+        private var logCount = 0
+
         override fun base64Encode(value: String): String =
             Base64.getEncoder().encodeToString(value.encodeToByteArray())
 
@@ -309,65 +314,19 @@ class AndroidNuvioWorkerService : Service() {
             require(result.error.isBlank()) { result.error }
             return CoveJson.encodeToString(requireNotNull(result.response))
         }
-    }
 
-    private companion object {
-        val BOOTSTRAP_PREFIX = """
-            globalThis.console = { log(){}, info(){}, debug(){}, warn(){}, error(){} };
-            globalThis.logger = console;
-            globalThis.atob = value => __bridge.base64Decode(String(value));
-            globalThis.btoa = value => __bridge.base64Encode(String(value));
-            globalThis.base64Decode = globalThis.atob;
-            globalThis.base64Encode = globalThis.btoa;
-            const __factories = {__COVE_MODULE_FACTORIES__};
-            const __moduleCache = {};
-            globalThis.require = name => {
-              if (__moduleCache[name]) return __moduleCache[name].exports;
-              const factory = __factories[name];
-              if (!factory) throw new Error('unsupported module: ' + name);
-              const loaded = { exports: {} };
-              __moduleCache[name] = loaded;
-              factory(loaded, loaded.exports);
-              return loaded.exports;
-            };
-            globalThis.fetch = (url, options = {}) => {
-              const payload = JSON.parse(__bridge.request(String(url), JSON.stringify(options || {})));
-              return {
-                ok: payload.status >= 200 && payload.status < 300,
-                status: payload.status,
-                headers: payload.headers,
-                text: () => payload.body,
-                json: () => JSON.parse(payload.body)
-              };
-            };
-            globalThis.fetchWithTimeout = globalThis.fetch;
-            globalThis.module = { exports: {} };
-            globalThis.exports = globalThis.module.exports;
-        """.trimIndent()
+        override fun log(level: String, message: String) {
+            if (logCount >= MAX_GUEST_LOG_LINES) return
+            logCount += 1
+            System.err.println(
+                "Cove Nuvio [$scraperId/${level.take(12)}]: ${message.take(MAX_GUEST_LOG_LENGTH)}",
+            )
+        }
 
-        val INVOKE_SCRIPT = """
-            globalThis.__coveDone = false;
-            globalThis.__coveResult = '';
-            globalThis.__coveError = '';
-            (() => {
-              const input = JSON.parse(__invocationHost.json());
-              const exported = module.exports || exports;
-              const fn = exported.getStreams || exported.scrape;
-              if (typeof fn !== 'function') throw new Error('no getStreams or scrape export');
-              try {
-                const value = exported.getStreams
-                ? fn(input.tmdbId, input.mediaType, input.season, input.episode)
-                : fn({title: input.title, year: input.year, type: input.mediaType, imdbId: input.imdbId}, {});
-                if (value && typeof value.then === 'function') {
-                  throw new Error('scraper returned an unsupported pending promise');
-                }
-                globalThis.__coveResult = JSON.stringify(value || []);
-              } catch (error) {
-                globalThis.__coveError = String(error);
-              }
-              globalThis.__coveDone = true;
-            })();
-        """.trimIndent()
+        private companion object {
+            const val MAX_GUEST_LOG_LINES = 100
+            const val MAX_GUEST_LOG_LENGTH = 2_000
+        }
     }
 }
 
@@ -388,8 +347,11 @@ private data class NuvioFetchOptions(
 @Serializable
 private data class NuvioFetchResponse(
     val status: Int,
+    val statusText: String = "",
     val headers: Map<String, String>,
     val body: String,
+    val url: String = "",
+    val redirected: Boolean = false,
 )
 
 @Serializable
