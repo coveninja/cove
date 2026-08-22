@@ -111,6 +111,7 @@ class MediaBoundaryTest {
     @Test
     fun `torrent playback honors a single HTTP byte range`() = runBlocking {
         val payload = "0123456789".encodeToByteArray()
+        var streamed = false
         val engine = object : TorrentPlaybackEngine {
             override suspend fun open(hash: String, season: Int?, episode: Int?, fileIndex: Int?) =
                 TorrentResource("resource", "movie.mkv", payload.size.toLong(), "video/x-matroska")
@@ -121,6 +122,19 @@ class MediaBoundaryTest {
                 endInclusive: Long,
                 output: ByteWriteChannel,
             ) {
+                error("the delayed response producer must reopen through stream")
+            }
+
+            override suspend fun stream(
+                hash: String,
+                season: Int?,
+                episode: Int?,
+                fileIndex: Int?,
+                start: Long,
+                endInclusive: Long,
+                output: ByteWriteChannel,
+            ) {
+                streamed = true
                 val slice = payload.copyOfRange(start.toInt(), endInclusive.toInt() + 1)
                 output.writeFully(slice)
             }
@@ -147,6 +161,7 @@ class MediaBoundaryTest {
             assertEquals("bytes 2-5/10", response.headers[HttpHeaders.ContentRange])
             assertEquals("2345", response.bodyAsText())
         }
+        assertTrue(streamed)
     }
 
     @Test

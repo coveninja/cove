@@ -34,6 +34,7 @@ import com.coveninja.cove.backend.prefetch.PrefetchService
 import com.coveninja.cove.backend.http.LocalBackendHost
 import com.coveninja.cove.backend.http.MediaBoundary
 import com.coveninja.cove.backend.torrent.JlibtorrentPlaybackEngine
+import com.coveninja.cove.backend.torrent.TorrentCacheLifecycle
 import com.coveninja.cove.backend.platform.DesktopBackendEnvironment
 import com.coveninja.cove.backend.platform.DesktopConfigPaths
 import com.coveninja.cove.shared.data.AppGraph
@@ -207,8 +208,10 @@ class LocalBackendRuntime private constructor(
                 val cachePolicy = MutableStateFlow(
                     runCatching(deviceSettings::read).getOrDefault(TorrentCachePolicy()),
                 )
+                val torrentLifecycle = TorrentCacheLifecycle()
                 val torrentEngine = JlibtorrentPlaybackEngine(
                     downloadDirectory = torrentDirectory,
+                    lifecycle = torrentLifecycle,
                     policy = cachePolicy::value,
                     journal = cacheJournal,
                 )
@@ -219,6 +222,7 @@ class LocalBackendRuntime private constructor(
                             images = imageCacheDirectory,
                             tools = dataDirectory.resolve("tools"),
                         ),
+                        torrentLifecycle = torrentLifecycle,
                         journal = cacheJournal,
                         activeHashes = torrentEngine::activeHashes,
                         release = torrentEngine::release,

@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.storage
 
 import com.coveninja.cove.backend.platform.DeviceSettingsService
+import com.coveninja.cove.backend.torrent.TorrentCacheLifecycle
 import com.coveninja.cove.shared.data.CacheKind
 import com.coveninja.cove.shared.data.DevicePerformanceState
 import com.coveninja.cove.shared.data.StorageUsageState
@@ -41,6 +42,7 @@ class LocalStorageRepositoryTest {
         val policy = MutableStateFlow(settings.read())
         val service = CacheStorageService(
             directories = CacheDirectories(torrents = root.resolve("torrents")),
+            torrentLifecycle = TorrentCacheLifecycle(),
             journal = TorrentCacheJournal(root.resolve("torrents")),
         )
         return LocalStorageRepository(service, settings, policy) to policy

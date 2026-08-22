@@ -146,7 +146,7 @@ class MediaBoundary(
             status = if (range.partial) HttpStatusCode.PartialContent else HttpStatusCode.OK,
             contentLength = range.endInclusive - range.start + 1,
         ) {
-            engine.write(resource, range.start, range.endInclusive, this)
+            engine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
         }
     }
 

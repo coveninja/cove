@@ -25,6 +25,7 @@ import kotlinx.coroutines.withTimeout
 /** Android native packaging for the same streaming engine used by desktop. */
 internal class AndroidJlibtorrentPlaybackEngine(
     private val downloadDirectory: Path,
+    private val lifecycle: TorrentCacheLifecycle,
     private val metadataTimeoutSeconds: Int = 45,
     private val pieceTimeoutMillis: Long = 120_000,
     /** Read fresh each time, so a changed allowance applies without restarting the app. */
@@ -38,6 +39,15 @@ internal class AndroidJlibtorrentPlaybackEngine(
     private val resources = ConcurrentHashMap<String, ManagedResource>()
 
     override suspend fun open(
+        hash: String,
+        season: Int?,
+        episode: Int?,
+        fileIndex: Int?,
+    ): TorrentResource = lifecycle.withUse(hash.lowercase()) {
+        openWithinLease(hash, season, episode, fileIndex)
+    }
+
+    private suspend fun openWithinLease(
         hash: String,
         season: Int?,
         episode: Int?,
@@ -74,6 +84,15 @@ internal class AndroidJlibtorrentPlaybackEngine(
         start: Long,
         endInclusive: Long,
         output: ByteWriteChannel,
+    ) = lifecycle.withUse(resource.id.substringBefore(':').lowercase()) {
+        writeWithinLease(resource, start, endInclusive, output)
+    }
+
+    private suspend fun writeWithinLease(
+        resource: TorrentResource,
+        start: Long,
+        endInclusive: Long,
+        output: ByteWriteChannel,
     ) = withContext(Dispatchers.IO) {
         val managed = resources[resource.id] ?: error("torrent resource is no longer available")
         require(start in 0 until managed.file.size && endInclusive in start until managed.file.size) {
@@ -82,8 +101,8 @@ internal class AndroidJlibtorrentPlaybackEngine(
         var cursor = start
         val buffer = ByteArray(1024 * 1024)
         journal?.touch(managed.torrent.hash)
-        // Pins the torrent for as long as this response is being written, so the retention sweep
-        // cannot release it out from under the player. See the desktop engine.
+        // Kept as a local session guard as well as the cross-component lifecycle lease. The
+        // latter spans Ktor's delayed producer and the eventual filesystem deletion.
         managed.torrent.readers.incrementAndGet()
         try {
             // libtorrent allocates sparsely: until it flushes the first piece covering
@@ -113,6 +132,24 @@ internal class AndroidJlibtorrentPlaybackEngine(
         }
     }
 
+    override suspend fun stream(
+        hash: String,
+        season: Int?,
+        episode: Int?,
+        fileIndex: Int?,
+        start: Long,
+        endInclusive: Long,
+        output: ByteWriteChannel,
+    ) {
+        lifecycle.withUse(hash.lowercase()) {
+            // Ktor invokes its response producer later. Reopening here makes a deletion that won
+            // the gap harmless, while the outer lease keeps this new resource alive through the
+            // complete write.
+            val resource = openWithinLease(hash, season, episode, fileIndex)
+            writeWithinLease(resource, start, endInclusive, output)
+        }
+    }
+
     override fun progress(hash: String): TorrentProgress? {
         val torrent = torrents[hash.lowercase()] ?: return null
         val resource = resources.values.firstOrNull { it.torrent === torrent } ?: return null
@@ -129,13 +166,15 @@ internal class AndroidJlibtorrentPlaybackEngine(
         )
     }
 
-    override fun activeHashes(): Set<String> =
-        torrents.values.filter { it.readers.get() > 0 }.mapTo(mutableSetOf()) { it.hash }
+    override fun activeHashes(): Set<String> = lifecycle.activeHashes()
 
     override fun release(hash: String): Boolean {
         val canonical = hash.lowercase()
         val torrent = torrents[canonical] ?: return true
+        if (canonical in lifecycle.activeHashes()) return false
         if (torrent.readers.get() > 0) return false
+        // The cache service holds the lifecycle's exclusive deletion gate through this removal
+        // and the filesystem delete. A new open waits at that gate, then re-adds a clean torrent.
         torrents.remove(canonical, torrent)
         if (torrent.readers.get() > 0) {
             torrents[canonical] = torrent
