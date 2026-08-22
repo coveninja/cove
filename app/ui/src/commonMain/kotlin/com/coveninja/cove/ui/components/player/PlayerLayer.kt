@@ -460,7 +460,7 @@ fun PlayerLayer(
                     media = request.media,
                     title = request.label,
                     headline = "Finding sources",
-                    detail = "Asking every enabled addon.",
+                    detail = "Asking every enabled source provider.",
                     onCancel = session::close,
                 )
             }

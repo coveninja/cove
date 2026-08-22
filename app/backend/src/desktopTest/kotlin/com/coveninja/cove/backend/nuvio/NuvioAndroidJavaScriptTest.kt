@@ -44,7 +44,34 @@ class NuvioAndroidJavaScriptTest {
         }
     }
 
+    @Test
+    fun officialRuntimeGlobalsAliasesAndGlobalExportAreAvailable() {
+        Context.newBuilder("js").build().use { context ->
+            context.eval("js", TEST_BRIDGE)
+            context.eval("js", androidNuvioBootstrap(TEST_MODULE_FACTORY))
+            context.eval("js", GLOBAL_PROVIDER)
+            context.eval("js", ANDROID_NUVIO_INVOKE_SCRIPT)
+
+            assertTrue(context.eval("js", "globalThis.__coveDone === true").asBoolean())
+            assertEquals("", context.eval("js", "String(globalThis.__coveError)").asString())
+            assertEquals(
+                "https://streamtape.com:8443/get_video?token=1&quality=1080p#watch",
+                context.eval("js", "JSON.parse(globalThis.__coveResult)[0].url").asString(),
+            )
+            assertEquals(
+                "cheerio:movie-42",
+                context.eval("js", "JSON.parse(globalThis.__coveResult)[0].name").asString(),
+            )
+        }
+    }
+
     private companion object {
+        const val TEST_MODULE_FACTORY = """
+            "cheerio-without-node-native": function(module) {
+              module.exports = {marker: "cheerio"};
+            }
+        """
+
         val TEST_BRIDGE = """
             globalThis.__bridge = {
               log() {},
@@ -117,6 +144,38 @@ class NuvioAndroidJavaScriptTest {
               });
               const stream = await response.json();
               return [stream];
+            };
+        """.trimIndent()
+
+        val GLOBAL_PROVIDER = """
+            globalThis.getStreams = function(id, type) {
+              if (self !== globalThis) throw new Error('self alias missing');
+              const controller = new AbortController();
+              let abortObserved = false;
+              controller.signal.addEventListener('abort', () => { abortObserved = true; });
+              controller.abort('test');
+              if (!controller.signal.aborted || !abortObserved || controller.signal.reason !== 'test') {
+                throw new Error('abort globals are incomplete');
+              }
+              const cheerio = require('cheerio');
+              if (cheerio !== require('react-native-cheerio')) throw new Error('module aliases diverged');
+              const url = new URL('/get_video?token=1#watch', 'https://old.example/path/page');
+              url.hostname = 'streamtape.com';
+              url.port = '8443';
+              url.searchParams.set('quality', '1080p');
+              const finish = () => [{name: cheerio.marker + ':' + type + '-' + id, url: url.toString()}];
+              const rejectAbortedFetch = error => {
+                if (!error || error.name !== 'AbortError') throw new Error('aborted fetch was not rejected');
+                return finish();
+              };
+              try {
+                return Promise.resolve(fetch('https://must-not-fetch.example', {signal: controller.signal})).then(
+                  () => { throw new Error('aborted fetch reached the bridge'); },
+                  rejectAbortedFetch
+                );
+              } catch (error) {
+                return rejectAbortedFetch(error);
+              }
             };
         """.trimIndent()
     }

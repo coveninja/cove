@@ -10,7 +10,9 @@ package com.coveninja.cove.backend.nuvio
  * tests without loading Android or running downloaded provider code in the app process.
  */
 internal fun androidNuvioBootstrap(moduleFactories: String): String =
-    ANDROID_NUVIO_BOOTSTRAP_PREFIX.replace("__COVE_MODULE_FACTORIES__", moduleFactories)
+    ANDROID_NUVIO_BOOTSTRAP_PREFIX
+        .replace("__COVE_BROWSER_COMPATIBILITY__", NUVIO_BROWSER_COMPATIBILITY_SCRIPT)
+        .replace("__COVE_MODULE_FACTORIES__", moduleFactories)
 
 internal fun synchronousNuvioScraperSource(source: String): String = source
     .replace(Regex("\\bfor\\s+await\\s*\\("), "for (")
@@ -26,7 +28,9 @@ internal val ANDROID_NUVIO_INVOKE_SCRIPT = """
     (() => {
       const input = JSON.parse(__invocationHost.json());
       const exported = module.exports || exports;
-      const fn = exported.getStreams || exported.scrape;
+      const getStreams = exported.getStreams || globalThis.getStreams;
+      const scrape = exported.scrape || globalThis.scrape;
+      const fn = getStreams || scrape;
       if (typeof fn !== 'function') throw new Error('no getStreams or scrape export');
       const complete = streams => {
         globalThis.__coveResult = JSON.stringify(streams || []);
@@ -37,7 +41,7 @@ internal val ANDROID_NUVIO_INVOKE_SCRIPT = """
         globalThis.__coveDone = true;
       };
       try {
-        const value = exported.getStreams
+        const value = getStreams
           ? fn(input.tmdbId, input.mediaType, input.season, input.episode)
           : fn({title: input.title, year: input.year, type: input.mediaType, imdbId: input.imdbId}, {});
         if (value && typeof value.then === 'function') value.then(complete, fail);
@@ -263,6 +267,7 @@ private val ANDROID_NUVIO_BOOTSTRAP_PREFIX = """
         toString() { return this.pairs.map(value => encodeURIComponent(value[0]).replace(/%20/g, '+') + '=' + encodeURIComponent(value[1]).replace(/%20/g, '+')).join('&'); }
       };
     }
+    __COVE_BROWSER_COMPATIBILITY__
 
     const __coveLogValue = value => {
       if (typeof value === 'string') return value;
@@ -288,7 +293,12 @@ private val ANDROID_NUVIO_BOOTSTRAP_PREFIX = """
 
     const __factories = {__COVE_MODULE_FACTORIES__};
     const __moduleCache = {};
-    globalThis.require = name => {
+    const __moduleAliases = {
+      'cheerio': 'cheerio-without-node-native',
+      'react-native-cheerio': 'cheerio-without-node-native'
+    };
+    globalThis.require = requestedName => {
+      const name = __moduleAliases[requestedName] || requestedName;
       if (__moduleCache[name]) return __moduleCache[name].exports;
       const factory = __factories[name];
       if (!factory) throw new Error('unsupported module: ' + name);
@@ -316,7 +326,12 @@ private val ANDROID_NUVIO_BOOTSTRAP_PREFIX = """
     };
 
     globalThis.fetch = (url, options = {}) => {
-      const payload = JSON.parse(__bridge.request(String(url), JSON.stringify(options || {})));
+      const signal = options && options.signal;
+      if (signal && signal.aborted) throw __coveAbortError(signal.reason);
+      const requestOptions = Object.assign({}, options || {});
+      delete requestOptions.signal;
+      const payload = JSON.parse(__bridge.request(String(url), JSON.stringify(requestOptions)));
+      if (signal && signal.aborted) throw __coveAbortError(signal.reason);
       const response = {
         ok: payload.status >= 200 && payload.status < 300,
         status: payload.status,
@@ -337,4 +352,150 @@ private val ANDROID_NUVIO_BOOTSTRAP_PREFIX = """
     globalThis.fetchWithTimeout = globalThis.fetch;
     globalThis.module = { exports: {} };
     globalThis.exports = globalThis.module.exports;
+""".trimIndent()
+
+/** Browser primitives exposed by the official Nuvio runtime and used by current providers. */
+internal val NUVIO_BROWSER_COMPATIBILITY_SCRIPT = """
+    if (typeof globalThis.self === 'undefined') globalThis.self = globalThis;
+
+    if (typeof globalThis.AbortSignal !== 'function') {
+      globalThis.AbortSignal = class {
+        constructor() {
+          this.aborted = false;
+          this.reason = undefined;
+          this.listeners = [];
+        }
+        addEventListener(type, listener) {
+          if (type === 'abort' && typeof listener === 'function') this.listeners.push(listener);
+        }
+        removeEventListener(type, listener) {
+          if (type === 'abort') this.listeners = this.listeners.filter(value => value !== listener);
+        }
+        dispatchEvent(event) {
+          if (!event || event.type !== 'abort') return true;
+          for (const listener of this.listeners.slice()) listener.call(this, event);
+          return true;
+        }
+        throwIfAborted() {
+          if (!this.aborted) return;
+          const error = this.reason instanceof Error ? this.reason : new Error('The operation was aborted.');
+          error.name = 'AbortError';
+          throw error;
+        }
+      };
+    }
+    if (typeof globalThis.AbortController !== 'function') {
+      globalThis.AbortController = class {
+        constructor() { this.signal = new globalThis.AbortSignal(); }
+        abort(reason) {
+          if (this.signal.aborted) return;
+          this.signal.aborted = true;
+          this.signal.reason = reason;
+          this.signal.dispatchEvent({type: 'abort'});
+        }
+      };
+    }
+    const __coveAbortError = reason => {
+      const error = reason instanceof Error ? reason : new Error('The operation was aborted.');
+      error.name = 'AbortError';
+      return error;
+    };
+
+    const __coveNormalizeUrlPath = path => {
+      const parts = String(path || '/').split('/');
+      const normalized = [];
+      for (const part of parts) {
+        if (!part || part === '.') continue;
+        if (part === '..') normalized.pop();
+        else normalized.push(part);
+      }
+      const trailingSlash = parts.length > 1 && parts[parts.length - 1] === '';
+      return '/' + normalized.join('/') + (trailingSlash && normalized.length ? '/' : '');
+    };
+    const __coveResolveUrl = (input, base) => {
+      const value = String(input);
+      if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return value;
+      if (base === undefined || base === null) throw new TypeError('Invalid URL');
+      const parent = new globalThis.URL(String(base));
+      if (value.startsWith('//')) return parent.protocol + value;
+      if (value.startsWith('#')) return parent.origin + parent.pathname + parent.search + value;
+      if (value.startsWith('?')) return parent.origin + parent.pathname + value;
+      const suffixIndex = value.search(/[?#]/);
+      const suffix = suffixIndex < 0 ? '' : value.slice(suffixIndex);
+      const path = suffixIndex < 0 ? value : value.slice(0, suffixIndex);
+      if (path.startsWith('/')) return parent.origin + __coveNormalizeUrlPath(path) + suffix;
+      const directory = parent.pathname.slice(0, parent.pathname.lastIndexOf('/') + 1);
+      return parent.origin + __coveNormalizeUrlPath(directory + path) + suffix;
+    };
+
+    if (typeof globalThis.URL !== 'function') {
+      globalThis.URL = class {
+        constructor(input, base) { this.assign(__coveResolveUrl(input, base)); }
+        assign(value) {
+          const match = String(value).match(
+            /^([A-Za-z][A-Za-z0-9+.-]*:)\/\/(?:([^@/?#]*)@)?(\[[^\]]+\]|[^:/?#]+)(?::(\d+))?([^?#]*)(\?[^#]*)?(#.*)?$/
+          );
+          if (!match) throw new TypeError('Invalid URL');
+          this.protocol = match[1];
+          const credentials = match[2] || '';
+          const separator = credentials.indexOf(':');
+          this.username = separator < 0 ? credentials : credentials.slice(0, separator);
+          this.password = separator < 0 ? '' : credentials.slice(separator + 1);
+          this.hostname = match[3];
+          this.port = match[4] || '';
+          this.pathname = match[5] || '/';
+          this.search = match[6] || '';
+          this.hash = match[7] || '';
+        }
+        get host() { return this.hostname + (this.port ? ':' + this.port : ''); }
+        set host(value) {
+          const raw = String(value);
+          if (raw.startsWith('[')) {
+            const end = raw.indexOf(']');
+            if (end < 0) throw new TypeError('Invalid URL host');
+            this.hostname = raw.slice(0, end + 1);
+            this.port = raw.slice(end + 1).replace(/^:/, '');
+            return;
+          }
+          const separator = raw.lastIndexOf(':');
+          this.hostname = separator > 0 ? raw.slice(0, separator) : raw;
+          this.port = separator > 0 ? raw.slice(separator + 1) : '';
+        }
+        get origin() { return this.protocol + '//' + this.host; }
+        get href() { return this.toString(); }
+        set href(value) { this.assign(__coveResolveUrl(value, this.toString())); }
+        get pathname() { return this.pathValue; }
+        set pathname(value) {
+          const raw = String(value || '/');
+          this.pathValue = raw.startsWith('/') ? raw : '/' + raw;
+        }
+        get search() {
+          const value = this.searchParams.toString();
+          return value ? '?' + value : '';
+        }
+        set search(value) {
+          this.searchParams = new globalThis.URLSearchParams(String(value || '').replace(/^\?/, ''));
+        }
+        get hash() { return this.hashValue; }
+        set hash(value) {
+          const raw = String(value || '');
+          this.hashValue = raw && !raw.startsWith('#') ? '#' + raw : raw;
+        }
+        toString() {
+          const credentials = this.username
+            ? this.username + (this.password ? ':' + this.password : '') + '@'
+            : '';
+          return this.protocol + '//' + credentials + this.host + this.pathname + this.search + this.hash;
+        }
+        toJSON() { return this.toString(); }
+        static canParse(input, base) {
+          try { new globalThis.URL(input, base); return true; }
+          catch (_) { return false; }
+        }
+        static parse(input, base) {
+          try { return new globalThis.URL(input, base); }
+          catch (_) { return null; }
+        }
+      };
+    }
 """.trimIndent()
