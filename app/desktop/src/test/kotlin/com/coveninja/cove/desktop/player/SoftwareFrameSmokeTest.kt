@@ -28,9 +28,13 @@ class SoftwareFrameSmokeTest {
 
         val frames = AtomicInteger()
         val firstFrame = CountDownLatch(1)
-        val player = MpvSoftwarePlayer(hardwareDecoding = false) {
+        val highResolutionFrame = CountDownLatch(1)
+        val player = MpvSoftwarePlayer(hardwareDecoding = false) { frame ->
             frames.incrementAndGet()
             firstFrame.countDown()
+            if (frame.size.width == 3840 && frame.size.height == 2160) {
+                highResolutionFrame.countDown()
+            }
         }
 
         try {
@@ -41,6 +45,11 @@ class SoftwareFrameSmokeTest {
             }
             player.load(sample.toAbsolutePath().toString())
             assertTrue(firstFrame.await(5, TimeUnit.SECONDS), "software renderer produced no frame")
+            player.resize(3840, 2160)
+            assertTrue(
+                highResolutionFrame.await(5, TimeUnit.SECONDS),
+                "software renderer produced no 3840x2160 frame",
+            )
 
             val collecting = AtomicBoolean(true)
             val collector = thread(name = "cove-mpv-test-gc", isDaemon = true) {
@@ -51,6 +60,7 @@ class SoftwareFrameSmokeTest {
             }
             val before = frames.get()
             val sizes = listOf(
+                3840 to 2160, // the high-cost path this regression protects
                 1791 to 1015, // dimensions from the reported native crash
                 1280 to 720,
                 1537 to 863,
@@ -96,9 +106,9 @@ class SoftwareFrameSmokeTest {
         val frames = AtomicInteger()
         val dimensions = AtomicReference<Pair<Int, Int>>()
         val player = try {
-            MpvSoftwarePlayer { frame: BufferedImage ->
+            MpvSoftwarePlayer { frame: SoftwareVideoFrame ->
                 frames.incrementAndGet()
-                dimensions.set(frame.width to frame.height)
+                dimensions.set(frame.size.width to frame.size.height)
             }
         } catch (e: UnsatisfiedLinkError) {
             println("SKIP: libmpv not loadable: ${e.message}")

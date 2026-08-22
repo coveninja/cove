@@ -47,10 +47,17 @@ data class PlayerSnapshot(
     /** mpv's sub-delay/audio-delay, in seconds; negative pulls the track earlier. */
     val subtitleDelaySeconds: Double = 0.0,
     val audioDelaySeconds: Double = 0.0,
-    /** Decode diagnostics, for the stats overlay. */
+    /** Playback diagnostics for distinguishing decode, timing, and presentation pressure. */
     val frameDropCount:  Int    = 0,
+    val decoderFrameDropCount: Int = 0,
+    val mistimedFrameCount: Int = 0,
+    val delayedFrameCount: Int = 0,
     val estimatedFps:    Double = 0.0,
     val videoBitrate:    Double = 0.0,
+    /** Software-render target and time spent producing its latest frame. */
+    val renderWidth: Int = 0,
+    val renderHeight: Int = 0,
+    val renderTimeMillis: Double = 0.0,
     /**
      * Set on MPV_EVENT_FILE_LOADED. idle-active is not a usable substitute: it
      * goes false the moment loadfile is accepted, long before the demuxer has

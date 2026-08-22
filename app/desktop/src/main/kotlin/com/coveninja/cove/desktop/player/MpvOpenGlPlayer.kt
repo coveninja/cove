@@ -8,6 +8,8 @@ import java.lang.ref.Reference
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +39,9 @@ class MpvOpenGlPlayer(
     private val renderContext = AtomicReference<Pointer?>()
     private val pendingSource = AtomicReference<PendingMedia?>()
     private val closing       = AtomicBoolean(false)
+    private val lastRenderWidth = AtomicInteger(0)
+    private val lastRenderHeight = AtomicInteger(0)
+    private val lastRenderNanos = AtomicLong(0)
 
     private val commandExecutor = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-commands"))
     private val eventExecutor   = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-events"))
@@ -233,6 +238,7 @@ class MpvOpenGlPlayer(
     override fun render(framebuffer: Int, width: Int, height: Int) {
         val ctx     = renderContext.get() ?: return
         val library = Mpv.library()
+        val started = System.nanoTime()
 
         library.mpv_render_context_update(ctx)
 
@@ -258,6 +264,9 @@ class MpvOpenGlPlayer(
             Reference.reachabilityFence(fbo)
             Reference.reachabilityFence(params)
         }
+        lastRenderWidth.set(width.coerceAtLeast(1))
+        lastRenderHeight.set(height.coerceAtLeast(1))
+        lastRenderNanos.set(System.nanoTime() - started)
         // Trap 2: mpv_render_context_render leaves framebuffer 0 bound.
         // Rebinding is done in MpvOpenGlPanel after this call returns so
         // GLJPanel's readback pass finds the correct FBO.
@@ -336,6 +345,9 @@ class MpvOpenGlPlayer(
             val subDelay = getDouble(library, target, "sub-delay") ?: 0.0
             val audioDelay = getDouble(library, target, "audio-delay") ?: 0.0
             val dropped  = getDouble(library, target, "frame-drop-count") ?: 0.0
+            val decoderDropped = getDouble(library, target, "decoder-frame-drop-count") ?: 0.0
+            val mistimed = getDouble(library, target, "mistimed-frame-count") ?: 0.0
+            val delayed = getDouble(library, target, "vo-delayed-frame-count") ?: 0.0
             val fps      = getDouble(library, target, "estimated-vf-fps") ?: 0.0
             val bitrate  = getDouble(library, target, "video-bitrate") ?: 0.0
 
@@ -362,8 +374,14 @@ class MpvOpenGlPlayer(
                 subtitleDelaySeconds = subDelay.takeIf(Double::isFinite) ?: 0.0,
                 audioDelaySeconds = audioDelay.takeIf(Double::isFinite) ?: 0.0,
                 frameDropCount  = dropped.finiteOrZero().toInt(),
+                decoderFrameDropCount = decoderDropped.finiteOrZero().toInt(),
+                mistimedFrameCount = mistimed.finiteOrZero().toInt(),
+                delayedFrameCount = delayed.finiteOrZero().toInt(),
                 estimatedFps    = fps.finiteOrZero(),
                 videoBitrate    = bitrate.finiteOrZero(),
+                renderWidth     = lastRenderWidth.get(),
+                renderHeight    = lastRenderHeight.get(),
+                renderTimeMillis = lastRenderNanos.get().coerceAtLeast(0L) / 1_000_000.0,
                 error           = null,
             )
 

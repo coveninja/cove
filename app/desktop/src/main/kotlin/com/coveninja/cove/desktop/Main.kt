@@ -1,6 +1,6 @@
 package com.coveninja.cove.desktop
 
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
@@ -14,9 +14,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.SwingPanel
-import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
@@ -29,6 +30,7 @@ import com.coveninja.cove.desktop.player.MpvOpenGlPanel
 import com.coveninja.cove.desktop.player.MpvOpenGlPlayer
 import com.coveninja.cove.desktop.player.MpvSoftwarePlayer
 import com.coveninja.cove.desktop.player.MpvVideoPlayerHost
+import com.coveninja.cove.desktop.player.SoftwareVideoFrame
 import com.coveninja.cove.desktop.player.YtDlpProvisioner
 import com.coveninja.cove.backend.LocalBackendRuntime
 import com.coveninja.cove.backend.LocalStoreGraph
@@ -46,6 +48,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
@@ -204,10 +207,10 @@ private fun StandalonePlayerWindow(
     }
 }
 
-/** Software render surface: frames arrive as BufferedImages → Compose ImageBitmap. */
+/** Software render surface backed by the same persistent Skia pixels mpv writes. */
 @Composable
 private fun SoftwarePlayerSurface(file: String) {
-    var latestFrame by remember { mutableStateOf<java.awt.image.BufferedImage?>(null) }
+    var latestFrame by remember { mutableStateOf<SoftwareVideoFrame?>(null) }
     val player = remember {
         MpvSoftwarePlayer { frame -> latestFrame = frame }.also {
             it.start()
@@ -218,11 +221,14 @@ private fun SoftwarePlayerSurface(file: String) {
     androidx.compose.runtime.DisposableEffect(player) { onDispose { player.close() } }
 
     Box(Modifier.fillMaxSize()) {
-        latestFrame?.let {
-            Image(
-                bitmap      = it.toComposeImageBitmap(),
-                contentDescription = null,
-                modifier    = Modifier.fillMaxSize(),
+        Canvas(
+            Modifier
+                .fillMaxSize()
+                .onSizeChanged { player.resize(it.width, it.height) },
+        ) {
+            latestFrame?.draw(
+                scope = this,
+                destination = IntSize(size.width.roundToInt(), size.height.roundToInt()),
             )
         }
         val snap by player.snapshot.collectAsState()

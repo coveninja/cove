@@ -44,11 +44,14 @@ internal fun PlayerStatsOverlay(
     modifier: Modifier = Modifier,
 ) {
     val rows = listOf(
-        "Renderer" to status.renderBackend.ifBlank { "unknown" },
+        "Renderer" to formatRenderer(status),
         "Decoder" to status.hardwareDecoder.ifBlank { "software" },
         "Video" to status.videoCodec.ifBlank { "unknown" },
         "Frame rate" to formatFps(status.estimatedFps),
-        "Dropped" to status.droppedFrames.toString(),
+        "Output drops" to status.droppedFrames.toString(),
+        "Decoder drops" to status.decoderDroppedFrames.toString(),
+        "Timing" to "${status.mistimedFrames} mistimed · ${status.delayedFrames} delayed",
+        "Render time" to formatRenderTime(status.renderTimeMillis),
         "Bitrate" to formatBitrate(status.videoBitrate),
         "Buffer" to formatBuffer(status),
         "Speed" to "${status.speed}x",
@@ -115,6 +118,23 @@ private fun StatRow(label: String, value: String, order: Int) {
 
 private fun formatFps(fps: Double): String =
     if (fps <= 0.0) "—" else "${(fps * 100).roundToInt() / 100.0}"
+
+private fun formatRenderer(status: PlaybackStatus): String {
+    val backend = status.renderBackend.ifBlank { "unknown" }
+    val size = if (status.renderWidth > 0 && status.renderHeight > 0) {
+        "${status.renderWidth}×${status.renderHeight}"
+    } else {
+        null
+    }
+    return size?.let { "$backend · $it" } ?: backend
+}
+
+private fun formatRenderTime(milliseconds: Double): String =
+    if (milliseconds <= 0.0 || !milliseconds.isFinite()) {
+        "—"
+    } else {
+        "${(milliseconds * 10).roundToInt() / 10.0} ms"
+    }
 
 private fun formatBitrate(bitsPerSecond: Double): String = when {
     bitsPerSecond <= 0.0 -> "—"
