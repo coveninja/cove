@@ -38,7 +38,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.SettingsState
-import com.coveninja.cove.shared.model.labelled
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.player.SeekBurst
 import com.coveninja.cove.ui.components.player.SeekFeedback
@@ -51,6 +50,7 @@ import com.coveninja.cove.ui.state.PlaybackPhase
 import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.PlaybackSession
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.playbackSegments
 import com.coveninja.cove.ui.state.segmentAt
 import com.coveninja.cove.ui.state.skipTarget
 import com.coveninja.cove.ui.state.skipsAutomatically
@@ -161,9 +161,11 @@ internal fun TvPlayerLayer(
         host?.seekRelative(delta)
     }
 
-    // Auto-skip is the session's own settings applied to the session's own timestamps; the
-    // only reason it lives in a view file at all is that it needs the live position.
-    val segments = session.timestamps.labelled()
+    // Auto-skip is the session's own settings applied to the best source-specific metadata;
+    // the only reason it lives in a view file at all is that it needs the live position.
+    val segments = remember(session.timestamps, status.chapters, status.durationSeconds) {
+        playbackSegments(session.timestamps, status.chapters, status.durationSeconds)
+    }
     val currentSegment = segmentAt(status.positionSeconds, segments)
     val skipped = remember(request.season, request.episode, request.media.id) {
         mutableSetOf<String>()

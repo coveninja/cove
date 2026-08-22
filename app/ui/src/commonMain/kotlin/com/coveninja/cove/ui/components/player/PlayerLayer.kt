@@ -75,7 +75,6 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.shared.model.LabelledSegment
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.model.TorrentProgress
-import com.coveninja.cove.shared.model.labelled
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.ui.platform.hideCursorWhen
@@ -84,6 +83,7 @@ import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.identity
 import com.coveninja.cove.ui.state.nextEpisodeAfter
+import com.coveninja.cove.ui.state.playbackSegments
 import com.coveninja.cove.ui.state.segmentAt
 import com.coveninja.cove.ui.state.showUpNext
 import com.coveninja.cove.ui.state.skipLabel
@@ -176,7 +176,9 @@ fun PlayerLayer(
     )
 
     val settings = (LocalAppGraph.current.settings.settings.value as? SettingsState.Ready)?.settings
-    val segments = session.timestamps.labelled()
+    val segments = remember(session.timestamps, status.chapters, status.durationSeconds) {
+        playbackSegments(session.timestamps, status.chapters, status.durationSeconds)
+    }
     val currentSegment = segmentAt(status.positionSeconds, segments)
     val seekStep = settings?.seekStepSeconds?.takeIf { it > 0.0 } ?: SEEK_STEP_SECONDS
 

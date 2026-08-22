@@ -2,7 +2,83 @@ package com.coveninja.cove.ui.state
 
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LabelledSegment
+import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.SegmentKind
+import com.coveninja.cove.shared.model.labelled
+
+/**
+ * Semantic playback ranges from both metadata sources.
+ *
+ * A file's chapters describe the exact encode being played, so a usable embedded
+ * range replaces IntroDB for that kind. IntroDB still fills every kind the file
+ * does not label. Ordinary chapters remain navigation metadata and never become
+ * skip ranges.
+ */
+internal fun playbackSegments(
+    timestamps: MediaTimestamps,
+    chapters: List<MediaChapter>,
+    durationSeconds: Double,
+): List<LabelledSegment> {
+    val embedded = chapters.embeddedSegments(durationSeconds)
+    val embeddedKinds = embedded.mapTo(mutableSetOf()) { it.kind }
+    return (timestamps.labelled().filterNot { it.kind in embeddedKinds } + embedded)
+        .sortedBy { it.startSeconds }
+}
+
+/** A chapter ends where the next one begins, or at the file duration if it is last. */
+private fun List<MediaChapter>.embeddedSegments(durationSeconds: Double): List<LabelledSegment> {
+    val ordered = asSequence()
+        .filter { it.startSeconds.isFinite() && it.startSeconds >= 0.0 }
+        .sortedWith(compareBy<MediaChapter> { it.startSeconds }.thenBy { it.index })
+        .toList()
+    val mediaEnd = durationSeconds.takeIf { it.isFinite() && it > 0.0 }
+
+    return ordered.mapIndexedNotNull { index, chapter ->
+        val kind = chapter.title.segmentKind() ?: return@mapIndexedNotNull null
+        val boundary = ordered.getOrNull(index + 1)?.startSeconds ?: mediaEnd
+            ?: return@mapIndexedNotNull null
+        val end = mediaEnd?.let { minOf(boundary, it) } ?: boundary
+        if (end <= chapter.startSeconds) return@mapIndexedNotNull null
+        LabelledSegment(kind, chapter.startSeconds, end)
+    }
+}
+
+/** Conservative aliases only: normalization is forgiving, classification is exact. */
+private fun String.segmentKind(): SegmentKind? = CHAPTER_KINDS[normalizedChapterTitle()]
+
+private fun String.normalizedChapterTitle(): String = lowercase()
+    .replace(CHAPTER_TITLE_SEPARATOR, " ")
+    .trim()
+    .replace(CHAPTER_TITLE_WHITESPACE, " ")
+    .replace(CHAPTER_NUMBER_PREFIX, "")
+
+private val CHAPTER_KINDS = mapOf(
+    "intro" to SegmentKind.Intro,
+    "introduction" to SegmentKind.Intro,
+    "opening" to SegmentKind.Intro,
+    "opening credits" to SegmentKind.Intro,
+    "opening titles" to SegmentKind.Intro,
+    "op" to SegmentKind.Intro,
+    "recap" to SegmentKind.Recap,
+    "previously on" to SegmentKind.Recap,
+    "previous episode" to SegmentKind.Recap,
+    "credits" to SegmentKind.Credits,
+    "end credits" to SegmentKind.Credits,
+    "ending credits" to SegmentKind.Credits,
+    "closing credits" to SegmentKind.Credits,
+    "closing titles" to SegmentKind.Credits,
+    "outro" to SegmentKind.Credits,
+    "ed" to SegmentKind.Credits,
+    "preview" to SegmentKind.Preview,
+    "next episode preview" to SegmentKind.Preview,
+    "next episode" to SegmentKind.Preview,
+    "next time" to SegmentKind.Preview,
+    "next on" to SegmentKind.Preview,
+)
+
+private val CHAPTER_TITLE_SEPARATOR = Regex("[^a-z0-9]+")
+private val CHAPTER_TITLE_WHITESPACE = Regex("\\s+")
+private val CHAPTER_NUMBER_PREFIX = Regex("^(?:chapter\\s+)?\\d+\\s+")
 
 /**
  * Which labelled stretch the playhead is inside, if any.
@@ -67,8 +143,8 @@ private const val MINIMUM_SKIP_SECONDS = 1.0
  *
  * Credits are the honest marker: once they roll the episode is effectively over,
  * and waiting for the last frame means the card arrives after the viewer has
- * already reached for something else. IntroDB supplies that boundary when it
- * knows it; failing that, a fixed tail is the best available guess.
+ * already reached for something else. IntroDB or an embedded chapter supplies
+ * that boundary when available; failing that, a fixed tail is the best guess.
  */
 internal fun upNextThreshold(
     durationSeconds: Double,

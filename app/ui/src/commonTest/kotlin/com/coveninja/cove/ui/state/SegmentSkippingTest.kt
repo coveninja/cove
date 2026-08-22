@@ -2,7 +2,9 @@ package com.coveninja.cove.ui.state
 
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LabelledSegment
+import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.SegmentKind
+import com.coveninja.cove.shared.model.TimestampSegment
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -78,4 +80,116 @@ class SegmentSkippingTest {
 
         assertTrue(intro.identity() != second.identity())
     }
+
+    @Test
+    fun `common embedded chapter aliases become semantic segments`() {
+        assertAliases(
+            SegmentKind.Intro,
+            "intro", "introduction", "opening", "opening credits", "opening titles", "op",
+        )
+        assertAliases(
+            SegmentKind.Recap,
+            "recap", "previously on", "previous episode",
+        )
+        assertAliases(
+            SegmentKind.Credits,
+            "credits", "end credits", "ending credits", "closing credits",
+            "closing titles", "outro", "ed",
+        )
+        assertAliases(
+            SegmentKind.Preview,
+            "preview", "next episode preview", "next episode", "next time", "next on",
+        )
+    }
+
+    @Test
+    fun `chapter title matching ignores case punctuation and numbering`() {
+        val segments = playbackSegments(
+            timestamps = MediaTimestamps.None,
+            chapters = listOf(
+                chapter(0, 10.0, "CHAPTER 03: Opening_Titles!!"),
+                chapter(1, 40.0, "Main feature"),
+            ),
+            durationSeconds = 100.0,
+        )
+
+        assertEquals(listOf(LabelledSegment(SegmentKind.Intro, 10.0, 40.0)), segments)
+    }
+
+    @Test
+    fun `embedded ranges end at the next chapter or the media duration`() {
+        val segments = playbackSegments(
+            timestamps = MediaTimestamps.None,
+            chapters = listOf(
+                chapter(0, 0.0, "Recap"),
+                chapter(1, 30.0, "Story"),
+                chapter(2, 90.0, "Next time"),
+            ),
+            durationSeconds = 120.0,
+        )
+
+        assertEquals(
+            listOf(
+                LabelledSegment(SegmentKind.Recap, 0.0, 30.0),
+                LabelledSegment(SegmentKind.Preview, 90.0, 120.0),
+            ),
+            segments,
+        )
+    }
+
+    @Test
+    fun `embedded timing wins only for the kinds the media identifies`() {
+        val timestamps = MediaTimestamps(
+            intro = listOf(TimestampSegment(startMs = 60_000, endMs = 90_000)),
+            credits = listOf(TimestampSegment(startMs = 500_000, endMs = 600_000)),
+        )
+
+        val segments = playbackSegments(
+            timestamps = timestamps,
+            chapters = listOf(
+                chapter(0, 70.0, "Intro"),
+                chapter(1, 100.0, "The story"),
+            ),
+            durationSeconds = 700.0,
+        )
+
+        assertEquals(
+            listOf(
+                LabelledSegment(SegmentKind.Intro, 70.0, 100.0),
+                LabelledSegment(SegmentKind.Credits, 500.0, 600.0),
+            ),
+            segments,
+        )
+    }
+
+    @Test
+    fun `generic and unusable chapters do not become skip ranges`() {
+        val segments = playbackSegments(
+            timestamps = MediaTimestamps.None,
+            chapters = listOf(
+                chapter(0, -1.0, "Intro"),
+                chapter(1, Double.NaN, "Recap"),
+                chapter(2, 50.0, "Credits"),
+                chapter(3, 50.0, "Chapter 4"),
+                chapter(4, 100.0, "Preview"),
+            ),
+            durationSeconds = 0.0,
+        )
+
+        assertTrue(segments.isEmpty(), "was: $segments")
+    }
+
+    private fun assertAliases(kind: SegmentKind, vararg aliases: String) {
+        aliases.forEach { alias ->
+            val segments = playbackSegments(
+                timestamps = MediaTimestamps.None,
+                chapters = listOf(chapter(0, 10.0, alias), chapter(1, 20.0, "Story")),
+                durationSeconds = 100.0,
+            )
+            assertEquals(kind, segments.single().kind, "alias: $alias")
+        }
+    }
+
+    private fun chapter(index: Int, startSeconds: Double, title: String) =
+        MediaChapter(index = index, title = title, startSeconds = startSeconds)
 }

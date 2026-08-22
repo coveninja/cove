@@ -345,9 +345,8 @@ private fun OverflowMenuButton(
 /**
  * Progress plus the labelled stretches of the episode.
  *
- * The segments come from IntroDB, so an intro or a credits roll is visible on
- * the bar before you reach it — which is the whole point of knowing where they
- * are. Anything outside a segment stays neutral.
+ * The segments come from IntroDB and recognized file chapters, so an intro or a
+ * credits roll is visible before you reach it. Anything outside stays neutral.
  */
 @Composable
 private fun SegmentedSeekBar(
@@ -530,8 +529,8 @@ private fun SegmentedSeekBar(
         }
 
         // Chapter divisions, drawn over the pieces because the two carve the bar up
-        // differently: chapters come from the file, segments from IntroDB, and a
-        // chapter boundary rarely lands on a segment edge.
+        // differently: chapters divide the file structurally, while segments label
+        // only semantic stretches, and their boundaries need not coincide.
         val marks = remember(chapters, durationSeconds) {
             chapterMarks(chapters, durationSeconds)
         }

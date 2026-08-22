@@ -43,9 +43,9 @@ data class MediaTrack(
 enum class TrackKind { Audio, Subtitle }
 
 /**
- * One entry of the file's own chapter list, which is a different thing from the
- * labelled segments on the seek bar: chapters are authored into the file, segments
- * come from IntroDB and exist for titles that have no chapters at all.
+ * One entry of the file's own chapter list. Chapters always drive navigation and
+ * seek-bar ticks; recognized semantic titles can also supply labelled segments,
+ * with IntroDB filling the kinds the file does not identify.
  */
 data class MediaChapter(
     val index: Int,
