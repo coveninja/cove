@@ -78,7 +78,7 @@ internal fun TvDetailsScreen(
     onOpenRecommendation: (MediaRecommendation) -> Unit,
     onOpenPerson: (MediaCastMember) -> Unit,
     modifier: Modifier = Modifier,
-    resumeLabel: String? = null,
+    watchLabel: String = "Watch",
     /** True while the person screen or the player is drawn over this one. */
     covered: Boolean = false,
 ) {
@@ -161,7 +161,7 @@ internal fun TvDetailsScreen(
                         media = media,
                         listCategory = listCategory,
                         rating = rating,
-                        resumeLabel = resumeLabel,
+                        watchLabel = watchLabel,
                         playFocusRequester = playFocusRequester,
                         onPlay = onPlay,
                         onChooseSource = onChooseSource,
@@ -220,7 +220,7 @@ private fun TvDetailsHeader(
     media: Media,
     listCategory: MyListCategory?,
     rating: Int?,
-    resumeLabel: String?,
+    watchLabel: String,
     playFocusRequester: FocusRequester,
     onPlay: () -> Unit,
     onChooseSource: () -> Unit,
@@ -288,7 +288,7 @@ private fun TvDetailsHeader(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             TvButton(
-                label = resumeLabel ?: "Play",
+                label = watchLabel,
                 onClick = onPlay,
                 icon = "lucide:play",
                 primary = true,

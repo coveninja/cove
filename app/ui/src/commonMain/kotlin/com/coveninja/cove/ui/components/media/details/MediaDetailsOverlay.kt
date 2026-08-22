@@ -114,6 +114,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
     onDismiss: () -> Unit,
     currentListCategory: MyListCategory? = null,
     currentRating: Int? = null,
+    watchLabel: String = "Watch",
     onWatch: (Media) -> Unit = {},
     onChooseSource: (Media) -> Unit = {},
     onListCategorySelected: (Media, MyListCategory) -> Unit = { _, _ -> },
@@ -389,6 +390,7 @@ fun SharedTransitionScope.MediaDetailsSharedOverlay(
                         scrollState = detailsScrollState,
                         currentListCategory = currentListCategory,
                         currentRating = currentRating,
+                        watchLabel = watchLabel,
                         onWatch = { onWatch(currentMedia) },
                         onChooseSource = { onChooseSource(currentMedia) },
                         onListCategorySelected = { category ->
@@ -547,6 +549,7 @@ private fun MediaDetailsHeroContent(
     scrollState: androidx.compose.foundation.ScrollState,
     currentListCategory: MyListCategory?,
     currentRating: Int?,
+    watchLabel: String,
     onWatch: () -> Unit,
     onChooseSource: () -> Unit,
     onListCategorySelected: (MyListCategory) -> Unit,
@@ -686,6 +689,7 @@ private fun MediaDetailsHeroContent(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 PrimaryWatchButton(
+                    label = watchLabel,
                     onClick = onWatch,
                     modifier = Modifier
                         .weight(2f)
