@@ -1,0 +1,178 @@
+diff --git a/audio/out/ao_coreaudio.c b/audio/out/ao_coreaudio.c
+index 4b4bf1d..22856e4 100644
+--- a/audio/out/ao_coreaudio.c
++++ b/audio/out/ao_coreaudio.c
+@@ -28,12 +28,35 @@
+ #include "ao_coreaudio_properties.h"
+ #include "ao_coreaudio_utils.h"
+ #include "osdep/mac/compat.h"
++#include "osdep/threads.h"
+ 
+ // The timeout for stopping the audio unit after being reset. This allows the
+ // device to sleep after playback paused. The duration is chosen to match the
+ // behavior of AVFoundation.
+ #define IDLE_TIME 7 * NSEC_PER_SEC
+ 
++// CoreAudio dispatches device hotplug notifications (kAudioHardwareProperty
++// Devices/DefaultOutputDevice) asynchronously on its own internal queue, so
++// hotplug_cb() can still be entered (or be running) after the owning `ao` has
++// been uninit'd and freed: AudioObjectRemovePropertyListener() does not
++// guarantee that an already-queued notification is cancelled. Seen as a SIGSEGV
++// inside the callback on macOS 26/27, where device-change notifications fire
++// far more often (in particular after wake from sleep).
++//
++// The listener context is heap-allocated, decoupled from `ao`'s talloc
++// lifetime, and intentionally never freed, so a late callback can always
++// safely read `valid`. `valid` is guarded by hotplug_lock rather than being
++// merely atomic: a plain atomic check is a TOCTOU, since teardown can still
++// complete between the check and the dereference of `ao`. Taking the lock in
++// unregister_hotplug_cb() also waits out a callback that already passed the
++// check, so once unregister_hotplug_cb() returns, no callback can touch `ao`.
++struct coreaudio_hotplug_ctx {
++    struct ao *ao;
++    bool valid; // hotplug_lock
++};
++
++static mp_static_mutex hotplug_lock = MP_STATIC_MUTEX_INITIALIZER;
++
+ struct priv {
+     // This must be put in the front
+     struct coreaudio_cb_sem sem;
+@@ -53,6 +76,7 @@ struct priv {
+     dispatch_queue_t queue;
+ 
+     int hotplug_cb_registration_times;
++    struct coreaudio_hotplug_ctx *hotplug_ctx;
+ };
+ 
+ static int64_t ca_get_hardware_latency(struct ao *ao) {
+@@ -196,6 +220,16 @@ static int init(struct ao *ao)
+     return CONTROL_OK;
+ 
+ coreaudio_error:
++    // The hotplug listener is registered early in init(), but ao_uninit() only
++    // calls the driver's uninit() (and thus unregister_hotplug_cb()) when
++    // init() succeeded, i.e. once ao->driver_initialized is set. Failing here
++    // without unregistering would leave the CoreAudio listener installed for
++    // good, pointing at an `ao` that ao_init() frees on its way out - the next
++    // device change then runs hotplug_cb() on freed memory. This is the common
++    // case on macOS 26/27, where coreaudio init regularly fails and the player
++    // silently falls back to another ao (e.g. --ao=coreaudio,avfoundation).
++    if (p->hotplug_cb_registration_times)
++        unregister_hotplug_cb(ao);
+     return CONTROL_ERROR;
+ }
+ 
+@@ -457,15 +491,29 @@ static void uninit(struct ao *ao)
+ 
+ static OSStatus hotplug_cb(AudioObjectID id, UInt32 naddr,
+                            const AudioObjectPropertyAddress addr[],
+-                           void *ctx)
++                           void *ctx_ptr)
+ {
+-    struct ao *ao = ctx;
++    struct coreaudio_hotplug_ctx *ctx = ctx_ptr;
++
++    // Held for the whole callback: the listener may be torn down concurrently
++    // by unregister_hotplug_cb(), and `ao` can be freed as soon as that
++    // returns. See the comment on struct coreaudio_hotplug_ctx.
++    mp_mutex_lock(&hotplug_lock);
++
++    if (!ctx->valid) {
++        mp_mutex_unlock(&hotplug_lock);
++        return noErr;
++    }
++
++    struct ao *ao = ctx->ao;
+     struct priv *p = ao->priv;
+     MP_VERBOSE(ao, "Handling potential hotplug event...\n");
+     reinit_device(ao);
+     if (p->audio_unit)
+         reinit_latency(ao);
+     ao_hotplug_event(ao);
++
++    mp_mutex_unlock(&hotplug_lock);
+     return noErr;
+ }
+ 
+@@ -497,15 +545,27 @@ static bool register_hotplug_cb(struct ao *ao)
+     if (p->hotplug_cb_registration_times++)
+         return true;
+ 
++    // Deliberately not tied to `p`/`ao`'s talloc lifetime and never freed:
++    // see the comment on struct coreaudio_hotplug_ctx.
++    p->hotplug_ctx = calloc(1, sizeof(*p->hotplug_ctx));
++    if (!p->hotplug_ctx) {
++        p->hotplug_cb_registration_times--;
++        MP_ERR(ao, "failed to allocate hotplug listener context\n");
++        return false;
++    }
++    p->hotplug_ctx->ao = ao;
++    p->hotplug_ctx->valid = true;
++
+     OSStatus err = noErr;
+-    for (int i = 0; i < MP_ARRAY_SIZE(hotplug_properties); i++) {
++    int i;
++    for (i = 0; i < MP_ARRAY_SIZE(hotplug_properties); i++) {
+         AudioObjectPropertyAddress addr = {
+             hotplug_properties[i],
+             kAudioObjectPropertyScopeGlobal,
+             kAudioObjectPropertyElementMain
+         };
+         err = AudioObjectAddPropertyListener(
+-            kAudioObjectSystemObject, &addr, hotplug_cb, (void *)ao);
++            kAudioObjectSystemObject, &addr, hotplug_cb, p->hotplug_ctx);
+         if (err != noErr) {
+             char *c1 = mp_tag_str(hotplug_properties[i]);
+             char *c2 = mp_tag_str(err);
+@@ -517,6 +577,23 @@ static bool register_hotplug_cb(struct ao *ao)
+     return true;
+ 
+ coreaudio_error:
++    // Roll back the listeners registered so far and invalidate the context:
++    // both callers (init(), hotplug_init()) let the `ao` be freed when this
++    // fails, and neither gets a matching uninit()/hotplug_uninit() call, so a
++    // listener left behind here would outlive the `ao` for good.
++    for (int j = 0; j < i; j++) {
++        AudioObjectPropertyAddress addr = {
++            hotplug_properties[j],
++            kAudioObjectPropertyScopeGlobal,
++            kAudioObjectPropertyElementMain
++        };
++        AudioObjectRemovePropertyListener(
++            kAudioObjectSystemObject, &addr, hotplug_cb, p->hotplug_ctx);
++    }
++    mp_mutex_lock(&hotplug_lock);
++    p->hotplug_ctx->valid = false;
++    mp_mutex_unlock(&hotplug_lock);
++    p->hotplug_cb_registration_times--;
+     return false;
+ }
+ 
+@@ -527,6 +604,17 @@ static void unregister_hotplug_cb(struct ao *ao)
+     if (--p->hotplug_cb_registration_times)
+         return;
+ 
++    if (!p->hotplug_ctx)
++        return;
++
++    // Invalidate before removing the listener. Acquiring the lock also waits
++    // for a callback that is already past its `valid` check and running with
++    // this `ao`, so that once this function returns - and the ao is freed -
++    // no callback can be touching it any more.
++    mp_mutex_lock(&hotplug_lock);
++    p->hotplug_ctx->valid = false;
++    mp_mutex_unlock(&hotplug_lock);
++
+     OSStatus err = noErr;
+     for (int i = 0; i < MP_ARRAY_SIZE(hotplug_properties); i++) {
+         AudioObjectPropertyAddress addr = {
+@@ -535,7 +623,7 @@ static void unregister_hotplug_cb(struct ao *ao)
+             kAudioObjectPropertyElementMain
+         };
+         err = AudioObjectRemovePropertyListener(
+-            kAudioObjectSystemObject, &addr, hotplug_cb, (void *)ao);
++            kAudioObjectSystemObject, &addr, hotplug_cb, p->hotplug_ctx);
+         if (err != noErr) {
+             char *c1 = mp_tag_str(hotplug_properties[i]);
+             char *c2 = mp_tag_str(err);
