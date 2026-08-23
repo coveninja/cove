@@ -52,7 +52,7 @@ fun semanticVersionCode(version: String): Int = version.split('.')
 
 android {
     namespace = "com.coveninja.cove"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.coveninja.cove"

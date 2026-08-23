@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.coveninja.cove.benchmark"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 28
