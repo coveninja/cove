@@ -81,6 +81,13 @@ class AndroidMpvVideoPlayerHost(
     override val playsWebVideos: Boolean = true
     override val videoCodecCapabilities: VideoCodecCapabilities = probeVideoCodecCapabilities()
 
+    /**
+     * The mpv handle. libmpv 1.0.0 turned every call from a static into an instance
+     * method, so the handle exists from [MPVLib.create] — before the option pass —
+     * until [dispose] releases it. [initialized] still marks the later point where
+     * `init()` has run and properties rather than options may be set.
+     */
+    private var mpv: MPVLib? = null
     private var initialized = false
     private var destroyed = false
     private var surfaceReady = false
@@ -188,7 +195,7 @@ class AndroidMpvVideoPlayerHost(
     override fun setPaused(paused: Boolean) = onMain {
         if (!initialized) return@onMain
         if (!paused && _status.value.endReached) seek(0.0)
-        MPVLib.setPropertyBoolean("pause", paused)
+        requireMpv().setPropertyBoolean("pause", paused)
         _status.value = _status.value.copy(paused = paused)
     }
 
@@ -218,8 +225,8 @@ class AndroidMpvVideoPlayerHost(
         val clamped = volume.coerceIn(0.0, 100.0)
         pendingVolume = clamped
         if (initialized) {
-            MPVLib.setPropertyDouble("volume", clamped)
-            if (clamped > 0.0 && _status.value.muted) MPVLib.setPropertyBoolean("mute", false)
+            requireMpv().setPropertyDouble("volume", clamped)
+            if (clamped > 0.0 && _status.value.muted) requireMpv().setPropertyBoolean("mute", false)
         }
         _status.value = _status.value.copy(
             volume = clamped,
@@ -228,7 +235,7 @@ class AndroidMpvVideoPlayerHost(
     }
 
     override fun setMuted(muted: Boolean) = onMain {
-        if (initialized) MPVLib.setPropertyBoolean("mute", muted)
+        if (initialized) requireMpv().setPropertyBoolean("mute", muted)
         _status.value = _status.value.copy(muted = muted)
     }
 
@@ -300,12 +307,15 @@ class AndroidMpvVideoPlayerHost(
         playerScope.cancel()
         main.removeCallbacksAndMessages(null)
         abandonAudioFocus()
-        if (initialized) {
-            MPVLib.removeObserver(this)
-            MPVLib.removeLogObserver(this)
-            runCatching { MPVLib.detachSurface() }
-            MPVLib.destroy()
+        mpv?.let { handle ->
+            if (initialized) {
+                handle.removeObserver(this)
+                handle.removeLogObserver(this)
+                runCatching { handle.detachSurface() }
+            }
+            handle.destroy()
         }
+        mpv = null
         initialized = false
         surfaceReady = false
         _status.value = PlaybackStatus()
@@ -323,8 +333,8 @@ class AndroidMpvVideoPlayerHost(
         if (destroyed) return@onMain
         runCatching {
             ensureInitialized()
-            MPVLib.attachSurface(surface)
-            MPVLib.setPropertyString(
+            requireMpv().attachSurface(surface)
+            requireMpv().setPropertyString(
                 "android-surface-size",
                 "${width.coerceAtLeast(1)}x${height.coerceAtLeast(1)}",
             )
@@ -332,7 +342,7 @@ class AndroidMpvVideoPlayerHost(
                 renderWidth = width.coerceAtLeast(1),
                 renderHeight = height.coerceAtLeast(1),
             )
-            MPVLib.setPropertyString("vo", "gpu")
+            requireMpv().setPropertyString("vo", "gpu")
             surfaceReady = true
             performPendingLoad()
             refreshStillFrame()
@@ -348,7 +358,7 @@ class AndroidMpvVideoPlayerHost(
 
     internal fun onSurfaceChanged(width: Int, height: Int) = onMain {
         if (initialized && surfaceReady) {
-            MPVLib.setPropertyString("android-surface-size", "${width.coerceAtLeast(1)}x${height.coerceAtLeast(1)}")
+            requireMpv().setPropertyString("android-surface-size", "${width.coerceAtLeast(1)}x${height.coerceAtLeast(1)}")
             _status.value = _status.value.copy(
                 renderWidth = width.coerceAtLeast(1),
                 renderHeight = height.coerceAtLeast(1),
@@ -360,8 +370,8 @@ class AndroidMpvVideoPlayerHost(
     internal fun onSurfaceDestroyed() = onMain {
         if (!initialized || !surfaceReady) return@onMain
         surfaceReady = false
-        runCatching { MPVLib.setPropertyString("vo", "null") }
-        runCatching { MPVLib.detachSurface() }
+        runCatching { requireMpv().setPropertyString("vo", "null") }
+        runCatching { requireMpv().detachSurface() }
     }
 
     /**
@@ -391,50 +401,67 @@ class AndroidMpvVideoPlayerHost(
 
     private fun ensureInitialized() {
         if (initialized) return
-        MPVLib.create(appContext)
-        stageSubtitleFont()
-        setInitialOption("vo", "gpu")
-        setInitialOption("gpu-context", "android")
-        setInitialOption("gpu-dumb-mode", "yes")
-        setInitialOption("hwdec", "mediacodec")
-        setInitialOption("hwdec-codecs", "h264,hevc,vp8,vp9,av1")
-        setInitialOption("ao", "audiotrack")
-        setInitialOption("force-window", "yes")
-        setInitialOption("keep-open", "yes")
-        setInitialOption("cache", "yes")
-        setInitialOption("demuxer-max-bytes", "32MiB")
-        setInitialOption("demuxer-readahead-secs", "4")
-        setInitialOption("cache-pause-initial", "no")
-        setInitialOption("cache-pause-wait", "2")
-        setInitialOption("terminal", "no")
-        // mpv's ytdl_hook runs on load failure and shells out to a yt-dlp on PATH.
-        // An app sandbox has no PATH to put one on, so it can only ever fail — and
-        // when it does it replaces the real reason a stream would not open with
-        // "youtube-dl failed: not found or not enough permissions". Android resolves
-        // page URLs itself through youtubedl-android before mpv is handed anything,
-        // so the hook has no work here beyond hiding errors. Not setInitialOption:
-        // a libmpv built without the Lua script has no such option, and refusing to
-        // start the player over that would be worse than leaving the hook on.
-        if (MPVLib.setOptionString("ytdl", "no") < 0) {
-            Log.w(MPV_LOG_TAG, "This libmpv has no ytdl option; its hook stays on")
+        // Null where 0.5.1 could only succeed or kill the process. onSurfaceCreated
+        // turns this into "Android player initialization failed: …" on screen, which
+        // is the whole reason 1.0.0 is worth having: a device that cannot start mpv
+        // now says so instead of taking the app down with it.
+        val handle = MPVLib.create(appContext)
+            ?: error("libmpv could not create a player context")
+        mpv = handle
+        // init() likewise throws where 0.5.1 called exit(1), so for the first time a
+        // handle can outlive a failed start. Release it before rethrowing —
+        // onSurfaceCreated retries on the next surface, and create() would otherwise
+        // leak the native context this attempt is holding.
+        try {
+            stageSubtitleFont()
+            setInitialOption("vo", "gpu")
+            setInitialOption("gpu-context", "android")
+            setInitialOption("gpu-dumb-mode", "yes")
+            setInitialOption("hwdec", "mediacodec")
+            setInitialOption("hwdec-codecs", "h264,hevc,vp8,vp9,av1")
+            setInitialOption("ao", "audiotrack")
+            setInitialOption("force-window", "yes")
+            setInitialOption("keep-open", "yes")
+            setInitialOption("cache", "yes")
+            setInitialOption("demuxer-max-bytes", "32MiB")
+            setInitialOption("demuxer-readahead-secs", "4")
+            setInitialOption("cache-pause-initial", "no")
+            setInitialOption("cache-pause-wait", "2")
+            setInitialOption("terminal", "no")
+            // mpv's ytdl_hook runs on load failure and shells out to a yt-dlp on PATH.
+            // An app sandbox has no PATH to put one on, so it can only ever fail — and
+            // when it does it replaces the real reason a stream would not open with
+            // "youtube-dl failed: not found or not enough permissions". Android resolves
+            // page URLs itself through youtubedl-android before mpv is handed anything,
+            // so the hook has no work here beyond hiding errors. Not setInitialOption:
+            // a libmpv built without the Lua script has no such option, and refusing to
+            // start the player over that would be worse than leaving the hook on.
+            if (requireMpv().setOptionString("ytdl", "no") < 0) {
+                Log.w(MPV_LOG_TAG, "This libmpv has no ytdl option; its hook stays on")
+            }
+            // Caps mpv's own stdout only. The client API log the LogObserver reads is a
+            // separate buffer whose level msg-level cannot lower — see
+            // isViewableMpvDiagnostic for the filter that stands in for it.
+            setInitialOption("msg-level", "all=warn")
+            setInitialOption(
+                "screenshot-directory",
+                (appContext.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+                    ?: appContext.filesDir).absolutePath,
+            )
+            handle.init()
+            handle.addObserver(this)
+            handle.addLogObserver(this)
+            observeProperties()
+            initialized = true
+            pendingPreferences?.let(::applyPreferencesNow)
+            pendingVolume?.let { handle.setPropertyDouble("volume", it) }
+            applyScaling(pendingScaling)
+        } catch (error: Throwable) {
+            initialized = false
+            mpv = null
+            runCatching { handle.destroy() }
+            throw error
         }
-        // Caps mpv's own stdout only. The client API log the LogObserver reads is a
-        // separate buffer whose level msg-level cannot lower — see
-        // isViewableMpvDiagnostic for the filter that stands in for it.
-        setInitialOption("msg-level", "all=warn")
-        setInitialOption(
-            "screenshot-directory",
-            (appContext.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
-                ?: appContext.filesDir).absolutePath,
-        )
-        MPVLib.init()
-        MPVLib.addObserver(this)
-        MPVLib.addLogObserver(this)
-        observeProperties()
-        initialized = true
-        pendingPreferences?.let(::applyPreferencesNow)
-        pendingVolume?.let { MPVLib.setPropertyDouble("volume", it) }
-        applyScaling(pendingScaling)
     }
 
     private fun resolveWebVideo(url: String, startPositionSeconds: Double, generation: Long) {
@@ -481,9 +508,9 @@ class AndroidMpvVideoPlayerHost(
     }
 
     private fun observeProperties() {
-        DOUBLE_PROPERTIES.forEach { MPVLib.observeProperty(it, MPVLib.MPV_FORMAT_DOUBLE) }
-        FLAG_PROPERTIES.forEach { MPVLib.observeProperty(it, MPVLib.MPV_FORMAT_FLAG) }
-        STRING_PROPERTIES.forEach { MPVLib.observeProperty(it, MPVLib.MPV_FORMAT_STRING) }
+        DOUBLE_PROPERTIES.forEach { requireMpv().observeProperty(it, MPVLib.MpvFormat.MPV_FORMAT_DOUBLE) }
+        FLAG_PROPERTIES.forEach { requireMpv().observeProperty(it, MPVLib.MpvFormat.MPV_FORMAT_FLAG) }
+        STRING_PROPERTIES.forEach { requireMpv().observeProperty(it, MPVLib.MpvFormat.MPV_FORMAT_STRING) }
     }
 
     private fun performPendingLoad() {
@@ -492,7 +519,7 @@ class AndroidMpvVideoPlayerHost(
         pendingLoad = null
         fileLoaded = false
         applyRequestHeaders(load.headers)
-        MPVLib.command(buildMpvLoadCommand(load.url, load.startPositionSeconds).toTypedArray())
+        requireMpv().command(buildMpvLoadCommand(load.url, load.startPositionSeconds).toTypedArray())
     }
 
     /**
@@ -515,7 +542,7 @@ class AndroidMpvVideoPlayerHost(
         command("change-list", "http-header-fields", "clr", "")
         // mpv owns the User-Agent separately; ffmpeg would otherwise send both it
         // and the one in the header list.
-        MPVLib.setPropertyString("user-agent", mpvUserAgent(headers))
+        requireMpv().setPropertyString("user-agent", mpvUserAgent(headers))
         mpvHeaderFields(headers).forEach { field ->
             command("change-list", "http-header-fields", "append", field)
         }
@@ -595,7 +622,7 @@ class AndroidMpvVideoPlayerHost(
     override fun event(eventId: Int) = onMain {
         if (destroyed) return@onMain
         when (eventId) {
-            MPVLib.MPV_EVENT_START_FILE -> {
+            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
                 fileLoaded = false
                 fileOpening = true
                 _status.value = _status.value.copy(
@@ -607,7 +634,7 @@ class AndroidMpvVideoPlayerHost(
                     statusMessage = "Opening stream…",
                 )
             }
-            MPVLib.MPV_EVENT_FILE_LOADED -> {
+            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 stoppedByUser = false
                 fileLoaded = true
                 _status.value = _status.value
@@ -622,10 +649,10 @@ class AndroidMpvVideoPlayerHost(
                         chapters = parseMpvChapters(chapterListJson),
                     )
             }
-            MPVLib.MPV_EVENT_PLAYBACK_RESTART -> {
+            MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> {
                 if (fileLoaded) _status.value = _status.value.copy(hasMedia = true, waitingForData = false)
             }
-            MPVLib.MPV_EVENT_END_FILE -> {
+            MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
                 val failed = mpvEndOfFileIsFailure(
                     fileOpening = fileOpening,
                     playbackRequested = playbackRequested,
@@ -648,8 +675,8 @@ class AndroidMpvVideoPlayerHost(
         val message = text.trim().takeIf(String::isNotBlank) ?: return@onMain
         val source = prefix.takeIf(String::isNotBlank)?.let { "[$it] " }.orEmpty()
         when {
-            level <= MPVLib.MPV_LOG_LEVEL_ERROR -> Log.e(MPV_LOG_TAG, source + message)
-            level <= MPVLib.MPV_LOG_LEVEL_WARN -> Log.w(MPV_LOG_TAG, source + message)
+            level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_ERROR -> Log.e(MPV_LOG_TAG, source + message)
+            level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_WARN -> Log.w(MPV_LOG_TAG, source + message)
             else -> Log.d(MPV_LOG_TAG, source + message)
         }
         // Logcat takes everything; the screen only takes what reads as progress.
@@ -660,20 +687,20 @@ class AndroidMpvVideoPlayerHost(
 
     private fun applyPreferencesNow(preferences: PlaybackPreferences) {
         if (preferences.audioLanguages.isNotEmpty()) {
-            MPVLib.setPropertyString("alang", preferences.audioLanguages.joinToString(","))
+            requireMpv().setPropertyString("alang", preferences.audioLanguages.joinToString(","))
         }
         if (preferences.subtitleLanguages.isNotEmpty()) {
-            MPVLib.setPropertyString("slang", preferences.subtitleLanguages.joinToString(","))
+            requireMpv().setPropertyString("slang", preferences.subtitleLanguages.joinToString(","))
         }
-        MPVLib.setPropertyString("sid", if (preferences.subtitlesEnabled) "auto" else "no")
-        MPVLib.setPropertyBoolean("mute", preferences.startMuted)
-        MPVLib.setPropertyDouble("sub-scale", preferences.subtitleScale)
-        MPVLib.setPropertyInt("sub-pos", preferences.subtitlePosition)
-        MPVLib.setPropertyString(
+        requireMpv().setPropertyString("sid", if (preferences.subtitlesEnabled) "auto" else "no")
+        requireMpv().setPropertyBoolean("mute", preferences.startMuted)
+        requireMpv().setPropertyDouble("sub-scale", preferences.subtitleScale)
+        requireMpv().setPropertyInt("sub-pos", preferences.subtitlePosition)
+        requireMpv().setPropertyString(
             "sub-border-style",
             if (preferences.subtitleBackground) "opaque-box" else "outline-and-shadow",
         )
-        MPVLib.setPropertyString("hwdec", if (preferences.hardwareDecoding) "mediacodec" else "no")
+        requireMpv().setPropertyString("hwdec", if (preferences.hardwareDecoding) "mediacodec" else "no")
     }
 
     private fun applyScaling(scaling: VideoScaling) {
@@ -683,9 +710,9 @@ class AndroidMpvVideoPlayerHost(
             VideoScaling.Zoom -> Triple(true, 0.0, 0.2)
             VideoScaling.Stretch -> Triple(false, 0.0, 0.0)
         }
-        MPVLib.setPropertyBoolean("keepaspect", keepAspect)
-        MPVLib.setPropertyDouble("panscan", panscan)
-        MPVLib.setPropertyDouble("video-zoom", zoom)
+        requireMpv().setPropertyBoolean("keepaspect", keepAspect)
+        requireMpv().setPropertyDouble("panscan", panscan)
+        requireMpv().setPropertyDouble("video-zoom", zoom)
     }
 
     private fun stageSubtitleFont() {
@@ -720,20 +747,29 @@ class AndroidMpvVideoPlayerHost(
         }
     }
 
+    /**
+     * The handle every call needs since libmpv 1.0.0 stopped being static.
+     *
+     * Errors rather than no-ops when there is none: every call site is already
+     * behind [initialized], or runs inside [ensureInitialized] after the handle
+     * exists, so a null here is a broken invariant and not a state to absorb.
+     */
+    private fun requireMpv(): MPVLib = mpv ?: error("mpv has not been created")
+
     private fun setInitialOption(name: String, value: String) {
-        check(MPVLib.setOptionString(name, value) >= 0) { "mpv rejected option $name" }
+        check(requireMpv().setOptionString(name, value) >= 0) { "mpv rejected option $name" }
     }
 
     private fun setStringProperty(name: String, value: String) = onMain {
-        if (initialized) MPVLib.setPropertyString(name, value)
+        if (initialized) requireMpv().setPropertyString(name, value)
     }
 
     private fun setDoubleProperty(name: String, value: Double) = onMain {
-        if (initialized) MPVLib.setPropertyDouble(name, value)
+        if (initialized) requireMpv().setPropertyDouble(name, value)
     }
 
     private fun command(vararg args: String) {
-        if (initialized) MPVLib.command(arrayOf(*args))
+        if (initialized) requireMpv().command(arrayOf(*args))
     }
 
     private fun onMain(action: () -> Unit) {
@@ -967,7 +1003,7 @@ internal fun PlaybackStatus.withMpvDiagnostic(message: String): PlaybackStatus =
  * progress. Desktop never sees them because it asks libmpv for "info" and up
  * directly; this is the same cut, made after delivery rather than before it.
  */
-internal fun isViewableMpvDiagnostic(level: Int): Boolean = level <= MPVLib.MPV_LOG_LEVEL_INFO
+internal fun isViewableMpvDiagnostic(level: Int): Boolean = level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_INFO
 
 /**
  * Whether an mpv end-of-file means the stream the viewer asked for would not open.
