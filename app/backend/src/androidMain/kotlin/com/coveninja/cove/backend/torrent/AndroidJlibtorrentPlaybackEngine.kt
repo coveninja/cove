@@ -1,7 +1,9 @@
 package com.coveninja.cove.backend.torrent
 
 import com.frostwire.jlibtorrent.Priority
+import com.frostwire.jlibtorrent.Sha1Hash
 import com.frostwire.jlibtorrent.SessionManager
+import com.frostwire.jlibtorrent.TorrentFlags
 import com.frostwire.jlibtorrent.TorrentHandle
 import com.frostwire.jlibtorrent.TorrentInfo
 import com.coveninja.cove.backend.storage.TorrentCacheJournal
@@ -193,27 +195,70 @@ internal class AndroidJlibtorrentPlaybackEngine(
         manager = null
     }
 
+    /** Waits for metadata on the live handle, then caches it for the next play. */
+    private suspend fun awaitTorrentMetadata(
+        handle: TorrentHandle,
+        hash: String,
+        cachePath: Path,
+    ): TorrentInfo {
+        awaitMetadata(
+            hash = hash,
+            timeoutMillis = metadataTimeoutSeconds * 1_000L,
+            hasMetadata = { handle.status().hasMetadata() },
+            peerCount = { handle.status().numPeers() },
+            log = ::log,
+            diagnostics = {
+                val current = manager
+                val dht = runCatching {
+                    "dht=${current?.isDhtRunning} nodes=${current?.dhtNodes()}"
+                }.getOrDefault("dht=?")
+                val trackers = runCatching { handle.trackers().size }.getOrDefault(-1)
+                "$dht, $trackers trackers"
+            },
+        )
+        val fetched = handle.torrentFile()
+        // Cached after it parses, so metadata that does not decode is never written and the next
+        // attempt refetches rather than failing fast.
+        runCatching { if (fetched.isValid) Files.write(cachePath, fetched.bencode()) }
+        return fetched
+    }
+
     private suspend fun loadTorrent(hash: String): ManagedTorrent {
         val session = session()
         val torrentDirectory = downloadDirectory.resolve(hash).toAbsolutePath().normalize()
         val metadataDirectory = downloadDirectory.resolve("metadata").toAbsolutePath().normalize()
         Files.createDirectories(torrentDirectory)
         Files.createDirectories(metadataDirectory)
-        val metadata = session.fetchMagnet(
-            "magnet:?xt=urn:btih:$hash",
-            metadataTimeoutSeconds,
-            metadataDirectory.toFile(),
-        ) ?: throw IllegalStateException("timed out fetching torrent metadata")
-        val info = TorrentInfo(metadata)
-        session.download(info, torrentDirectory.toFile())
-        val handle = withTimeout(10_000) {
+        // Metadata a previous play already paid for. The second episode of a series, and every
+        // resume of one, skips straight to asking for pieces.
+        val cachedMetadata = metadataDirectory.resolve("$hash.torrent")
+        val cached = readCachedMetadata(cachedMetadata, hash)
+        // Added exactly once, and never taken back out.
+        //
+        // The obvious way to do this — fetchMagnet for the metadata, then download() for the
+        // content — costs the entire swarm. fetchMagnet adds the torrent, waits for metadata and
+        // then *removes* it, so the second add starts from nothing: another DHT lookup, another
+        // tracker announce, another round of peer handshakes, all of which had already completed
+        // moments earlier. That second cold start is the wait, and it is why the first play of
+        // anything timed out here while the desktop, which has added the magnet once and held
+        // onto it since, was watching video.
+        log("$hash: adding torrent — metadata ${if (cached != null) "from cache" else "from magnet"}")
+        if (cached != null) {
+            session.download(cached, torrentDirectory.toFile())
+        } else {
+            session.download(magnetUri(hash), torrentDirectory.toFile(), TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        }
+        val handle = withTimeout(HANDLE_TIMEOUT_MILLIS) {
             var found: TorrentHandle? = null
             while (found == null) {
-                found = session.find(info)
-                if (found == null) delay(50)
+                found = session.find(Sha1Hash(hash))
+                if (found == null) delay(TORRENT_POLL_MILLIS)
             }
             found
         }
+        // The metadata now arrives on the handle that is already talking to peers, rather than
+        // on a throwaway one.
+        val info = cached ?: awaitTorrentMetadata(handle, hash, cachedMetadata)
         val storage = info.files()
         val files = (0 until storage.numFiles()).map { index ->
             TorrentFile(index, storage.filePath(index), storage.fileSize(index))
@@ -336,3 +381,7 @@ private fun contentType(name: String): String = when (name.substringAfterLast('.
     "ts", "m2ts" -> "video/mp2t"
     else -> "video/x-matroska"
 }
+
+// Matches the desktop engine: plain stderr, no logging framework, one "Cove" prefix so the
+// line is findable in logcat and in a terminal alike.
+private fun log(message: String) = System.err.println("Cove torrent: $message")
