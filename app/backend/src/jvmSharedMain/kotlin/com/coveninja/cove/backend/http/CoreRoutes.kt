@@ -26,6 +26,8 @@ import com.coveninja.cove.backend.trakt.TraktPollRequest
 import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.backend.trakt.TraktService
 import com.coveninja.cove.shared.data.LibraryState
+import com.coveninja.cove.shared.data.PluginMediaRequest
+import com.coveninja.cove.shared.data.PluginRepository
 import com.coveninja.cove.shared.data.ProfilesState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.AppSettings
@@ -105,6 +107,7 @@ data class CoreRouteServices(
     val quality: QualityLookup? = null,
     val updater: RouteUpdater? = null,
     val prefetch: PrefetchService? = null,
+    val plugins: PluginRepository? = null,
 )
 
 enum class ApiAccess {
@@ -530,7 +533,34 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                             )
                         }
                     }
-                    addonStreams.await() + nuvioStreams?.await().orEmpty()
+                    val pluginStreams = services.plugins?.takeIf(PluginRepository::available)?.let { plugins ->
+                        async {
+                            val metadata = catalog.media(id, type)
+                            plugins.streams(
+                                PluginMediaRequest(
+                                    tmdbId = id,
+                                    mediaType = type,
+                                    imdbId = stremioId.substringBefore(':'),
+                                    title = metadata.displayTitle,
+                                    year = metadata.displayDate?.take(4)?.toIntOrNull() ?: 0,
+                                    season = call.request.queryParameters["season"]?.toIntOrNull(),
+                                    episode = call.request.queryParameters["episode"]?.toIntOrNull(),
+                                ),
+                            ).map { result ->
+                                com.coveninja.cove.backend.addons.AddonStream(
+                                    name = result.name,
+                                    title = result.title,
+                                    url = result.url.orEmpty(),
+                                    infoHash = result.infoHash.orEmpty(),
+                                    addonName = "Plugin · ${result.pluginName.ifBlank { result.pluginId }}",
+                                    sizeBytes = result.sizeBytes,
+                                    headers = result.headers,
+                                    fileIdx = result.fileIndex,
+                                )
+                            }
+                        }
+                    }
+                    addonStreams.await() + nuvioStreams?.await().orEmpty() + pluginStreams?.await().orEmpty()
                 }
                 call.respond(services.media?.registerStreams(streams) ?: streams)
             }
@@ -549,7 +579,21 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                 } else {
                     imdbId
                 }
-                call.respond(addons.subtitles(type, stremioId))
+                val pluginSubtitles = services.plugins?.takeIf(PluginRepository::available)?.let { plugins ->
+                    val metadata = catalog.media(id, type)
+                    plugins.subtitles(
+                        PluginMediaRequest(
+                            tmdbId = id,
+                            mediaType = type,
+                            imdbId = imdbId,
+                            title = metadata.displayTitle,
+                            year = metadata.displayDate?.take(4)?.toIntOrNull() ?: 0,
+                            season = seasonRaw?.toIntOrNull(),
+                            episode = episodeRaw?.toIntOrNull(),
+                        ),
+                    ).map { com.coveninja.cove.backend.addons.AddonSubtitle(it.id, it.url, it.lang) }
+                }.orEmpty()
+                call.respond(addons.subtitles(type, stremioId) + pluginSubtitles)
             }
         }
     }
@@ -819,10 +863,30 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
             call.markLegacy(legacy)
             val id = call.request.queryParameters["id"]?.toIntOrNull()?.takeIf { it > 0 }
                 ?: throw IllegalArgumentException("invalid media id")
-            call.respond(addons.timestamps(
-                id,
-                call.optionalNonNegativeQueryInt("season"),
-                call.optionalNonNegativeQueryInt("episode"),
+            val season = call.optionalNonNegativeQueryInt("season")
+            val episode = call.optionalNonNegativeQueryInt("episode")
+            val builtIn = addons.timestamps(id, season, episode)
+            val plugin = services.plugins?.takeIf(PluginRepository::available)?.timestamps(
+                PluginMediaRequest(
+                    tmdbId = id,
+                    mediaType = if (season != null || episode != null) MediaType.Tv else MediaType.Movie,
+                    season = season,
+                    episode = episode,
+                ),
+            ) ?: com.coveninja.cove.shared.model.MediaTimestamps.None
+            call.respond(com.coveninja.cove.backend.addons.TimestampData(
+                intro = builtIn.intro.ifEmpty { plugin.intro.map { segment ->
+                    com.coveninja.cove.backend.addons.TimestampSegment(segment.startMs, segment.endMs)
+                } },
+                recap = builtIn.recap.ifEmpty { plugin.recap.map { segment ->
+                    com.coveninja.cove.backend.addons.TimestampSegment(segment.startMs, segment.endMs)
+                } },
+                credits = builtIn.credits.ifEmpty { plugin.credits.map { segment ->
+                    com.coveninja.cove.backend.addons.TimestampSegment(segment.startMs, segment.endMs)
+                } },
+                preview = builtIn.preview.ifEmpty { plugin.preview.map { segment ->
+                    com.coveninja.cove.backend.addons.TimestampSegment(segment.startMs, segment.endMs)
+                } },
             ))
         }
         get("/watch-options") {

@@ -31,6 +31,8 @@ import com.coveninja.cove.backend.quality.QualityService
 import com.coveninja.cove.backend.updater.UpdateService
 import com.coveninja.cove.backend.updater.createDesktopUpdateRepository
 import com.coveninja.cove.backend.prefetch.PrefetchService
+import com.coveninja.cove.backend.plugins.DesktopPluginManager
+import com.coveninja.cove.backend.plugins.parsePluginPublicKeys
 import com.coveninja.cove.backend.http.LocalBackendHost
 import com.coveninja.cove.backend.http.MediaBoundary
 import com.coveninja.cove.backend.torrent.JlibtorrentPlaybackEngine
@@ -55,6 +57,7 @@ import com.coveninja.cove.backend.trakt.LocalTraktRepository
 import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.shared.data.LivePlaybackRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
+import com.coveninja.cove.shared.data.PluginRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailablePlaybackRepository
 import com.coveninja.cove.shared.data.UpdateRepository
@@ -98,6 +101,7 @@ class LocalBackendRuntime private constructor(
     deviceRepository: DeviceRepository,
     private val updateRepository: UpdateRepository,
     storageRepository: StorageRepository,
+    private val pluginRepository: PluginRepository,
 ) : AutoCloseable {
     val graph = AppGraph(
         content = content,
@@ -114,6 +118,7 @@ class LocalBackendRuntime private constructor(
         device = deviceRepository,
         updates = updateRepository,
         storage = storageRepository,
+        plugins = pluginRepository,
         onClose = ::close,
     )
 
@@ -127,6 +132,7 @@ class LocalBackendRuntime private constructor(
         host?.close()
         media.close()
         (updateRepository as? AutoCloseable)?.close()
+        (pluginRepository as? AutoCloseable)?.close()
         contentScope.cancel()
         untrustedClient.close()
         contentClient.close()
@@ -154,6 +160,7 @@ class LocalBackendRuntime private constructor(
                 install(HttpTimeout) { requestTimeoutMillis = 25_000 }
             }
             val scope = backendScope("runtime")
+            var pluginManager: DesktopPluginManager? = null
             try {
                 val systemLocale = MutableStateFlow(Locale.getDefault().toLanguageTag())
                 val localeProvider = {
@@ -171,11 +178,26 @@ class LocalBackendRuntime private constructor(
                     apiKey = tmdbApiKey,
                     localeProvider = localeProvider,
                 )
+                val plugins = DesktopPluginManager(
+                    dataDirectory = dataDirectory,
+                    activeProfileIds = stores.profileSession.profileId,
+                    scope = scope,
+                    httpClient = client,
+                    catalogApiBase = DesktopBackendEnvironment.pluginCatalogApiBase(),
+                    publicKeys = parsePluginPublicKeys(DesktopBackendEnvironment.pluginPublicKeys()),
+                    currentCoveVersion = DesktopBackendEnvironment.appVersion(),
+                    allowLan = {
+                        (stores.settings.settings.value as? SettingsState.Ready)
+                            ?.settings
+                            ?.allowLanStreamSources == true
+                    },
+                ).also { pluginManager = it }
                 val content = LocalContentRepository(
                     catalog = catalog,
                     scope = scope,
                     localeChanges = localeChanges,
                     initialLocale = localeProvider(),
+                    plugins = plugins,
                 )
                 val activity = ActivityService(stores.databaseHandle, stores.profileSession)
                 val calendar = CalendarService(stores.databaseHandle, stores.profileSession, catalog)
@@ -333,6 +355,7 @@ class LocalBackendRuntime private constructor(
                     quality,
                     UpdateService(DesktopBackendEnvironment.appVersion()),
                     prefetch,
+                    plugins,
                     host,
                     port,
                     remoteAddress.host,
@@ -396,8 +419,10 @@ class LocalBackendRuntime private constructor(
                     LocalDeviceRepository(deviceSettings, DesktopBackendEnvironment.appVersion()),
                     updateRepository,
                     storageRepository,
+                    plugins,
                 )
             } catch (error: Throwable) {
+                pluginManager?.close()
                 scope.cancel()
                 untrustedClient.close()
                 client.close()

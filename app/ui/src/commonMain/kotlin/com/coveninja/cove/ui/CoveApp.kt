@@ -106,6 +106,7 @@ import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
 import com.coveninja.cove.ui.state.rememberPersonDetailsState
 import com.coveninja.cove.ui.state.rememberPlaybackSession
+import com.coveninja.cove.ui.state.PluginPlaybackEffect
 import com.coveninja.cove.ui.state.rememberSearchSession
 import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import com.coveninja.cove.ui.state.toUiCategory
@@ -330,6 +331,7 @@ private fun CoveAppContent(
     val personState = rememberPersonDetailsState()
     val drag = rememberDragSession()
     val playback = rememberPlaybackSession()
+    PluginPlaybackEffect(playback)
     val search = rememberSearchSession()
     // These page sessions live above the destination switch. Returning to a primary tab keeps
     // its loaded optional content and every vertical/horizontal scroll position instead of

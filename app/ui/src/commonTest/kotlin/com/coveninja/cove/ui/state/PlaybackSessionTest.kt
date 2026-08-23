@@ -40,6 +40,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import com.coveninja.cove.shared.model.Media as DomainMedia
 import com.coveninja.cove.shared.model.MediaType as DomainMediaType
@@ -1105,6 +1106,20 @@ class PlaybackSessionTest {
             "Fight Club · Official Trailer",
             PlaybackRequest(movie(), extra = trailer()).label,
         )
+    }
+
+    @Test
+    fun `plugin artwork exposes only normalized public TMDB images`() {
+        assertEquals(
+            "https://image.tmdb.org/t/p/w500/poster.jpg",
+            pluginArtworkUrl("http://127.0.0.1:6969/api/img/w185/poster.jpg"),
+        )
+        assertEquals(
+            "https://image.tmdb.org/t/p/w500/poster.jpg",
+            pluginArtworkUrl("https://image.tmdb.org/t/p/original/poster.jpg"),
+        )
+        assertNull(pluginArtworkUrl("https://images.example/private-poster.jpg?token=secret"))
+        assertNull(pluginArtworkUrl("http://127.0.0.1:6969/private.jpg"))
     }
 
     // An extra opens embedded in the sheet it was started from; the film itself

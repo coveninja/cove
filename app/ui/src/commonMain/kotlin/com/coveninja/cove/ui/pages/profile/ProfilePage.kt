@@ -77,6 +77,7 @@ enum class ProfileTab(val label: String, val icon: String) {
 private val SelfContainedCategories = setOf(
     SettingsCategory.Account,
     SettingsCategory.Addons,
+    SettingsCategory.Plugins,
     SettingsCategory.Advanced,
     SettingsCategory.Storage,
 )
@@ -206,10 +207,13 @@ private fun SettingsTab(
     val graph = LocalAppGraph.current
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val settingsState by graph.settings.settings.collectAsState()
+    val categories = remember(graph.plugins.available) {
+        SettingsCategory.entries.filter { it != SettingsCategory.Plugins || graph.plugins.available }
+    }
 
     BoxWithConstraints(modifier = modifier) {
         val wide = maxWidth >= RailBreakpoint
-        val category = opened ?: SettingsCategory.entries.first()
+        val category = opened?.takeIf { it in categories } ?: categories.first()
 
         // These own their own repositories and stay usable while preferences are
         // still loading, so they are routed directly rather than through the settings
@@ -224,6 +228,7 @@ private fun SettingsTab(
             if (shown in SelfContainedCategories) {
                 when (shown) {
                     SettingsCategory.Addons -> AddonSettings(modifier = bodyModifier)
+                    SettingsCategory.Plugins -> PluginSettings(modifier = bodyModifier)
                     SettingsCategory.Advanced -> AdvancedSettings(modifier = bodyModifier)
                     SettingsCategory.Storage -> StorageSettings(modifier = bodyModifier)
                     else -> Column(
@@ -260,6 +265,7 @@ private fun SettingsTab(
                 horizontalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 CategoryRail(
+                    categories = categories,
                     selected = category,
                     onSelect = onOpenedChange,
                     modifier = Modifier.width(RailWidth),
@@ -318,6 +324,7 @@ private fun SettingsTab(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     if (current == null) {
                         CategoryList(
+                            categories = categories,
                             onSelect = {
                                 onOpenedChange(it)
                                 onNavigate()
@@ -341,6 +348,7 @@ private fun SettingsTab(
 
 @Composable
 private fun CategoryRail(
+    categories: List<SettingsCategory>,
     selected: SettingsCategory,
     onSelect: (SettingsCategory) -> Unit,
     modifier: Modifier = Modifier,
@@ -354,7 +362,7 @@ private fun CategoryRail(
             modifier = Modifier.padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            SettingsCategory.entries.forEach { entry ->
+            categories.forEach { entry ->
                 CategoryRailItem(
                     label = entry.label,
                     iconName = entry.icon,
@@ -368,9 +376,12 @@ private fun CategoryRail(
 
 /** Narrow-window level one: every category as a tappable row. */
 @Composable
-private fun CategoryList(onSelect: (SettingsCategory) -> Unit) {
+private fun CategoryList(
+    categories: List<SettingsCategory>,
+    onSelect: (SettingsCategory) -> Unit,
+) {
     SettingsCard {
-        SettingsCategory.entries.forEachIndexed { index, entry ->
+        categories.forEachIndexed { index, entry ->
             if (index > 0) SettingDivider()
             CategoryListRow(category = entry, onClick = { onSelect(entry) })
         }

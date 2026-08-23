@@ -22,6 +22,26 @@ class DesktopBackendEnvironmentTest {
     }
 
     @Test
+    fun `plugin trust and catalog endpoints have explicit desktop overrides`() {
+        assertEquals(
+            "plugins-1=public-key",
+            DesktopBackendEnvironment.pluginPublicKeys(
+                mapOf("COVE_PLUGIN_PUBLIC_KEYS" to "plugins-1=public-key"),
+            ),
+        )
+        assertEquals(
+            "https://catalog.test/repos/plugins",
+            DesktopBackendEnvironment.pluginCatalogApiBase(
+                mapOf("COVE_PLUGIN_CATALOG_API_BASE" to "https://catalog.test/repos/plugins"),
+            ),
+        )
+        assertEquals(
+            "https://api.github.com/repos/coveninja/cove-plugins",
+            DesktopBackendEnvironment.pluginCatalogApiBase(emptyMap()),
+        )
+    }
+
+    @Test
     fun `environment takes precedence over nearest dotenv`() {
         val root = Files.createTempDirectory("cove-env")
         Files.writeString(root.resolve(".env"), "TMDB_API_KEY=file-key\n")

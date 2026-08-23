@@ -63,6 +63,7 @@ import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
 import com.coveninja.cove.ui.state.rememberPersonDetailsState
 import com.coveninja.cove.ui.state.rememberPlaybackSession
+import com.coveninja.cove.ui.state.PluginPlaybackEffect
 import com.coveninja.cove.ui.state.rememberWatchProgressIndex
 import com.coveninja.cove.ui.state.toUiCategory
 import com.coveninja.cove.ui.tv.components.TvSideRail
@@ -210,6 +211,7 @@ private fun TvAppContent(
     val detailsState = rememberMediaDetailsState(catalog)
     val personState = rememberPersonDetailsState()
     val playback = rememberPlaybackSession()
+    PluginPlaybackEffect(playback)
     // Above the destination switch, so returning to Home keeps its loaded rails and every
     // scroll position instead of rebuilding the controllers that own those requests.
     val homeController = rememberHomeController(graph.content, graph.discovery)

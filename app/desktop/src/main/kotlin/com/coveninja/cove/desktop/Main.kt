@@ -35,6 +35,8 @@ import com.coveninja.cove.desktop.player.YtDlpProvisioner
 import com.coveninja.cove.backend.LocalBackendRuntime
 import com.coveninja.cove.backend.LocalStoreGraph
 import com.coveninja.cove.backend.platform.DesktopConfigPaths
+import com.coveninja.cove.backend.plugins.COVE_PLUGIN_WORKER_ARGUMENT
+import com.coveninja.cove.backend.plugins.runPluginSandboxWorker
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.createLiveAppGraph
 import com.coveninja.cove.shared.fixture.FixtureAppGraph
@@ -52,6 +54,10 @@ import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
+    if (args.contentEquals(arrayOf(COVE_PLUGIN_WORKER_ARGUMENT))) {
+        runPluginSandboxWorker()
+        return
+    }
     if (System.getProperty("os.name").startsWith("Mac", ignoreCase = true)) {
         System.setProperty("apple.awt.application.name", "Cove")
     }

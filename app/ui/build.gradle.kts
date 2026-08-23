@@ -46,6 +46,7 @@ kotlin {
             implementation(libs.coil3.network.ktor)
 
             implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
         }
 
         // Presentation state (PlaybackSession in particular) carries real decision

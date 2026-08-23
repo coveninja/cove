@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "api_version": 1,
+  "id": "io.github.coveninja.discord-presence",
+  "name": "Discord Presence",
+  "version": "1.1.0",
+  "description": "Shows the title, artwork, and episode currently playing in Cove on your Discord profile.",
+  "publisher": "Cove Ninja",
+  "entrypoint": "main.js",
+  "minimum_cove_version": "1.1.2",
+  "capabilities": [
+    "playback.observe",
+    "ui.settings",
+    "discord.presence"
+  ],
+  "allowed_hosts": [],
+  "discord_application_id": "__DISCORD_APPLICATION_ID__",
+  "settings": [
+    {
+      "key": "show_title",
+      "type": "boolean",
+      "label": "Show title",
+      "description": "Put the movie or series name in Discord activity.",
+      "default": true
+    },
+    {
+      "key": "show_episode",
+      "type": "boolean",
+      "label": "Show episode",
+      "description": "Include season, episode, and episode title when available.",
+      "default": true
+    },
+    {
+      "key": "show_artwork",
+      "type": "boolean",
+      "label": "Show media artwork",
+      "description": "Use the movie or series poster as the large Discord activity image.",
+      "default": true
+    },
+    {
+      "key": "show_playback_state",
+      "type": "boolean",
+      "label": "Show playback state",
+      "description": "Indicate when playback is paused, opening, or reconnecting.",
+      "default": true
+    },
+    {
+      "key": "show_progress",
+      "type": "boolean",
+      "label": "Show remaining time",
+      "description": "Show Discord's remaining-time indicator while playback is running.",
+      "default": true
+    }
+  ]
+}

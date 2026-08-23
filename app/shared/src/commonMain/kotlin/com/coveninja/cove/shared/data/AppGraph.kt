@@ -21,6 +21,7 @@ class AppGraph(
     val device: DeviceRepository = UnavailableDeviceRepository,
     val updates: UpdateRepository = UnavailableUpdateRepository,
     val storage: StorageRepository = UnavailableStorageRepository,
+    val plugins: PluginRepository = UnavailablePluginRepository,
     /**
      * True when every repository above is a canned fixture rather than a live backend.
      *

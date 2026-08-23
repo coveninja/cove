@@ -16,6 +16,18 @@ finish-args:
   - --socket=pulseaudio
   - --device=dri
   - --filesystem=home
+  # Discord's documented local RPC sockets. Each name is granted narrowly;
+  # exposing all of xdg-run would include unrelated application sockets.
+  - --filesystem=xdg-run/discord-ipc-0
+  - --filesystem=xdg-run/discord-ipc-1
+  - --filesystem=xdg-run/discord-ipc-2
+  - --filesystem=xdg-run/discord-ipc-3
+  - --filesystem=xdg-run/discord-ipc-4
+  - --filesystem=xdg-run/discord-ipc-5
+  - --filesystem=xdg-run/discord-ipc-6
+  - --filesystem=xdg-run/discord-ipc-7
+  - --filesystem=xdg-run/discord-ipc-8
+  - --filesystem=xdg-run/discord-ipc-9
 
 modules:
   # libass: subtitle rendering for mpv

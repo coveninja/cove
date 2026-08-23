@@ -33,6 +33,12 @@ enum class SettingsCategory(
         headline = "Addons",
         blurb = "Where streams come from and how they are configured",
     ),
+    Plugins(
+        label = "Plugins",
+        icon = "lucide:blocks",
+        headline = "Desktop plugins",
+        blurb = "Optional integrations that run outside Cove's main process.",
+    ),
     Playback(
         label = "Playback",
         icon = "lucide:play-circle",
@@ -145,6 +151,8 @@ fun SettingsCategoryContent(
             }
 
             SettingsCategory.Addons -> AddonSettings()
+
+            SettingsCategory.Plugins -> PluginSettings()
 
             SettingsCategory.Advanced -> AdvancedSettings()
 

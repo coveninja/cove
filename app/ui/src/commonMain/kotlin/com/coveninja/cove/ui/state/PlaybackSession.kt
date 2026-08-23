@@ -1,7 +1,10 @@
 package com.coveninja.cove.ui.state
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -14,6 +17,9 @@ import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.data.PluginPlaybackActivity
+import com.coveninja.cove.shared.data.PluginTransportCommand
+import com.coveninja.cove.shared.network.resolveTmdbImageUrl
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaEpisode
@@ -858,6 +864,70 @@ fun rememberPlaybackSession(): PlaybackSession {
     val scope = rememberCoroutineScope()
     return remember(graph, host) { PlaybackSession(graph, scope, host) }
 }
+
+/**
+ * Publishes a playback-source-free view of the active session to approved desktop
+ * plugins and applies only the narrow transport commands the plugin contract permits.
+ * Artwork is limited to TMDB's public CDN; provider and playback URLs stay private.
+ */
+@Composable
+fun PluginPlaybackEffect(session: PlaybackSession) {
+    val graph = LocalAppGraph.current
+    val host = LocalVideoPlayerHost.current
+    val status = host?.status?.collectAsState()?.value
+    val request = session.request
+    val phase = session.phase
+    // Five-second buckets keep observers useful without turning mpv's 200 ms
+    // status mirror into an extension-event firehose. Seeks still publish at once
+    // when they land in a different bucket; pause and phase changes are independent.
+    val positionBucket = status?.positionSeconds
+        ?.takeIf { it.isFinite() && it >= 0.0 }
+        ?.let { (it / 5.0).toInt() * 5.0 }
+        ?: 0.0
+    val activity = PluginPlaybackActivity(
+        active = request != null,
+        tmdbId = request?.media?.tmdbId,
+        mediaType = request?.media?.type?.name?.lowercase(),
+        title = request?.media?.title ?: request?.media?.name.orEmpty(),
+        artworkUrl = pluginArtworkUrl(request?.media?.posterUrl),
+        season = request?.season,
+        episode = request?.episode,
+        episodeTitle = request?.episodeTitle,
+        extraTitle = request?.extra?.title,
+        phase = when (phase) {
+            PlaybackPhase.Resolving -> "resolving"
+            is PlaybackPhase.Choosing -> "choosing"
+            is PlaybackPhase.Playing -> if (status?.hasMedia == true) "playing" else "opening"
+            is PlaybackPhase.Failed -> "failed"
+            null -> "idle"
+        },
+        paused = status?.paused ?: true,
+        positionSeconds = positionBucket,
+        durationSeconds = status?.durationSeconds?.takeIf(Double::isFinite)?.coerceAtLeast(0.0) ?: 0.0,
+        speed = status?.speed?.takeIf(Double::isFinite)?.coerceIn(0.25, 4.0) ?: 1.0,
+        reconnecting = session.reconnecting,
+    )
+    LaunchedEffect(graph.plugins, activity) {
+        graph.plugins.publishPlayback(activity)
+    }
+    LaunchedEffect(graph.plugins, host, session) {
+        graph.plugins.transportCommands.collect { command ->
+            val player = host ?: return@collect
+            when (command) {
+                is PluginTransportCommand.SetPaused -> player.setPaused(command.paused)
+                is PluginTransportCommand.SeekAbsolute -> player.seek(command.seconds.coerceAtLeast(0.0))
+                is PluginTransportCommand.SeekRelative -> player.seekRelative(command.seconds)
+                PluginTransportCommand.Stop -> session.close()
+            }
+        }
+    }
+    DisposableEffect(graph.plugins) {
+        onDispose { graph.plugins.publishPlayback(PluginPlaybackActivity()) }
+    }
+}
+
+internal fun pluginArtworkUrl(value: String?): String? = resolveTmdbImageUrl(value, "w500")
+    ?.takeIf { it.length <= 300 && it.startsWith("https://image.tmdb.org/t/p/") }
 
 /** Identifies a candidate across retries; position in the list is not stable. */
 internal fun StreamSource.identityKey(): String =

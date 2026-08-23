@@ -47,9 +47,10 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          PLUGIN_PUBLIC_KEYS: ${{ vars.PLUGIN_TRUSTED_PUBLIC_KEYS }}
         run: |
           set -euo pipefail
-          for name in TMDB_API_KEY SUPABASE_URL SUPABASE_PUBLISHABLE_KEY TRAKT_CLIENT_ID TRAKT_CLIENT_SECRET; do
+          for name in TMDB_API_KEY SUPABASE_URL SUPABASE_PUBLISHABLE_KEY TRAKT_CLIENT_ID TRAKT_CLIENT_SECRET PLUGIN_PUBLIC_KEYS; do
             test -n "${!name}" || { echo "::error::$name is not configured"; exit 1; }
           done
 
@@ -79,6 +80,7 @@ jobs:
       - name: Build and test
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
+          PLUGIN_PUBLIC_KEYS: ${{ vars.PLUGIN_TRUSTED_PUBLIC_KEYS }}
         run: >-
           scripts/gradle-retry.sh
           :shared:build
@@ -113,6 +115,7 @@ jobs:
       - name: Build Compose Desktop distributable
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
+          PLUGIN_PUBLIC_KEYS: ${{ vars.PLUGIN_TRUSTED_PUBLIC_KEYS }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
@@ -196,6 +199,7 @@ jobs:
         working-directory: app
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
+          PLUGIN_PUBLIC_KEYS: ${{ vars.PLUGIN_TRUSTED_PUBLIC_KEYS }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
@@ -268,6 +272,7 @@ jobs:
       - name: Build Compose application
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
+          PLUGIN_PUBLIC_KEYS: ${{ vars.PLUGIN_TRUSTED_PUBLIC_KEYS }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}

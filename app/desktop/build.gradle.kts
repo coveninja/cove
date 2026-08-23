@@ -11,6 +11,8 @@ val generateCoveConfig by tasks.registering {
         "TRAKT_CLIENT_ID",
         "TRAKT_CLIENT_SECRET",
         "UPDATE_PUBLIC_KEYS",
+        "PLUGIN_PUBLIC_KEYS",
+        "PLUGIN_CATALOG_API_BASE",
     )
     val values = keys.associateWith { providers.environmentVariable(it).orElse("") }
     // Captured as locals so the doLast lambda holds plain values and Providers rather than a
@@ -116,6 +118,7 @@ compose.desktop {
                 "java.net.http",
                 "java.scripting",
                 "java.sql",
+                "jdk.crypto.ec",
                 "jdk.unsupported",
             )
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)

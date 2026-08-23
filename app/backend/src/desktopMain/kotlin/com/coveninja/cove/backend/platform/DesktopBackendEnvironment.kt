@@ -34,6 +34,16 @@ object DesktopBackendEnvironment {
         environment["COVE_UPDATE_API_BASE"]?.takeIf(String::isNotBlank)
             ?: "https://api.github.com/repos/coveninja/cove"
 
+    fun pluginPublicKeys(environment: Map<String, String> = System.getenv()): String =
+        environment["COVE_PLUGIN_PUBLIC_KEYS"]?.takeIf(String::isNotBlank)
+            ?: bundledValues["PLUGIN_PUBLIC_KEYS"]?.takeIf(String::isNotBlank)
+            ?: ""
+
+    fun pluginCatalogApiBase(environment: Map<String, String> = System.getenv()): String =
+        environment["COVE_PLUGIN_CATALOG_API_BASE"]?.takeIf(String::isNotBlank)
+            ?: bundledValues["PLUGIN_CATALOG_API_BASE"]?.takeIf(String::isNotBlank)
+            ?: "https://api.github.com/repos/coveninja/cove-plugins"
+
     fun supabaseConfig(
         environment: Map<String, String> = System.getenv(),
         searchStart: Path = Path.of("").toAbsolutePath(),

@@ -1,0 +1,43 @@
+name: Release Cove plugins
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install release tools
+        run: sudo apt-get update && sudo apt-get install -y jq openssl zip unzip
+      - name: Decode signing key
+        env:
+          PRIVATE_KEY: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
+        run: |
+          test -n "$PRIVATE_KEY"
+          printf '%s' "$PRIVATE_KEY" | tr -d ' \t\r\n' | base64 -d > "$RUNNER_TEMP/plugin-private.der"
+      - name: Build and sign packages and catalog
+        env:
+          DISCORD_APPLICATION_ID: ${{ vars.DISCORD_APPLICATION_ID }}
+          KEY_ID: ${{ vars.PLUGIN_SIGNING_KEY_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$KEY_ID"
+          mkdir -p dist
+          version=$(jq -r .version discord/plugin.template.json)
+          package="dist/cove-discord-presence-$version.zip"
+          tools/package-plugin.sh discord "$package" "$DISCORD_APPLICATION_ID"
+          tools/sign-asset.sh "$package" "$RUNNER_TEMP/plugin-private.der" "$package.sig"
+          base="https://github.com/coveninja/cove-plugins/releases/download/$GITHUB_REF_NAME"
+          tools/generate-catalog.sh "$KEY_ID" "$base" dist/cove-plugin-catalog-v1.json "$package"
+          tools/sign-asset.sh dist/cove-plugin-catalog-v1.json "$RUNNER_TEMP/plugin-private.der" \
+            dist/cove-plugin-catalog-v1.json.sig
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes

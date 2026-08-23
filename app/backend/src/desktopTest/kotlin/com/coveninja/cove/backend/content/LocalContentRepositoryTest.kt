@@ -1,11 +1,16 @@
 package com.coveninja.cove.backend.content
 
 import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.data.PluginMediaRequest
+import com.coveninja.cove.shared.data.PluginMetadataAugment
+import com.coveninja.cove.shared.data.PluginRepository
+import com.coveninja.cove.shared.data.UnavailablePluginRepository
 import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
 import com.coveninja.cove.shared.model.MediaGenre
 import com.coveninja.cove.shared.model.MediaImages
+import com.coveninja.cove.shared.model.MediaImage
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
 import com.coveninja.cove.shared.model.PersonDetails
@@ -72,9 +77,50 @@ class LocalContentRepositoryTest {
         assertEquals(0, catalog.videoCalls)
         assertEquals(0, catalog.similarCalls)
     }
+
+    @Test
+    fun `metadata plugins fill missing fields without replacing catalog values`() = runTest {
+        val locale = MutableStateFlow("en")
+        val catalog = FakeCatalog(locale)
+        val plugins = object : PluginRepository by UnavailablePluginRepository {
+            override val available = true
+            override suspend fun augmentMetadata(request: PluginMediaRequest) = listOf(
+                PluginMetadataAugment(
+                    overview = "Plugin overview",
+                    posterUrl = "https://images.test/plugin-poster.jpg",
+                    backdropUrl = "https://images.test/plugin-backdrop.jpg",
+                ),
+            )
+        }
+        val repository = LocalContentRepository(
+            catalog = catalog,
+            scope = backgroundScope,
+            localeChanges = locale,
+            initialLocale = locale.value,
+            plugins = plugins,
+        )
+        val media = Media(id = 42, title = "Hero", mediaType = MediaType.Movie)
+
+        val augmented = repository.details(media)
+        assertEquals("Plugin overview", augmented.details.overview)
+        assertEquals("https://images.test/plugin-poster.jpg", augmented.images.posters.single().url)
+        assertEquals("https://images.test/plugin-backdrop.jpg", augmented.images.backdrops.single().url)
+
+        catalog.detailsResult = MediaDetails(overview = "Catalog overview")
+        catalog.imagesResult = MediaImages(
+            posters = listOf(MediaImage(url = "https://images.test/catalog-poster.jpg")),
+            backdrops = listOf(MediaImage(url = "https://images.test/catalog-backdrop.jpg")),
+        )
+        val retained = repository.details(media)
+        assertEquals("Catalog overview", retained.details.overview)
+        assertEquals("https://images.test/catalog-poster.jpg", retained.images.posters.single().url)
+        assertEquals("https://images.test/catalog-backdrop.jpg", retained.images.backdrops.single().url)
+    }
 }
 
 private class FakeCatalog(private val locale: MutableStateFlow<String>) : MediaCatalog {
+    var detailsResult = MediaDetails()
+    var imagesResult = MediaImages()
     var detailCalls = 0
         private set
     var imageCalls = 0
@@ -91,12 +137,12 @@ private class FakeCatalog(private val locale: MutableStateFlow<String>) : MediaC
     override suspend fun media(id: Int, type: MediaType): Media = item(type).copy(id = id)
     override suspend fun details(id: Int, type: MediaType): MediaDetails {
         detailCalls += 1
-        return MediaDetails()
+        return detailsResult
     }
 
     override suspend fun images(id: Int, type: MediaType): MediaImages {
         imageCalls += 1
-        return MediaImages()
+        return imagesResult
     }
 
     override suspend fun videos(id: Int, type: MediaType): MediaVideos {

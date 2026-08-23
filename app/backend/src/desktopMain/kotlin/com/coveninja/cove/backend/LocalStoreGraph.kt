@@ -20,6 +20,7 @@ import com.coveninja.cove.backend.quality.QualityLookup
 import com.coveninja.cove.backend.updater.UpdateService
 import com.coveninja.cove.backend.prefetch.PrefetchService
 import com.coveninja.cove.backend.nuvio.NuvioManager
+import com.coveninja.cove.shared.data.PluginRepository
 import com.coveninja.cove.backend.platform.DesktopConfigPaths
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalLibraryRepository
@@ -69,29 +70,31 @@ class LocalStoreGraph private constructor(
         quality: QualityLookup? = null,
         updater: UpdateService? = null,
         prefetch: PrefetchService? = null,
+        plugins: PluginRepository? = null,
         host: String = "127.0.0.1",
         port: Int = 6969,
         remoteHost: String = "0.0.0.0",
         remotePort: Int = port + 1,
     ): LocalBackendHost = LocalBackendHost(
         CoreRouteServices(
-            profiles,
-            settings,
-            library,
-            catalog,
-            addons,
-            nuvio,
-            media,
-            auth,
-            clientSessions,
-            activity,
-            calendar,
-            trakt,
-            deviceSettings,
-            discovery,
-            quality,
-            updater,
-            prefetch,
+            profiles = profiles,
+            settings = settings,
+            library = library,
+            catalog = catalog,
+            addons = addons,
+            nuvio = nuvio,
+            media = media,
+            auth = auth,
+            clientSessions = clientSessions,
+            activity = activity,
+            calendar = calendar,
+            trakt = trakt,
+            deviceSettings = deviceSettings,
+            discovery = discovery,
+            quality = quality,
+            updater = updater,
+            prefetch = prefetch,
+            plugins = plugins,
         ),
         host,
         port,

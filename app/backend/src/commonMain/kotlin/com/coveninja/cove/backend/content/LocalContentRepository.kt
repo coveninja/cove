@@ -5,8 +5,12 @@ import com.coveninja.cove.shared.data.ContentArtwork
 import com.coveninja.cove.shared.data.ContentRepository
 import com.coveninja.cove.shared.data.ExploreState
 import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.data.PluginMediaRequest
+import com.coveninja.cove.shared.data.PluginRepository
 import com.coveninja.cove.shared.data.SearchState
+import com.coveninja.cove.shared.data.UnavailablePluginRepository
 import com.coveninja.cove.shared.model.Media
+import com.coveninja.cove.shared.model.MediaImage
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.PersonDetails
 import com.coveninja.cove.shared.model.TvEpisode
@@ -27,6 +31,7 @@ class LocalContentRepository(
     private val scope: CoroutineScope,
     localeChanges: Flow<String> = flowOf("en"),
     initialLocale: String = "en",
+    private val plugins: PluginRepository = UnavailablePluginRepository,
 ) : ContentRepository {
     private val _presentationLocale = MutableStateFlow(initialLocale)
     override val presentationLocale: StateFlow<String> = _presentationLocale.asStateFlow()
@@ -100,7 +105,39 @@ class LocalContentRepository(
         val images = async { catalog.images(media.id, type) }
         val videos = async { catalog.videos(media.id, type) }
         val similar = async { catalog.similar(media.id, type) }
-        ContentDetails(media, details.await(), images.await(), videos.await(), similar.await())
+        val resolvedDetails = details.await()
+        val resolvedImages = images.await()
+        val augment = runCatching {
+            plugins.augmentMetadata(
+                PluginMediaRequest(
+                    tmdbId = media.id,
+                    mediaType = type,
+                    imdbId = runCatching { catalog.imdbId(media.id, type) }.getOrDefault(""),
+                    title = media.displayTitle,
+                    year = media.displayDate?.take(4)?.toIntOrNull() ?: 0,
+                ),
+            )
+        }.getOrDefault(emptyList())
+        val overview = resolvedDetails.overview.ifBlank {
+            augment.firstNotNullOfOrNull { it.overview?.takeIf(String::isNotBlank) }.orEmpty()
+        }
+        val posters = resolvedImages.posters.ifEmpty {
+            augment.firstNotNullOfOrNull { it.posterUrl?.takeIf(String::isNotBlank) }
+                ?.let { listOf(MediaImage(url = it)) }
+                .orEmpty()
+        }
+        val backdrops = resolvedImages.backdrops.ifEmpty {
+            augment.firstNotNullOfOrNull { it.backdropUrl?.takeIf(String::isNotBlank) }
+                ?.let { listOf(MediaImage(url = it)) }
+                .orEmpty()
+        }
+        ContentDetails(
+            media,
+            resolvedDetails.copy(overview = overview),
+            resolvedImages.copy(posters = posters, backdrops = backdrops),
+            videos.await(),
+            similar.await(),
+        )
     }
 
     override suspend fun person(id: Int): PersonDetails = catalog.person(id)
