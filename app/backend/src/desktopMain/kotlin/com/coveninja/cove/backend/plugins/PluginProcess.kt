@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.plugins
 
 import com.coveninja.cove.shared.network.CoveJson
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
@@ -94,7 +95,7 @@ internal class PluginProcess(
     }
 
     suspend fun invoke(method: String, payload: JsonElement, timeoutMillis: Long): JsonElement {
-        check(process.isAlive) { "plugin worker is not running" }
+        check(!closing && process.isAlive) { "plugin worker is not running" }
         val id = UUID.randomUUID().toString()
         val deferred = CompletableDeferred<JsonElement>()
         synchronized(pending) { pending[id] = deferred }
@@ -104,13 +105,18 @@ internal class PluginProcess(
         } catch (error: TimeoutCancellationException) {
             close()
             throw IllegalStateException("plugin call timed out", error)
+        } catch (error: IOException) {
+            close()
+            throw IllegalStateException("plugin worker is not running", error)
         } finally {
             synchronized(pending) { pending.remove(id) }
         }
     }
 
     fun event(method: String, payload: JsonElement) {
-        if (process.isAlive) send(PluginHostFrame("event", method = method, payload = payload))
+        if (!closing && process.isAlive) {
+            runCatching { send(PluginHostFrame("event", method = method, payload = payload)) }
+        }
     }
 
     @Synchronized
@@ -123,12 +129,19 @@ internal class PluginProcess(
         writer.flush()
     }
 
+    @Synchronized
     override fun close() {
+        if (closing) return
         closing = true
         runCatching { send(PluginHostFrame("shutdown")) }
         runCatching {
-            if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroy()
-            if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
+            if (!process.waitFor(1, TimeUnit.SECONDS)) {
+                process.destroy()
+                if (!process.waitFor(1, TimeUnit.SECONDS)) {
+                    process.destroyForcibly()
+                    process.waitFor(1, TimeUnit.SECONDS)
+                }
+            }
         }
         runCatching { writer.close() }
         readerJob.cancel()

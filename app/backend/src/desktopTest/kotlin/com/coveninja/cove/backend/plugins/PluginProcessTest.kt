@@ -80,7 +80,8 @@ class PluginProcessTest {
             process.invoke("hang", JsonNull, 100)
         }
         assertEquals("plugin call timed out", error.message)
-        assertFailsWith<IllegalStateException> { process.invoke("hang", JsonNull, 100) }
+        val stopped = assertFailsWith<IllegalStateException> { process.invoke("hang", JsonNull, 100) }
+        assertEquals("plugin worker is not running", stopped.message)
     }
 
     @Test
