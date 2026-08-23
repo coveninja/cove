@@ -190,7 +190,18 @@ internal class AndroidPlaybackMediaHost private constructor(
         episode: Int?,
         fileIndex: Int?,
     ) {
-        val resource = torrentEngine.open(hash, season, episode, fileIndex)
+        // The player only ever says "The selected stream could not be opened", which is the
+        // same sentence whether the hash was rejected, the swarm was empty or the file never
+        // appeared. The reason is worth one line on the way past — see the stream producer
+        // below for why nothing else records it.
+        val resource = try {
+            torrentEngine.open(hash, season, episode, fileIndex)
+        } catch (failure: Throwable) {
+            System.err.println(
+                "Cove torrent: open failed for $hash — ${failure::class.simpleName}: ${failure.message}",
+            )
+            throw failure
+        }
         val range = parseRange(call.request.header(HttpHeaders.Range), resource.length)
         call.response.header(HttpHeaders.AcceptRanges, "bytes")
         call.response.header(
@@ -208,7 +219,30 @@ internal class AndroidPlaybackMediaHost private constructor(
             status = if (range.partial) HttpStatusCode.PartialContent else HttpStatusCode.OK,
             contentLength = range.endInclusive - range.start + 1,
         ) {
-            torrentEngine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
+            // A failure here arrives after the 206 has already gone out, so it cannot become an
+            // error response — the connection just dies and the player reports a stream it could
+            // not open. Ktor hands the cause to an SLF4J logger, and this process binds no
+            // provider ("No SLF4J providers were found" at startup), so by default the one
+            // account of what went wrong is discarded. That is the difference between a torrent
+            // bug that can be read off a log and one that can only be guessed at.
+            try {
+                torrentEngine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
+            } catch (cancellation: CancellationException) {
+                throw cancellation // the viewer closing the player is not a fault
+            } catch (failure: Throwable) {
+                // Every seek ends one response and opens another with a fresh Range, so the
+                // player dropping a connection mid-write is the ordinary case rather than a
+                // fault, and a line per seek would bury the failures worth reading. Ask the
+                // channel instead of matching exception types: a hangup surfaces as any of
+                // ClosedWriteChannelException, ClosedByteChannelException or a plain IOException
+                // carrying "Broken pipe", and a list of those would quietly rot.
+                if (isClosedForWrite) throw failure
+                System.err.println(
+                    "Cove torrent: stream failed for $hash after the response started — " +
+                        "${failure::class.simpleName}: ${failure.message}",
+                )
+                throw failure
+            }
         }
     }
 

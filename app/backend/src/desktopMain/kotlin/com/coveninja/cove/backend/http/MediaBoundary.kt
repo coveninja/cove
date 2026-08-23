@@ -146,7 +146,28 @@ class MediaBoundary(
             status = if (range.partial) HttpStatusCode.PartialContent else HttpStatusCode.OK,
             contentLength = range.endInclusive - range.start + 1,
         ) {
-            engine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
+            // Same reasoning as the open above, for the half of the work that happens after the
+            // 206 is already on the wire. Ktor reports a producer failure to its own logger
+            // rather than to the caller, so without this the connection simply dies and the
+            // sentence the viewer sees is the only trace left.
+            try {
+                engine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
+            } catch (cancellation: CancellationException) {
+                throw cancellation // the viewer closing the player is not a fault
+            } catch (failure: Throwable) {
+                // Every seek ends one response and opens another with a fresh Range, so the
+                // player dropping a connection mid-write is the ordinary case rather than a
+                // fault, and a line per seek would bury the failures worth reading. Ask the
+                // channel instead of matching exception types: a hangup surfaces as any of
+                // ClosedWriteChannelException, ClosedByteChannelException or a plain IOException
+                // carrying "Broken pipe", and a list of those would quietly rot.
+                if (isClosedForWrite) throw failure
+                System.err.println(
+                    "Cove torrent: stream failed for $hash after the response started — " +
+                        "${failure::class.simpleName}: ${failure.message}",
+                )
+                throw failure
+            }
         }
     }
 
