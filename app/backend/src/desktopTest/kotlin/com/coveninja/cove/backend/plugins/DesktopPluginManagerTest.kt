@@ -23,6 +23,7 @@ import kotlin.test.assertIs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filter
@@ -97,16 +98,42 @@ class DesktopPluginManagerTest {
     private suspend fun DesktopPluginManager.ready(): PluginsState.Ready =
         assertIs<PluginsState.Ready>(state.value)
 
-    private suspend fun DesktopPluginManager.awaitStatus(status: PluginRuntimeStatus) = withTimeout(10_000) {
-        state.filter { current ->
+    private suspend fun DesktopPluginManager.awaitStatus(status: PluginRuntimeStatus) =
+        awaitState("status == $status") { current ->
             (current as? PluginsState.Ready)?.installed?.singleOrNull()?.status == status
-        }.first().let { (it as PluginsState.Ready).installed.single() }
-    }
+        }
 
-    private suspend fun DesktopPluginManager.awaitEnabled(enabled: Boolean) = withTimeout(10_000) {
-        state.filter { current ->
+    private suspend fun DesktopPluginManager.awaitEnabled(enabled: Boolean) =
+        awaitState("enabled == $enabled") { current ->
             (current as? PluginsState.Ready)?.installed?.singleOrNull()?.enabled == enabled
-        }.first().let { (it as PluginsState.Ready).installed.single() }
+        }
+
+    /**
+     * Waits for a plugin state, and says what it was still waiting on if it never arrives.
+     *
+     * Reaching Running means spawning a child JVM that interprets the plugin's JavaScript,
+     * so this bound is the slowest thing in the suite and the first to give way on a loaded
+     * CI runner. A bare `TimeoutCancellationException` names neither the condition nor how
+     * far the plugin actually got, which leaves a CI-only failure with nothing to go on —
+     * so report both, and the elapsed time, to tell "never started" apart from "too slow".
+     */
+    private suspend fun DesktopPluginManager.awaitState(
+        expectation: String,
+        predicate: (PluginsState) -> Boolean,
+    ) = try {
+        val started = System.nanoTime()
+        withTimeout(AWAIT_STATE_TIMEOUT_MILLIS) {
+            state.filter(predicate).first().let { (it as PluginsState.Ready).installed.single() }
+        }.also {
+            val elapsed = (System.nanoTime() - started) / 1_000_000
+            println("[DesktopPluginManagerTest] $expectation reached in ${elapsed}ms")
+        }
+    } catch (timeout: TimeoutCancellationException) {
+        throw AssertionError(
+            "Timed out after ${AWAIT_STATE_TIMEOUT_MILLIS}ms waiting for $expectation; " +
+                "last state was ${state.value}",
+            timeout,
+        )
     }
 
     private fun pluginZip(): ByteArray {
@@ -154,5 +181,6 @@ class DesktopPluginManagerTest {
 
     private companion object {
         const val PLUGIN_ID = "io.github.coveninja.profile-plugin"
+        const val AWAIT_STATE_TIMEOUT_MILLIS = 10_000L
     }
 }
