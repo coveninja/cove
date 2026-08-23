@@ -5,15 +5,12 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.StringArray
 import com.sun.jna.ptr.PointerByReference
-import java.awt.image.BufferedImage
-import java.awt.image.DataBufferInt
 import java.lang.ref.Reference
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,12 +19,11 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * In-process libmpv player backed by mpv's software render API.
  *
- * Decoded frames land in a direct ByteBuffer as bgr0 pixels and are converted
- * to a Compose ImageBitmap for display. No GPU interop or Swing embedding.
- * Establish this path before introducing OpenGL so there is always a working
- * fallback if GL context creation fails.
+ * Decoded frames land directly in a persistent Skia bitmap as bgr0 pixels.
+ * Compose draws that same allocation, so there is no frame-sized AWT image or
+ * per-pixel conversion between mpv and the UI. No GPU interop or Swing embedding.
  */
-class MpvSoftwarePlayer(
+class MpvSoftwarePlayer internal constructor(
     // Software *rendering*, not necessarily software decoding. auto-copy keeps the
     // decode on the GPU and copies finished frames back to system memory, which is
     // what this path needs and is far cheaper than decoding on the CPU. mpv falls
@@ -42,7 +38,7 @@ class MpvSoftwarePlayer(
     private val ytdlFormat: String? = null,
     /** Flags the hook passes yt-dlp itself; null passes none. See [ytdlRawOptions]. */
     private val ytdlRawOptions: String? = null,
-    private val frameConsumer: (BufferedImage) -> Unit,
+    private val frameConsumer: (SoftwareVideoFrame) -> Unit,
 ) : DesktopPlayer {
     private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
     override val snapshot: StateFlow<PlayerSnapshot> = _snapshot.asStateFlow()
@@ -53,6 +49,8 @@ class MpvSoftwarePlayer(
     private val renderQueued  = AtomicBoolean(false)
     private val renderWidth   = AtomicInteger(1280)
     private val renderHeight  = AtomicInteger(720)
+    private val frameSequence = AtomicLong(0)
+    private val lastRenderNanos = AtomicLong(0)
 
     private val renderExecutor = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-render"))
     private val eventExecutor  = Executors.newSingleThreadExecutor(namedDaemon("cove-mpv-events"))
@@ -68,7 +66,7 @@ class MpvSoftwarePlayer(
     // schedule work and never touch GL or mpv API functions directly.
     private val updateCallback = MpvRenderUpdateCallback { requestRender() }
 
-    @Volatile private var renderBuffer: ByteBuffer? = null
+    private val renderSurface = SoftwareVideoSurface()
     @Volatile private var renderParameters: SoftwareRenderParameters? = null
 
     @Synchronized
@@ -250,8 +248,11 @@ class MpvSoftwarePlayer(
                         ?.let(Mpv.library()::mpv_render_context_free)
                     renderParameters?.close()
                     renderParameters = null
+                    renderSurface.close()
                 }.get(3, TimeUnit.SECONDS)
             }
+        } else {
+            renderSurface.close()
         }
         renderExecutor.shutdown()
         runCatching { renderExecutor.awaitTermination(2, TimeUnit.SECONDS) }
@@ -290,35 +291,32 @@ class MpvSoftwarePlayer(
         val context = renderContext.get() ?: return
         val width   = renderWidth.get()
         val height  = renderHeight.get()
-        val bytes   = Math.multiplyExact(Math.multiplyExact(width, height), Int.SIZE_BYTES)
-
-        val target = renderBuffer
-            ?.takeIf { it.capacity() == bytes }
-            ?: ByteBuffer.allocateDirect(bytes).order(ByteOrder.LITTLE_ENDIAN)
-                .also { renderBuffer = it }
 
         // mpv receives raw pointers nested inside the render-param array. JNA
         // cannot see those pointees while the native call is in progress, so a
-        // local Memory can become unreachable and its Cleaner can free it before
-        // mpv returns. Keep one owner for the context lifetime and fence both it
-        // and the direct pixel buffer across the native boundary.
+        // local owner can become unreachable and its Cleaner can free it before
+        // mpv returns. Keep the parameters for the context lifetime; the Skia
+        // surface holds its bitmap and draw/write lock across the native call.
         val parameters = renderParameters
             ?: SoftwareRenderParameters().also { renderParameters = it }
-        parameters.configure(width, height, target)
 
         val library = Mpv.library()
         library.mpv_render_context_update(context)
-        try {
-            checkMpv(
-                library,
-                library.mpv_render_context_render(context, parameters.pointer),
-                "sw render frame",
-            )
-        } finally {
-            parameters.keepAlive()
-            Reference.reachabilityFence(target)
+        val started = System.nanoTime()
+        renderSurface.render(width, height) { target, stride ->
+            parameters.configure(width, height, target, stride)
+            try {
+                checkMpv(
+                    library,
+                    library.mpv_render_context_render(context, parameters.pointer),
+                    "sw render frame",
+                )
+            } finally {
+                parameters.keepAlive()
+            }
         }
-        frameConsumer(bgr0ToBufferedImage(target, width, height))
+        lastRenderNanos.set(System.nanoTime() - started)
+        frameConsumer(SoftwareVideoFrame(renderSurface, frameSequence.incrementAndGet()))
     }
 
     private fun drainEvents(library: MpvLibrary, target: Pointer) {
@@ -387,6 +385,9 @@ class MpvSoftwarePlayer(
             val subDelay = getDouble(library, target, "sub-delay") ?: 0.0
             val audioDelay = getDouble(library, target, "audio-delay") ?: 0.0
             val dropped  = getDouble(library, target, "frame-drop-count") ?: 0.0
+            val decoderDropped = getDouble(library, target, "decoder-frame-drop-count") ?: 0.0
+            val mistimed = getDouble(library, target, "mistimed-frame-count") ?: 0.0
+            val delayed = getDouble(library, target, "vo-delayed-frame-count") ?: 0.0
             val fps      = getDouble(library, target, "estimated-vf-fps") ?: 0.0
             val bitrate  = getDouble(library, target, "video-bitrate") ?: 0.0
 
@@ -415,8 +416,14 @@ class MpvSoftwarePlayer(
                 subtitleDelaySeconds = subDelay.takeIf(Double::isFinite) ?: 0.0,
                 audioDelaySeconds = audioDelay.takeIf(Double::isFinite) ?: 0.0,
                 frameDropCount  = dropped.finiteOrZero().toInt(),
+                decoderFrameDropCount = decoderDropped.finiteOrZero().toInt(),
+                mistimedFrameCount = mistimed.finiteOrZero().toInt(),
+                delayedFrameCount = delayed.finiteOrZero().toInt(),
                 estimatedFps    = fps.finiteOrZero(),
                 videoBitrate    = bitrate.finiteOrZero(),
+                renderWidth     = renderWidth.get(),
+                renderHeight    = renderHeight.get(),
+                renderTimeMillis = lastRenderNanos.get().coerceAtLeast(0L) / 1_000_000.0,
                 error           = null,
             )
         } catch (error: Throwable) {
@@ -526,15 +533,15 @@ private class SoftwareRenderParameters : AutoCloseable {
     val pointer: Pointer
         get() = params[0].pointer
 
-    fun configure(width: Int, height: Int, target: ByteBuffer) {
+    fun configure(width: Int, height: Int, target: Pointer, rowBytes: Int) {
         dimensions.setInt(0, width)
         dimensions.setInt(Int.SIZE_BYTES.toLong(), height)
         if (Native.SIZE_T_SIZE == Long.SIZE_BYTES) {
-            stride.setLong(0, width.toLong() * Int.SIZE_BYTES)
+            stride.setLong(0, rowBytes.toLong())
         } else {
-            stride.setInt(0, width * Int.SIZE_BYTES)
+            stride.setInt(0, rowBytes)
         }
-        params[3].data = Native.getDirectBufferPointer(target)
+        params[3].data = target
         params.forEach(MpvRenderParam::write)
     }
 
@@ -550,27 +557,6 @@ private class SoftwareRenderParameters : AutoCloseable {
         format.close()
         stride.close()
     }
-}
-
-/**
- * Convert a bgr0 direct ByteBuffer (little-endian) to a TYPE_INT_RGB image.
- *
- * bgr0 pixel layout: [B, G, R, 0] at byte offsets 0–3.
- * Read as a little-endian int32: value = B | G<<8 | R<<16 | 0<<24 = 0x00RRGGBB.
- * TYPE_INT_RGB stores 0x00RRGGBB, so the in-memory representation is identical
- * and a single bulk int-buffer copy is sufficient.
- */
-internal fun bgr0ToBufferedImage(source: ByteBuffer, width: Int, height: Int): BufferedImage {
-    require(width > 0 && height > 0) { "Frame dimensions must be positive" }
-    val pixelCount = Math.multiplyExact(width, height)
-    require(source.capacity() >= pixelCount * Int.SIZE_BYTES) {
-        "Frame buffer is smaller than the declared ${width}x${height} dimensions"
-    }
-    val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-    val dest  = (image.raster.dataBuffer as DataBufferInt).data
-    source.duplicate().order(ByteOrder.LITTLE_ENDIAN).apply { clear() }.asIntBuffer()
-        .get(dest, 0, pixelCount)
-    return image
 }
 
 private fun namedDaemon(name: String) = java.util.concurrent.ThreadFactory { task ->

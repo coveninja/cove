@@ -744,12 +744,7 @@ class PlaybackSession(
 
         // Replaying something already finished is the expected behaviour, and a
         // resume point in the last few seconds drops the viewer onto the credits.
-        if (progress.completed) return 0.0
-        val position = progress.positionSeconds
-        val duration = progress.durationSeconds
-        if (position <= 0.0) return 0.0
-        if (duration > 0.0 && position >= duration - RESUME_TAIL_SECONDS) return 0.0
-        return position
+        return resumablePositionSeconds(progress) ?: 0.0
     }
 
     private fun startProgressTicker(token: Int) {
@@ -824,23 +819,13 @@ class PlaybackSession(
             return PlaybackRequest(media, season, episode, episodeTitle)
         }
 
-        val firstSeason = media.seasons.minOfOrNull { it.number } ?: 1
         val entry = libraryEntry(media)
         val lastSeason = entry?.lastWatchedSeason
         val lastEpisode = entry?.lastWatchedEpisode
-        if (lastSeason == null || lastEpisode == null) {
-            return PlaybackRequest(media, firstSeason, 1)
-        }
-
-        if (!episodeCompleted(media, lastSeason, lastEpisode)) {
-            return PlaybackRequest(media, lastSeason, lastEpisode)
-        }
-
-        // Nothing after it means the finished episode is the best available
-        // answer; replaying beats refusing to play anything.
-        val next = nextEpisodeAfter(media.seasons, lastSeason, lastEpisode)
-            ?: return PlaybackRequest(media, lastSeason, lastEpisode)
-        return PlaybackRequest(media, next.first, next.second)
+        val completed = lastSeason != null && lastEpisode != null &&
+            episodeCompleted(media, lastSeason, lastEpisode)
+        val target = defaultSeriesEpisode(media, entry, completed)
+        return PlaybackRequest(media, target.first, target.second)
     }
 
     // Same signal the episode browser ticks off.
@@ -863,7 +848,6 @@ class PlaybackSession(
         const val MAX_EXTERNAL_SUBTITLES = 12
         const val PROGRESS_SAVE_INTERVAL_MILLIS = 10_000L
         const val COMPLETED_FRACTION = 0.9
-        const val RESUME_TAIL_SECONDS = 15.0
     }
 }
 

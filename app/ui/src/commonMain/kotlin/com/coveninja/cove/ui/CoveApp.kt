@@ -100,6 +100,7 @@ import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberDragSession
 import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberLocalizedLibraryMedia
+import com.coveninja.cove.ui.state.mediaWatchAction
 import com.coveninja.cove.ui.state.rememberMediaActions
 import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
@@ -623,6 +624,9 @@ private fun CoveAppContent(
                 },
                 currentListCategory = overlayEntry?.status?.toUiCategory(),
                 currentRating = overlayEntry?.rating?.roundToInt(),
+                watchLabel = detailsState.overlayMedia?.let { media ->
+                    mediaWatchAction(media, overlayEntry, progressRows).label
+                } ?: "Watch",
                 // The details sheet deliberately stays open underneath. Playback
                 // covers it completely, and leaving it in place means closing the
                 // player returns you to the title you were looking at — ready to

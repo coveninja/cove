@@ -186,9 +186,15 @@ internal object NuvioSandboxWorker {
                 toString() { return this.pairs.map(value => encodeURIComponent(value[0]).replace(/%20/g, '+') + '=' + encodeURIComponent(value[1]).replace(/%20/g, '+')).join('&'); }
               };
             }
+            $NUVIO_BROWSER_COMPATIBILITY_SCRIPT
             const __factories = {$moduleFactories};
             const __moduleCache = {};
-            globalThis.require = name => {
+            const __moduleAliases = {
+              'cheerio': 'cheerio-without-node-native',
+              'react-native-cheerio': 'cheerio-without-node-native'
+            };
+            globalThis.require = requestedName => {
+              const name = __moduleAliases[requestedName] || requestedName;
               if (__moduleCache[name]) return __moduleCache[name].exports;
               const factory = __factories[name];
               if (!factory) throw new Error('unsupported module: ' + name);
@@ -214,7 +220,12 @@ internal object NuvioSandboxWorker {
               return result;
             };
             globalThis.fetch = async (url, options = {}) => {
-              const payload = JSON.parse(__bridge.request(String(url), JSON.stringify(options || {})));
+              const signal = options && options.signal;
+              if (signal && signal.aborted) throw __coveAbortError(signal.reason);
+              const requestOptions = Object.assign({}, options || {});
+              delete requestOptions.signal;
+              const payload = JSON.parse(__bridge.request(String(url), JSON.stringify(requestOptions)));
+              if (signal && signal.aborted) throw __coveAbortError(signal.reason);
               return {
                 ok: payload.status >= 200 && payload.status < 300,
                 status: payload.status,
@@ -239,9 +250,11 @@ internal object NuvioSandboxWorker {
         (() => {
           const input = JSON.parse(__invocation);
           const exported = module.exports || exports;
-          const fn = exported.getStreams || exported.scrape;
+          const getStreams = exported.getStreams || globalThis.getStreams;
+          const scrape = exported.scrape || globalThis.scrape;
+          const fn = getStreams || scrape;
           if (typeof fn !== 'function') throw new Error('no getStreams or scrape export');
-          const value = exported.getStreams
+          const value = getStreams
             ? fn(input.tmdbId, input.mediaType, input.season, input.episode)
             : fn({title: input.title, year: input.year, type: input.mediaType, imdbId: input.imdbId}, {});
           Promise.resolve(value).then(

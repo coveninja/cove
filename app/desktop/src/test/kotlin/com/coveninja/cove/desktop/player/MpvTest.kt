@@ -1,8 +1,5 @@
 package com.coveninja.cove.desktop.player
 
-import java.awt.image.DataBufferInt
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -10,10 +7,10 @@ import kotlin.test.assertFailsWith
 /**
  * Unit tests for the genuinely testable parts of the mpv integration.
  *
- * Rendering cannot be unit-tested without a display and a live libmpv.
+ * Full libmpv rendering cannot be unit-tested without a display and live mpv.
  * These tests cover: LC_NUMERIC category selection per OS, library candidate
- * ordering, bgr0→RGB pixel conversion with a known byte pattern, and loadfile
- * argument construction.
+ * ordering, and loadfile argument construction. SoftwareVideoSurfaceTest owns
+ * the bgr0/Skia pixel contract.
  *
  * Each test is mutation-verified — see comments inside each test.
  */
@@ -84,74 +81,6 @@ class MpvTest {
         assertFailsWith<IllegalStateException> {
             configureMpvNumericLocale(osName = "Linux") { _, _ -> null }
         }
-    }
-
-    // ---- bgr0ToBufferedImage ----
-
-    @Test
-    fun `bgr0ToBufferedImage converts a known pixel to TYPE_INT_RGB correctly`() {
-        // bgr0 byte pattern for a single pixel: [B=0x11, G=0x22, R=0x33, 0=0x00]
-        // Expected TYPE_INT_RGB int: 0x00_33_22_11 = 0x00332211
-        val buf = ByteBuffer.allocateDirect(4).order(ByteOrder.LITTLE_ENDIAN)
-        buf.put(0x11.toByte())   // B
-        buf.put(0x22.toByte())   // G
-        buf.put(0x33.toByte())   // R
-        buf.put(0x00.toByte())   // padding
-        buf.rewind()
-
-        val image = bgr0ToBufferedImage(buf, 1, 1)
-        val pixel = (image.raster.dataBuffer as DataBufferInt).data[0]
-        // Mutation: swapping B and R in the byte buffer makes this fail because
-        // the int becomes 0x00112233 instead of 0x00332211.
-        assertEquals(0x00332211, pixel and 0x00FFFFFF)
-    }
-
-    @Test
-    fun `bgr0ToBufferedImage handles non-trivial stride correctly`() {
-        // 2x2 image: four pixels with distinct colours to prove all four are copied.
-        // pixel(0,0) = B=0x10 G=0x20 R=0x30
-        // pixel(1,0) = B=0x40 G=0x50 R=0x60
-        // pixel(0,1) = B=0x70 G=0x80 R=0x90
-        // pixel(1,1) = B=0xA0 G=0xB0 R=0xC0
-        val buf = ByteBuffer.allocateDirect(16).order(ByteOrder.LITTLE_ENDIAN)
-        val pixels = listOf(
-            Triple(0x10, 0x20, 0x30),
-            Triple(0x40, 0x50, 0x60),
-            Triple(0x70, 0x80, 0x90),
-            Triple(0xA0.toByte(), 0xB0.toByte(), 0xC0.toByte()),
-        )
-        for ((b, g, r) in pixels) {
-            buf.put(b.toByte()); buf.put(g.toByte()); buf.put(r.toByte()); buf.put(0)
-        }
-        buf.rewind()
-
-        val image = bgr0ToBufferedImage(buf, 2, 2)
-        val data  = (image.raster.dataBuffer as DataBufferInt).data
-
-        // Mutation: reading only pixel 0 is not enough — assert all four so that
-        // an off-by-one stride error will fail on pixels 1, 2, or 3.
-        assertEquals(0x302010, data[0] and 0xFFFFFF)
-        assertEquals(0x605040, data[1] and 0xFFFFFF)
-        assertEquals(0x908070, data[2] and 0xFFFFFF)
-        assertEquals(0xC0B0A0.toInt() and 0xFFFFFF, data[3] and 0xFFFFFF)
-    }
-
-    @Test
-    fun `bgr0ToBufferedImage rejects negative dimensions`() {
-        val buf = ByteBuffer.allocateDirect(4).order(ByteOrder.LITTLE_ENDIAN)
-        // Mutation: removing the require checks lets these return without
-        // throwing, causing the test to fail.
-        assertFailsWith<IllegalArgumentException> { bgr0ToBufferedImage(buf, 0, 1) }
-        assertFailsWith<IllegalArgumentException> { bgr0ToBufferedImage(buf, 1, 0) }
-    }
-
-    @Test
-    fun `bgr0ToBufferedImage rejects undersized buffer`() {
-        // Declaring 2x2 but providing only 4 bytes (enough for 1 pixel).
-        val buf = ByteBuffer.allocateDirect(4).order(ByteOrder.LITTLE_ENDIAN)
-        // Mutation: removing the size check lets this crash with an
-        // ArrayIndexOutOfBoundsException rather than IllegalArgumentException.
-        assertFailsWith<IllegalArgumentException> { bgr0ToBufferedImage(buf, 2, 2) }
     }
 
     // ---- mpvLoadFileArgs / mpvStartOption ----

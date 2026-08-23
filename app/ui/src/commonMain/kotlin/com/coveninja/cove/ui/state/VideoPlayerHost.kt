@@ -107,10 +107,20 @@ data class PlaybackStatus(
     val videoCodec: String = "",
     val hardwareDecoder: String = "",
     val renderBackend: String = "",
+    /** mpv frame-drop-count: frames discarded by video output because they arrived late. */
     val droppedFrames: Int = 0,
+    /** Frames discarded by the decoder itself, excluding slow presentation. */
+    val decoderDroppedFrames: Int = 0,
+    /** Timing corrections and externally delayed presentation reported by mpv. */
+    val mistimedFrames: Int = 0,
+    val delayedFrames: Int = 0,
     val estimatedFps: Double = 0.0,
     val videoBitrate: Double = 0.0,
     val bufferedAheadSeconds: Double = 0.0,
+    /** Actual player render target and latest native render-call duration. */
+    val renderWidth: Int = 0,
+    val renderHeight: Int = 0,
+    val renderTimeMillis: Double = 0.0,
     val error: String? = null,
 ) {
     val progressFraction: Float

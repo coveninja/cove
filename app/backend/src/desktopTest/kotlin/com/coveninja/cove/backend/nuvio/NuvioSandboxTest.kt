@@ -58,6 +58,49 @@ class NuvioSandboxTest {
     }
 
     @Test
+    fun officialRuntimeGlobalsAliasesAndGlobalExportAreAvailable() = runTest {
+        val streams = ProcessNuvioSandbox(timeoutMillis = 15_000).run(invocation("""
+            globalThis.getStreams = function(id, type) {
+              if (self !== globalThis) throw new Error('self alias missing');
+              const controller = new AbortController();
+              let abortObserved = false;
+              controller.signal.addEventListener('abort', () => { abortObserved = true; });
+              controller.abort('test');
+              if (!controller.signal.aborted || !abortObserved || controller.signal.reason !== 'test') {
+                throw new Error('abort globals are incomplete');
+              }
+              const cheerio = require('cheerio');
+              if (cheerio !== require('react-native-cheerio') || typeof cheerio.load !== 'function') {
+                throw new Error('cheerio aliases are unavailable');
+              }
+              const url = new URL('/get_video?token=1#watch', 'https://old.example/path/page');
+              url.hostname = 'streamtape.com';
+              url.port = '8443';
+              url.searchParams.set('quality', '1080p');
+              const finish = () => [{name: type + '-' + id, url: url.toString()}];
+              const rejectAbortedFetch = error => {
+                if (!error || error.name !== 'AbortError') throw new Error('aborted fetch was not rejected');
+                return finish();
+              };
+              try {
+                return Promise.resolve(fetch('https://must-not-fetch.example', {signal: controller.signal})).then(
+                  () => { throw new Error('aborted fetch reached the bridge'); },
+                  rejectAbortedFetch
+                );
+              } catch (error) {
+                return rejectAbortedFetch(error);
+              }
+            };
+        """.trimIndent()))
+
+        assertEquals("movie-42", streams.single().name)
+        assertEquals(
+            "https://streamtape.com:8443/get_video?token=1&quality=1080p#watch",
+            streams.single().url,
+        )
+    }
+
+    @Test
     fun runawayGuestIsKilledAtTheProcessBoundary() = runTest {
         val started = System.nanoTime()
         assertFailsWith<Exception> {

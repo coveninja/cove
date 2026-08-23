@@ -57,6 +57,7 @@ import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberLocalizedLibraryMedia
+import com.coveninja.cove.ui.state.mediaWatchAction
 import com.coveninja.cove.ui.state.rememberMediaActions
 import com.coveninja.cove.ui.state.rememberMediaCatalog
 import com.coveninja.cove.ui.state.rememberMediaDetailsState
@@ -358,7 +359,7 @@ private fun TvAppContent(
                 media = overlay,
                 listCategory = entry?.status?.toUiCategory(),
                 rating = entry?.rating?.roundToInt(),
-                resumeLabel = watchProgress.fractionFor(overlay.id)?.let { "Resume" },
+                watchLabel = mediaWatchAction(overlay, entry, progressRows).label,
                 onPlay = { playback.open(overlay) },
                 onChooseSource = { playback.open(overlay, forcePicker = true) },
                 onSetListCategory = { category -> actions.setListCategory(overlay, category) },

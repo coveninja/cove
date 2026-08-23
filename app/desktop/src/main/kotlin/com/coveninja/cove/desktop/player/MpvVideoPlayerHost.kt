@@ -1,7 +1,6 @@
 package com.coveninja.cove.desktop.player
 
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -10,8 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.graphics.toComposeImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.IntSize
 import com.coveninja.cove.shared.network.CoveJson
 import com.coveninja.cove.ui.state.MediaChapter
 import com.coveninja.cove.ui.state.MediaTrack
@@ -21,9 +19,9 @@ import com.coveninja.cove.ui.state.TrackKind
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.classifyPlaybackTermination
-import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -134,7 +132,7 @@ class MpvVideoPlayerHost(
     // Produced on mpv's render thread and consumed by the composition; a flow is
     // the defined handoff, where a raw snapshot write from a foreign thread would
     // rely on apply-notification timing.
-    private val frames = MutableStateFlow<BufferedImage?>(null)
+    private val frames = MutableStateFlow<SoftwareVideoFrame?>(null)
 
     override fun load(url: String, startPositionSeconds: Double) {
         // The new file starts wherever it starts; a target aimed at the old one would
@@ -353,10 +351,10 @@ class MpvVideoPlayerHost(
      * which, per WindowSkiaLayerComponent.interopBlendingSupported, is Direct3D
      * and Metal only. On an OpenGL render API (every Linux desktop) the panel
      * paints over the whole scene, so the controls, the buffering spinner and any
-     * error would all sit behind an opaque black rectangle. Reading frames back
-     * and drawing them as an ImageBitmap costs a copy per frame but keeps one
-     * compositor in charge of the entire window. The decode itself stays on the
-     * GPU via hwdec=auto-copy.
+     * error would all sit behind an opaque black rectangle. The software render
+     * target keeps one compositor in charge of the entire window. mpv now writes
+     * directly into one persistent Skia bitmap, avoiding the former AWT and
+     * per-pixel Compose conversions; decoding stays on the GPU via hwdec=auto-copy.
      *
      * The OpenGL path is still the right choice for --play, which is a bare
      * window with nothing drawn on top; see StandalonePlayerWindow.
@@ -380,27 +378,19 @@ class MpvVideoPlayerHost(
         }
 
         val frame by frames.collectAsState()
-        Box(
+        Canvas(
             // mpv renders at exactly the size it is told and letterboxes inside
             // it, so the surface size is the render size.
-            modifier = modifier.onSizeChanged {
-                if (activeSurface.get() == surfaceId) player.resize(it.width, it.height)
-            },
+            modifier = modifier
+                .fillMaxSize()
+                .onSizeChanged {
+                    if (activeSurface.get() == surfaceId) player.resize(it.width, it.height)
+                },
         ) {
-            frame?.let {
-                Image(
-                    bitmap = it.toComposeImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    // FillBounds, not the default Fit: mpv has already composed
-                    // the picture into a buffer the size of this surface, aspect
-                    // and cropping included. Fit would apply a second aspect
-                    // policy on top and add bars mpv never intended — bars no
-                    // scaling mode could then remove, because they are added
-                    // after mpv is done.
-                    contentScale = ContentScale.FillBounds,
-                )
-            }
+            frame?.draw(
+                scope = this,
+                destination = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+            )
         }
     }
 
@@ -429,8 +419,8 @@ class MpvVideoPlayerHost(
         val active = owned ?: return
         owned = null
         detach()
-        active.close()
         frames.value = null
+        active.close()
     }
 
     private fun attach(active: DesktopPlayer) {
@@ -656,8 +646,14 @@ private fun PlayerSnapshot.playbackStatus(
     hardwareDecoder = if (usingHardwareDecoding) hwdecCurrent else "",
     renderBackend = renderBackend,
     droppedFrames = frameDropCount,
+    decoderDroppedFrames = decoderFrameDropCount,
+    mistimedFrames = mistimedFrameCount,
+    delayedFrames = delayedFrameCount,
     estimatedFps = estimatedFps,
     videoBitrate = videoBitrate,
     bufferedAheadSeconds = cacheDurationSeconds,
+    renderWidth = renderWidth,
+    renderHeight = renderHeight,
+    renderTimeMillis = renderTimeMillis,
     error = error,
 )

@@ -328,6 +328,10 @@ class AndroidMpvVideoPlayerHost(
                 "android-surface-size",
                 "${width.coerceAtLeast(1)}x${height.coerceAtLeast(1)}",
             )
+            _status.value = _status.value.copy(
+                renderWidth = width.coerceAtLeast(1),
+                renderHeight = height.coerceAtLeast(1),
+            )
             MPVLib.setPropertyString("vo", "gpu")
             surfaceReady = true
             performPendingLoad()
@@ -345,6 +349,10 @@ class AndroidMpvVideoPlayerHost(
     internal fun onSurfaceChanged(width: Int, height: Int) = onMain {
         if (initialized && surfaceReady) {
             MPVLib.setPropertyString("android-surface-size", "${width.coerceAtLeast(1)}x${height.coerceAtLeast(1)}")
+            _status.value = _status.value.copy(
+                renderWidth = width.coerceAtLeast(1),
+                renderHeight = height.coerceAtLeast(1),
+            )
             refreshStillFrame()
         }
     }
@@ -537,6 +545,11 @@ class AndroidMpvVideoPlayerHost(
             "sub-delay" -> current.copy(subtitleDelaySeconds = value)
             "audio-delay" -> current.copy(audioDelaySeconds = value)
             "frame-drop-count" -> current.copy(droppedFrames = value.coerceAtLeast(0.0).toInt())
+            "decoder-frame-drop-count" -> current.copy(
+                decoderDroppedFrames = value.coerceAtLeast(0.0).toInt(),
+            )
+            "mistimed-frame-count" -> current.copy(mistimedFrames = value.coerceAtLeast(0.0).toInt())
+            "vo-delayed-frame-count" -> current.copy(delayedFrames = value.coerceAtLeast(0.0).toInt())
             "estimated-vf-fps" -> current.copy(estimatedFps = value.coerceAtLeast(0.0))
             "video-bitrate" -> current.copy(videoBitrate = value.coerceAtLeast(0.0))
             else -> current
@@ -747,7 +760,8 @@ class AndroidMpvVideoPlayerHost(
         val DOUBLE_PROPERTIES = listOf(
             "time-pos", "duration", "volume", "cache-buffering-state",
             "demuxer-cache-time", "demuxer-cache-duration", "speed", "sub-delay",
-            "audio-delay", "frame-drop-count", "estimated-vf-fps", "video-bitrate",
+            "audio-delay", "frame-drop-count", "decoder-frame-drop-count",
+            "mistimed-frame-count", "vo-delayed-frame-count", "estimated-vf-fps", "video-bitrate",
         )
         val FLAG_PROPERTIES = listOf("pause", "mute", "paused-for-cache", "eof-reached")
         val STRING_PROPERTIES = listOf(
