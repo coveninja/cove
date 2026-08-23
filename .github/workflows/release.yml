@@ -76,7 +76,7 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0"
+            "platforms;android-37.0" "build-tools;37.0.0"
       - name: Build and test
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
@@ -350,7 +350,7 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0"
+            "platforms;android-37.0" "build-tools;37.0.0"
       - name: Decode release keystore
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

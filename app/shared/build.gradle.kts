@@ -9,7 +9,7 @@ kotlin {
 
     android {
         namespace = "com.coveninja.cove.shared"
-        compileSdk = 36
+        compileSdk = 37
         minSdk = 28
 
         withHostTest {}

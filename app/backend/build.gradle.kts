@@ -9,7 +9,7 @@ kotlin {
     jvm("desktop")
     android {
         namespace = "com.coveninja.cove.backend"
-        compileSdk = 36
+        compileSdk = 37
         minSdk = 28
         withHostTest {}
         compilerOptions {
