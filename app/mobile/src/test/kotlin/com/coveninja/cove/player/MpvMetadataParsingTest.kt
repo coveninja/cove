@@ -74,12 +74,12 @@ class MpvMetadataParsingTest {
         // Mutation check: both bounds were moved and the test failed each time —
         // relaxing to MPV_LOG_LEVEL_V trips the first assertion, tightening to
         // MPV_LOG_LEVEL_WARN trips the last.
-        assertFalse(isViewableMpvDiagnostic(MPVLib.MPV_LOG_LEVEL_V))
-        assertFalse(isViewableMpvDiagnostic(MPVLib.MPV_LOG_LEVEL_DEBUG))
-        assertFalse(isViewableMpvDiagnostic(MPVLib.MPV_LOG_LEVEL_TRACE))
-        assertTrue(isViewableMpvDiagnostic(MPVLib.MPV_LOG_LEVEL_ERROR))
-        assertTrue(isViewableMpvDiagnostic(MPVLib.MPV_LOG_LEVEL_WARN))
-        assertTrue(isViewableMpvDiagnostic(MPVLib.MPV_LOG_LEVEL_INFO))
+        assertFalse(isViewableMpvDiagnostic(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_V))
+        assertFalse(isViewableMpvDiagnostic(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_DEBUG))
+        assertFalse(isViewableMpvDiagnostic(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_TRACE))
+        assertTrue(isViewableMpvDiagnostic(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_ERROR))
+        assertTrue(isViewableMpvDiagnostic(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_WARN))
+        assertTrue(isViewableMpvDiagnostic(MPVLib.MpvLogLevel.MPV_LOG_LEVEL_INFO))
     }
 
     @Test
