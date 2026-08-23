@@ -616,8 +616,268 @@ class SupabaseSyncServiceTest {
         }
     }
 
+
+    // --- the profile roster -------------------------------------------------
+    //
+    // Every fixture above returns a single-profile `profiles` array, which is
+    // exactly why none of them noticed that a second profile never left the
+    // device it was made on.
+
+    // Mutation applied to verify: dropped the mergeRoster() call from
+    // reconcileRoster → test failed with one local profile, the pre-fix behaviour.
+    @Test
+    fun `a profile from another device is added to this one`() = runTest {
+        fixture(
+            remote = { _, profileId -> roster(primary(profileId), secondary("kids-1", "Kids")) },
+        ) { graph ->
+            graph.sync.reconcileAndSync("user-1", "jwt")
+
+            val state = assertIs<ProfilesState.Ready>(graph.profiles.profiles.value)
+            assertEquals(listOf("Primary", "Kids"), state.profiles.map { it.name })
+            // Adopting the account's own row, not inventing an id for it: every one
+            // of that profile's rows upstream is keyed by it.
+            assertEquals("kids-1", state.profiles.single { it.name == "Kids" }.id)
+            // The viewer is not moved off the profile they were using.
+            assertEquals(profileIdOf(graph), state.activeProfileId)
+        }
+    }
+
+    // The first half of the household scenario: a profile made on the desktop and
+    // never switched to still belongs to the account.
+    // Mutation applied to verify: pushed only profiles.activeSyncRecord() rather
+    // than syncRecords() → test failed, the roster carried one row.
+    @Test
+    fun `a profile created here and never activated is pushed`() = runTest {
+        var pushed: String? = null
+        fixture(
+            remote = { request, profileId ->
+                if (request.method == HttpMethod.Post && request.url.encodedPath.endsWith("/profiles")) {
+                    pushed = (request.body as TextContent).text
+                }
+                roster(primary(profileId))
+            },
+        ) { graph ->
+            val kids = graph.profiles.create("Kids")
+
+            graph.sync.reconcileAndSync("user-1", "jwt")
+
+            val rows = CoveJson.parseToJsonElement(assertNotNull(pushed)).jsonArray
+            assertEquals(
+                setOf(profileIdOf(graph), kids.id),
+                rows.mapTo(mutableSetOf()) { it.jsonObject.getValue("id").jsonPrimitive.content },
+            )
+            // PostgREST refuses a bulk upsert whose objects do not all carry the
+            // same keys, and it refuses the whole batch rather than one row of it.
+            assertEquals(1, rows.map { it.jsonObject.keys }.distinct().size)
+        }
+    }
+
+    // Mutation applied to verify: made deleteFromRemote() skip the "activate a
+    // survivor first" step → test failed on the ON DELETE RESTRICT foreign key
+    // from active_profile.
+    @Test
+    fun `a tombstoned profile is removed even while it is the active one`() = runTest {
+        var kidsDeleted = false
+        fixture(
+            remote = { _, profileId ->
+                if (kidsDeleted) {
+                    roster(primary(profileId), secondary("kids-1", "Kids", deletedAt = "2026-08-02T00:00:00Z"))
+                } else {
+                    roster(primary(profileId), secondary("kids-1", "Kids"))
+                }
+            },
+        ) { graph ->
+            graph.sync.reconcileAndSync("user-1", "jwt")
+            graph.profiles.activate("kids-1")
+            assertEquals("kids-1", assertIs<ProfilesState.Ready>(graph.profiles.profiles.value).activeProfileId)
+
+            kidsDeleted = true
+            graph.sync.reconcileAndSync("user-1", "jwt")
+
+            val state = assertIs<ProfilesState.Ready>(graph.profiles.profiles.value)
+            assertEquals(listOf("Primary"), state.profiles.map { it.name })
+            assertEquals(profileIdOf(graph), state.activeProfileId)
+        }
+    }
+
+    // Child RLS proves ownership by looking the parent row up, so a tombstone
+    // written first would put every one of that profile's rows beyond reach — a
+    // property invisible in the result and only checkable in the request order.
+    // Mutation applied to verify: patched the parent before deleting the children
+    // → test failed on the ordering assertion.
+    @Test
+    fun `a removal clears the child rows before tombstoning the profile`() = runTest {
+        val calls = mutableListOf<String>()
+        fixture(
+            remote = { request, profileId ->
+                val table = request.url.encodedPath.substringAfterLast('/')
+                if (request.method != HttpMethod.Get) calls += "${request.method.value} $table"
+                roster(primary(profileId))
+            },
+        ) { graph ->
+            val kids = graph.profiles.create("Kids")
+            graph.profiles.delete(kids.id)
+
+            graph.sync.reconcileAndSync("user-1", "jwt")
+
+            val patch = calls.indexOf("PATCH profiles")
+            assertTrue(patch >= 0, "the profile was never tombstoned: $calls")
+            val children = calls.withIndex().filter { it.value.startsWith("DELETE ") }
+            assertTrue(children.isNotEmpty(), "no child rows were cleared: $calls")
+            assertTrue(
+                children.all { it.index < patch },
+                "child rows must be cleared before the parent is tombstoned: $calls",
+            )
+            // Every profile-keyed table upstream, checked as a whole rather than a
+            // sample: one left out leaves rows nothing can reach once the parent is
+            // tombstoned, and nothing else in the system would ever notice.
+            assertEquals(
+                setOf(
+                    "library_entries",
+                    "watch_progress",
+                    "dismissals",
+                    "library_removals",
+                    "profile_settings",
+                    "profile_addons",
+                    "profile_nuvio",
+                    "profile_activity",
+                ),
+                children.mapTo(mutableSetOf()) { it.value.removePrefix("DELETE ") },
+                "this must match every table with a profile_id column upstream",
+            )
+            // Cleared once it succeeded, so it is not tombstoned again every sync.
+            assertEquals(emptyList(), graph.database.database.coveQueries.selectProfileRemovals().executeAsList())
+        }
+    }
+
+    // Two things keep the deleted profile out of that push, and either alone is
+    // enough: the tombstone goes up before the roster is read, and a removal still
+    // pending is skipped on the way back in. So neither is a mutation this test can
+    // discriminate on its own — the test above pins the second directly.
+    // Mutation applied to verify: pushed removals last *and* dropped the pending
+    // guard → test failed, the deleted profile was re-inserted and pushed back up.
+    @Test
+    fun `a profile deleted here is not pushed back`() = runTest {
+        val pushes = mutableListOf<String>()
+        var tombstoned = false
+        fixture(
+            remote = { request, profileId ->
+                when {
+                    request.method == HttpMethod.Post && request.url.encodedPath.endsWith("/profiles") ->
+                        pushes += (request.body as TextContent).text
+                    // The server the account actually has: once told, it answers
+                    // with the tombstone rather than the profile.
+                    request.method == HttpMethod.Patch && request.url.encodedPath.endsWith("/profiles") ->
+                        tombstoned = true
+                }
+                if (tombstoned) {
+                    roster(primary(profileId), secondary("kids-1", "Kids", deletedAt = "2026-08-02T00:00:00Z"))
+                } else {
+                    roster(primary(profileId), secondary("kids-1", "Kids"))
+                }
+            },
+        ) { graph ->
+            graph.sync.reconcileAndSync("user-1", "jwt")
+            graph.profiles.delete("kids-1")
+
+            graph.sync.reconcileAndSync("user-1", "jwt")
+
+            assertTrue(
+                pushes.last().let { "kids-1" !in it },
+                "a deleted profile must not be re-pushed: ${pushes.last()}",
+            )
+            assertEquals(
+                listOf("Primary"),
+                assertIs<ProfilesState.Ready>(graph.profiles.profiles.value).profiles.map { it.name },
+            )
+        }
+    }
+
+    // The identity step has to run before the roster merge. Merging first would add
+    // the account's primary as a *second* local profile, and the adoption would then
+    // find the id taken and leave this device permanently duplicated.
+    // Mutation applied to verify: ran mergeRoster before reconcileIdentity → test
+    // failed with three profiles.
+    @Test
+    fun `a fresh device adopts the primary rather than gaining a third profile`() = runTest {
+        fixture(
+            remote = { _, _ ->
+                roster(
+                    primary("remote-primary", "Arcady"),
+                    secondary("remote-second", "Kids"),
+                )
+            },
+        ) { graph ->
+            graph.sync.reconcileAndSync("user-1", "jwt")
+
+            val state = assertIs<ProfilesState.Ready>(graph.profiles.profiles.value)
+            assertEquals(setOf("remote-primary", "remote-second"), state.profiles.mapTo(mutableSetOf()) { it.id })
+            assertEquals("remote-primary", state.activeProfileId)
+            // One primary per account, and it is the account's, not this device's.
+            assertEquals(listOf("Arcady"), state.profiles.filter { it.isPrimary }.map { it.name })
+        }
+    }
+
+    // The tombstone can only be pushed when there is a connection, and until it is
+    // the account still lists the profile. Re-adding it from that listing would undo
+    // the deletion on every sync until the device got online — the resurrection this
+    // whole mechanism exists to prevent, arriving from the device that did the delete.
+    // Mutation applied to verify: dropped the pending-removal guard from mergeRoster
+    // → test failed, the deleted profile came straight back.
+    @Test
+    fun `a removal that cannot be pushed yet still keeps the profile deleted`() = runTest {
+        fixture(
+            // The account has not been told, and cannot be: the tombstone write fails.
+            remote = { _, profileId -> roster(primary(profileId), secondary("kids-1", "Kids")) },
+            status = { request ->
+                if (request.method == HttpMethod.Patch) {
+                    HttpStatusCode.InternalServerError
+                } else {
+                    HttpStatusCode.OK
+                }
+            },
+        ) { graph ->
+            graph.sync.reconcileAndSync("user-1", "jwt")
+            graph.profiles.delete("kids-1")
+
+            val result = graph.sync.reconcileAndSync("user-1", "jwt")
+
+            assertEquals(
+                listOf("Primary"),
+                assertIs<ProfilesState.Ready>(graph.profiles.profiles.value).profiles.map { it.name },
+            )
+            // Still pending, so it is retried rather than forgotten.
+            assertEquals(
+                listOf("kids-1"),
+                graph.database.database.coveQueries.selectProfileRemovals().executeAsList().map { it.profile_id },
+            )
+            assertTrue(result.pushError.contains("profile removals"), "the failure was not reported: $result")
+
+            // And it holds across further syncs, not just the one.
+            graph.sync.reconcileAndSync("user-1", "jwt")
+            assertEquals(
+                listOf("Primary"),
+                assertIs<ProfilesState.Ready>(graph.profiles.profiles.value).profiles.map { it.name },
+            )
+        }
+    }
+
+    private fun profileIdOf(graph: TestGraph): String =
+        assertIs<ProfilesState.Ready>(graph.profiles.profiles.value).profiles.single { it.isPrimary }.id
+
+    private fun roster(vararg rows: String) = rows.joinToString(",", "[", "]")
+
+    private fun primary(id: String, name: String = "Primary") =
+        """{"id":"$id","user_id":"user-1","name":"$name","is_primary":true,"updated_at":"2026-01-01T00:00:00Z"}"""
+
+    private fun secondary(id: String, name: String, deletedAt: String? = null) =
+        """{"id":"$id","user_id":"user-1","name":"$name","is_primary":false,""" +
+            """"updated_at":"2026-01-01T00:00:00Z","deleted_at":${deletedAt?.let { "\"$it\"" } ?: "null"}}"""
+
     private suspend fun fixture(
         remote: (HttpRequestData, String) -> String,
+        /** Lets a test refuse one kind of request while the rest still succeed. */
+        status: (HttpRequestData) -> HttpStatusCode = { HttpStatusCode.OK },
         // False models a host that runs no addon manager, where the addon blob
         // has to survive a sync untouched rather than being replaced.
         withAddonParticipant: Boolean = true,
@@ -632,7 +892,7 @@ class SupabaseSyncServiceTest {
                     addHandler { request ->
                         respond(
                             remote(request, profileId),
-                            HttpStatusCode.OK,
+                            status(request),
                             headersOf(HttpHeaders.ContentType, "application/json"),
                         )
                     }

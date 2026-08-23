@@ -1,0 +1,8 @@
+-- Profiles deleted locally, waiting to be tombstoned on the account.
+-- Deliberately without a foreign key to profiles, unlike every other
+-- profile-scoped table here: the row this records is the one being deleted, so
+-- an FK would either block the delete or cascade the tombstone away with it.
+CREATE TABLE profile_removals (
+    profile_id TEXT NOT NULL PRIMARY KEY,
+    removed_at TEXT NOT NULL
+);

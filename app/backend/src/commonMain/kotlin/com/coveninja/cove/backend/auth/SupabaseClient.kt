@@ -5,6 +5,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -148,6 +149,22 @@ class SupabaseClient(
             setBody(jsonBody(rows))
         }
         response.requireSuccess("Supabase REST POST $table")
+    }
+
+    /**
+     * Sets named columns on rows already matching [query].
+     *
+     * An upsert cannot stand in for this: with `merge-duplicates` it inserts when
+     * the row is missing, and a partial object would then fail the table's NOT NULL
+     * columns. A tombstone is a write to a row that must already exist.
+     */
+    suspend fun patch(accessToken: String, table: String, query: String, values: JsonElement) {
+        require(query.isNotBlank()) { "a Supabase PATCH without a filter would rewrite the table" }
+        val response = httpClient.patch(restUrl(table, query)) {
+            restHeaders(accessToken)
+            setBody(jsonBody(values))
+        }
+        response.requireSuccess("Supabase REST PATCH $table")
     }
 
     suspend fun delete(accessToken: String, table: String, query: String) {

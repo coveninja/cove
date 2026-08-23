@@ -75,6 +75,15 @@ CREATE TABLE removals (
     PRIMARY KEY(profile_id, tmdb_id, media_type)
 );
 
+-- Profiles deleted locally, waiting to be tombstoned on the account.
+-- Deliberately without a foreign key to profiles, unlike every other
+-- profile-scoped table here: the row this records is the one being deleted, so
+-- an FK would either block the delete or cascade the tombstone away with it.
+CREATE TABLE profile_removals (
+    profile_id TEXT NOT NULL PRIMARY KEY,
+    removed_at TEXT NOT NULL
+);
+
 -- These stores remain opaque during their feature ports. Keeping their exact
 -- payload makes the migration reversible without forcing unrelated
 -- services to share one untyped settings table.
@@ -242,6 +251,15 @@ DELETE FROM profiles;
 
 deleteProfileById:
 DELETE FROM profiles WHERE id = ?;
+
+upsertProfileRemoval:
+INSERT OR REPLACE INTO profile_removals(profile_id, removed_at) VALUES (?, ?);
+
+selectProfileRemovals:
+SELECT * FROM profile_removals ORDER BY removed_at;
+
+deleteProfileRemoval:
+DELETE FROM profile_removals WHERE profile_id = ?;
 
 moveSettingsToProfile:
 UPDATE app_settings SET profile_id = ? WHERE profile_id = ?;

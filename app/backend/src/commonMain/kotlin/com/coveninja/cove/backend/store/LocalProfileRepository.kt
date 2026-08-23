@@ -60,7 +60,13 @@ class LocalProfileRepository(
             ?: error("unknown profile $id")
         require(existing.is_primary == 0L) { "the primary profile cannot be deleted" }
         require(session.profileId.value != id) { "activate another profile before deleting this one" }
-        database.coveQueries.deleteProfileById(id)
+        // The tombstone and the delete are one transaction: a profile removed here
+        // but not recorded would be pulled straight back from the account, and one
+        // recorded but not removed would tombstone a profile that still exists.
+        database.transaction {
+            database.coveQueries.deleteProfileById(id)
+            database.coveQueries.upsertProfileRemoval(id, now())
+        }
         refresh()
     }
 
@@ -145,6 +151,87 @@ class LocalProfileRepository(
         true
     }
 
+    /** Every local profile, for the roster push. */
+    internal fun syncRecords(): List<ProfileSyncRecord> =
+        database.coveQueries.selectProfiles().executeAsList().map {
+            ProfileSyncRecord(
+                id = it.id,
+                name = it.name,
+                isPrimary = it.is_primary != 0L,
+                supabaseUid = it.supabase_uid,
+                nameUpdatedAt = it.name_updated_at,
+            )
+        }
+
+    /**
+     * Adds a profile the account has and this device does not.
+     *
+     * The remote id is used verbatim rather than minted here: it keys every one of
+     * that profile's rows upstream, and `profiles.id` is a uuid column, so a
+     * synthetic one would both orphan the data and fail the push.
+     */
+    internal suspend fun insertFromRemote(
+        id: String,
+        name: String,
+        isPrimary: Boolean,
+        userId: String,
+        nameUpdatedAt: String,
+    ) = mutation.withLock {
+        if (database.coveQueries.selectProfileById(id).executeAsOneOrNull() != null) return@withLock
+        database.coveQueries.insertProfile(
+            id,
+            name.trim().takeIf(String::isNotEmpty) ?: "Profile",
+            if (isPrimary) 1L else 0L,
+            userId,
+            nameUpdatedAt,
+        )
+        refresh()
+    }
+
+    /** Mirrors the account's primary onto the local row. */
+    internal suspend fun applyRemoteFlags(id: String, isPrimary: Boolean) = mutation.withLock {
+        val existing = database.coveQueries.selectProfileById(id).executeAsOneOrNull() ?: return@withLock
+        if ((existing.is_primary != 0L) == isPrimary) return@withLock
+        database.coveQueries.updateProfile(
+            existing.name,
+            if (isPrimary) 1L else 0L,
+            existing.supabase_uid,
+            existing.name_updated_at,
+            id,
+        )
+        refresh()
+    }
+
+    /**
+     * Removes a profile the account says is gone.
+     *
+     * Deliberately not [delete]: that one refuses the primary and the active profile
+     * because a *person* asked, and neither refusal makes sense for something already
+     * deleted on another device. The two floors that do survive are structural — the
+     * active row is `ON DELETE RESTRICT` from `active_profile`, so something else has
+     * to be activated first, and a device with no profile at all cannot start.
+     */
+    internal suspend fun deleteFromRemote(id: String): Boolean = mutation.withLock {
+        database.coveQueries.selectProfileById(id).executeAsOneOrNull() ?: return@withLock false
+        val survivors = database.coveQueries.selectProfiles().executeAsList().filter { it.id != id }
+        if (survivors.isEmpty()) return@withLock false
+        if (session.profileId.value == id) {
+            session.activate(survivors.firstOrNull { it.is_primary != 0L }?.id ?: survivors.first().id)
+        }
+        database.coveQueries.deleteProfileById(id)
+        refresh()
+        true
+    }
+
+    internal fun pendingRemovals(): List<ProfileRemoval> =
+        database.coveQueries.selectProfileRemovals().executeAsList().map {
+            ProfileRemoval(it.profile_id, it.removed_at)
+        }
+
+    internal fun clearRemoval(id: String) {
+        database.coveQueries.deleteProfileRemoval(id)
+    }
+
     internal fun activeSyncRecord(): ProfileSyncRecord {
         val row = database.coveQueries.selectProfileById(session.profileId.value).executeAsOne()
         return ProfileSyncRecord(
@@ -174,6 +261,8 @@ class LocalProfileRepository(
         }
     }
 }
+
+internal data class ProfileRemoval(val profileId: String, val removedAt: String)
 
 internal data class ProfileSyncRecord(
     val id: String,

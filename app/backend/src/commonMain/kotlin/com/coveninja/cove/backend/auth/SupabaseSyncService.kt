@@ -71,7 +71,13 @@ class SupabaseSyncService(
     private val running = Mutex()
 
     suspend fun reconcileAndSync(userId: String, accessToken: String): SyncResult = running.withLock {
-        val profileId = reconcileProfile(userId, accessToken)
+        // Before anything reads the roster. A profile deleted here is already gone
+        // locally, so a roster read that still saw it alive upstream would insert it
+        // straight back and the deletion would have to fight its way out again.
+        val removalError = runCatching { pushProfileRemovals(accessToken) }
+            .exceptionOrNull()
+            ?.also { if (it is SupabaseException && it.statusCode == UNAUTHORIZED) throw it }
+        val profileId = reconcileRoster(userId, accessToken)
         val pulled = pull(accessToken, profileId)
 
         library.mergeFromRemote(pulled.library)
@@ -119,7 +125,8 @@ class SupabaseSyncService(
         SYNCED_PAYLOAD_KINDS.forEach { kind ->
             push(kind) { pushPayload(accessToken, profileId, kind) }
         }
-        push("profile") { ensureProfile(accessToken, userId) }
+        push("profile") { pushRoster(accessToken, userId) }
+        removalError?.let { pushErrors += "profile removals: ${it.message}" }
 
         SyncResult(++generation, pushErrors.joinToString("; "), pullWarnings.joinToString("; "))
     }
@@ -130,58 +137,172 @@ class SupabaseSyncService(
             profiles.rename(active.id, requestedName)
         }
         profiles.linkSupabase(active.id, userId)
-        ensureProfile(accessToken, userId)
+        pushRoster(accessToken, userId)
         val result = reconcileAndSync(userId, accessToken)
         if (result.pushError.isNotBlank()) {
             throw IllegalStateException("profile created but initial push was incomplete: ${result.pushError}")
         }
     }
 
-    private suspend fun reconcileProfile(userId: String, token: String): String {
-        var active = profiles.activeSyncRecord()
+    /**
+     * Brings this device's profile list into line with the account's, and returns
+     * the profile whose data the rest of the sync should carry.
+     *
+     * Two steps that must stay in this order. [reconcileIdentity] settles which
+     * *one* profile this device already is — a fresh install re-keys its default
+     * profile onto the account's primary rather than becoming a duplicate of it —
+     * and only then does [mergeRoster] add everything else the account owns. Merging
+     * first would insert the primary as a second local profile, and the adoption
+     * would then find the id taken and give up.
+     */
+    private suspend fun reconcileRoster(userId: String, token: String): String {
         val remotes = client.select(
             token,
             "profiles",
             "user_id=eq.${userId.encodeURLParameter()}",
         ).map { CoveJson.decodeFromJsonElement<RemoteProfile>(it) }
+        reconcileIdentity(userId, token, remotes)
+        mergeRoster(userId, remotes)
+        // Read *after* the merge rather than taking what reconcileIdentity settled
+        // on. A tombstone for the profile in use is applied in there, and the rest
+        // of the sync would otherwise pull, link and push against a profile this
+        // device has just deleted.
+        return profiles.activeSyncRecord().id
+    }
 
-        remotes.firstOrNull { it.id == active.id }?.let { matching ->
+    private suspend fun reconcileIdentity(
+        userId: String,
+        token: String,
+        remotes: List<RemoteProfile>,
+    ) {
+        var active = profiles.activeSyncRecord()
+        val live = remotes.filter { it.deletedAt.isBlank() }
+
+        live.firstOrNull { it.id == active.id }?.let { matching ->
             if (matching.name.isNotBlank() && matching.updatedAt > active.nameUpdatedAt) {
                 profiles.renameFromRemote(active.id, matching.name, matching.updatedAt)
             }
-            return active.id
+            return
         }
-        if (remotes.isEmpty()) {
-            ensureProfile(token, userId)
-            return active.id
+        if (live.isEmpty()) {
+            pushRoster(token, userId)
+            return
         }
 
-        val target = remotes.firstOrNull(RemoteProfile::isPrimary) ?: remotes.first()
+        val target = choosePrimary(live) ?: live.first()
         if (profiles.adoptActiveId(target.id)) {
             active = profiles.activeSyncRecord()
             if (target.name.isNotBlank() && target.name != active.name) {
                 profiles.renameFromRemote(active.id, target.name, target.updatedAt)
             }
-            return target.id
+            return
         }
 
         // Another local profile already owns the remote ID. Preserve both by
         // registering the currently active local profile as a second profile.
-        ensureProfile(token, userId)
-        return active.id
+        pushRoster(token, userId)
     }
 
-    private suspend fun ensureProfile(token: String, userId: String) {
-        val active = profiles.activeSyncRecord()
+    /**
+     * Adds the account's other profiles to this device, and drops the ones it says
+     * are gone. This is what makes a profile created on one device appear on the
+     * rest; without it a second device only ever adopts the primary.
+     */
+    private suspend fun mergeRoster(userId: String, remotes: List<RemoteProfile>) {
+        val known = profiles.syncRecords().associateBy { it.id }
+        val live = remotes.filter { it.deletedAt.isBlank() }
+
+        // Tombstones first, so a deleted profile cannot be the one [choosePrimary]
+        // settles on and cannot be renamed on its way out.
+        remotes.filter { it.deletedAt.isNotBlank() }.forEach { gone ->
+            if (known.containsKey(gone.id)) profiles.deleteFromRemote(gone.id)
+        }
+
+        // A removal this device has not managed to push yet still counts as deleted.
+        // Re-adding it here would undo the user's action every sync until the push
+        // finally lands.
+        val unpushed = profiles.pendingRemovals().mapTo(mutableSetOf()) { it.profileId }
+        live.forEach { remote ->
+            if (remote.id in unpushed) return@forEach
+            val existing = known[remote.id]
+            when {
+                existing == null -> profiles.insertFromRemote(
+                    remote.id,
+                    remote.name,
+                    remote.isPrimary,
+                    userId,
+                    remote.updatedAt,
+                )
+                remote.name.isNotBlank() && remote.updatedAt > existing.nameUpdatedAt ->
+                    profiles.renameFromRemote(remote.id, remote.name, remote.updatedAt)
+            }
+        }
+
+        // Exactly one primary per account. Nothing upstream enforces it, and two
+        // devices that each believed they were primary would take turns demoting
+        // each other — which the addon-sharing policy reads, so it is not cosmetic.
+        val primary = choosePrimary(live) ?: return
+        profiles.syncRecords().forEach { profiles.applyRemoteFlags(it.id, it.id == primary.id) }
+    }
+
+    /** Deterministic across devices: id order breaks a tie the same way everywhere. */
+    private fun choosePrimary(live: List<RemoteProfile>): RemoteProfile? =
+        live.sortedBy { it.id }.firstOrNull { it.isPrimary }
+
+    /**
+     * Pushes every local profile, not just the active one — a profile created here
+     * and never switched to still belongs to the account.
+     *
+     * The rows are built uniformly because PostgREST refuses a bulk upsert whose
+     * objects do not all carry identical keys ("All object keys must match"), which
+     * would fail the whole roster rather than one row of it.
+     */
+    private suspend fun pushRoster(token: String, userId: String) {
+        // Profiles left behind by a previous account are not this account's to
+        // claim. A null uid is a profile made on this device and not yet linked,
+        // which is precisely the one that should join.
+        val records = profiles.syncRecords()
+            .filter { it.supabaseUid.isNullOrBlank() || it.supabaseUid == userId }
+        if (records.isEmpty()) return
         client.upsert(token, "profiles", buildJsonArray {
-            add(buildJsonObject {
-                put("id", active.id)
-                put("user_id", userId)
-                put("name", active.name)
-                put("is_primary", active.isPrimary)
-                put("updated_at", active.nameUpdatedAt.ifBlank(now))
-            })
+            records.forEach { record ->
+                // No deleted_at key: PostgREST's merge-duplicates updates only the
+                // columns present, so a device that still has a profile another one
+                // deleted refreshes its name without clearing the tombstone.
+                add(buildJsonObject {
+                    put("id", record.id)
+                    put("user_id", userId)
+                    put("name", record.name)
+                    put("is_primary", record.isPrimary)
+                    put("updated_at", record.nameUpdatedAt.ifBlank(now))
+                })
+            }
         })
+    }
+
+    /**
+     * Tombstones profiles deleted on this device and clears out their data.
+     *
+     * The profiles row is kept and marked rather than deleted: a device that was
+     * offline when the deletion happened still has the profile locally, and with no
+     * tombstone to read it would push it back and resurrect it on every device.
+     */
+    private suspend fun pushProfileRemovals(token: String) {
+        profiles.pendingRemovals().forEach { removal ->
+            val id = removal.profileId.encodeURLParameter()
+            // Children before the parent, always. Child RLS proves ownership by
+            // looking the parent row up, so a tombstone written first would put
+            // every one of that profile's rows beyond this account's reach.
+            PROFILE_CHILD_TABLES.forEach { table ->
+                client.delete(token, table, "profile_id=eq.$id")
+            }
+            client.patch(token, "profiles", "id=eq.$id", buildJsonObject {
+                put("deleted_at", removal.removedAt.ifBlank(now))
+            })
+            // Only now. An interrupted removal has to run again next time rather
+            // than leaving the account with a profile no device will ever tidy up.
+            profiles.clearRemoval(removal.profileId)
+        }
     }
 
     private suspend fun pull(token: String, profileId: String): PulledData {
@@ -365,6 +486,8 @@ class SupabaseSyncService(
         val name: String = "",
         @SerialName("is_primary") val isPrimary: Boolean = false,
         @SerialName("updated_at") val updatedAt: String = "",
+        // Defaulted so a client still works against a project without the column.
+        @SerialName("deleted_at") val deletedAt: String = "",
     )
 
     @Serializable
@@ -392,6 +515,20 @@ class SupabaseSyncService(
          * from that host would drop them for every other device.
          */
         val SYNCED_PAYLOAD_KINDS = listOf("addons", "nuvio", "activity")
+
+        /**
+         * Every table keyed by `profile_id`, cleared when a profile is deleted.
+         * Kept beside [SYNCED_PAYLOAD_KINDS] rather than derived from it: three of
+         * these are not payload blobs, and a table missing from this list leaves
+         * rows upstream that nothing can reach once the profile is tombstoned.
+         */
+        private val PROFILE_CHILD_TABLES = listOf(
+            "library_entries",
+            "watch_progress",
+            "dismissals",
+            "library_removals",
+            "profile_settings",
+        ) + SYNCED_PAYLOAD_KINDS.map(::tableFor)
 
         private const val UNAUTHORIZED = 401
 

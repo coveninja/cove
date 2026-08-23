@@ -27,6 +27,7 @@ class DesktopDatabaseMigrationTest {
             driver.execute(null, "DROP TABLE activity_positions", 0)
             driver.execute(null, "DROP TABLE activity_state", 0)
             driver.execute(null, "DROP TABLE trakt_sessions", 0)
+            driver.execute(null, "DROP TABLE profile_removals", 0)
             driver.execute(null, "PRAGMA user_version = 3", 0)
             driver.execute(
                 null,

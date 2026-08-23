@@ -9,6 +9,7 @@ import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.backend.store.LocalSettingsRepository
 import com.coveninja.cove.shared.data.AccountState
 import com.coveninja.cove.shared.data.AuthOutcome
+import com.coveninja.cove.shared.data.ProfilesState
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -31,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -240,16 +242,79 @@ class LocalAccountRepositoryTest {
         }
     }
 
+    // A profile that arrived from another device has no data here yet, and the
+    // policy's 30s debounce and 2-minute floor would leave it looking empty for
+    // minutes. Switching is the one roster event worth bypassing the pacing for.
+    // Mutation applied to verify: routed the switch through markLocalChange() like
+    // the other watchers → this failed on the timeout, no sync ever followed.
+    @Test
+    fun `switching profile syncs at once`() = runTest {
+        fixture { graph ->
+            graph.account.signIn("a@b.c", "hunter2")
+            val syncedBefore = graph.account.syncStatus.value.lastSyncedAt
+            val before = graph.server.requests.count { it.url.encodedPath.endsWith("/profiles") }
+
+            val second = graph.profiles.create("Kids")
+            graph.profiles.activate(second.id)
+
+            // Real time, not the test scheduler's: the sync runs on a dispatcher of
+            // its own and virtual time would expire the moment this coroutine idled.
+            withContext(Dispatchers.Default) {
+                withTimeout(10.seconds) {
+                    graph.account.syncStatus.first { !it.running && it.lastSyncedAt != syncedBefore }
+                }
+            }
+            assertTrue(
+                graph.server.requests.count { it.url.encodedPath.endsWith("/profiles") } > before,
+                "switching profile did not sync",
+            )
+        }
+    }
+
+    // A sync can change the active profile itself: a device signing in for the
+    // first time is re-keyed onto the account's primary. The watcher must not treat
+    // that as the viewer switching profile and sync all over again.
+    // Mutation applied to verify: dropped the lastSyncedActiveId check from
+    // syncForProfileSwitch() → this failed with two roster reads for one sign-in.
+    @Test
+    fun `adopting the account's primary does not cost a second sync`() = runTest {
+        fixture(remotePrimaryId = "account-primary") { graph ->
+            graph.account.signIn("a@b.c", "hunter2")
+
+            // The adoption really happened — otherwise this proves nothing.
+            assertEquals(
+                "account-primary",
+                assertIs<ProfilesState.Ready>(graph.profiles.profiles.value).activeProfileId,
+            )
+            // Give a stray second sync time to show up before counting.
+            withContext(Dispatchers.Default) {
+                withTimeout(10.seconds) {
+                    graph.account.syncStatus.first { !it.running && it.lastSyncedAt != null }
+                }
+                delay(200)
+            }
+            assertEquals(
+                1,
+                graph.server.requests.count {
+                    it.method == HttpMethod.Get && it.url.encodedPath.endsWith("/profiles")
+                },
+                "signing in read the roster more than once",
+            )
+        }
+    }
+
     private suspend fun fixture(
         signInStatus: HttpStatusCode = HttpStatusCode.OK,
         failProfileUpsert: Boolean = false,
+        /** Differs from [PROFILE_ID] to model a device joining an existing account. */
+        remotePrimaryId: String = PROFILE_ID,
         test: suspend (TestGraph) -> Unit,
     ) {
         val dataDir = Files.createTempDirectory("cove-account")
         DesktopDatabase.inMemory().use { database ->
             LegacyMigration(database.database, dataDir) { PROFILE_ID }.importIfNeeded()
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-            val server = Server(signInStatus, failProfileUpsert)
+            val server = Server(signInStatus, failProfileUpsert, remotePrimaryId = remotePrimaryId)
             val http = HttpClient(MockEngine) {
                 engine { addHandler { request -> respond(request, server) } }
             }
@@ -278,9 +343,10 @@ class LocalAccountRepositoryTest {
                 )
                 test(
                     TestGraph(
-                        LocalAccountRepository(auth, settings, library, scope),
+                        LocalAccountRepository(auth, settings, library, profiles, scope),
                         server,
                         database.database,
+                        profiles,
                     ),
                 )
             } finally {
@@ -339,7 +405,7 @@ class LocalAccountRepositoryTest {
                     request.method == HttpMethod.Get ->
                         // Matching the local id keeps profile reconciliation on its
                         // early-return path, so the only failure is the push below.
-                        json("""[{"id":"$PROFILE_ID","user_id":"user-1","name":"Cove","is_primary":true,"updated_at":"2026-01-01T00:00:00Z"}]""")
+                        json("""[{"id":"${server.remotePrimaryId}","user_id":"user-1","name":"Cove","is_primary":true,"updated_at":"2026-01-01T00:00:00Z"}]""")
 
                     server.failProfileUpsert ->
                         json("""{"message":"denied"}""", HttpStatusCode.InternalServerError)
@@ -361,6 +427,7 @@ class LocalAccountRepositoryTest {
         val account: LocalAccountRepository,
         val server: Server,
         val database: CoveDatabase,
+        val profiles: LocalProfileRepository,
     )
 
     /**
@@ -375,6 +442,7 @@ class LocalAccountRepositoryTest {
     private class Server(
         val signInStatus: HttpStatusCode,
         val failProfileUpsert: Boolean,
+        val remotePrimaryId: String = PROFILE_ID,
         val accepted: MutableSet<String> = mutableSetOf("jwt-1"),
         var refuseRefresh: Boolean = false,
         var expireOnWrite: Boolean = false,

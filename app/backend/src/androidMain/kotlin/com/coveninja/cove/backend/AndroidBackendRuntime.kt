@@ -432,6 +432,7 @@ class AndroidBackendRuntime private constructor(
                             auth = auth,
                             settings = stores.repositories.settings,
                             library = stores.repositories.library,
+                            profiles = stores.repositories.profiles,
                             scope = scope,
                         )
                     } ?: UnavailableAccountRepository

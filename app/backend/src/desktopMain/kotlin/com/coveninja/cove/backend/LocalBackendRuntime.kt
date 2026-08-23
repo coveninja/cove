@@ -401,6 +401,7 @@ class LocalBackendRuntime private constructor(
                         auth = it,
                         settings = stores.settings,
                         library = stores.library,
+                        profiles = stores.profiles,
                         scope = scope,
                     )
                 } ?: UnavailableAccountRepository
