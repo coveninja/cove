@@ -268,7 +268,9 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v6
       - name: Install native packaging dependencies
-        run: brew install mpv dylibbundler
+        run: brew install mpv dylibbundler meson ninja
+      - name: Build libmpv with the CoreAudio hotplug lifetime fix
+        run: scripts/build-patched-mpv-macos.sh "$RUNNER_TEMP/cove-mpv"
       - name: Build Compose application
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}
@@ -285,7 +287,7 @@ jobs:
           APP=app/desktop/build/compose/binaries/main/app/Cove.app
           FRAMEWORKS="$APP/Contents/Frameworks"
           mkdir -p "$FRAMEWORKS"
-          cp "$(brew --prefix mpv)/lib/libmpv.2.dylib" "$FRAMEWORKS/libmpv.2.dylib"
+          cp "$RUNNER_TEMP/cove-mpv/lib/libmpv.2.dylib" "$FRAMEWORKS/libmpv.2.dylib"
           dylibbundler -of -cd -b -x "$FRAMEWORKS/libmpv.2.dylib" \
             -d "$FRAMEWORKS" -p '@loader_path/'
           # Homebrew's libmpv already carries this rpath. dylibbundler adds it
