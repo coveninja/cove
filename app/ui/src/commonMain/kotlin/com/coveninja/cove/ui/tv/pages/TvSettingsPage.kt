@@ -158,7 +158,7 @@ internal fun TvSettingsPage(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     when (section) {
-                        TvSettingsSection.Profiles -> ProfileRows()
+                        TvSettingsSection.Profiles -> ProfileRows(settings, editor)
                         TvSettingsSection.Playback -> PlaybackRows(settings, editor)
                         TvSettingsSection.Skipping -> SkippingRows(settings, editor)
                         TvSettingsSection.Subtitles -> SubtitleRows(settings, editor)
@@ -431,11 +431,18 @@ private fun ProviderRows(addons: List<Addon>) {
     }
 
     addons.forEach { addon ->
+        val description = addon.manifest.description.takeIf { it.isNotBlank() } ?: addon.url
         TvSettingRow(
             label = addon.displayName,
-            detail = addon.manifest.description.takeIf { it.isNotBlank() } ?: addon.url,
+            // Says why the row will not answer before it is reached. A remote has
+            // no hover and no error toast worth reading from a sofa, so a row that
+            // simply did nothing would read as the television having missed a press.
+            detail = if (addon.managed) "Shared by the primary profile · $description" else description,
             value = onOff(addon.enabled),
             highlighted = addon.enabled,
+            // Skipped by the D-pad rather than merely inert: this profile streams
+            // through the addon but the switch belongs to the primary.
+            enabled = !addon.managed,
             onActivate = {
                 scope.launch { graph.addons.setAddonEnabled(addon.id, !addon.enabled) }
             },
@@ -464,10 +471,11 @@ private fun ProviderRows(addons: List<Addon>) {
  * does from the sofa. Switching needs nothing but the D-pad.
  */
 @Composable
-private fun ProfileRows() {
+private fun ProfileRows(settings: AppSettings, editor: SettingsEditor) {
     val graph = LocalAppGraph.current
     val scope = rememberCoroutineScope()
     val profilesState by graph.profiles.profiles.collectAsState()
+    val addonsState by graph.addons.state.collectAsState()
 
     when (val state = profilesState) {
         ProfilesState.Loading -> Text(
@@ -482,18 +490,47 @@ private fun ProfileRows() {
             color = CoveColors.Neutral.MutedDim,
         )
 
-        is ProfilesState.Ready -> state.profiles.forEach { profile ->
-            val active = profile.id == state.activeProfileId
-            TvSettingRow(
-                label = profile.name,
-                detail = if (profile.isPrimary) "Primary profile" else null,
-                value = if (active) "Watching" else "Switch",
-                highlighted = active,
-                // Switching to the profile already active would tear the whole graph down and
-                // rebuild it to arrive exactly where it started.
-                enabled = !active,
-                onActivate = { scope.launch { graph.profiles.activate(profile.id) } },
-            )
+        is ProfilesState.Ready -> {
+            state.profiles.forEach { profile ->
+                val active = profile.id == state.activeProfileId
+                TvSettingRow(
+                    label = profile.name,
+                    detail = if (profile.isPrimary) "Primary profile" else null,
+                    value = if (active) "Watching" else "Switch",
+                    highlighted = active,
+                    // Switching to the profile already active would tear the whole graph down and
+                    // rebuild it to arrive exactly where it started.
+                    enabled = !active,
+                    onActivate = { scope.launch { graph.profiles.activate(profile.id) } },
+                )
+            }
+
+            // The flag is a field on the primary's own settings row, so only the primary
+            // is offered it — a secondary flipping its copy would change nothing. What a
+            // secondary gets instead is the already-resolved answer, read back off the
+            // addon state, because it cannot read the primary's settings at all.
+            val activeIsPrimary = state.profiles
+                .firstOrNull { it.id == state.activeProfileId }?.isPrimary == true
+            val sharing = (addonsState as? AddonsState.Ready)?.sharing
+            when {
+                activeIsPrimary -> TvSettingRow(
+                    label = "Primary profile drives addons",
+                    detail = "Every other profile gets this profile's addons and cannot change them.",
+                    value = onOff(settings.addonsFollowPrimary),
+                    highlighted = settings.addonsFollowPrimary,
+                    onActivate = {
+                        editor.edit { copy(addonsFollowPrimary = !addonsFollowPrimary) }
+                    },
+                )
+
+                sharing?.enabled == true -> TvSettingRow(
+                    label = "Addons shared by ${sharing.primaryName.ifBlank { "the primary profile" }}",
+                    detail = "You can still add your own on a desktop.",
+                    value = "On",
+                    enabled = false,
+                    onActivate = {},
+                )
+            }
         }
     }
 }

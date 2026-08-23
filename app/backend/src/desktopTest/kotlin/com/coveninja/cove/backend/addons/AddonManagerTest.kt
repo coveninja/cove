@@ -4,7 +4,9 @@ import com.coveninja.cove.backend.db.DesktopDatabase
 import com.coveninja.cove.backend.migration.LegacyMigration
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalProfileRepository
+import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -14,6 +16,8 @@ import io.ktor.http.headersOf
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -158,5 +162,299 @@ class AddonManagerTest {
             assertEquals("provider.one", manager.entries().single { it.source == "stremio" }.id)
         }
         http.close()
+    }
+
+    // --- "Primary profile drives addons" ------------------------------------
+    //
+    // The policy is a field on the *primary's* settings row, so these tests write
+    // it there directly rather than through the active profile's repository —
+    // which is the same asymmetry the feature has in the app.
+
+    // Mutation applied to verify: dropped the `.map { it.copy(managed = true) }`
+    // from inheritedEntries → test failed on the managed assertion.
+    //
+    // The officials assertion below does *not* discriminate the `source ==
+    // "stremio"` filter, and is not claimed to: every official carries the same
+    // synthetic `official:<id>` URL in both profiles, so the own-URL dedupe drops
+    // them with or without it. The filter earns its place in
+    // findIncludingInherited, which has no own-list to dedupe against.
+    @Test
+    fun `a secondary profile inherits the primary's stremio addons`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                """{"id":"provider.one","name":"Provider One","resources":["stream"]}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        val dir = Files.createTempDirectory("cove-addons-shared")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            var id = 0
+            val profiles = LocalProfileRepository(store.database, session, { "id-${++id}" }, { "now" })
+            val manager = AddonManager(store.database, session, http, { "now" })
+            manager.add("https://addon.test")
+            setAddonPolicy(store, "primary", follow = true)
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+
+            val inherited = manager.entries().single { it.source == "stremio" }
+            assertEquals("provider.one", inherited.id)
+            assertTrue(inherited.managed, "the primary's addon must arrive read-only")
+            // Officials are seeded into every profile and keep their own switches,
+            // so none of them may arrive as a copy of the primary's row.
+            assertTrue(manager.entries().none { it.source == "official" && it.managed })
+            // Officials first, then the shared list, then anything of its own.
+            assertEquals(
+                listOf("cove.justwatch", "cove.introdb", "provider.one"),
+                manager.entries().map { it.id },
+            )
+
+            val sharing = manager.sharing()
+            assertTrue(sharing.enabled)
+            assertFalse(sharing.editable, "only the primary may change the policy")
+            assertEquals("Primary", sharing.primaryName)
+
+            profiles.activate("primary")
+            assertTrue(manager.sharing().editable)
+            // The primary's own row is never marked: it owns it.
+            assertFalse(manager.entries().single { it.source == "stremio" }.managed)
+        }
+        http.close()
+    }
+
+    // Mutation applied to verify: made inheritedFrom() ignore policySetOn and
+    // return the primary unconditionally → test failed, the child saw
+    // provider.one with no policy ever having been switched on.
+    @Test
+    fun `a secondary profile inherits nothing while the policy is off`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                """{"id":"provider.one","name":"Provider One","resources":["stream"]}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        val dir = Files.createTempDirectory("cove-addons-unshared")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            var id = 0
+            val profiles = LocalProfileRepository(store.database, session, { "id-${++id}" }, { "now" })
+            val manager = AddonManager(store.database, session, http, { "now" })
+            manager.add("https://addon.test")
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+
+            // Default off: sharing a household's providers is opt-in.
+            assertEquals(emptyList(), manager.entries().filter { it.source == "stremio" })
+            assertFalse(manager.sharing().enabled)
+
+            // And switching it off again takes them away.
+            setAddonPolicy(store, "primary", follow = true)
+            assertEquals(1, manager.entries().count { it.managed })
+            setAddonPolicy(store, "primary", follow = false)
+            assertEquals(emptyList(), manager.entries().filter { it.managed })
+        }
+        http.close()
+    }
+
+    // Mutation applied to verify: pointed the four mutations at
+    // findIncludingInherited instead of find → test failed, setEnabled(false)
+    // silently wrote a second copy of the primary's addon into the child.
+    @Test
+    fun `a secondary cannot change an inherited addon but keeps its own`() = runBlocking {
+        val http = HttpClient(MockEngine { request ->
+            val host = request.url.host.substringBefore('.')
+            respond(
+                """{"id":"$host","name":"${host.uppercase()}","resources":["stream"]}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        val dir = Files.createTempDirectory("cove-addons-locked")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            var id = 0
+            val profiles = LocalProfileRepository(store.database, session, { "id-${++id}" }, { "now" })
+            val manager = AddonManager(store.database, session, http, { "now" })
+            manager.add("https://shared.test/manifest.json")
+            setAddonPolicy(store, "primary", follow = true)
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+            manager.add("https://mine.test/manifest.json")
+
+            // Every mutation says the policy is holding rather than "addon not
+            // found", which for an addon sitting in the list would read as a bug.
+            listOf<suspend () -> Unit>(
+                { manager.setEnabled("shared", null, false) },
+                { manager.remove("shared", null) },
+                { manager.refresh("shared", null) },
+                { manager.setCatalogEnabled("shared", null, "movie/top", true) },
+            ).forEach { mutation ->
+                val failure = assertFailsWith<IllegalStateException> { mutation() }
+                assertEquals("this addon is managed by the primary profile", failure.message)
+            }
+            // A URL that exists nowhere still reports the ordinary failure.
+            assertEquals(
+                "addon not found",
+                assertFailsWith<IllegalStateException> { manager.remove("nobody", null) }.message,
+            )
+
+            // Untouched by all of that, and the child's own addon is still fully its own.
+            assertTrue(manager.entries().single { it.id == "shared" }.enabled)
+            manager.setEnabled("mine", null, false)
+            assertFalse(manager.entries().single { it.id == "mine" }.enabled)
+            manager.remove("mine", null)
+            assertEquals(listOf("shared"), manager.entries().filter { it.source == "stremio" }.map { it.id })
+        }
+        http.close()
+    }
+
+    // The regression this feature could most easily cause: a secondary pushing
+    // the primary's addons to Supabase under its own profile carries a newer
+    // timestamp than every other device, so the next pull duplicates them across
+    // the account — and a later removal on the primary never propagates.
+    // Mutation applied to verify: routed snapshotForSync through entries()
+    // → test failed with two entries in the child's snapshot.
+    @Test
+    fun `an inherited addon is never pushed under the secondary's own profile`() = runBlocking {
+        val http = HttpClient(MockEngine { request ->
+            val host = request.url.host.substringBefore('.')
+            respond(
+                """{"id":"$host","name":"${host.uppercase()}","resources":["stream"]}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        val dir = Files.createTempDirectory("cove-addons-sync")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            var id = 0
+            val profiles = LocalProfileRepository(store.database, session, { "id-${++id}" }, { "now" })
+            val manager = AddonManager(store.database, session, http, { "now" })
+            manager.add("https://shared.test/manifest.json")
+            setAddonPolicy(store, "primary", follow = true)
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+            manager.add("https://mine.test/manifest.json")
+
+            val snapshot = manager.snapshotForSync()
+            assertEquals(
+                listOf("mine"),
+                snapshot.entries.filter { it.source == "stremio" }.map { it.id },
+            )
+            assertTrue(snapshot.entries.none { it.managed })
+        }
+        http.close()
+    }
+
+    // Every mutation on AddonManager clears the whole stream cache, so nothing the
+    // primary does to its own addons can leave a secondary stale. Switching the
+    // policy is the exception: it is a settings write that never reaches this
+    // class, and only the cache key notices it.
+    // Mutation applied to verify: dropped $inheritedVersion from the streams cache
+    // key → test failed, the child kept serving the empty fan-out it had cached
+    // before the policy was switched on.
+    @Test
+    fun `a secondary resolves streams through the inherited provider`() = runBlocking {
+        val requested = mutableListOf<String>()
+        val http = HttpClient(MockEngine { request ->
+            requested += request.url.toString()
+            val body = when {
+                request.url.encodedPath.endsWith("/manifest.json") ->
+                    """{"id":"provider.one","name":"Provider One","resources":["stream"],"types":["movie"]}"""
+                "/stream/movie/" in request.url.encodedPath ->
+                    """{"streams":[{"name":"1080p","infoHash":"abc"}]}"""
+                else -> error("unexpected URL ${request.url}")
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        })
+        val dir = Files.createTempDirectory("cove-addons-streams")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            var id = 0
+            val profiles = LocalProfileRepository(store.database, session, { "id-${++id}" }, { "now" })
+            val manager = AddonManager(store.database, session, http, { "now" })
+            manager.add("https://addon.test/manifest.json")
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+            // Caches an empty answer while the policy is off, which is what the
+            // switch below has to be able to displace.
+            assertEquals(emptyList(), manager.streams(MediaType.Movie, "tt1"))
+
+            setAddonPolicy(store, "primary", follow = true)
+
+            assertEquals("Provider One", manager.streams(MediaType.Movie, "tt1").single().addonName)
+            assertTrue(requested.any { "/stream/movie/" in it })
+
+            // And back: the shared provider has to stop answering at once too.
+            setAddonPolicy(store, "primary", follow = false)
+            assertEquals(emptyList(), manager.streams(MediaType.Movie, "tt1"))
+
+            // A change the primary makes to a shared addon reaches the child as
+            // well — by a different route, since that one does clear the cache.
+            setAddonPolicy(store, "primary", follow = true)
+            assertEquals(1, manager.streams(MediaType.Movie, "tt1").size)
+            profiles.activate("primary")
+            manager.setEnabled("provider.one", null, false)
+            profiles.activate(child.id)
+            assertEquals(emptyList(), manager.streams(MediaType.Movie, "tt1"))
+        }
+        http.close()
+    }
+
+    // Mutation applied to verify: dropped the `it.url !in ownUrls` filter from
+    // inheritedEntries → test failed with the addon listed twice, the second
+    // copy locked.
+    @Test
+    fun `an addon both profiles installed stays the secondary's own`() = runBlocking {
+        val http = HttpClient(MockEngine {
+            respond(
+                """{"id":"provider.one","name":"Provider One","resources":["stream"]}""",
+                HttpStatusCode.OK,
+                headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        })
+        val dir = Files.createTempDirectory("cove-addons-both")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            var id = 0
+            val profiles = LocalProfileRepository(store.database, session, { "id-${++id}" }, { "now" })
+            val manager = AddonManager(store.database, session, http, { "now" })
+            manager.add("https://addon.test/manifest.json")
+            setAddonPolicy(store, "primary", follow = true)
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+            manager.add("https://addon.test/manifest.json")
+
+            // One row, and it is the child's: turning the policy off later must
+            // not take away an addon this profile installed for itself.
+            val own = manager.entries().single { it.source == "stremio" }
+            assertFalse(own.managed)
+            manager.setEnabled("provider.one", null, false)
+            assertFalse(manager.entries().single { it.source == "stremio" }.enabled)
+        }
+        http.close()
+    }
+
+    /** Writes the sharing policy onto [profileId]'s own settings row. */
+    private fun setAddonPolicy(store: DesktopDatabase, profileId: String, follow: Boolean) {
+        store.database.coveQueries.upsertSettings(
+            profileId,
+            CoveJson.encodeToString(AppSettings(addonsFollowPrimary = follow)),
+            "now",
+        )
     }
 }

@@ -109,7 +109,7 @@ internal class LocalAddonRepository(
             } catch (_: Exception) {
                 emptyList()
             }
-            AddonsState.Ready(entries, repos)
+            AddonsState.Ready(entries, repos, addons.sharing())
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
@@ -148,4 +148,5 @@ private fun AddonEntry.toSharedModel() = Addon(
     },
     source = source,
     enabled = enabled,
+    managed = managed,
 )

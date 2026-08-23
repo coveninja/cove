@@ -44,6 +44,10 @@ data class AddonEntry(
     val source: String = "stremio",
     val enabled: Boolean = true,
     val disabledCatalogs: Map<String, Boolean> = emptyMap(),
+    // Inherited from the primary profile rather than stored against this one.
+    // Never written by persist() and never read back by toModel(), so every
+    // stored row is false and only AddonManager.entries() ever sets it.
+    val managed: Boolean = false,
 )
 
 @Serializable

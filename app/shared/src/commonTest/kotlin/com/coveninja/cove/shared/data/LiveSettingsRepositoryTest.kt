@@ -73,6 +73,7 @@ private val settingsJson = """
   "remoteAccessEnabled": true,
   "remoteAccessToken": "deadbeefcafe",
   "allowLanStreamSources": true,
+  "addonsFollowPrimary": true,
   "traktScrobbleEnabled": false,
   "traktSyncEnabled": true,
   "autoSyncEnabled": false,
@@ -161,6 +162,9 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,  sent.remoteAccessEnabled,   "remoteAccessEnabled")
         assertEquals("deadbeefcafe", sent.remoteAccessToken, "remoteAccessToken")
         assertEquals(true,  sent.allowLanStreamSources, "allowLanStreamSources")
+        // Non-default on purpose, and destructive to lose: zeroing it takes the
+        // household's shared provider addons away from every secondary profile.
+        assertEquals(true,  sent.addonsFollowPrimary,   "addonsFollowPrimary")
         assertEquals(false, sent.traktScrobbleEnabled,  "traktScrobbleEnabled")
         assertEquals(true,  sent.traktSyncEnabled,      "traktSyncEnabled")
         // Non-default on purpose: autoSyncEnabled defaults to true, so a value of

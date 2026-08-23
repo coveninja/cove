@@ -70,6 +70,13 @@ data class AppSettings(
     val remoteAccessEnabled: Boolean = false,
     val remoteAccessToken: String = "",
     val allowLanStreamSources: Boolean = false,
+    /**
+     * Whether other profiles follow this one's provider addons. Only meaningful
+     * on the primary profile's row — that is the profile whose value every
+     * other one reads, and the only profile the toggle is offered to. A
+     * secondary's own copy of this field is inert.
+     */
+    val addonsFollowPrimary: Boolean = false,
     val traktScrobbleEnabled: Boolean = true,
     val traktSyncEnabled: Boolean = false,
     // Off means Cove only syncs when asked. On, it also syncs at launch, on a

@@ -48,11 +48,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.shared.data.AddonsState
 import com.coveninja.cove.shared.data.ProfilesState
+import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.Profile
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.rememberSettingsEditor
 import kotlinx.coroutines.launch
 
 /**
@@ -73,6 +76,10 @@ fun ProfilesSettings(modifier: Modifier = Modifier) {
     var renaming by remember { mutableStateOf<String?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+
+    val ready = state as? ProfilesState.Ready
+    val activeIsPrimary = ready?.profiles
+        ?.firstOrNull { it.id == ready.activeProfileId }?.isPrimary == true
 
     fun run(block: suspend () -> Unit) {
         scope.launch {
@@ -186,8 +193,47 @@ fun ProfilesSettings(modifier: Modifier = Modifier) {
                     )
                 }
             }
+
+            AddonSharingSetting(activeIsPrimary)
         }
     }
+}
+
+/**
+ * The household's shared-addon policy.
+ *
+ * The flag lives on the primary profile's own settings row, so only the primary
+ * is offered the switch — a secondary writing its own copy would change nothing.
+ * A secondary cannot read the primary's settings either, which is why this reads
+ * the already-resolved answer back out of the addon state instead.
+ */
+@Composable
+private fun AddonSharingSetting(activeIsPrimary: Boolean) {
+    val graph = LocalAppGraph.current
+    val settingsState by graph.settings.settings.collectAsState()
+    val addonsState by graph.addons.state.collectAsState()
+
+    if (activeIsPrimary) {
+        val ready = settingsState as? SettingsState.Ready ?: return
+        val editor = rememberSettingsEditor(ready.settings)
+        SettingDivider()
+        SettingToggle(
+            title = "Primary profile drives addons",
+            description = "Every other profile gets this profile's provider addons " +
+                "and cannot change them. They can still add their own.",
+            checked = ready.settings.addonsFollowPrimary,
+            onCheckedChange = { editor.edit { copy(addonsFollowPrimary = it) } },
+        )
+        return
+    }
+
+    val sharing = (addonsState as? AddonsState.Ready)?.sharing ?: return
+    if (!sharing.enabled) return
+    SettingDivider()
+    SettingsNotice(
+        "Provider addons are shared from ${sharing.primaryName.ifBlank { "the primary profile" }}. " +
+            "You can add your own alongside them.",
+    )
 }
 
 @Composable

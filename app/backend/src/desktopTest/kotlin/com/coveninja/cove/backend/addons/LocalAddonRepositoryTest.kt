@@ -5,6 +5,8 @@ import com.coveninja.cove.backend.migration.LegacyMigration
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.shared.data.AddonsState
+import com.coveninja.cove.shared.model.AppSettings
+import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -101,6 +103,63 @@ class LocalAddonRepositoryTest {
             advanceUntilIdle()
             assertEquals("provider.one", assertIs<AddonsState.Ready>(repository.state.value)
                 .addons.single { it.source == "stremio" }.id)
+            scope.cancel()
+        }
+        http.close()
+    }
+
+    // The two fields AddonManagerTest cannot see, because both are added on the
+    // way out of the backend rather than in it.
+    // Mutation applied to verify: dropped `managed = managed` from toSharedModel
+    // → test failed, the inherited addon reached the UI as an ordinary editable
+    // row; dropped `addons.sharing()` from AddonsState.Ready → test failed with
+    // the default AddonSharing() and no primary to name.
+    @Test
+    fun `an inherited addon reaches the UI marked and explained`() = runTest {
+        val http = providerHttpClient()
+        val directory = Files.createTempDirectory("cove-local-addon-shared")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, directory) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+            var sequence = 0
+            val profiles = LocalProfileRepository(
+                store.database,
+                session,
+                { "profile-${++sequence}" },
+                { "now" },
+            )
+            val repository = LocalAddonRepository(
+                addons = AddonManager(store.database, session, http, { "now" }),
+                activeProfileIds = session.profileId,
+                scope = scope,
+            )
+            advanceUntilIdle()
+            repository.addAddon("https://addon.test")
+            store.database.coveQueries.upsertSettings(
+                "primary",
+                CoveJson.encodeToString(AppSettings(addonsFollowPrimary = true)),
+                "now",
+            )
+
+            val child = profiles.create("Child")
+            profiles.activate(child.id)
+            advanceUntilIdle()
+
+            val state = assertIs<AddonsState.Ready>(repository.state.value)
+            val inherited = state.addons.single { it.source == "stremio" }
+            assertEquals("provider.one", inherited.id)
+            assertTrue(inherited.managed, "the UI has no other way to know it is read-only")
+            assertTrue(state.sharing.enabled)
+            assertFalse(state.sharing.editable)
+            // Named, because the locked card is titled after it.
+            assertEquals("Primary", state.sharing.primaryName)
+
+            profiles.activate("primary")
+            advanceUntilIdle()
+            val own = assertIs<AddonsState.Ready>(repository.state.value)
+            assertFalse(own.addons.single { it.source == "stremio" }.managed)
+            assertTrue(own.sharing.editable, "only the primary is offered the switch")
             scope.cancel()
         }
         http.close()

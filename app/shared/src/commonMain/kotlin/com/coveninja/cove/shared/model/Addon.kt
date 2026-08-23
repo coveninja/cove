@@ -35,6 +35,13 @@ data class Addon(
     val kind: AddonKind = AddonKind.Provider,
     val source: String = "stremio",
     val enabled: Boolean = true,
+    /**
+     * Inherited from the primary profile rather than owned by this one, and so
+     * read-only here. Carried over the wire deliberately: the compatibility HTTP
+     * client is the only thing between [AddonRepository] and the backend, so a
+     * transient marker would leave that client offering controls that fail.
+     */
+    val managed: Boolean = false,
 ) {
     val displayName: String
         get() = manifest.name.ifBlank { url.substringAfter("://").substringBefore('/') }

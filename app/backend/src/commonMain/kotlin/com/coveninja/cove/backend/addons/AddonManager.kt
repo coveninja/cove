@@ -2,7 +2,10 @@ package com.coveninja.cove.backend.addons
 
 import com.coveninja.cove.backend.db.Addons as AddonRow
 import com.coveninja.cove.backend.db.CoveDatabase
+import com.coveninja.cove.backend.db.Profiles as ProfileRow
 import com.coveninja.cove.backend.store.ActiveProfileSession
+import com.coveninja.cove.shared.data.AddonSharing
+import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
@@ -49,17 +52,88 @@ class AddonManager(
     private val streamCacheMutex = Mutex()
     private val streamCache = mutableMapOf<String, CachedAddonStreams>()
 
+    /**
+     * Every addon this profile resolves streams and catalogs through: the ones it
+     * owns, plus the primary profile's when that profile shares them.
+     *
+     * This is the single funnel — the settings screen, [streams], [subtitles] and
+     * [enabledCatalogs] all read it — which is the whole reason inheritance is
+     * resolved here and nowhere else. Note that [snapshotForSync] deliberately
+     * does *not* come through here: a secondary that pushed the primary's addons
+     * under its own profile would carry a newer timestamp than every other device
+     * and duplicate them across the account.
+     */
     suspend fun entries(): List<AddonEntry> {
         val profileId = session.profileId.value
         ensureLegacyImported(profileId)
         ensureOfficialEntries(profileId)
+        val own = database.coveQueries.selectAddons(profileId).executeAsList().map(AddonRow::toModel)
         // sortedBy is stable, so within each group this keeps selectAddons' rowid
         // order — registration order for installed addons, seed order for the
         // built-in ones. That only holds because persist() updates rows in place;
-        // see the note on insertAddonIfMissing in Cove.sq.
-        return database.coveQueries.selectAddons(profileId).executeAsList().map(AddonRow::toModel)
-            .sortedBy { if (it.source == "official") 0 else 1 }
+        // see the note on insertAddonIfMissing in Cove.sq. Inherited addons sort
+        // ahead of this profile's own, which is also the order providers are
+        // asked in: the household's shared sources answer first.
+        return (own + inheritedEntries(profileId, own)).sortedBy { entry ->
+            when {
+                entry.source == "official" -> 0
+                entry.managed -> 1
+                else -> 2
+            }
+        }
     }
+
+    /** How the active profile relates to the primary's shared addon list. */
+    fun sharing(): AddonSharing {
+        val primary = primaryProfile() ?: return AddonSharing()
+        return AddonSharing(
+            enabled = policySetOn(primary.id),
+            editable = primary.id == session.profileId.value,
+            primaryName = primary.name,
+        )
+    }
+
+    /**
+     * The primary's shareable addons, minus any URL [own] already holds — the
+     * profile's own row wins, so switching the policy off later leaves an addon
+     * it installed for itself still working and still editable.
+     */
+    private fun inheritedEntries(profileId: String, own: List<AddonEntry>): List<AddonEntry> {
+        val primary = inheritedFrom(profileId) ?: return emptyList()
+        ensureLegacyImported(primary.id)
+        val ownUrls = own.mapTo(mutableSetOf(), AddonEntry::url)
+        return database.coveQueries.selectAddons(primary.id).executeAsList().map(AddonRow::toModel)
+            // Only pasted-in addons are shared. JustWatch and IntroDB are seeded
+            // into every profile already, and each keeps its own on/off switch.
+            .filter { it.source == "stremio" && it.url !in ownUrls }
+            .map { it.copy(managed = true) }
+    }
+
+    /**
+     * The profile [profileId] inherits addons from, or null when it inherits
+     * none — because it *is* the primary, because there is no primary, or
+     * because the primary has not switched sharing on.
+     */
+    private fun inheritedFrom(profileId: String): ProfileRow? {
+        val primary = primaryProfile() ?: return null
+        if (primary.id == profileId) return null
+        return primary.takeIf { policySetOn(it.id) }
+    }
+
+    private fun primaryProfile(): ProfileRow? =
+        // selectProfiles already orders is_primary DESC, but filtering says what
+        // is meant rather than leaning on the ordering of a shared query.
+        database.coveQueries.selectProfiles().executeAsList().firstOrNull { it.is_primary != 0L }
+
+    /**
+     * Reads the policy off the primary's own settings row. A settings row that
+     * fails to decode means no sharing rather than no addons at all — this sits
+     * underneath every stream resolution, so it must not be able to throw.
+     */
+    private fun policySetOn(primaryId: String): Boolean =
+        database.coveQueries.selectSettings(primaryId).executeAsOneOrNull()
+            ?.let { runCatching { CoveJson.decodeFromString<AppSettings>(it) }.getOrNull() }
+            ?.addonsFollowPrimary == true
 
     suspend fun add(rawUrl: String): AddonEntry {
         val url = normalizeAddonUrl(rawUrl)
@@ -81,7 +155,7 @@ class AddonManager(
         ensureLegacyImported(profileId)
         val normalizedUrl = rawUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
         val existing = find(profileId, id, normalizedUrl)
-            ?: throw IllegalStateException("addon not found")
+            ?: throw ownershipFailure(profileId, id, normalizedUrl)
         require(existing.source == "stremio") { "official addons cannot be refreshed" }
         urlPolicy.validate(existing.url)
         val manifest = fetchManifest(existing.url)
@@ -102,7 +176,7 @@ class AddonManager(
         ensureLegacyImported(profileId)
         val normalizedUrl = rawUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
         val existing = find(profileId, id, normalizedUrl)
-            ?: throw IllegalStateException("addon not found")
+            ?: throw ownershipFailure(profileId, id, normalizedUrl)
         // No source check here, unlike remove and refresh. Official integrations
         // are meant to be switched off — officialEnabled() gates JustWatch and
         // IntroDB on exactly this flag — and the guard that used to sit here was a
@@ -117,7 +191,7 @@ class AddonManager(
         ensureLegacyImported(profileId)
         val normalizedUrl = rawUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
         val existing = find(profileId, id, normalizedUrl)
-            ?: throw IllegalStateException("addon not found")
+            ?: throw ownershipFailure(profileId, id, normalizedUrl)
         database.coveQueries.deleteAddonByUrl(profileId, existing.url)
         database.coveQueries.upsertProfileStoreVersion(profileId, "addons", now())
         invalidateStreamCache()
@@ -130,7 +204,15 @@ class AddonManager(
         val profileId = session.profileId.value
         val storeVersion = database.coveQueries.selectProfileStoreVersion(profileId, "addons")
             .executeAsOneOrNull().orEmpty()
-        val key = "$profileId|$storeVersion|${type.wireName}|$stremioId"
+        // An addon the primary adds or disables never touches this profile's own
+        // store version, so without the primary's in the key an inheriting profile
+        // would keep serving the stale fan-out for the whole cache window. It also
+        // covers the policy itself being switched: this collapses to "" the moment
+        // inheritance stops, which is a different key either way.
+        val inheritedVersion = inheritedFrom(profileId)?.let { primary ->
+            database.coveQueries.selectProfileStoreVersion(primary.id, "addons").executeAsOneOrNull()
+        }.orEmpty()
+        val key = "$profileId|$storeVersion|$inheritedVersion|${type.wireName}|$stremioId"
         val now = Clock.System.now().toEpochMilliseconds()
         streamCacheMutex.withLock {
             streamCache.entries.removeAll { it.value.expiresAt <= now }
@@ -200,7 +282,8 @@ class AddonManager(
         val profileId = session.profileId.value
         ensureLegacyImported(profileId)
         val normalizedUrl = rawUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
-        val existing = find(profileId, id, normalizedUrl) ?: error("addon not found")
+        val existing = find(profileId, id, normalizedUrl)
+            ?: throw ownershipFailure(profileId, id, normalizedUrl)
         require(existing.manifest.catalogs.any { "${it.type}/${it.id}" == catalogKey }) {
             "unknown catalog $catalogKey"
         }
@@ -220,7 +303,10 @@ class AddonManager(
         val profileId = session.profileId.value
         ensureLegacyImported(profileId)
         val normalizedUrl = rawAddonUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
-        val addon = find(profileId, addonId, normalizedUrl) ?: error("addon not found")
+        // Read path, so inherited addons resolve too: a home-screen row from
+        // one carries its id, and the owned-only find() would 404 on it.
+        val addon = findIncludingInherited(profileId, addonId, normalizedUrl)
+            ?: error("addon not found")
         require(addon.source == "stremio" && addon.enabled) { "addon is disabled" }
         urlPolicy.validate(addon.url)
         val suffix = if (skip == 0) ".json" else "/skip=$skip.json"
@@ -368,6 +454,30 @@ class AddonManager(
         else -> throw IllegalArgumentException("addon id or URL is required")
     }
 
+    /**
+     * [find], widened to the addons this profile inherits from the primary.
+     *
+     * Read paths use this; mutations must not. A mutation persists against the
+     * active profile, so a managed row resolved here is one this profile does
+     * not own — [ownershipFailure] is what a mutation gets instead.
+     */
+    private fun findIncludingInherited(profileId: String, id: String?, url: String?): AddonEntry? =
+        find(profileId, id, url) ?: inheritedEntries(profileId, emptyList()).firstOrNull { entry ->
+            if (!url.isNullOrBlank()) entry.url == url else entry.id == id
+        }
+
+    /**
+     * Why a mutation could not resolve its target. An inherited addon is listed
+     * like any other and is not missing at all, so the generic "addon not found"
+     * would read as a bug rather than as the sharing policy holding.
+     */
+    private fun ownershipFailure(profileId: String, id: String?, url: String?) =
+        if (findIncludingInherited(profileId, id, url) != null) {
+            IllegalStateException("this addon is managed by the primary profile")
+        } else {
+            IllegalStateException("addon not found")
+        }
+
     private fun persist(
         profileId: String,
         entry: AddonEntry,
@@ -473,6 +583,8 @@ class AddonManager(
         }
     }
 
+    // Safe to read through entries(): inheritance covers stremio addons only, so
+    // no primary row can ever shadow this profile's own JustWatch/IntroDB switch.
     private suspend fun officialEnabled(id: String): Boolean =
         entries().firstOrNull { it.id == id && it.source == "official" }?.enabled == true
 

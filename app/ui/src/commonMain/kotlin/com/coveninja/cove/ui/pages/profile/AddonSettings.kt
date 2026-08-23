@@ -60,9 +60,39 @@ fun AddonSettings(modifier: Modifier = Modifier) {
     val lastError by repository.lastError.collectAsState()
     val scope = rememberCoroutineScope()
 
+    val ready = state as? AddonsState.Ready
+    val managed = ready?.addons.orEmpty().filter(Addon::managed)
+    val sharedFrom = ready?.sharing?.primaryName.orEmpty().ifBlank { "the primary profile" }
+
     Column(modifier = modifier.fillMaxWidth()) {
+        // Inherited addons get their own card rather than a lock badge in the
+        // list below: what can and cannot be changed here is the whole point,
+        // and a mixed list makes that a per-row detail the eye has to check.
+        if (managed.isNotEmpty()) {
+            SettingsCard(
+                title = "Managed by $sharedFrom",
+                iconName = "lucide:lock",
+                description = "Shared with every profile. Only $sharedFrom can change them.",
+            ) {
+                Column(modifier = Modifier.animateContentSize()) {
+                    managed.forEach { addon ->
+                        key(addon.id) {
+                            SettingDivider()
+                            AddonRow(
+                                addon = addon,
+                                onToggle = {},
+                                onRefresh = {},
+                                onRemove = {},
+                                locked = true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         SettingsCard(
-            title = "Provider addons",
+            title = if (managed.isEmpty()) "Provider addons" else "Your addons",
             iconName = "lucide:blocks",
             description = "Addons that supply streams.",
         ) {
@@ -91,13 +121,22 @@ fun AddonSettings(modifier: Modifier = Modifier) {
                 when (val current = state) {
                     AddonsState.Loading -> SettingsNotice("Loading addons…")
                     is AddonsState.Failed -> SettingsNotice(current.message, isError = true)
-                    is AddonsState.Ready -> if (current.addons.isEmpty()) {
-                        SettingsNotice("No addons yet. Paste a manifest URL above to get streams.")
+                    is AddonsState.Ready -> if (current.addons.none { !it.managed }) {
+                        SettingsNotice(
+                            if (managed.isEmpty()) {
+                                "No addons yet. Paste a manifest URL above to get streams."
+                            } else {
+                                // Streams already work here, so the stock copy would
+                                // read as a fault rather than as an empty own-list.
+                                "No addons of your own yet. Anything you add here is " +
+                                    "yours alone, alongside the shared ones above."
+                            },
+                        )
                     } else {
                         // Keyed by id: matched by position instead, a list that
                         // reorders leaves the switch you just flipped sitting on a
                         // different addon's row.
-                        current.addons.forEach { addon ->
+                        current.addons.filterNot(Addon::managed).forEach { addon ->
                             key(addon.id) {
                                 SettingDivider()
                                 AddonRow(
@@ -179,6 +218,7 @@ private fun AddonRow(
     onToggle: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
+    locked: Boolean = false,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         if (maxWidth < 520.dp) {
@@ -199,7 +239,11 @@ private fun AddonRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    Switch(checked = addon.enabled, onCheckedChange = onToggle)
+                    if (locked) {
+                        LockedState(addon.enabled)
+                    } else {
+                        Switch(checked = addon.enabled, onCheckedChange = onToggle)
+                    }
                 }
                 KindBadge(addon.kind)
                 Text(
@@ -209,7 +253,7 @@ private fun AddonRow(
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (addon.source == "stremio") {
+                if (addon.source == "stremio" && !locked) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
@@ -252,14 +296,32 @@ private fun AddonRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (addon.source == "stremio") {
+                if (addon.source == "stremio" && !locked) {
                     SettingsIconAction(icon = "lucide:refresh-cw", onClick = onRefresh)
                     SettingsIconAction(icon = "lucide:trash", onClick = onRemove, danger = true)
                 }
-                Switch(checked = addon.enabled, onCheckedChange = onToggle)
+                if (locked) {
+                    LockedState(addon.enabled)
+                } else {
+                    Switch(checked = addon.enabled, onCheckedChange = onToggle)
+                }
             }
         }
     }
+}
+
+/**
+ * What a managed addon shows where its switch would be. A disabled Switch would
+ * be the obvious substitute, but it still reads as a control that failed to
+ * respond; a label states the primary's setting without inviting the tap.
+ */
+@Composable
+private fun LockedState(enabled: Boolean) {
+    Text(
+        text = if (enabled) "On" else "Off",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.labelMedium,
+    )
 }
 
 @Composable
