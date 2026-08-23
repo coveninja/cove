@@ -7,10 +7,10 @@ import com.coveninja.cove.backend.http.ProbeStreamResult
 import com.coveninja.cove.backend.http.ProbeStreamsRequest
 import com.coveninja.cove.backend.http.ProbeStreamsResponse
 import com.coveninja.cove.backend.http.RouteMediaBoundary
+import com.coveninja.cove.backend.http.UpstreamHop
 import com.coveninja.cove.backend.torrent.TorrentPlaybackEngine
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
@@ -36,7 +36,6 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.cancel
 import io.ktor.utils.io.copyTo
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
@@ -45,6 +44,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -111,10 +111,9 @@ internal class AndroidPlaybackMediaHost private constructor(
                         runCatching {
                             val headers = registered.headers.toMutableMap()
                             headers[HttpHeaders.Range] = "bytes=0-0"
-                            val response = publicGet(url, headers, allowLanStreamSources())
-                            val alive = response.status.value in 200..399
-                            response.bodyAsChannel().cancel(CancellationException("probe complete"))
-                            url.takeIf { alive }
+                            publicGet(url, headers, allowLanStreamSources()) { response ->
+                                url.takeIf { response.status.value in 200..399 }
+                            }
                         }.getOrNull()
                     }
                 }
@@ -136,14 +135,17 @@ internal class AndroidPlaybackMediaHost private constructor(
                         runCatching {
                             val headers = registered.headers.toMutableMap()
                             headers[HttpHeaders.Range] = "bytes=0-0"
-                            val response = publicGet(stream.url, headers, allowLanStreamSources())
-                            val alive = response.status.value in 200..399
-                            val length = response.headers[HttpHeaders.ContentRange]
-                                ?.substringAfterLast('/')?.toLongOrNull()
-                                ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-                                ?: 0
-                            response.bodyAsChannel().cancel(CancellationException("probe complete"))
-                            ProbeStreamResult(stream.url, alive, length)
+                            publicGet(stream.url, headers, allowLanStreamSources()) { response ->
+                                val alive = response.status.value in 200..399
+                                val length = response.headers[HttpHeaders.ContentRange]
+                                    ?.substringAfterLast('/')?.toLongOrNull()
+                                    ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                                    ?: 0
+                                // Leaving this block discards the body, which is the point: a
+                                // probe reads headers only, and `bytes=0-0` is a request rather
+                                // than a promise — a server free to ignore it sends the file.
+                                ProbeStreamResult(stream.url, alive, length)
+                            }
                         }.getOrElse { ProbeStreamResult(stream.url, false) }
                     } ?: ProbeStreamResult(stream.url, false)
                 }
@@ -167,19 +169,34 @@ internal class AndroidPlaybackMediaHost private constructor(
         val requestHeaders = registered.headers.toMutableMap().also { headers ->
             call.request.header(HttpHeaders.Range)?.let { headers[HttpHeaders.Range] = it }
         }
-        val upstream = publicGet(url, requestHeaders, allowLanStreamSources())
-        val contentType = upstream.headers[HttpHeaders.ContentType]
-            ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
-            ?: ContentType.Application.OctetStream
-        for (name in FORWARDED_RESPONSE_HEADERS) {
-            upstream.headers[name]?.let { call.response.header(name, it) }
-        }
-        call.respondBytesWriter(
-            contentType = contentType,
-            status = upstream.status,
-            contentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
-        ) {
-            upstream.bodyAsChannel().copyTo(this)
+        publicGet(url, requestHeaders, allowLanStreamSources()) { upstream ->
+            val contentType = upstream.headers[HttpHeaders.ContentType]
+                ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
+                ?: ContentType.Application.OctetStream
+            for (name in FORWARDED_RESPONSE_HEADERS) {
+                upstream.headers[name]?.let { call.response.header(name, it) }
+            }
+            // The response producer does not necessarily run inside respondBytesWriter — under
+            // some engines it is invoked later, once the engine is ready to write the body — and
+            // the upstream body dies with this block. So the block waits for the copy either way:
+            // where the producer is synchronous the deferred is already complete by the time
+            // respondBytesWriter returns, and where it is deferred this is what keeps the socket
+            // it reads from open.
+            val copied = CompletableDeferred<Unit>()
+            call.respondBytesWriter(
+                contentType = contentType,
+                status = upstream.status,
+                contentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+            ) {
+                try {
+                    upstream.bodyAsChannel().copyTo(this)
+                    copied.complete(Unit)
+                } catch (failure: Throwable) {
+                    copied.completeExceptionally(failure)
+                    throw failure
+                }
+            }
+            copied.await()
         }
     }
 
@@ -248,9 +265,10 @@ internal class AndroidPlaybackMediaHost private constructor(
 
     override suspend fun subtitle(call: io.ktor.server.application.ApplicationCall, url: String) {
         requireHttpUrl(url)
-        val response = publicGet(url, emptyMap(), allowLan = false)
-        check(response.status.isSuccess()) { "subtitle upstream returned HTTP ${response.status.value}" }
-        val bytes = response.bodyAsChannel().readAtMost(MAX_SUBTITLE_BYTES)
+        val bytes = publicGet(url, emptyMap(), allowLan = false) { response ->
+            check(response.status.isSuccess()) { "subtitle upstream returned HTTP ${response.status.value}" }
+            response.bodyAsChannel().readAtMost(MAX_SUBTITLE_BYTES, "subtitle exceeds 10 MiB limit")
+        }
         val content = bytes.decodeToString()
         call.respondText(
             if (content.trimStart().startsWith("WEBVTT")) content else srtToVtt(content),
@@ -267,19 +285,36 @@ internal class AndroidPlaybackMediaHost private constructor(
             "invalid image size"
         }
         require(Regex("^[A-Za-z0-9._-]+$").matches(file)) { "invalid image file" }
-        val response = publicGet("https://image.tmdb.org/t/p/$size/$file", emptyMap(), allowLan = false)
-        require(response.status.isSuccess()) { "TMDB image returned HTTP ${response.status.value}" }
-        val bytes = response.body<ByteArray>()
-        require(bytes.size <= MAX_IMAGE_BYTES) { "TMDB image exceeds 25 MiB" }
+        val bytes = publicGet("https://image.tmdb.org/t/p/$size/$file", emptyMap(), allowLan = false) { response ->
+            require(response.status.isSuccess()) { "TMDB image returned HTTP ${response.status.value}" }
+            response.bodyAsChannel().readAtMost(MAX_IMAGE_BYTES, "TMDB image exceeds 25 MiB")
+        }
         call.response.header(HttpHeaders.CacheControl, "public, max-age=604800, immutable")
         call.respondBytes(bytes, imageContentType(file))
     }
 
-    private suspend fun publicGet(
+    /**
+     * Follows the redirect chain by hand — every hop re-validated, credentials dropped when the
+     * authority changes — and hands the final response to [consume] while its body is still on
+     * the wire.
+     *
+     * The response cannot simply be returned instead. `httpClient.get()` finishes the call before
+     * it returns, and finishing it means Ktor's SaveBody plugin has already replayed the body
+     * through a `ByteChannelReplay` — the whole thing resident before any of it is used. On
+     * [playDirect] that body is the video, because mpv opens every stream with `Range: bytes=0-`,
+     * so the proxy buffered an entire episode into heap with no ceiling and no timeout — against
+     * a 256 MiB growth limit, which is the same wall the updater hit.
+     * `prepareGet(...).execute {}` is the only supported way out: as of Ktor 3.5 the per-request
+     * `skipSavingBody()` is a no-op that logs and says so. It is also why the response exists
+     * only inside the block — Ktor cancels the body the moment the block returns, which is what
+     * [consume] has to be finished with before it does.
+     */
+    private suspend fun <T> publicGet(
         initialUrl: String,
         headers: Map<String, String>,
         allowLan: Boolean,
-    ): HttpResponse {
+        consume: suspend (HttpResponse) -> T,
+    ): T {
         var current = initialUrl
         val initialAuthority = URI(initialUrl).normalizedAuthority()
         repeat(MAX_REDIRECTS) { redirectCount ->
@@ -290,14 +325,26 @@ internal class AndroidPlaybackMediaHost private constructor(
             } else {
                 headers.filterKeys { it.lowercase() !in SENSITIVE_REDIRECT_HEADERS }
             }
-            val response = httpClient.get(current) {
+            val hop = httpClient.prepareGet(current) {
                 requestHeaders.forEach { (name, value) -> header(name, value) }
+            }.execute { response ->
+                val location = response.headers[HttpHeaders.Location]
+                if (response.status.value in 300..399 && location != null) {
+                    // The body of a redirect is discarded by leaving this block.
+                    UpstreamHop.Redirect(location)
+                } else {
+                    // A 3xx carrying no Location is not a redirect anyone can follow, so it
+                    // reaches the consumer like any other final response.
+                    UpstreamHop.Consumed(consume(response))
+                }
             }
-            if (response.status.value !in 300..399) return response
-            val location = response.headers[HttpHeaders.Location] ?: return response
-            response.bodyAsChannel().cancel(CancellationException("following redirect"))
-            if (redirectCount == MAX_REDIRECTS - 1) error("too many redirects")
-            current = URI(current).resolve(location).toString()
+            when (hop) {
+                is UpstreamHop.Consumed -> return hop.value
+                is UpstreamHop.Redirect -> {
+                    if (redirectCount == MAX_REDIRECTS - 1) error("too many redirects")
+                    current = URI(current).resolve(hop.location).toString()
+                }
+            }
         }
         error("too many redirects")
     }
@@ -480,14 +527,16 @@ private fun srtToVtt(content: String): String = buildString {
     }
 }
 
-private suspend fun ByteReadChannel.readAtMost(maxBytes: Int): ByteArray {
+// Reads off the channel so the ceiling is a real one. A Content-Length can be absent or a lie,
+// and a limit checked against an already-buffered body has nothing left to protect.
+private suspend fun ByteReadChannel.readAtMost(maxBytes: Int, message: String): ByteArray {
     val output = ByteArrayOutputStream()
     val buffer = ByteArray(64 * 1024)
     while (!isClosedForRead) {
         val count = readAvailable(buffer)
         if (count == -1) break
         if (count == 0) continue
-        require(output.size() + count <= maxBytes) { "subtitle exceeds 10 MiB limit" }
+        require(output.size() + count <= maxBytes) { message }
         output.write(buffer, 0, count)
     }
     return output.toByteArray()

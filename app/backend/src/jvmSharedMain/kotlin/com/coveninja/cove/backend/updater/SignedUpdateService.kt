@@ -11,7 +11,7 @@ import com.coveninja.cove.shared.model.UpdateManifestAsset
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
@@ -245,30 +245,39 @@ internal class SignedUpdateService(
         val temporary = platform.stagingDirectory.resolve("$PAYLOAD_FILE.part-${UUID.randomUUID()}")
         val payload = platform.stagingDirectory.resolve(PAYLOAD_FILE)
         _state.value = AppUpdateState.Downloading(candidate.release, 0L, candidate.asset.sizeBytes)
+        val digest = MessageDigest.getInstance("SHA-256")
+        var downloaded = 0L
         try {
-            val response = client.get(candidate.assetUrl)
-            require(response.status.isSuccess()) { "update download returned HTTP ${response.status.value}" }
-            response.headers["Content-Length"]?.toLongOrNull()?.let { length ->
-                require(length == candidate.asset.sizeBytes) { "update download size does not match the manifest" }
-            }
-            val digest = MessageDigest.getInstance("SHA-256")
-            var downloaded = 0L
-            BufferedOutputStream(Files.newOutputStream(temporary)).use { output ->
-                val channel = response.bodyAsChannel()
-                val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
-                while (true) {
-                    val count = channel.readAvailable(buffer)
-                    if (count == -1) break
-                    if (count == 0) continue
-                    downloaded += count
-                    require(downloaded <= candidate.asset.sizeBytes) { "update download exceeds signed size" }
-                    output.write(buffer, 0, count)
-                    digest.update(buffer, 0, count)
-                    _state.value = AppUpdateState.Downloading(
-                        candidate.release,
-                        downloaded,
-                        candidate.asset.sizeBytes,
-                    )
+            // prepareGet/execute, never client.get. A plain get() finishes the call before it
+            // returns, and finishing it means Ktor saved the whole body: HttpStatement.execute()
+            // calls HttpClientCall.save(), which is readRemaining().readByteArray() — one
+            // contiguous ByteArray the size of the response. The loop below then streams out of
+            // memory rather than off the network, so the file is briefly held twice and the peak
+            // is the entire asset. Desktop absorbed that; Android has a 256 MiB heap growth
+            // limit, so a ~130 MB APK asked for a 132 MB allocation against ~100 MB of headroom
+            // and every phone update died with OutOfMemoryError before a byte reached the disk.
+            client.prepareGet(candidate.assetUrl).execute { response ->
+                require(response.status.isSuccess()) { "update download returned HTTP ${response.status.value}" }
+                response.headers["Content-Length"]?.toLongOrNull()?.let { length ->
+                    require(length == candidate.asset.sizeBytes) { "update download size does not match the manifest" }
+                }
+                BufferedOutputStream(Files.newOutputStream(temporary)).use { output ->
+                    val channel = response.bodyAsChannel()
+                    val buffer = ByteArray(DOWNLOAD_BUFFER_BYTES)
+                    while (true) {
+                        val count = channel.readAvailable(buffer)
+                        if (count == -1) break
+                        if (count == 0) continue
+                        downloaded += count
+                        require(downloaded <= candidate.asset.sizeBytes) { "update download exceeds signed size" }
+                        output.write(buffer, 0, count)
+                        digest.update(buffer, 0, count)
+                        _state.value = AppUpdateState.Downloading(
+                            candidate.release,
+                            downloaded,
+                            candidate.asset.sizeBytes,
+                        )
+                    }
                 }
             }
             require(downloaded == candidate.asset.sizeBytes) { "update download is incomplete" }
@@ -363,26 +372,29 @@ internal class SignedUpdateService(
     private suspend inline fun <reified T> getSmall(url: String, limit: Int): T =
         CoveJson.decodeFromString(getSmallBytes(url, limit).decodeToString())
 
-    private suspend fun getSmallBytes(url: String, limit: Int): ByteArray {
-        val response = client.get(url)
-        require(response.status == HttpStatusCode.OK) { "update service returned HTTP ${response.status.value}" }
-        response.headers["Content-Length"]?.toLongOrNull()?.let { length ->
-            require(length in 0..limit.toLong()) { "update response is too large" }
+    // Streamed for the same reason as the payload, and here the limit depends on it: client.get()
+    // buffers the whole body before returning, so a response that lied about (or omitted)
+    // Content-Length was already resident by the time `received <= limit` could reject it.
+    private suspend fun getSmallBytes(url: String, limit: Int): ByteArray =
+        client.prepareGet(url).execute { response ->
+            require(response.status == HttpStatusCode.OK) { "update service returned HTTP ${response.status.value}" }
+            response.headers["Content-Length"]?.toLongOrNull()?.let { length ->
+                require(length in 0..limit.toLong()) { "update response is too large" }
+            }
+            val output = ByteArrayOutputStream(minOf(limit, SMALL_RESPONSE_INITIAL_BYTES))
+            val channel = response.bodyAsChannel()
+            val buffer = ByteArray(SMALL_RESPONSE_BUFFER_BYTES)
+            var received = 0
+            while (true) {
+                val count = channel.readAvailable(buffer)
+                if (count == -1) break
+                if (count == 0) continue
+                received += count
+                require(received <= limit) { "update response is too large" }
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
         }
-        val output = ByteArrayOutputStream(minOf(limit, SMALL_RESPONSE_INITIAL_BYTES))
-        val channel = response.bodyAsChannel()
-        val buffer = ByteArray(SMALL_RESPONSE_BUFFER_BYTES)
-        var received = 0
-        while (true) {
-            val count = channel.readAvailable(buffer)
-            if (count == -1) break
-            if (count == 0) continue
-            received += count
-            require(received <= limit) { "update response is too large" }
-            output.write(buffer, 0, count)
-        }
-        return output.toByteArray()
-    }
 
     private fun validateAssetUrl(asset: GitHubAsset) {
         require(asset.name.isNotBlank()) { "release asset has no name" }

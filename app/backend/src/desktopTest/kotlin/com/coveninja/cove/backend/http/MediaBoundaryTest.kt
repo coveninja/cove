@@ -8,21 +8,28 @@ import com.coveninja.cove.backend.torrent.TorrentResource
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.server.application.call
 import io.ktor.server.application.install
+import io.ktor.server.cio.CIO as ServerCIO
+import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.readByteArray
 import io.ktor.utils.io.writeFully
 import java.nio.file.Files
 import kotlin.test.Test
@@ -30,7 +37,11 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class MediaBoundaryTest {
     @Test
@@ -235,6 +246,73 @@ class MediaBoundaryTest {
         }
     }
 
+    @Test
+    fun `direct playback reaches the client while the upstream body is still arriving`() = runBlocking {
+        // The proxy must stream the upstream body, not receive it. `httpClient.get()` finishes
+        // the call before it returns, and Ktor's SaveBody plugin has replayed the whole body
+        // through a ByteChannelReplay by then — resident before any of it is forwarded, and here
+        // the body is the video, since mpv opens every stream with `Range: bytes=0-`. Nothing in
+        // this test measures memory; it pins the observable half of the same property. The
+        // upstream is held open after the first 64 KiB, so a proxy that waits for a complete
+        // response forwards nothing and this test hangs until the timeout fires.
+        val head = ByteArray(64 * 1024) { 'a'.code.toByte() }
+        val tail = ByteArray(16 * 1024) { 'b'.code.toByte() }
+        val body = ByteChannel(autoFlush = true)
+        val upstream = HttpClient(MockEngine {
+            respond(
+                body,
+                HttpStatusCode.OK,
+                headersOf(
+                    HttpHeaders.ContentType to listOf("video/mp4"),
+                    HttpHeaders.ContentLength to listOf((head.size + tail.size).toString()),
+                ),
+            )
+        })
+        val boundary = boundary(upstream)
+        boundary.registerStreams(
+            listOf(
+                AddonStream(
+                    url = "https://video.test/big.mp4",
+                    headers = mapOf(HttpHeaders.Referrer to "https://provider.test/"),
+                ),
+            ),
+        )
+
+        // A real socket, not testApplication: its in-memory transport does not hand the client
+        // a response until the server has finished producing one, which is exactly the thing
+        // under test here.
+        val server = embeddedServer(ServerCIO, port = 0) { mediaRoutes(boundary) }
+        server.start(wait = false)
+        val port = server.engine.resolvedConnectors().first().port
+        val client = HttpClient(ClientCIO)
+        val headRead = CompletableDeferred<Unit>()
+        // Fed from its own coroutine so the upstream can stay open across the assertion below.
+        val writer = launch(Dispatchers.IO) {
+            body.writeFully(head)
+            body.flush()
+            headRead.await() // the response must be flowing while the upstream is still open
+            body.writeFully(tail)
+            body.flushAndClose()
+        }
+        try {
+            withTimeout(STREAMING_TIMEOUT_MILLIS) {
+                client.prepareGet("http://127.0.0.1:$port/play?url=https%3A%2F%2Fvideo.test%2Fbig.mp4")
+                    .execute { response ->
+                        assertEquals(HttpStatusCode.OK, response.status)
+                        val incoming = response.bodyAsChannel()
+                        assertContentEquals(head, incoming.readByteArray(head.size))
+                        headRead.complete(Unit)
+                        assertContentEquals(tail, incoming.readByteArray(tail.size))
+                    }
+            }
+            writer.join()
+        } finally {
+            headRead.complete(Unit)
+            client.close()
+            server.stop(0, 0)
+        }
+    }
+
     private fun boundary(client: HttpClient) = MediaBoundary(
         httpClient = client,
         imageCacheDirectory = Files.createTempDirectory("cove-images"),
@@ -253,5 +331,10 @@ class MediaBoundaryTest {
                 boundary.subtitle(call, requireNotNull(call.request.queryParameters["url"]))
             }
         }
+    }
+
+    private companion object {
+        // Generous: this bounds a hang, it does not time an operation.
+        const val STREAMING_TIMEOUT_MILLIS = 30_000L
     }
 }

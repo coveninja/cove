@@ -15,6 +15,9 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.writeFully
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyPair
@@ -26,6 +29,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import org.bouncycastle.asn1.ASN1ObjectIdentifier
@@ -252,7 +259,62 @@ class SignedUpdateServiceTest {
         }
     }
 
-    private fun updateClient(manifest: ByteArray, signature: ByteArray, payload: ByteArray): HttpClient {
+    @Test
+    fun `payload reaches the disk while the response body is still arriving`() = runBlocking {
+        // The payload must be streamed, not received. client.get() finishes the call before it
+        // returns, and finishing it means Ktor already called HttpClientCall.save() —
+        // readRemaining().readByteArray(), one contiguous array the size of the whole asset.
+        // A ~130 MB APK is then a single allocation against Android's 256 MiB heap growth limit,
+        // which is how every phone update died with OutOfMemoryError before writing a byte.
+        // Nothing here measures memory; it pins the observable half of the same property. The
+        // response body is held open after the first 96 KiB, so a service that waits for a
+        // complete response reports no progress and this test hangs until the timeout fires.
+        val head = ByteArray(96 * 1024) { 'a'.code.toByte() }
+        val tail = ByteArray(32 * 1024) { 'b'.code.toByte() }
+        val payload = head + tail
+        val manifestBytes = manifest(payload).bytes()
+        val signature = sign(manifestBytes)
+        val directory = createTempDirectory("cove-update-test")
+        val body = ByteChannel(autoFlush = true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val service = SignedUpdateService(
+            currentVersion = "1.0.0",
+            platform = FakePlatform(directory),
+            client = updateClient(manifestBytes, signature, payload, payloadChannel = body),
+            scope = scope,
+            apiBase = "http://updates.test",
+            publicKeys = publicKeys,
+        )
+        try {
+            val check = scope.launch { service.checkNow() }
+            withTimeout(STREAMING_TIMEOUT_MILLIS) {
+                body.writeFully(head)
+                body.flush()
+                // 96 KiB is the resting point: the copy loop reads 64 KiB and then 32 KiB, and
+                // the next read cannot complete until the tail below is written.
+                val progress = service.state.first {
+                    it is AppUpdateState.Downloading && it.downloadedBytes == head.size.toLong()
+                }
+                assertEquals(payload.size.toLong(), (progress as AppUpdateState.Downloading).totalBytes)
+                body.writeFully(tail)
+                body.flushAndClose()
+                check.join()
+            }
+            assertIs<AppUpdateState.Ready>(service.state.value)
+            assertEquals(payload.toList(), Files.readAllBytes(directory.resolve("update.payload")).toList())
+        } finally {
+            service.close()
+            scope.cancel()
+            directory.toFile().deleteRecursively()
+        }
+    }
+
+    private fun updateClient(
+        manifest: ByteArray,
+        signature: ByteArray,
+        payload: ByteArray,
+        payloadChannel: ByteReadChannel? = null,
+    ): HttpClient {
         val release = """{
           "tag_name":"v1.1.0","name":"v1.1.0","draft":false,"prerelease":false,
           "assets":[
@@ -264,6 +326,13 @@ class SignedUpdateServiceTest {
         return HttpClient(MockEngine) {
             engine {
                 addHandler { request ->
+                    if (payloadChannel != null && request.url.encodedPath == "/payload") {
+                        return@addHandler respond(
+                            payloadChannel,
+                            HttpStatusCode.OK,
+                            headersOf(HttpHeaders.ContentLength, payload.size.toString()),
+                        )
+                    }
                     val body = when (request.url.encodedPath) {
                         "/releases/latest" -> release
                         "/manifest" -> manifest
@@ -324,5 +393,6 @@ class SignedUpdateServiceTest {
 
     private companion object {
         const val KEY_ID = "test-key"
+        const val STREAMING_TIMEOUT_MILLIS = 30_000L
     }
 }
