@@ -1014,6 +1014,15 @@ private class FixturePlaybackRepository : PlaybackRepository {
 }
 
 /** In-memory, so the addon screens are usable with no backend running. */
+private fun fixtureCatalog(id: String, name: String, type: String) = AddonCatalogDescriptor(
+    addonId = "fixture.provider",
+    addonName = "Fixture Provider",
+    addonUrl = "https://example.com/manifest.json",
+    type = type,
+    catalogId = id,
+    name = name,
+)
+
 private class FixtureAddonRepository : AddonRepository {
     override val supportsNuvio: Boolean = true
 
@@ -1028,6 +1037,13 @@ private class FixtureAddonRepository : AddonRepository {
                 version = "1.0.0",
             ),
             kind = AddonKind.Provider,
+            // Two, one per type, so a fixture run exercises the switch on Explore as well
+            // as the row itself — the shelves are filtered by the format toggle, and a
+            // single movie catalog would look broken the moment someone picked Series.
+            catalogs = listOf(
+                fixtureCatalog("popular", "Popular", "movie"),
+                fixtureCatalog("top", "Top rated", "series"),
+            ),
         ),
     )
     private val repos = mutableListOf<NuvioRepoSummary>()
@@ -1060,6 +1076,41 @@ private class FixtureAddonRepository : AddonRepository {
     }
 
     override suspend fun refreshAddon(id: String) = reload()
+
+    override suspend fun catalogs(): List<AddonCatalogDescriptor> = addons
+        .filter(Addon::enabled)
+        .flatMap(Addon::catalogs)
+        .filter(AddonCatalogDescriptor::enabled)
+
+    override suspend fun catalogPage(
+        addonId: String,
+        type: String,
+        catalogId: String,
+        skip: Int,
+        limit: Int,
+    ): AddonCatalogPage {
+        val pool = if (type == "series") fixtureTv else fixtureMovies
+        // Reversed against the discover feed so the row is visibly its own list rather
+        // than a second copy of Trending — the whole point of drawing it is that an
+        // addon chose this order.
+        val ordered = pool.reversed()
+        return AddonCatalogPage(
+            medias = ordered.drop(skip).take(limit),
+            nextSkip = skip + minOf(limit, (ordered.size - skip).coerceAtLeast(0)),
+        )
+    }
+
+    override suspend fun setCatalogEnabled(addonId: String, catalogKey: String, enabled: Boolean) {
+        addons.replaceAll { addon ->
+            if (addon.id != addonId) addon
+            else addon.copy(
+                catalogs = addon.catalogs.map {
+                    if (it.key == catalogKey) it.copy(enabled = enabled) else it
+                },
+            )
+        }
+        reload()
+    }
 
     override suspend fun addNuvioRepo(url: String) {
         repos += NuvioRepoSummary(

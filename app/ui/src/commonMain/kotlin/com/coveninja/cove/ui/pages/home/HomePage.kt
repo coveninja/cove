@@ -31,6 +31,7 @@ import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
 import com.coveninja.cove.ui.components.navigation.NavBarPlacement
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.MediaRail
@@ -98,6 +99,7 @@ fun HomePage(
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
     onExplore: () -> Unit,
+    onExploreCatalog: (AddonCatalogDescriptor) -> Unit,
     onOpenMyList: () -> Unit,
     navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
     modifier: Modifier = Modifier,
@@ -123,6 +125,7 @@ fun HomePage(
             withFrameNanos { }
             withFrameNanos { }
             controller.loadPersonal()
+            controller.loadCatalogs()
         }
     }
 
@@ -169,9 +172,9 @@ fun HomePage(
         }
     }
 
-    val rails = remember(controller.personalRails, trending) {
+    val rails = remember(controller.personalRails, controller.catalogRails, trending) {
         buildHomeRails(
-            controller.personalRails + listOf(
+            controller.personalRails + controller.catalogRails + listOf(
                 HomeRail(
                     id = "trending",
                     title = "Trending now",
@@ -218,6 +221,7 @@ fun HomePage(
             onOpenMedia = onOpenMedia,
             onPlayMedia = onPlayMedia,
             onExplore = onExplore,
+            onExploreCatalog = onExploreCatalog,
             onOpenMyList = onOpenMyList,
             navBarPlacement = navBarPlacement,
             pageState = pageState,
@@ -247,6 +251,7 @@ private fun HomeReady(
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
     onExplore: () -> Unit,
+    onExploreCatalog: (AddonCatalogDescriptor) -> Unit,
     onOpenMyList: () -> Unit,
     navBarPlacement: NavBarPlacement,
     pageState: HomePageState,
@@ -404,7 +409,11 @@ private fun HomeReady(
                     state = pageState.railStates.stateFor(rail.id),
                     // Only the impersonal rail has an equivalent anywhere else. A "see all"
                     // on a personal rail would have to show something other than the rail.
-                    onSeeAll = if (rail.ordered) onExplore else null,
+                    // A catalog rail is the exception that does have one of its own: the
+                    // rest of that same catalog, which Explore can page through.
+                    onSeeAll = rail.catalog
+                        ?.let { catalog -> { onExploreCatalog(catalog) } }
+                        ?: onExplore.takeIf { rail.ordered },
                     itemContent = mediaCard,
                 )
             }

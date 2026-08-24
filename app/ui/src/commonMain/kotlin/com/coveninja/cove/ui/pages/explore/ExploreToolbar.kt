@@ -79,14 +79,14 @@ fun ExploreToolbar(
         icon = { if (it == MediaType.Movie) "lucide:film" else "lucide:tv" },
         // Changing format invalidates the genre: the two vocabularies do not share ids,
         // so carrying one over would filter by a genre that does not exist here.
-        onSelect = { onFiltersChange(filters.copy(type = it, genreId = null)) },
+        onSelect = { onFiltersChange(filters.copy(type = it, genreId = null, catalog = null)) },
         modifier = switchModifier,
     )
 
     @Composable
     fun sortPicker(pickerModifier: Modifier) = SortPicker(
         sort = filters.sort,
-        onSelect = { onFiltersChange(filters.copy(sort = it)) },
+        onSelect = { onFiltersChange(filters.copy(sort = it, catalog = null)) },
         modifier = pickerModifier,
     )
 
@@ -139,7 +139,7 @@ fun ExploreToolbar(
                     ) {
                         ExploreSearchField(
                             query = filters.query,
-                            onQueryChange = { onFiltersChange(filters.copy(query = it)) },
+                            onQueryChange = { onFiltersChange(filters.copy(query = it, catalog = null)) },
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -161,7 +161,7 @@ fun ExploreToolbar(
                     ) {
                         ExploreSearchField(
                             query = filters.query,
-                            onQueryChange = { onFiltersChange(filters.copy(query = it)) },
+                            onQueryChange = { onFiltersChange(filters.copy(query = it, catalog = null)) },
                             modifier = Modifier.width(220.dp),
                         )
                     }
@@ -176,7 +176,7 @@ fun ExploreToolbar(
         GenrePills(
             genres = genres,
             selected = filters.genreId,
-            onSelect = { onFiltersChange(filters.copy(genreId = it)) },
+            onSelect = { onFiltersChange(filters.copy(genreId = it, catalog = null)) },
         )
     }
 }

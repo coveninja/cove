@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.AddonsState
 import com.coveninja.cove.shared.model.Addon
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.shared.model.AddonKind
 import com.coveninja.cove.shared.model.NuvioRepoSummary
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -83,6 +84,7 @@ fun AddonSettings(modifier: Modifier = Modifier) {
                                 onToggle = {},
                                 onRefresh = {},
                                 onRemove = {},
+                                onToggleCatalog = { _, _ -> },
                                 locked = true,
                             )
                         }
@@ -146,6 +148,15 @@ fun AddonSettings(modifier: Modifier = Modifier) {
                                     },
                                     onRefresh = { scope.launch { repository.refreshAddon(addon.id) } },
                                     onRemove = { scope.launch { repository.removeAddon(addon.id) } },
+                                    onToggleCatalog = { catalogKey, enabled ->
+                                        scope.launch {
+                                            repository.setCatalogEnabled(
+                                                addon.id,
+                                                catalogKey,
+                                                enabled,
+                                            )
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -218,7 +229,26 @@ private fun AddonRow(
     onToggle: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onRemove: () -> Unit,
+    onToggleCatalog: (String, Boolean) -> Unit,
     locked: Boolean = false,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        AddonRowBody(addon, onToggle, onRefresh, onRemove, locked)
+        // Below the body rather than inside it: the body has a compact and a wide
+        // arrangement, and the catalog list is the same either way.
+        if (addon.catalogs.isNotEmpty()) {
+            AddonCatalogList(addon.catalogs, locked, onToggleCatalog)
+        }
+    }
+}
+
+@Composable
+private fun AddonRowBody(
+    addon: Addon,
+    onToggle: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
+    onRemove: () -> Unit,
+    locked: Boolean,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         if (maxWidth < 520.dp) {
@@ -304,6 +334,71 @@ private fun AddonRow(
                     LockedState(addon.enabled)
                 } else {
                     Switch(checked = addon.enabled, onCheckedChange = onToggle)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The catalogs one addon offers, each with its own switch.
+ *
+ * Separate from the addon's own switch because they answer different questions: the addon
+ * switch decides whether it resolves streams at all, and these decide which of its rows
+ * appear on Home and Explore. An addon can easily offer half a dozen catalogs, and every
+ * one drawn costs a metadata request per title, so being able to keep the one that is
+ * wanted and drop the rest is what makes a busy addon usable.
+ *
+ * A [locked] addon is one inherited from the primary profile. Its catalogs show their
+ * state and no control: the flag is stored against the addon's owner, and writing to it
+ * from here would silently give this profile a private copy of the primary's addon.
+ */
+@Composable
+private fun AddonCatalogList(
+    catalogs: List<AddonCatalogDescriptor>,
+    locked: Boolean,
+    onToggle: (String, Boolean) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 32.dp, end = 18.dp, bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "Catalogs",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        catalogs.forEach { catalog ->
+            key(catalog.key) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = catalog.name.ifBlank { catalog.catalogId },
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = if (catalog.type == "series") "Series" else "Films",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    if (locked) {
+                        LockedState(catalog.enabled)
+                    } else {
+                        Switch(
+                            checked = catalog.enabled,
+                            onCheckedChange = { onToggle(catalog.key, it) },
+                        )
+                    }
                 }
             }
         }

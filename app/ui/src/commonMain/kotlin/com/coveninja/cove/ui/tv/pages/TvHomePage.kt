@@ -108,6 +108,7 @@ internal fun TvHomePage(
             withFrameNanos { }
             withFrameNanos { }
             controller.loadPersonal()
+            controller.loadCatalogs()
         }
     }
 
@@ -136,9 +137,9 @@ internal fun TvHomePage(
         if (initialContentReady) controller.loadEpisodeStills(continuing)
     }
 
-    val rails = remember(controller.personalRails, trending) {
+    val rails = remember(controller.personalRails, controller.catalogRails, trending) {
         buildHomeRails(
-            controller.personalRails + listOf(
+            controller.personalRails + controller.catalogRails + listOf(
                 HomeRail(
                     id = "trending",
                     title = "Trending now",

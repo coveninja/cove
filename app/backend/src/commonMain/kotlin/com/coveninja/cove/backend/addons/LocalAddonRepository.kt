@@ -3,6 +3,8 @@ package com.coveninja.cove.backend.addons
 import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.AddonsState
 import com.coveninja.cove.shared.model.Addon
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
+import com.coveninja.cove.shared.model.AddonCatalogPage
 import com.coveninja.cove.shared.model.AddonKind as SharedAddonKind
 import com.coveninja.cove.shared.model.AddonManifestSummary
 import com.coveninja.cove.shared.model.NuvioRepoSummary
@@ -28,6 +30,11 @@ internal class LocalAddonRepository(
     activeProfileIds: StateFlow<String>,
     scope: CoroutineScope,
     private val nuvio: LocalNuvioService? = null,
+    /**
+     * Absent on a host with no metadata catalog to resolve entries against, which is the
+     * one case where reporting no catalogs is honest rather than a failure.
+     */
+    private val catalogService: AddonCatalogService? = null,
 ) : AddonRepository {
     private val operation = Mutex()
     private val _state = MutableStateFlow<AddonsState>(AddonsState.Loading)
@@ -64,6 +71,23 @@ internal class LocalAddonRepository(
     override suspend fun refreshAddon(id: String) = mutate {
         addons.refresh(id, null)
     }
+
+    override suspend fun catalogs(): List<AddonCatalogDescriptor> =
+        catalogService?.catalogs().orEmpty()
+
+    override suspend fun catalogPage(
+        addonId: String,
+        type: String,
+        catalogId: String,
+        skip: Int,
+        limit: Int,
+    ): AddonCatalogPage = catalogService?.page(addonId, null, type, catalogId, skip, limit)
+        ?: AddonCatalogPage()
+
+    override suspend fun setCatalogEnabled(addonId: String, catalogKey: String, enabled: Boolean) =
+        mutate {
+            addons.setCatalogEnabled(addonId, null, catalogKey, enabled)
+        }
 
     override suspend fun addNuvioRepo(url: String) = mutate {
         requireNuvio().addRepo(url.trim())
@@ -148,5 +172,20 @@ private fun AddonEntry.toSharedModel() = Addon(
     },
     source = source,
     enabled = enabled,
+    // Drawable catalogs only, matching what enabledCatalogs() will actually offer as a
+    // row — a switch for a search-gated catalog would toggle something that can never
+    // appear. `enabled` is the absence of a disabling entry: the map records only the
+    // ones switched off, so an unlisted catalog is on.
+    catalogs = manifest.catalogs.filter(AddonCatalog::isHomeEligible).map { catalog ->
+        AddonCatalogDescriptor(
+            addonId = id,
+            addonName = manifest.name,
+            addonUrl = url,
+            type = catalog.type,
+            catalogId = catalog.id,
+            name = catalog.name,
+            enabled = disabledCatalogs[catalog.key()] != true,
+        )
+    },
     managed = managed,
 )

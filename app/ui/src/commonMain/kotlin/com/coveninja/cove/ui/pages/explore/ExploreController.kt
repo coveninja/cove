@@ -8,7 +8,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.coveninja.cove.shared.data.BrowseQuery
+import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.DiscoveryRepository
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.MediaGenre
 import com.coveninja.cove.ui.model.Media
@@ -43,6 +45,7 @@ import com.coveninja.cove.shared.model.MediaType as DomainMediaType
 @Stable
 class ExploreController(
     private val discovery: DiscoveryRepository,
+    private val addons: AddonRepository,
     private val scope: CoroutineScope,
 ) {
     var genres by mutableStateOf<List<MediaGenre>>(emptyList())
@@ -80,8 +83,27 @@ class ExploreController(
     private var gridJob: Job? = null
 
     private var loadedType: MediaType? = null
-    private var activeKey: Triple<MediaType, Int?, ExploreSort>? = null
+    private var activeKey: ExploreCatalogKey? = null
     private var loadedPages = 0
+
+    /** Which addon catalog the grid is paging, when it is paging one at all. */
+    private var gridCatalog: AddonCatalogDescriptor? = null
+
+    /**
+     * Where the next catalog request starts. Addon catalogs page by an offset the source
+     * hands back rather than by page number, because entries dropped for being
+     * unresolvable were still consumed and must not be asked for again.
+     */
+    private var catalogSkip = 0
+
+    /**
+     * Consecutive catalog pages that added nothing. A page can legitimately resolve to
+     * nothing while the source still advances — every title on it was one this app cannot
+     * key on — so a single empty page is not exhaustion, but an unbounded run of them
+     * would page forever.
+     */
+    private var catalogEmptyPages = 0
+
 
     /** The discover feed, kept as the grid's fallback when the catalog serves nothing. */
     private var seedMedia: List<Media> = emptyList()
@@ -91,6 +113,7 @@ class ExploreController(
     private var personalShelves: List<ExploreShelf> = emptyList()
     private var editorialShelves: List<ExploreShelf> = emptyList()
     private var genreShelves: List<ExploreShelf> = emptyList()
+    private var catalogShelves: List<ExploreShelf> = emptyList()
 
     // ── Shelves ─────────────────────────────────────────────────────────────
 
@@ -121,6 +144,7 @@ class ExploreController(
 
         personalShelves = emptyList()
         genreShelves = emptyList()
+        catalogShelves = emptyList()
         // Stage 0: the seed is already here, so the page is never blank while stage 1 runs.
         editorialShelves = listOfNotNull(seedShelf(type, seed))
         shelvesLoading = editorialShelves.isEmpty()
@@ -139,8 +163,54 @@ class ExploreController(
                 if (loadedType == type) personalizing = false
             }
             if (loadedType != type) return@launch
+            // Ahead of the genre rails: these are rows the viewer opted into by
+            // installing the addon, and they are the slower of the two to resolve.
+            loadAddonCatalogs(type)
+            if (loadedType != type) return@launch
             loadGenreShelves(type, domainType)
         }
+    }
+
+    /**
+     * A rail per addon catalog matching [type].
+     *
+     * Filtered by format because Explore is a typed page — a series catalog has nothing
+     * to say while someone is browsing films, and Stremio spells that type "series".
+     * Each catalog resolves independently and a failed one is simply absent.
+     */
+    private suspend fun loadAddonCatalogs(type: MediaType) = coroutineScope {
+        val wanted = type.stremioType()
+        val catalogs = runCatching { addons.catalogs() }
+            .getOrDefault(emptyList())
+            .filter { it.type == wanted }
+        if (catalogs.isEmpty()) return@coroutineScope
+
+        val resolved = catalogs.map { descriptor ->
+            async {
+                runCatching {
+                    addons.catalogPage(
+                        addonId = descriptor.addonId,
+                        type = descriptor.type,
+                        catalogId = descriptor.catalogId,
+                        skip = 0,
+                        limit = SHELF_SIZE,
+                    ).medias
+                }.getOrDefault(emptyList())
+                    .toUi()
+                    .toShelf(
+                        id = "addon-${descriptor.addonId}-${descriptor.key}",
+                        title = descriptor.name.ifBlank { descriptor.addonName },
+                        subtitle = "From ${descriptor.addonName}",
+                        icon = "lucide:blocks",
+                        kind = ShelfKind.AddonCatalog,
+                        catalog = descriptor,
+                    )
+            }
+        }.mapNotNull { it.await() }
+
+        if (loadedType != type) return@coroutineScope
+        catalogShelves = resolved
+        publish()
     }
 
     private fun seedShelf(type: MediaType, seed: List<Media>): ExploreShelf? {
@@ -283,7 +353,12 @@ class ExploreController(
     }
 
     private fun publish() {
-        shelves = buildShelves(personalShelves + editorialShelves + genreShelves)
+        // Catalogs sit after the editorial rails and ahead of the per-genre ones: a
+        // provider the viewer deliberately installed says more than "Action", and less
+        // than what the app's own trending and top-rated rows say about the format.
+        shelves = buildShelves(
+            personalShelves + editorialShelves + catalogShelves + genreShelves,
+        )
     }
 
     // ── Grid ────────────────────────────────────────────────────────────────
@@ -299,6 +374,9 @@ class ExploreController(
         gridError = null
         gridLoading = false
         loadedPages = 0
+        gridCatalog = filters.catalog
+        catalogSkip = 0
+        catalogEmptyPages = 0
         loadNextPage()
     }
 
@@ -314,26 +392,51 @@ class ExploreController(
         gridLoading = true
         gridJob = scope.launch {
             try {
-                val page = discovery.browse(
-                    BrowseQuery(key.first.domain(), key.second, key.third.catalog, loadedPages + 1),
+                val catalog = gridCatalog
+                val fetched = if (catalog != null) {
+                    addons.catalogPage(
+                        addonId = catalog.addonId,
+                        type = catalog.type,
+                        catalogId = catalog.catalogId,
+                        skip = catalogSkip,
+                        limit = GRID_PAGE_SIZE,
+                    )
+                } else {
+                    null
+                }
+                val page = fetched?.medias?.toUi() ?: discovery.browse(
+                    BrowseQuery(key.type.domain(), key.genreId, key.sort.catalog, loadedPages + 1),
                 ).toUi()
                 // A filter changed while this was in flight: its results belong to a page
                 // nobody is looking at any more, and appending them would mix two catalogs.
                 if (activeKey != key) return@launch
 
                 val merged = (gridItems + page).distinctBy(Media::id)
-                // Exhausted covers both "the catalog gave nothing" and "it gave only
-                // duplicates" — the second happens when a popularity ordering shifts
-                // under paging, and without it the scroll handler would loop forever
-                // fetching pages that add nothing.
-                if (merged.size == gridItems.size) {
+                val stalled = merged.size == gridItems.size
+                if (fetched != null) {
+                    // The source says where the next request starts, because entries it
+                    // dropped as unresolvable were still consumed. A page that advances
+                    // nothing is the real end of the catalog; one that merely resolved to
+                    // nothing is not, so a run of them is what exhaustion waits for.
+                    val advanced = fetched.nextSkip > catalogSkip
+                    catalogSkip = maxOf(fetched.nextSkip, catalogSkip)
+                    catalogEmptyPages = if (stalled) catalogEmptyPages + 1 else 0
+                    if (!advanced || catalogEmptyPages >= MAX_EMPTY_CATALOG_PAGES) {
+                        gridExhausted = true
+                    }
+                    if (!stalled) gridItems = merged
+                } else if (stalled) {
+                    // Exhausted covers both "the catalog gave nothing" and "it gave only
+                    // duplicates" — the second happens when a popularity ordering shifts
+                    // under paging, and without it the scroll handler would loop forever
+                    // fetching pages that add nothing.
                     gridExhausted = true
                     // Nothing at all on the very first page means browsing is not
                     // available here — no discovery wired, or a host that serves no
                     // /browse. The discover feed is still in hand, so narrow that
                     // instead of leaving the grid blank.
                     if (gridItems.isEmpty() && loadedPages == 0) {
-                        gridItems = seedFor(key.first, key.second)
+                        gridItems = seedFor(key.type, key.genreId)
                     }
                 } else {
                     loadedPages += 1
@@ -380,12 +483,21 @@ class ExploreController(
         kind: ShelfKind,
         genreId: Int? = null,
         sort: ExploreSort = ExploreSort.Trending,
+        catalog: AddonCatalogDescriptor? = null,
     ): ExploreShelf? = takeIf { it.isNotEmpty() }?.let { media ->
-        ExploreShelf(id, title, subtitle, icon, kind, media, genreId, sort)
+        ExploreShelf(id, title, subtitle, icon, kind, media, genreId, sort, catalog)
     }
 
     private companion object {
         const val SHELF_SIZE = 20
+
+        // One screenful of a catalog grid. Larger than a rail because the grid is what
+        // someone reaches for when they want to see past the first handful.
+        const val GRID_PAGE_SIZE = 40
+
+        // See catalogEmptyPages: enough slack for a stretch of titles this app cannot
+        // key on, short of paging an entire catalog that will never yield anything.
+        const val MAX_EMPTY_CATALOG_PAGES = 3
         const val GENRE_SHELVES = 6
 
         // Favourites come back weighted, and the strongest may well be a film when the
@@ -393,6 +505,12 @@ class ExploreController(
         // right format among them rather than none.
         const val FAVORITE_CANDIDATES = 8
     }
+}
+
+/** Stremio's own word for this format, which is what an addon manifest spells it as. */
+private fun MediaType.stremioType(): String = when (this) {
+    MediaType.Movie -> "movie"
+    MediaType.Series -> "series"
 }
 
 private fun MediaType.domain(): DomainMediaType = when (this) {
@@ -403,7 +521,10 @@ private fun MediaType.domain(): DomainMediaType = when (this) {
 private fun trendingShelfId(type: MediaType): String = "trending-${type.name}"
 
 @Composable
-fun rememberExploreController(discovery: DiscoveryRepository): ExploreController {
+fun rememberExploreController(
+    discovery: DiscoveryRepository,
+    addons: AddonRepository,
+): ExploreController {
     val scope = rememberCoroutineScope()
-    return remember(discovery) { ExploreController(discovery, scope) }
+    return remember(discovery, addons) { ExploreController(discovery, addons, scope) }
 }

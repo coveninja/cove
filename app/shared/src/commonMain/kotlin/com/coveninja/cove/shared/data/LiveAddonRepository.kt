@@ -1,5 +1,7 @@
 package com.coveninja.cove.shared.data
 
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
+import com.coveninja.cove.shared.model.AddonCatalogPage
 import com.coveninja.cove.shared.network.CoveApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +53,24 @@ class LiveAddonRepository(
     override suspend fun refreshAddon(id: String) = mutate {
         api.refreshAddon(id)
     }
+
+    override suspend fun catalogs(): List<AddonCatalogDescriptor> =
+        // Swallowed rather than surfaced: a host too old to serve /catalogs is otherwise
+        // perfectly usable, and the honest answer for it is that it offers none.
+        runCatching { api.addonCatalogs() }.getOrDefault(emptyList())
+
+    override suspend fun catalogPage(
+        addonId: String,
+        type: String,
+        catalogId: String,
+        skip: Int,
+        limit: Int,
+    ): AddonCatalogPage = api.addonCatalog(addonId, type, catalogId, skip, limit)
+
+    override suspend fun setCatalogEnabled(addonId: String, catalogKey: String, enabled: Boolean) =
+        mutate {
+            api.setAddonCatalogEnabled(addonId, catalogKey, enabled)
+        }
 
     override suspend fun addNuvioRepo(url: String) = mutate {
         api.addNuvioRepo(url.trim())

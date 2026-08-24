@@ -2,6 +2,7 @@ package com.coveninja.cove.backend
 
 import com.coveninja.cove.backend.db.DesktopDatabase
 import com.coveninja.cove.backend.content.MediaCatalog
+import com.coveninja.cove.backend.addons.AddonCatalogService
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.migration.LegacyExporter
 import com.coveninja.cove.backend.migration.LegacyMigration
@@ -58,6 +59,7 @@ class LocalStoreGraph private constructor(
     fun createHttpHost(
         catalog: MediaCatalog? = null,
         addons: AddonManager? = null,
+        addonCatalogs: AddonCatalogService? = null,
         nuvio: NuvioManager? = null,
         media: MediaBoundary? = null,
         auth: AuthService? = null,
@@ -82,6 +84,7 @@ class LocalStoreGraph private constructor(
             library = library,
             catalog = catalog,
             addons = addons,
+            addonCatalogs = addonCatalogs,
             nuvio = nuvio,
             media = media,
             auth = auth,

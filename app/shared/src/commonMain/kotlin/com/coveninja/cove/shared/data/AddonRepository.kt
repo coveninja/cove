@@ -1,6 +1,8 @@
 package com.coveninja.cove.shared.data
 
 import com.coveninja.cove.shared.model.Addon
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
+import com.coveninja.cove.shared.model.AddonCatalogPage
 import com.coveninja.cove.shared.model.NuvioRepoSummary
 import kotlinx.coroutines.flow.StateFlow
 
@@ -58,6 +60,41 @@ interface AddonRepository {
     suspend fun setAddonEnabled(id: String, enabled: Boolean)
     suspend fun removeAddon(id: String)
     suspend fun refreshAddon(id: String)
+
+    /**
+     * Every catalog the profile can currently draw, newest addon last.
+     *
+     * A *list* rather than a [StateFlow] because nothing watches it continuously: Home and
+     * Explore ask once per load, and the addon mutations that could change it already
+     * republish [state]. Hosts that cannot serve catalogs report none rather than failing,
+     * which is what leaves a compatibility client with the rest of the app working.
+     */
+    suspend fun catalogs(): List<AddonCatalogDescriptor> = emptyList()
+
+    /**
+     * One page of [catalogId], resolved onto media this app can key on.
+     *
+     * Page with the returned [AddonCatalogPage.nextSkip] rather than by counting what came
+     * back — entries that could not be resolved are dropped, so the two differ, and adding
+     * the survivors would re-request the dropped ones forever. An empty [
+     * AddonCatalogPage.medias] means the catalog is exhausted.
+     */
+    suspend fun catalogPage(
+        addonId: String,
+        type: String,
+        catalogId: String,
+        skip: Int = 0,
+        limit: Int = 20,
+    ): AddonCatalogPage = AddonCatalogPage()
+
+    /**
+     * Shows or hides one catalog, keyed as [AddonCatalogDescriptor.key].
+     *
+     * Only on an addon this profile owns. An inherited one resolves through the primary,
+     * and writing to it would quietly give this profile a private copy of the primary's
+     * addon — so the settings screen must not offer the switch there.
+     */
+    suspend fun setCatalogEnabled(addonId: String, catalogKey: String, enabled: Boolean) {}
 
     suspend fun addNuvioRepo(url: String)
     suspend fun setNuvioRepoEnabled(id: String, enabled: Boolean)

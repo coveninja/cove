@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.pages.explore
 
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.model.TmdbGenres
@@ -276,4 +277,108 @@ class ExploreModelTest {
         // A blank name from the backend is not an answer, so the fallback still applies.
         assertEquals("Drama", resolveGenreName(18, MediaType.Movie, mapOf(18 to "")))
     }
+
+    // ── Addon catalogs ──────────────────────────────────────────────────────
+
+    private fun descriptor(addonId: String, catalogId: String, type: String = "movie") =
+        AddonCatalogDescriptor(
+            addonId = addonId,
+            addonName = "Provider",
+            addonUrl = "https://addon.test",
+            type = type,
+            catalogId = catalogId,
+            name = catalogId,
+        )
+
+    /**
+     * `catalogKey` is what `setGridFilters` diffs on to decide whether the grid needs
+     * reloading. Two different addon catalogs are two different pages, so they must not
+     * compare equal — otherwise "See all" on the second row would show the first row's
+     * results.
+     *
+     * Mutation applied to verify: dropped `catalog?.addonId` and `catalog?.key` from
+     * `catalogKey` → test failed, the two keys compared equal.
+     */
+    @Test
+    fun `two addon catalogs are two different grid pages`() {
+        val first = ExploreFilters(catalog = descriptor("addon.one", "popular"))
+        val second = ExploreFilters(catalog = descriptor("addon.one", "trending"))
+        val otherAddon = ExploreFilters(catalog = descriptor("addon.two", "popular"))
+
+        assertTrue(first.catalogKey != second.catalogKey, "same addon, different catalog")
+        assertTrue(first.catalogKey != otherAddon.catalogKey, "same catalog id, different addon")
+        assertEquals(first.catalogKey, ExploreFilters(catalog = descriptor("addon.one", "popular")).catalogKey)
+    }
+
+    /**
+     * A catalog is a narrowing of the page just as a genre is, which is what puts the
+     * "Clear filters" affordance in reach — the only way back out of a catalog grid whose
+     * results are empty.
+     *
+     * Mutation applied to verify: removed `|| catalog != null` from `narrowed` → test
+     * failed, a catalog-filtered page reported itself unnarrowed.
+     */
+    @Test
+    fun `a catalog narrows the page`() {
+        assertTrue(ExploreFilters(catalog = descriptor("addon.one", "popular")).narrowed)
+        assertTrue(!ExploreFilters().narrowed)
+    }
+
+    /**
+     * The catalog grid is the one arrangement reached from somewhere else, so it has to
+     * name itself. The addon is the identifying half — "Popular" is what half the
+     * catalogs in circulation are called, and it says nothing on its own.
+     *
+     * Mutation applied to verify: dropped `catalog.addonName` from
+     * `catalogGridSubtitle` → test failed, the provider was no longer named.
+     */
+    @Test
+    fun `a catalog grid names its addon alongside the count`() {
+        val catalog = descriptor("addon.one", "popular")
+
+        assertEquals("Provider · 24+ titles", catalogGridSubtitle(catalog, 24, moreAvailable = true))
+        assertEquals("Provider · 3 titles", catalogGridSubtitle(catalog, 3, moreAvailable = false))
+        assertEquals("Provider · 1 title", catalogGridSubtitle(catalog, 1, moreAvailable = false))
+    }
+
+    /**
+     * Leaving the catalog has to leave the page unnarrowed, or Explore stays filtered to
+     * something nothing on screen still mentions.
+     *
+     * Mutation applied to verify: made the exit `filters.copy()` without clearing the
+     * catalog → test failed, the page was still narrowed.
+     */
+    @Test
+    fun `clearing the catalog unnarrows the page`() {
+        val inCatalog = ExploreFilters(catalog = descriptor("addon.one", "popular"))
+        val left = inCatalog.copy(catalog = null)
+
+        assertTrue(inCatalog.narrowed)
+        assertTrue(!left.narrowed)
+        assertTrue(inCatalog.catalogKey != left.catalogKey, "leaving reloads the grid")
+    }
+
+    /**
+     * An addon's rail is defined by its ordering, so it survives `buildShelves` even where
+     * every title on it has already appeared. A membership rail in the same position would
+     * be dropped as saying nothing new — that difference is the whole point of
+     * [ShelfKind.definedByOrder].
+     *
+     * Mutation applied to verify: declared `AddonCatalog(definedByOrder = false)` → test
+     * failed, the catalog shelf was dropped as redundant.
+     */
+    @Test
+    fun `an addon catalog rail survives overlapping an earlier rail`() {
+        val titles = List(6) { media("Title $it") }
+        val kept = buildShelves(
+            listOf(
+                shelf("trending", titles, ShelfKind.Trending),
+                shelf("addon", titles, ShelfKind.AddonCatalog),
+                shelf("genre", titles, ShelfKind.Genre),
+            ),
+        )
+
+        assertEquals(listOf("trending", "addon"), kept.map(ExploreShelf::id))
+    }
+
 }

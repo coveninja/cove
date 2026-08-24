@@ -221,6 +221,69 @@ class LocalAddonRepositoryTest {
         http.close()
     }
 
+    /**
+     * The settings screen draws a switch per catalog straight off the addon, so the
+     * manifest's catalogs have to survive the mapping into the shared model — and only
+     * the drawable ones, since a switch for a search-gated catalog would toggle a row
+     * that can never appear.
+     *
+     * Mutation applied to verify: dropped the `filter(AddonCatalog::isHomeEligible)` from
+     * `toSharedModel` → test failed, the search catalog came back too.
+     */
+    @Test
+    fun `an addon reports its drawable catalogs and their enabled state`() = runTest {
+        val http = catalogHttpClient()
+        val directory = Files.createTempDirectory("cove-addon-catalogs")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, directory) { "primary" }.importIfNeeded()
+            val session = ActiveProfileSession(store.database)
+            val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+            val manager = AddonManager(store.database, session, http, { "now" })
+            val repository = LocalAddonRepository(
+                addons = manager,
+                activeProfileIds = session.profileId,
+                scope = scope,
+            )
+
+            advanceUntilIdle()
+            repository.addAddon("https://addon.test/manifest.json")
+
+            val installed = assertIs<AddonsState.Ready>(repository.state.value)
+                .addons.single { it.source == "stremio" }
+            assertEquals(listOf("popular", "top"), installed.catalogs.map { it.catalogId })
+            assertEquals(listOf("movie/popular", "movie/top"), installed.catalogs.map { it.key })
+            assertTrue(installed.catalogs.all { it.enabled }, "nothing is disabled by default")
+
+            repository.setCatalogEnabled("provider.one", "movie/popular", enabled = false)
+
+            val toggled = assertIs<AddonsState.Ready>(repository.state.value)
+                .addons.single { it.source == "stremio" }
+            assertEquals(
+                listOf(false, true),
+                toggled.catalogs.map { it.enabled },
+                "only the switched catalog changes",
+            )
+            scope.cancel()
+        }
+    }
+
+    private fun catalogHttpClient() = HttpClient(MockEngine { request ->
+        require(request.url.encodedPath.endsWith("/manifest.json")) {
+            "unexpected URL ${request.url}"
+        }
+        respond(
+            """{"id":"provider.one","name":"Provider One","resources":["stream","catalog"],
+                "catalogs":[
+                  {"type":"movie","id":"popular","name":"Popular"},
+                  {"type":"movie","id":"top","name":"Top"},
+                  {"type":"movie","id":"find","name":"Find",
+                   "extra":[{"name":"search","isRequired":true}]}
+                ]}""",
+            HttpStatusCode.OK,
+            headersOf(HttpHeaders.ContentType, "application/json"),
+        )
+    })
+
     private fun providerHttpClient() = HttpClient(MockEngine { request ->
         require(request.url.encodedPath.endsWith("/manifest.json")) {
             "unexpected URL ${request.url}"

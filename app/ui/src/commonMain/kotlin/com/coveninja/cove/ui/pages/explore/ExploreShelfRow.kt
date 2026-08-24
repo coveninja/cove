@@ -23,8 +23,13 @@ fun ExploreShelfRow(
 ) {
     // Only rails the grid can actually reproduce offer it. A personalized rail has no
     // equivalent filter, and a "See all" that quietly showed something else would be
-    // worse than no link.
-    val seeAll = if (shelf.genreId != null || shelf.kind != ShelfKind.BecauseYouWatched) {
+    // worse than no link. An addon catalog reproduces exactly — the grid pages the same
+    // catalog — which is why it qualifies on its own rather than through a genre.
+    val seeAll = if (
+        shelf.catalog != null ||
+        shelf.genreId != null ||
+        shelf.kind != ShelfKind.BecauseYouWatched
+    ) {
         { onSeeAll(shelf) }
     } else {
         null

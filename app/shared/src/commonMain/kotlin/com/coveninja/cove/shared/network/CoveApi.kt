@@ -339,6 +339,38 @@ class CoveApi(
         }.requireSuccess()
     }
 
+    // ── Addon catalogs ──────────────────────────────────────────────────────
+
+    suspend fun addonCatalogs(): List<AddonCatalogDescriptor> =
+        httpClient.get("${'$'}{config.baseUrl}/api/catalogs") { applyAuthHeaders() }
+            .requireSuccess().body()
+
+    suspend fun addonCatalog(
+        addonId: String,
+        type: String,
+        catalogId: String,
+        skip: Int,
+        limit: Int,
+    ): AddonCatalogPage =
+        httpClient.get("${'$'}{config.baseUrl}/api/catalog") {
+            applyAuthHeaders()
+            parameter("addonId", addonId)
+            parameter("type", type)
+            parameter("catalogId", catalogId)
+            parameter("skip", skip)
+            parameter("limit", limit)
+        }.requireSuccess().body()
+
+    suspend fun setAddonCatalogEnabled(addonId: String, catalogKey: String, enabled: Boolean) {
+        httpClient.patch("${'$'}{config.baseUrl}/api/addons/catalog") {
+            applyAuthHeaders()
+            parameter("id", addonId)
+            parameter("catalog", catalogKey)
+            contentType(ContentType.Application.Json)
+            setBody(ToggleEnabledRequest(enabled))
+        }.requireSuccess()
+    }
+
     // ── Nuvio scraper repositories ──────────────────────────────────────────
 
     suspend fun nuvioRepos(): List<NuvioRepoSummary> =

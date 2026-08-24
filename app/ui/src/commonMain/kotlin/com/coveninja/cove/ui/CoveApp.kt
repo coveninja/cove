@@ -336,9 +336,9 @@ private fun CoveAppContent(
     // These page sessions live above the destination switch. Returning to a primary tab keeps
     // its loaded optional content and every vertical/horizontal scroll position instead of
     // rebuilding request-owning controllers from scratch.
-    val homeController = rememberHomeController(graph.content, graph.discovery)
+    val homeController = rememberHomeController(graph.content, graph.discovery, graph.addons)
     val homePageState = rememberHomePageState()
-    val exploreController = rememberExploreController(graph.discovery)
+    val exploreController = rememberExploreController(graph.discovery, graph.addons)
     val explorePageState = rememberExplorePageState()
     val videoPlayerHost = LocalVideoPlayerHost.current
     val uriHandler = LocalUriHandler.current
@@ -475,6 +475,10 @@ private fun CoveAppContent(
                         // sheet: the whole claim of "carry on watching" is that it is one press.
                         onPlayMedia = { playback.open(it) },
                         onExplore = { selectedDestination = NavDestination.Explore },
+                        onExploreCatalog = { catalogDescriptor ->
+                            explorePageState.showCatalog(catalogDescriptor)
+                            selectedDestination = NavDestination.Explore
+                        },
                         onOpenMyList = { selectedDestination = NavDestination.MyList },
                         navBarPlacement = navBarPlacement,
                     )

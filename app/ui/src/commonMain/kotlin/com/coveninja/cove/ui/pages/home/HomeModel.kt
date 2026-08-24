@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.pages.home
 
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
@@ -423,6 +424,12 @@ data class HomeRail(
      * nothing and are dropped. Mirrors `ShelfKind.definedByOrder` on Explore.
      */
     val ordered: Boolean = false,
+    /**
+     * Set when the rail is one addon catalog, which is what lets "See all" page through
+     * the rest of it. Null for every rail built out of the app's own metadata provider,
+     * whose "see all" is a filter on the ordinary grid instead.
+     */
+    val catalog: AddonCatalogDescriptor? = null,
 )
 
 /**

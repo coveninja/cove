@@ -1,6 +1,9 @@
 package com.coveninja.cove.backend.content
 
 import com.coveninja.cove.backend.addons.AddonCatalogItem
+import com.coveninja.cove.backend.addons.imdbId
+import com.coveninja.cove.backend.addons.mediaType
+import com.coveninja.cove.backend.addons.tmdbId
 import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaCastMember
@@ -252,20 +255,16 @@ class TmdbClient(
         personId?.let { parameter("with_people", it) }
     }.withType(type).filter { !it.posterPath.isNullOrBlank() }
 
-    suspend fun resolveAddonMeta(meta: AddonCatalogItem): Media? {
-        val type = when (meta.type) {
-            "movie" -> MediaType.Movie
-            "series", "tv" -> MediaType.Tv
-            else -> return null
-        }
-        val direct = meta.id.removePrefix("tmdb:").substringBefore(':')
-            .takeIf { meta.id.startsWith("tmdb:") }
-            ?.toIntOrNull()
-            ?.takeIf { it > 0 }
-        if (direct != null) return runCatching { media(direct, type) }.getOrNull()
-        if (!meta.id.startsWith("tt")) return null
+    /**
+     * Adds the IMDB half to the interface's `tmdb:`-only default: TMDB can trade a `tt…`
+     * id for one of its own through /find, which is the form most addon catalogs use.
+     */
+    override suspend fun resolveAddonMeta(meta: AddonCatalogItem): Media? {
+        val type = meta.mediaType() ?: return null
+        meta.tmdbId()?.let { direct -> return runCatching { media(direct, type) }.getOrNull() }
+        val imdbId = meta.imdbId() ?: return null
         val found = runCatching {
-            request<TmdbFind>("/find/${meta.id}", "en-US") {
+            request<TmdbFind>("/find/$imdbId", "en-US") {
                 parameter("external_source", "imdb_id")
             }
         }.getOrNull() ?: return null

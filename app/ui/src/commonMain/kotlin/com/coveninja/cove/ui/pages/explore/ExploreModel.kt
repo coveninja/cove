@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.pages.explore
 
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
@@ -37,12 +38,25 @@ data class ExploreFilters(
     val genreId: Int? = null,
     val sort: ExploreSort = ExploreSort.Trending,
     val query: String = "",
+    /**
+     * When set, the grid pages through this addon catalog instead of the app's own
+     * metadata provider. Mutually exclusive with [genreId] and [sort] in practice — an
+     * addon decides its own contents and ordering, and neither filter reaches it.
+     */
+    val catalog: AddonCatalogDescriptor? = null,
 ) {
     /** True when anything beyond the format switch is narrowing the page. */
-    val narrowed: Boolean get() = genreId != null || query.isNotBlank()
+    val narrowed: Boolean get() = genreId != null || query.isNotBlank() || catalog != null
 
-    /** Everything that changes which page the catalog would return, and nothing else. */
-    val catalogKey: Triple<MediaType, Int?, ExploreSort> get() = Triple(type, genreId, sort)
+    /**
+     * Everything that changes which page the catalog would return, and nothing else.
+     *
+     * The addon catalog belongs in here as much as the genre does: it is the whole
+     * source of the results, so leaving it out would let a switch from one addon
+     * catalog to another compare equal and never reload.
+     */
+    val catalogKey: ExploreCatalogKey
+        get() = ExploreCatalogKey(type, genreId, sort, catalog?.addonId, catalog?.key)
 }
 
 /**
@@ -65,6 +79,13 @@ enum class ShelfKind(val definedByOrder: Boolean) {
     TopRated(definedByOrder = true),
     NewReleases(definedByOrder = true),
     Genre(definedByOrder = false),
+
+    /**
+     * One catalog from a third-party addon. Ordered, because the addon's own choice of
+     * order *is* the rail — a provider's "Popular" is a statement about its library, not
+     * a set that stops being worth showing once TMDB's trending has covered the titles.
+     */
+    AddonCatalog(definedByOrder = true),
 }
 
 /** One horizontal rail. */
@@ -78,6 +99,21 @@ data class ExploreShelf(
     /** Set when "See all" can hand the grid a filter that means the same thing. */
     val genreId: Int? = null,
     val sort: ExploreSort = ExploreSort.Trending,
+    /**
+     * Set on a [ShelfKind.AddonCatalog] rail, and the only honest destination its "See
+     * all" has: the grid's ordinary filters describe the app's own metadata provider and
+     * cannot reproduce an addon's list.
+     */
+    val catalog: AddonCatalogDescriptor? = null,
+)
+
+/** Identifies which page the grid is showing, so an unchanged filter does not reload it. */
+data class ExploreCatalogKey(
+    val type: MediaType,
+    val genreId: Int?,
+    val sort: ExploreSort,
+    val addonId: String?,
+    val catalogKey: String?,
 )
 
 /** Below this a rail has too few posters to be worth a heading and a row of its own. */
@@ -151,6 +187,19 @@ fun applyQuery(media: List<Media>, query: String): List<Media> {
 }
 
 /** "1 title" / "24 titles", and "24+ titles" while more pages are still reachable. */
+/**
+ * The line under an addon catalog's name in the grid.
+ *
+ * Names the addon as well as the count, because a catalog's own name is rarely enough to
+ * place it — half the catalogs in circulation are called "Popular", and which provider
+ * that is is the part worth knowing.
+ */
+fun catalogGridSubtitle(
+    catalog: AddonCatalogDescriptor,
+    count: Int,
+    moreAvailable: Boolean,
+): String = "${catalog.addonName} · ${titleCountLabel(count, moreAvailable)}"
+
 fun titleCountLabel(count: Int, moreAvailable: Boolean): String {
     val noun = if (count == 1) "title" else "titles"
     return if (moreAvailable) "$count+ $noun" else "$count $noun"

@@ -1,5 +1,8 @@
 package com.coveninja.cove.backend.content
 
+import com.coveninja.cove.backend.addons.AddonCatalogItem
+import com.coveninja.cove.backend.addons.mediaType
+import com.coveninja.cove.backend.addons.tmdbId
 import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaDetails
@@ -34,6 +37,24 @@ interface MediaCatalog {
 
     /** The provider's own genre vocabulary for [type]. Ids are only meaningful alongside it. */
     suspend fun genres(type: MediaType): List<MediaGenre>
+
+    /**
+     * One Stremio catalog entry resolved onto this catalog's own [Media], or null when it
+     * cannot be. Addon catalogs name titles in their own vocabulary — an IMDB id, a
+     * `tmdb:` id, sometimes a scheme this app has never heard of — and every screen
+     * downstream is keyed on a numeric catalog id, so an entry that will not resolve has
+     * no card to become and is dropped rather than half-drawn.
+     *
+     * On the interface for the same reason as [person]: Android runs no HTTP host, so
+     * in-process is the only way it can reach this at all. The default handles the one
+     * form any catalog can answer — its own ids, spelled `tmdb:` — and leaves the rest to
+     * implementations that can look an external id up.
+     */
+    suspend fun resolveAddonMeta(meta: AddonCatalogItem): Media? {
+        val type = meta.mediaType() ?: return null
+        val id = meta.tmdbId() ?: return null
+        return runCatching { media(id, type) }.getOrNull()
+    }
 
     /**
      * One page of the catalog narrowed by any combination of genre, keyword and person.

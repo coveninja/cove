@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend.addons
 
+import com.coveninja.cove.shared.model.MediaType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -118,11 +119,42 @@ data class AddonCatalogItem(
     val releaseInfo: String = "",
 )
 
-@Serializable
-data class AddonCatalogPage(
-    val medias: List<com.coveninja.cove.shared.model.Media> = emptyList(),
-    val nextSkip: Int = 0,
-)
+/**
+ * How a catalog's enable flag is keyed, in `disabledCatalogs` and over the wire.
+ *
+ * A catalog id is only unique within its addon and within its type, so the type is part
+ * of the key. Spelled once here because the manager, the repository mapping and the
+ * shared descriptor all have to agree on it.
+ */
+fun AddonCatalog.key(): String = "$type/$id"
+
+/**
+ * The app's own media type for a catalog entry, or null when the addon named one this
+ * app does not model. Stremio says "series" where this app says [MediaType.Tv], and
+ * some addons say "tv" instead.
+ */
+fun AddonCatalogItem.mediaType(): MediaType? = when (type) {
+    "movie" -> MediaType.Movie
+    "series", "tv" -> MediaType.Tv
+    else -> null
+}
+
+/**
+ * The TMDB id an entry names directly, or null when it names something else.
+ *
+ * Only the `tmdb:` form is direct. The trailing segments of an episode id
+ * (`tmdb:1396:1:1`) are dropped: the row shows the show, not the episode. An IMDB
+ * `tt…` id is *not* handled here — that needs a lookup, so it belongs to whichever
+ * implementation can make one.
+ */
+fun AddonCatalogItem.tmdbId(): Int? = id.takeIf { it.startsWith("tmdb:") }
+    ?.removePrefix("tmdb:")
+    ?.substringBefore(':')
+    ?.toIntOrNull()
+    ?.takeIf { it > 0 }
+
+/** An entry naming an IMDB title, which needs an external lookup to resolve. */
+fun AddonCatalogItem.imdbId(): String? = id.takeIf { it.startsWith("tt") }
 
 @Serializable
 data class TimestampSegment(

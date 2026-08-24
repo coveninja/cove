@@ -26,6 +26,11 @@ import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.model.WatchProgress
 import com.coveninja.cove.shared.network.CoveJson
 import com.coveninja.cove.shared.network.SearchResultsDto
+import com.coveninja.cove.backend.addons.AddonCatalogService
+import com.coveninja.cove.backend.addons.AddonManager
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -36,6 +41,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
 import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 import kotlin.test.Test
@@ -45,6 +51,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.builtins.serializer
@@ -267,8 +274,68 @@ class CoreRoutesTest {
         }
     }
 
+    /**
+     * The addon catalog routes, after the page assembly moved out of the route body into
+     * [AddonCatalogService]. What is worth pinning here is the contract the old inline
+     * version had and a delegating one could quietly lose: which catalogs are offered as
+     * rows, and that `nextSkip` counts source entries rather than surviving ones.
+     *
+     * Mutation applied to verify: made the /catalog route respond
+     * `AddonCatalogPage(medias, skip + medias.size)` from the service's own medias →
+     * test failed with next_skip 2 rather than 3.
+     */
+    @Test
+    fun addonCatalogRoutesListAndPageThroughACatalog() {
+        val http = HttpClient(MockEngine { request ->
+            val body = when {
+                request.url.encodedPath.endsWith("/manifest.json") ->
+                    """{"id":"provider.one","name":"Provider One",
+                        "resources":["stream","catalog"],
+                        "catalogs":[
+                          {"type":"movie","id":"popular","name":"Popular"},
+                          {"type":"movie","id":"find","name":"Find",
+                           "extra":[{"name":"search","isRequired":true}]}
+                        ]}"""
+                "/catalog/" in request.url.encodedPath ->
+                    """{"metas":[
+                        {"id":"tmdb:11","type":"movie","name":"One"},
+                        {"id":"kitsu:9","type":"movie","name":"Unresolvable"},
+                        {"id":"tmdb:22","type":"movie","name":"Two"}
+                      ]}"""
+                else -> error("unexpected URL ${request.url}")
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        })
+        val catalog = RecordingCatalog()
+        fixture(catalog, addonHttp = http) { services ->
+            testApplication {
+                application { configureCoreRoutes(services) }
+                runBlocking { services.addons!!.add("https://addon.test/manifest.json") }
+
+                val listed = client.get("/api/v1/catalogs")
+                assertEquals(HttpStatusCode.OK, listed.status)
+                val listedBody = listed.bodyAsText()
+                assertTrue("\"catalogId\":\"popular\"" in listedBody, listedBody)
+                // The wire name predates the app's own; renaming it would empty the list
+                // for every compatibility client.
+                assertTrue("\"catalogType\":\"movie\"" in listedBody, listedBody)
+                // A catalog that cannot answer without a search term is not a row.
+                assertTrue("\"catalogId\":\"find\"" !in listedBody, listedBody)
+
+                val page = client.get(
+                    "/api/v1/catalog?addonId=provider.one&type=movie&catalogId=popular&limit=20",
+                )
+                assertEquals(HttpStatusCode.OK, page.status)
+                val pageBody = page.bodyAsText()
+                assertTrue("\"next_skip\":3" in pageBody || "\"nextSkip\":3" in pageBody, pageBody)
+            }
+        }
+        http.close()
+    }
+
     private fun fixture(
         catalog: com.coveninja.cove.backend.content.MediaCatalog? = null,
+        addonHttp: HttpClient? = null,
         test: (CoreRouteServices) -> Unit,
     ) {
         val dir = Files.createTempDirectory("cove-routes")
@@ -277,6 +344,9 @@ class CoreRoutesTest {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             try {
                 val session = ActiveProfileSession(database.database)
+                val addonManager = addonHttp?.let {
+                    AddonManager(database.database, session, it, { "now" })
+                }
                 var id = 0
                 val ids = { "id-${++id}" }
                 test(
@@ -287,6 +357,9 @@ class CoreRoutesTest {
                         clientSessions = ClientSessionStore(database.database) { "now" },
                         deviceSettings = DeviceSettingsService(dir),
                         catalog = catalog,
+                        addons = addonManager,
+                        addonCatalogs = addonManager
+                            ?.let { AddonCatalogService(it, requireNotNull(catalog)) },
                     ),
                 )
             } finally {

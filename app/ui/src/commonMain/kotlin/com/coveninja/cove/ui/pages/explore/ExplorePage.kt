@@ -10,6 +10,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.ExploreState
@@ -53,10 +55,13 @@ import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.PageError
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
+import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.pages.common.MediaRailStateStore
 import com.coveninja.cove.ui.pages.common.ScrollToTopButton
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.pages.common.rememberMediaRailStateStore
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
+import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.rememberMediaActions
@@ -75,6 +80,23 @@ class ExplorePageState internal constructor(
 
     var layout by mutableStateOf(ExploreLayout.Shelves)
         internal set
+
+    /**
+     * Points Explore at one addon catalog, as Home's catalog rails do when the viewer
+     * asks to see the rest of one.
+     *
+     * Replaces the narrowing filters rather than adding to them: an addon decides its own
+     * contents and ordering, so a genre carried across from wherever the viewer came from
+     * would describe a page this is not about to show. The format follows the catalog,
+     * since a series catalog has nothing to say under the film switch.
+     */
+    fun showCatalog(catalog: AddonCatalogDescriptor) {
+        filters = ExploreFilters(
+            type = if (catalog.type == "series") MediaType.Series else MediaType.Movie,
+            catalog = catalog,
+        )
+        layout = ExploreLayout.Grid
+    }
 }
 
 @Composable
@@ -152,6 +174,14 @@ fun ExplorePage(
         applyQuery(controller.gridItems, filters.query)
     }
 
+    // Back to where the viewer came from: a catalog grid is only ever reached from its
+    // rail, and leaving the filter set behind would keep the page narrowed to a catalog
+    // nothing on screen still mentions.
+    fun leaveCatalog() {
+        pageState.filters = filters.copy(catalog = null)
+        pageState.layout = ExploreLayout.Shelves
+    }
+
     fun surpriseMe() {
         val pool = if (layout == ExploreLayout.Grid) visibleGrid else shelfMedia
         pool.randomOrNullStable()?.let(onOpenMedia)
@@ -163,7 +193,15 @@ fun ExplorePage(
             layout = layout,
             genres = controller.genres,
             onFiltersChange = onFiltersChange,
-            onLayoutChange = { pageState.layout = it },
+            // Switching arrangement by hand leaves the catalog too. Keeping it would
+            // hold the page narrowed to something only the grid ever named, and send the
+            // viewer back into it the next time they picked Grid.
+            onLayoutChange = { next ->
+                if (next == ExploreLayout.Shelves && filters.catalog != null) {
+                    pageState.filters = filters.copy(catalog = null)
+                }
+                pageState.layout = next
+            },
             onSurpriseMe = ::surpriseMe,
             modifier = Modifier.padding(
                 horizontal = PageLayoutDefaults.HorizontalPadding,
@@ -215,10 +253,19 @@ fun ExplorePage(
                         }
                     },
                     onSeeAll = { shelf ->
-                        pageState.filters = filters.copy(
-                            genreId = shelf.genreId,
-                            sort = shelf.sort,
-                        )
+                        // An addon catalog replaces the ordinary filters rather than
+                        // joining them: the addon decides its own contents and order, so
+                        // carrying a genre or sort across would describe a page the grid
+                        // is not about to show.
+                        pageState.filters = if (shelf.catalog != null) {
+                            filters.copy(genreId = null, catalog = shelf.catalog)
+                        } else {
+                            filters.copy(
+                                genreId = shelf.genreId,
+                                sort = shelf.sort,
+                                catalog = null,
+                            )
+                        }
                         pageState.layout = ExploreLayout.Grid
                     },
                     mediaCard = mediaCard,
@@ -238,6 +285,7 @@ fun ExplorePage(
                             sort = filters.sort,
                         )
                     },
+                    onExitCatalog = ::leaveCatalog,
                     mediaCard = mediaCard,
                     toolbar = toolbar,
                     navBarPlacement = navBarPlacement,
@@ -369,6 +417,7 @@ private fun GridLayout(
     filters: ExploreFilters,
     visible: List<Media>,
     onClearFilters: () -> Unit,
+    onExitCatalog: () -> Unit,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     toolbar: @Composable () -> Unit,
     navBarPlacement: NavBarPlacement,
@@ -402,16 +451,63 @@ private fun GridLayout(
         Column(modifier = Modifier.fillMaxSize()) {
             toolbar()
 
-            Text(
-                text = titleCountLabel(visible.size, moreAvailable = !controller.gridExhausted),
-                modifier = Modifier.padding(
-                    horizontal = PageLayoutDefaults.HorizontalPadding,
-                    vertical = 6.dp,
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-            )
+            // A catalog grid is the one arrangement the viewer arrives at from somewhere
+            // else, so it is also the only one that has to say where it is and offer a way
+            // back. Every other grid is a filter of the page the toolbar already describes.
+            val activeCatalog = filters.catalog
+            if (activeCatalog != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = PageLayoutDefaults.HorizontalPadding - 8.dp,
+                            end = PageLayoutDefaults.HorizontalPadding,
+                            top = 2.dp,
+                            bottom = 4.dp,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ToolbarIconButton(
+                        iconName = "lucide:chevron-left",
+                        description = "Back to shelves",
+                        onClick = onExitCatalog,
+                    )
+                    // Weighted so a long catalog name ellipsizes instead of pushing the
+                    // row past the screen edge; addon names are not length-bounded.
+                    Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
+                        Text(
+                            text = activeCatalog.name.ifBlank { activeCatalog.catalogId },
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = catalogGridSubtitle(
+                                activeCatalog,
+                                visible.size,
+                                moreAvailable = !controller.gridExhausted,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = titleCountLabel(visible.size, moreAvailable = !controller.gridExhausted),
+                    modifier = Modifier.padding(
+                        horizontal = PageLayoutDefaults.HorizontalPadding,
+                        vertical = 6.dp,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
 
             // An empty result is only an empty *state* once loading has finished; showing
             // "nothing matches" over an in-flight first page would be a lie that corrects

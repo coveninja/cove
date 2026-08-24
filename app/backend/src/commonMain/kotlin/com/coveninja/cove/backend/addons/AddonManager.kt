@@ -110,6 +110,30 @@ class AddonManager(
     }
 
     /**
+     * Everything that decides whether a cached addon answer is still good, and
+     * nothing that says what was asked. Callers append their own question to it.
+     *
+     * An addon the primary adds or disables never touches this profile's own store
+     * version, so without the primary's in the key an inheriting profile would keep
+     * serving a stale answer for the whole cache window. It also covers the policy
+     * itself being switched: this collapses to "" the moment inheritance stops,
+     * which is a different key either way.
+     *
+     * Shared by [streams] and by the catalog cache in [AddonCatalogService], which
+     * is why it is visible beyond this class — the two must agree on what staleness
+     * means, and a second copy of this reasoning would be the thing that drifts.
+     */
+    fun cacheToken(): String {
+        val profileId = session.profileId.value
+        val storeVersion = database.coveQueries.selectProfileStoreVersion(profileId, "addons")
+            .executeAsOneOrNull().orEmpty()
+        val inheritedVersion = inheritedFrom(profileId)?.let { primary ->
+            database.coveQueries.selectProfileStoreVersion(primary.id, "addons").executeAsOneOrNull()
+        }.orEmpty()
+        return "$profileId|$storeVersion|$inheritedVersion"
+    }
+
+    /**
      * The profile [profileId] inherits addons from, or null when it inherits
      * none — because it *is* the primary, because there is no primary, or
      * because the primary has not switched sharing on.
@@ -159,7 +183,7 @@ class AddonManager(
         require(existing.source == "stremio") { "official addons cannot be refreshed" }
         urlPolicy.validate(existing.url)
         val manifest = fetchManifest(existing.url)
-        val validCatalogs = manifest.catalogs.map { "${it.type}/${it.id}" }.toSet()
+        val validCatalogs = manifest.catalogs.map(AddonCatalog::key).toSet()
         val refreshed = existing.copy(
             id = manifest.id,
             manifest = manifest,
@@ -201,18 +225,7 @@ class AddonManager(
         type: MediaType,
         stremioId: String,
     ): List<AddonStream> {
-        val profileId = session.profileId.value
-        val storeVersion = database.coveQueries.selectProfileStoreVersion(profileId, "addons")
-            .executeAsOneOrNull().orEmpty()
-        // An addon the primary adds or disables never touches this profile's own
-        // store version, so without the primary's in the key an inheriting profile
-        // would keep serving the stale fan-out for the whole cache window. It also
-        // covers the policy itself being switched: this collapses to "" the moment
-        // inheritance stops, which is a different key either way.
-        val inheritedVersion = inheritedFrom(profileId)?.let { primary ->
-            database.coveQueries.selectProfileStoreVersion(primary.id, "addons").executeAsOneOrNull()
-        }.orEmpty()
-        val key = "$profileId|$storeVersion|$inheritedVersion|${type.wireName}|$stremioId"
+        val key = "${cacheToken()}|${type.wireName}|$stremioId"
         val now = Clock.System.now().toEpochMilliseconds()
         streamCacheMutex.withLock {
             streamCache.entries.removeAll { it.value.expiresAt <= now }
@@ -259,7 +272,7 @@ class AddonManager(
     suspend fun enabledCatalogs(): List<AddonCatalogRef> = entries().flatMap { addon ->
         if (!addon.enabled || addon.source != "stremio") return@flatMap emptyList()
         addon.manifest.catalogs.filter { catalog ->
-            catalog.isHomeEligible() && addon.disabledCatalogs["${catalog.type}/${catalog.id}"] != true
+            catalog.isHomeEligible() && addon.disabledCatalogs[catalog.key()] != true
         }.map { catalog ->
             AddonCatalogRef(
                 addon.id,
@@ -284,7 +297,7 @@ class AddonManager(
         val normalizedUrl = rawUrl?.takeIf(String::isNotBlank)?.let(::normalizeAddonUrl)
         val existing = find(profileId, id, normalizedUrl)
             ?: throw ownershipFailure(profileId, id, normalizedUrl)
-        require(existing.manifest.catalogs.any { "${it.type}/${it.id}" == catalogKey }) {
+        require(existing.manifest.catalogs.any { it.key() == catalogKey }) {
             "unknown catalog $catalogKey"
         }
         val disabled = existing.disabledCatalogs.toMutableMap()
@@ -625,7 +638,15 @@ private fun AddonManifest.hasResource(name: String): Boolean = resources.any { r
     }
 }
 
-private fun AddonCatalog.isHomeEligible(): Boolean {
+/**
+ * Whether a catalog can be drawn as a row without the viewer supplying something first.
+ *
+ * A catalog whose `extra` marks `search` or `genre` required has no meaningful "just show
+ * me it" response, so it is not a row — only `skip` is, since paging supplies that itself.
+ * Internal rather than private: [LocalAddonRepository] applies the same rule when it
+ * reports a manifest's catalogs to the settings screen, and two copies would drift.
+ */
+internal fun AddonCatalog.isHomeEligible(): Boolean {
     val required = extra.filter(AddonCatalogExtra::isRequired).map(AddonCatalogExtra::name) + extraRequired
     return required.all { it == "skip" }
 }

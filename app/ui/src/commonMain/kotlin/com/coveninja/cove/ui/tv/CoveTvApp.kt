@@ -214,10 +214,10 @@ private fun TvAppContent(
     PluginPlaybackEffect(playback)
     // Above the destination switch, so returning to Home keeps its loaded rails and every
     // scroll position instead of rebuilding the controllers that own those requests.
-    val homeController = rememberHomeController(graph.content, graph.discovery)
+    val homeController = rememberHomeController(graph.content, graph.discovery, graph.addons)
     val homePageState = rememberTvHomePageState()
     val myListPageState = rememberTvMyListPageState()
-    val exploreController = rememberExploreController(graph.discovery)
+    val exploreController = rememberExploreController(graph.discovery, graph.addons)
     val explorePageState = rememberTvExplorePageState()
     val search = rememberSearchSession()
     val searchPageState = rememberTvSearchPageState()

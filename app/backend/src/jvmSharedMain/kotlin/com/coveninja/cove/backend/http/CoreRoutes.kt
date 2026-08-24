@@ -1,7 +1,9 @@
 package com.coveninja.cove.backend.http
 
 import com.coveninja.cove.backend.addons.AddonManager
-import com.coveninja.cove.backend.addons.AddonCatalogPage
+import com.coveninja.cove.backend.addons.AddonCatalogRef
+import com.coveninja.cove.backend.addons.AddonCatalogService
+import com.coveninja.cove.backend.addons.toDescriptor
 import com.coveninja.cove.backend.activity.ActivityService
 import com.coveninja.cove.shared.model.InsightsRange
 import com.coveninja.cove.backend.auth.AuthService
@@ -82,7 +84,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.encodeToString
 import io.ktor.utils.io.readAvailable
 import java.io.ByteArrayOutputStream
@@ -95,6 +96,11 @@ data class CoreRouteServices(
     val library: LocalLibraryRepository,
     val catalog: MediaCatalog? = null,
     val addons: AddonManager? = null,
+    /**
+     * Held rather than built per request: it owns the resolved-page cache, and a fresh
+     * one each call would resolve every row against TMDB again.
+     */
+    val addonCatalogs: AddonCatalogService? = null,
     val nuvio: NuvioManager? = null,
     val media: RouteMediaBoundary? = null,
     val auth: AuthService? = null,
@@ -815,7 +821,7 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
         }
         get("/catalogs") {
             call.markLegacy(legacy)
-            call.respond(addons.enabledCatalogs())
+            call.respond(addons.enabledCatalogs().map(AddonCatalogRef::toDescriptor))
         }
         patch("/addons/catalog") {
             call.markLegacy(legacy)
@@ -841,23 +847,22 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
             val skip = call.request.queryParameters["skip"]?.toIntOrNull()?.takeIf { it >= 0 } ?: 0
             val limit = (call.request.queryParameters["limit"]?.toIntOrNull()
                 ?.takeIf { it > 0 } ?: 20).coerceAtMost(100)
-            val raw = addons.catalog(
-                call.request.queryParameters["addonId"] ?: call.request.queryParameters["id"],
-                call.request.queryParameters["addonUrl"] ?: call.request.queryParameters["url"],
-                type,
-                catalogId,
-                skip,
+            // Assembly lives in AddonCatalogService so the in-process graph can reach it
+            // too; this route is one of two callers rather than the only one. A host with
+            // addons but no metadata catalog cannot resolve anything, and says so instead
+            // of answering an empty page that reads as "this catalog is empty".
+            val catalogs = services.addonCatalogs
+                ?: throw IllegalStateException("catalog resolution is unavailable")
+            call.respond(
+                catalogs.page(
+                    call.request.queryParameters["addonId"] ?: call.request.queryParameters["id"],
+                    call.request.queryParameters["addonUrl"] ?: call.request.queryParameters["url"],
+                    type,
+                    catalogId,
+                    skip,
+                    limit,
+                ),
             )
-            val consumed = minOf(raw.size, limit)
-            val medias = (services.catalog as? TmdbClient)?.let { tmdb ->
-                val semaphore = kotlinx.coroutines.sync.Semaphore(6)
-                coroutineScope {
-                    raw.take(limit).map { meta ->
-                        async { semaphore.withPermit { tmdb.resolveAddonMeta(meta) } }
-                    }.map { it.await() }.filterNotNull()
-                }
-            }.orEmpty()
-            call.respond(AddonCatalogPage(medias, skip + consumed))
         }
         get("/timestamps") {
             call.markLegacy(legacy)

@@ -1,5 +1,6 @@
 package com.coveninja.cove.backend
 
+import com.coveninja.cove.backend.addons.AddonCatalogService
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.addons.AddonSyncPayload
 import com.coveninja.cove.backend.addons.DesktopAddonUrlPolicy
@@ -271,11 +272,13 @@ class LocalBackendRuntime private constructor(
                     sandbox = com.coveninja.cove.backend.nuvio.ProcessNuvioSandbox(),
                     urlPolicy = DesktopAddonUrlPolicy,
                 )
+                val addonCatalogs = AddonCatalogService(addons, catalog)
                 val addonRepository = LocalAddonRepository(
                     addons = addons,
                     activeProfileIds = stores.profileSession.profileId,
                     scope = scope,
                     nuvio = NuvioAddonService(nuvio),
+                    catalogService = addonCatalogs,
                 )
                 val prefetch = PrefetchService(
                     stores.databaseHandle,
@@ -343,6 +346,7 @@ class LocalBackendRuntime private constructor(
                 val httpHost = stores.createHttpHost(
                     catalog,
                     addons,
+                    addonCatalogs,
                     nuvio,
                     media,
                     auth,

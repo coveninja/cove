@@ -2,6 +2,7 @@ package com.coveninja.cove.backend
 
 import android.content.Context
 import android.os.Trace
+import com.coveninja.cove.backend.addons.AddonCatalogService
 import com.coveninja.cove.backend.addons.AddonManager
 import com.coveninja.cove.backend.addons.AddonSyncPayload
 import com.coveninja.cove.backend.addons.AndroidAddonUrlPolicy
@@ -267,11 +268,13 @@ class AndroidBackendRuntime private constructor(
                         sandbox = AndroidNuvioSandbox(context, untrustedClient, AndroidAddonUrlPolicy),
                         urlPolicy = AndroidAddonUrlPolicy,
                     )
+                    val addonCatalogs = AddonCatalogService(addonManager, catalog)
                     val addons = LocalAddonRepository(
                         addons = addonManager,
                         activeProfileIds = stores.repositories.profileSession.profileId,
                         scope = scope,
                         nuvio = NuvioAddonService(nuvio),
+                        catalogService = addonCatalogs,
                     )
                     val torrentDirectory = context.filesDir.resolve("torrents").toPath()
                     val cacheJournal = TorrentCacheJournal(torrentDirectory)
@@ -442,6 +445,7 @@ class AndroidBackendRuntime private constructor(
                         library = stores.repositories.library,
                         catalog = catalog,
                         addons = addonManager,
+                        addonCatalogs = addonCatalogs,
                         nuvio = nuvio,
                         media = media,
                         auth = routeAuth,

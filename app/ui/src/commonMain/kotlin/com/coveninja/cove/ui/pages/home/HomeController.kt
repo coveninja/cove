@@ -7,8 +7,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.ContentRepository
 import com.coveninja.cove.shared.data.DiscoveryRepository
+import com.coveninja.cove.shared.model.AddonCatalogDescriptor
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.displayImageUrl
 import com.coveninja.cove.ui.model.toDomainMedia
@@ -44,6 +46,7 @@ import com.coveninja.cove.shared.model.MediaType as DomainMediaType
 class HomeController(
     private val content: ContentRepository,
     private val discovery: DiscoveryRepository,
+    private val addons: AddonRepository,
     private val scope: CoroutineScope,
 ) {
     /** True while the taste profile is resolving, so the page can say it is still working. */
@@ -51,6 +54,15 @@ class HomeController(
         private set
 
     var personalRails by mutableStateOf<List<HomeRail>>(emptyList())
+        private set
+
+    /**
+     * Rails drawn from third-party addon catalogs. Kept apart from [personalRails] rather
+     * than appended to it so neither waits on the other: resolving a catalog costs a
+     * metadata request per title, and folding these in would hold every personal rail
+     * behind the slowest addon on the list.
+     */
+    var catalogRails by mutableStateOf<List<HomeRail>>(emptyList())
         private set
 
     private var enrichedHero by mutableStateOf<Media?>(null)
@@ -62,6 +74,9 @@ class HomeController(
 
     private var personalJob: Job? = null
     private var personalStarted = false
+
+    private var catalogJob: Job? = null
+    private var catalogStarted = false
 
     /** Seasons already fetched or already failed, so neither is asked for twice. */
     private val attemptedSeasons = mutableSetOf<String>()
@@ -226,17 +241,88 @@ class HomeController(
         listOfNotNull(because?.await(), forYou.await())
     }
 
+    // ── Addon catalog rails ─────────────────────────────────────────────────
+
+    /**
+     * Draws the first few catalogs the profile's addons offer.
+     *
+     * Capped at [HOME_CATALOG_LIMIT] deliberately. A viewer with several catalog addons can
+     * easily have a dozen enabled catalogs, each one a fan-out of metadata requests to
+     * resolve, and a home screen is not the place to spend that — the rest are reachable on
+     * Explore, which loads them for the format being browsed rather than all at once.
+     *
+     * Not filtered by type: Home is not a typed page, so a film catalog and a series
+     * catalog are equally at home here.
+     */
+    fun loadCatalogs() {
+        if (catalogStarted) return
+        catalogStarted = true
+
+        catalogJob = scope.launch {
+            try {
+                catalogRails = resolveCatalogs()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Left empty on purpose — see the class doc.
+            }
+        }
+    }
+
+    private suspend fun resolveCatalogs(): List<HomeRail> = coroutineScope {
+        val catalogs = runCatching { addons.catalogs() }.getOrDefault(emptyList())
+        catalogs.take(HOME_CATALOG_LIMIT).map { descriptor ->
+            async {
+                runCatching {
+                    addons.catalogPage(
+                        addonId = descriptor.addonId,
+                        type = descriptor.type,
+                        catalogId = descriptor.catalogId,
+                        skip = 0,
+                        limit = RAIL_SIZE,
+                    ).medias
+                }.getOrDefault(emptyList())
+                    .map { it.toUiMedia() }
+                    .toRail(
+                        id = "addon-${descriptor.addonId}-${descriptor.key}",
+                        title = descriptor.name.ifBlank { descriptor.addonName },
+                        subtitle = "From ${descriptor.addonName}",
+                        icon = "lucide:blocks",
+                        // The addon chose this order, and that ordering is the whole
+                        // content of the row — so it earns its place even where the
+                        // titles have already appeared above.
+                        ordered = true,
+                        catalog = descriptor,
+                    )
+            }
+        }.mapNotNull { it.await() }
+    }
+
     private fun List<Media>.toRail(
         id: String,
         title: String,
         subtitle: String,
         icon: String,
+        ordered: Boolean = false,
+        catalog: AddonCatalogDescriptor? = null,
     ): HomeRail? = takeIf { it.isNotEmpty() }?.let { media ->
-        HomeRail(id = id, title = title, subtitle = subtitle, icon = icon, media = media)
+        HomeRail(
+            id = id,
+            title = title,
+            subtitle = subtitle,
+            icon = icon,
+            media = media,
+            ordered = ordered,
+            catalog = catalog,
+        )
     }
 
     private companion object {
         const val RAIL_SIZE = 20
+
+        // Three rows is already most of a screen of scrolling past the personal rails,
+        // and each one costs a metadata request per title to resolve.
+        const val HOME_CATALOG_LIMIT = 3
 
         // Roughly what fits on screen before the viewer scrolls. Each one costs a season
         // fetch, so the rest of the rail keeps its backdrop rather than paying for art
@@ -253,7 +339,10 @@ class HomeController(
 fun rememberHomeController(
     content: ContentRepository,
     discovery: DiscoveryRepository,
+    addons: AddonRepository,
 ): HomeController {
     val scope = rememberCoroutineScope()
-    return remember(content, discovery) { HomeController(content, discovery, scope) }
+    return remember(content, discovery, addons) {
+        HomeController(content, discovery, addons, scope)
+    }
 }
