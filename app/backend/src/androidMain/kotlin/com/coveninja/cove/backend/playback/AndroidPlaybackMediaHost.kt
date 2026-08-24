@@ -3,6 +3,8 @@ package com.coveninja.cove.backend.playback
 import com.coveninja.cove.backend.backendScope
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
+import com.coveninja.cove.backend.http.looksLikePlayableContentType
+import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.backend.http.ProbeStreamResult
 import com.coveninja.cove.backend.http.ProbeStreamsRequest
 import com.coveninja.cove.backend.http.ProbeStreamsResponse
@@ -104,7 +106,7 @@ internal class AndroidPlaybackMediaHost private constructor(
     suspend fun aliveUrls(urls: List<String>): Set<String> {
         if (urls.isEmpty()) return emptySet()
         return coroutineScope {
-            urls.take(MAX_PROBED).map { url ->
+            urls.take(PlaybackRepository.MAX_PROBED_URLS).map { url ->
                 async {
                     val registered = streams.lookup(url) ?: return@async null
                     withTimeoutOrNull(PROBE_TIMEOUT_MILLIS) {
@@ -112,7 +114,12 @@ internal class AndroidPlaybackMediaHost private constructor(
                             val headers = registered.headers.toMutableMap()
                             headers[HttpHeaders.Range] = "bytes=0-0"
                             publicGet(url, headers, allowLanStreamSources()) { response ->
-                                url.takeIf { response.status.value in 200..399 }
+                                url.takeIf {
+                                    response.status.value in 200..399 &&
+                                        looksLikePlayableContentType(
+                                            response.headers[HttpHeaders.ContentType],
+                                        )
+                                }
                             }
                         }.getOrNull()
                     }
@@ -387,7 +394,6 @@ internal class AndroidPlaybackMediaHost private constructor(
     companion object {
         private const val HOST = "127.0.0.1"
         private const val MAX_REDIRECTS = 6
-        private const val MAX_PROBED = 10
         private const val PROBE_TIMEOUT_MILLIS = 800L
         private const val MAX_SUBTITLE_BYTES = 10 * 1024 * 1024
         private const val MAX_IMAGE_BYTES = 25 * 1024 * 1024

@@ -110,6 +110,27 @@ class NuvioSandboxTest {
         assertTrue(elapsedMillis < 8_000, "worker was not killed promptly: ${elapsedMillis}ms")
     }
 
+    @Test
+    fun providerFieldsThatArriveAsNumbersStillDecode() = runTest {
+        val sandbox = ProcessNuvioSandbox(timeoutMillis = 15_000)
+        val streams = sandbox.run(invocation("""
+            module.exports.getStreams = async function() {
+              return [{
+                name: 'HubCloud - FSL',
+                quality: 1080,
+                url: 'https://cdn.example/video.mkv',
+                headers: { Referer: 5 }
+              }];
+            };
+        """.trimIndent()))
+
+        // Two real providers emit `quality` as a number. Decoding is all-or-nothing per scraper,
+        // so this used to discard every stream that provider found for the title.
+        assertEquals("1080", streams.single().quality)
+        assertEquals("5", streams.single().headers["Referer"])
+        assertEquals("https://cdn.example/video.mkv", streams.single().url)
+    }
+
     private fun invocation(code: String) = NuvioInvocation(
         scraperId = "test",
         code = code,

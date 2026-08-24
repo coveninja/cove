@@ -12,6 +12,8 @@ import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.model.SubtitleSource
 import com.coveninja.cove.shared.model.TimestampSegment
 import com.coveninja.cove.shared.model.TorrentProgress
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 /** In-process discovery plus loopback URLs consumable by Android libmpv. */
 internal class AndroidPlaybackRepository(
@@ -35,19 +37,27 @@ internal class AndroidPlaybackRepository(
                 append(":$season:$episode")
             }
         }
-        val stremio = addons.streams(type, stremioId)
-        val scraped = nuvio?.let { manager ->
-            val title = catalog.media(tmdbId, type)
-            manager.streams(
-                mediaType = type,
-                tmdbId = tmdbId,
-                imdbId = imdbId,
-                title = title.displayTitle,
-                year = title.displayDate?.take(4)?.toIntOrNull() ?: 0,
-                season = season,
-                episode = episode,
-            )
-        }.orEmpty()
+        // Concurrently, as the desktop route already does (CoreRoutes "/streams"). Awaiting the
+        // addon fan-out first meant Android paid its fifteen-second timeout and the Nuvio budget
+        // end to end, for two sets of requests that share nothing.
+        val (stremio, scraped) = coroutineScope {
+            val addonStreams = async { addons.streams(type, stremioId) }
+            val scrapedStreams = async {
+                nuvio?.let { manager ->
+                    val title = catalog.media(tmdbId, type)
+                    manager.streams(
+                        mediaType = type,
+                        tmdbId = tmdbId,
+                        imdbId = imdbId,
+                        title = title.displayTitle,
+                        year = title.displayDate?.take(4)?.toIntOrNull() ?: 0,
+                        season = season,
+                        episode = episode,
+                    )
+                }.orEmpty()
+            }
+            addonStreams.await() to scrapedStreams.await()
+        }
         return media.registerStreams(stremio + scraped).map(AddonStream::toShared)
     }
 

@@ -285,7 +285,7 @@ class LocalBackendRuntime private constructor(
                     addons,
                     scope,
                     warmScrapers = { type, id, imdb, title, year, season, episode ->
-                        nuvio.streams(type, id, imdb, title, year, season, episode)
+                        nuvio.streams(type, id, imdb, title, year, season, episode, background = true)
                     },
                 )
                 val trakt = TraktService(

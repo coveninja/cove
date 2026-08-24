@@ -58,13 +58,23 @@ interface PlaybackRepository {
     ): List<SubtitleSource>
 
     /**
-     * URLs from [urls] that still answer. A failed probe returns everything —
-     * losing a working source to a flaky check is worse than offering a dead one.
+     * URLs from [urls] that still answer, checking at most [MAX_PROBED_URLS] of them. A failed
+     * probe returns everything — losing a working source to a flaky check is worse than offering
+     * a dead one.
+     *
+     * Callers must read the result as "these were reached", not "the rest are dead": a URL the
+     * probe had no room for is simply unknown, and dropping those silently cut every source list
+     * down to the probe's own budget.
      */
     suspend fun aliveUrls(urls: List<String>): Set<String>
 
     /** Null when the torrent is not active. */
     suspend fun torrentProgress(hash: String): TorrentProgress?
+
+    companion object {
+        /** How many URLs one probe covers. The HTTP boundary rejects a request beyond this. */
+        const val MAX_PROBED_URLS = 10
+    }
 }
 
 /** Thrown when a source list comes back but nothing in it can actually be played. */

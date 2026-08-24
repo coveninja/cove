@@ -13,13 +13,18 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -39,7 +44,14 @@ class NuvioManager internal constructor(
     private val urlPolicy: AddonUrlPolicy,
 ) {
     private val mutation = Mutex()
+
+    // Manager-wide, deliberately: a per-request limit let a playback request and a prefetch warm
+    // each start their own set of child sandboxes, so the machine saw twice the concurrency either
+    // of them asked for and every scraper missed its deadline.
+    private val batchSlots = Semaphore(MAX_CONCURRENT_BATCHES)
+    private val foregroundRuns = AtomicInteger()
     private val cache = ConcurrentHashMap<String, CachedStreams>()
+    private val scraperCache = ConcurrentHashMap<String, CachedStreams>()
     private val inFlight = ConcurrentHashMap<String, CompletableDeferred<List<AddonStream>>>()
 
     suspend fun repos(): List<NuvioRepo> = load().repos
@@ -144,6 +156,11 @@ class NuvioManager internal constructor(
         ))
     }
 
+    /**
+     * @param background prefetch warming rather than someone waiting on the player. A whole
+     *   fan-out is expensive enough that running one behind a live request only makes that
+     *   request miss its deadline, so background work stands down while one is in flight.
+     */
     suspend fun streams(
         mediaType: MediaType,
         tmdbId: Int,
@@ -152,11 +169,14 @@ class NuvioManager internal constructor(
         year: Int,
         season: Int?,
         episode: Int?,
+        background: Boolean = false,
     ): List<AddonStream> {
         val key = "${mediaType.wireName}|$tmdbId|${season ?: "-"}|${episode ?: "-"}"
         cache[key]?.takeIf { System.currentTimeMillis() < it.expiresAt }?.let { return it.streams }
+        if (background && foregroundRuns.get() > 0) return emptyList()
         val attempt = CompletableDeferred<List<AddonStream>>()
         inFlight.putIfAbsent(key, attempt)?.let { return it.await() }
+        if (!background) foregroundRuns.incrementAndGet()
         return try {
             // The previous attempt can finish between the first cache read and our
             // putIfAbsent. Recheck after becoming the owner before starting workers.
@@ -170,6 +190,7 @@ class NuvioManager internal constructor(
             attempt.completeExceptionally(error)
             throw error
         } finally {
+            if (!background) foregroundRuns.decrementAndGet()
             inFlight.remove(key, attempt)
         }
     }
@@ -191,63 +212,153 @@ class NuvioManager internal constructor(
             }
         }
         if (enabled.isEmpty()) return emptyList()
-        val semaphore = Semaphore(12)
-        val completed = ConcurrentHashMap<Int, ScraperExecution>()
-        val allFinished = withTimeoutOrNull(25_000) {
-            coroutineScope {
-                enabled.mapIndexed { index, scraper ->
-                    async {
-                        semaphore.withPermit {
-                            val execution = try {
-                                val streams = sandbox.run(NuvioInvocation(
-                                    scraper.id,
-                                    scraper.code,
-                                    tmdbId,
-                                    mediaType.wireName,
-                                    title,
-                                    year,
-                                    imdbId,
-                                    season,
-                                    episode,
-                                )).mapNotNull(NuvioScrapedStream::toAddonStream)
-                                ScraperExecution(scraper.id, streams)
-                            } catch (error: CancellationException) {
-                                // A ProcessNuvioSandbox owns a shorter timeout than the
-                                // aggregate request. Its TimeoutCancellationException is a
-                                // failure of that scraper only; the surrounding async is still
-                                // active and other scrapers' results remain usable. Preserve
-                                // cancellation from the aggregate request (or its caller),
-                                // where this context is no longer active.
-                                currentCoroutineContext().ensureActive()
-                                ScraperExecution(scraper.id, emptyList(), error)
-                            } catch (error: Throwable) {
-                                ScraperExecution(scraper.id, emptyList(), error)
+        val startedAt = System.currentTimeMillis()
+
+        // A scraper that already answered for this title is served from its own cache and never
+        // reaches the sandbox. The aggregate cache below cannot do this job: it is written only
+        // when every scraper agreed, so with a couple of dozen enabled the whole fan-out was
+        // rerun on every play and the prefetch warm was discarded along with it.
+        val cached = mutableMapOf<String, List<AddonStream>>()
+        val pending = mutableListOf<NuvioScraper>()
+        enabled.forEach { scraper ->
+            val hit = scraperCache["${scraper.id}|$key"]
+                ?.takeIf { System.currentTimeMillis() < it.expiresAt }
+            if (hit != null) cached[scraper.id] = hit.streams else pending += scraper
+        }
+
+        val ran = ConcurrentHashMap<String, List<AddonStream>>()
+        val failed = ConcurrentHashMap<String, String>()
+        val outcomes = AtomicInteger()
+        val timings = ConcurrentHashMap<String, Long>()
+        var returnedEarly = false
+        val allFinished = if (pending.isEmpty()) true else {
+            // The batch runs under a job of our own rather than the caller's, because
+            // coroutineScope cannot return until every child has, and a scraper wedged in
+            // uninterruptible I/O then held the request open long past the budget — on Android
+            // indefinitely, which is what left the player on "Finding sources" for good. Detached,
+            // the deadline below is the only thing that decides when this returns, and outcomes
+            // already reported are kept whatever the stragglers do.
+            val batchJob = SupervisorJob()
+            // Children here are deliberately abandoned at the deadline, so nothing is left to
+            // observe what they throw on the way out. Without a handler of its own that reaches
+            // the global one — which on Android takes the app down over a failed scraper.
+            val batchFailures = CoroutineExceptionHandler { _, error ->
+                logNuvio("scraper batch for $key ended with ${error.message ?: error::class.simpleName}")
+            }
+            val worker = CoroutineScope(
+                currentCoroutineContext().minusKey(Job) + batchJob + batchFailures,
+            )
+            try {
+                val job = worker.launch {
+                    batchSlots.withPermit {
+                        sandbox.runBatch(
+                            NuvioBatch(
+                                invocations = pending.map { scraper ->
+                                    NuvioInvocation(
+                                        scraper.id,
+                                        scraper.code,
+                                        tmdbId,
+                                        mediaType.wireName,
+                                        title,
+                                        year,
+                                        imdbId,
+                                        season,
+                                        episode,
+                                    )
+                                },
+                                concurrency = SCRAPER_CONCURRENCY,
+                                perScraperTimeoutMillis = PER_SCRAPER_CAP_MILLIS,
+                            ),
+                        ) { outcome ->
+                            outcomes.incrementAndGet()
+                            timings[outcome.scraperId] = outcome.elapsedMillis
+                            if (outcome.error.isNotBlank()) {
+                                failed[outcome.scraperId] = outcome.error
+                            } else {
+                                val streams = outcome.streams.mapNotNull(NuvioScrapedStream::toAddonStream)
+                                ran[outcome.scraperId] = streams
+                                scraperCache["${outcome.scraperId}|$key"] = CachedStreams(
+                                    streams,
+                                    System.currentTimeMillis() + SCRAPER_CACHE_MILLIS,
+                                )
                             }
-                            completed[index] = execution
                         }
                     }
-                }.awaitAll()
+                }
+
+                // Tear the scope down whichever way the batch ends: on its own completion, or at
+                // the hard budget if a scraper is still going when we have long since answered.
+                job.invokeOnCompletion { batchJob.cancel() }
+                worker.launch {
+                    delay(AGGREGATE_BUDGET_MILLIS)
+                    batchJob.cancel()
+                }
+
+                // Wait for the results to go quiet rather than for the last scraper. The fan-out
+                // is already parallel — a run where one scraper ran took 14 577 ms and a run
+                // where all twenty-seven ran took 14 730 ms — so the whole wait was one straggler
+                // and the per-scraper cache could never help while an uncached one held the
+                // request. Counting polls rather than reading a clock keeps this on virtual time,
+                // which is the only way runTest can exercise it.
+                var lastSeen = -1
+                var quietPolls = 0
+                val completed = withTimeoutOrNull(AGGREGATE_BUDGET_MILLIS) {
+                    while (job.isActive) {
+                        val seen = outcomes.get()
+                        quietPolls = if (seen == lastSeen) quietPolls + 1 else 0
+                        lastSeen = seen
+                        val enough = ran.values.sumOf { it.size } >= MIN_EARLY_RESULTS
+                        if (quietPolls >= QUIET_POLLS && enough) {
+                            returnedEarly = true
+                            return@withTimeoutOrNull false
+                        }
+                        delay(QUIET_POLL_MILLIS)
+                    }
+                    true
+                }
+                // Only a batch that actually finished counts as complete. An early return leaves
+                // the rest running on purpose: every outcome still writes its own cache entry, so
+                // the stragglers land there for the next open instead of being thrown away.
+                completed == true
+            } finally {
+                // Everything except a deliberate early return is cancelled here and now: a
+                // completed batch (already torn down above), the hard budget, and a caller who
+                // gave up on the player. Only the early return leaves the batch alive, because
+                // cancelling it would discard the very results it returned early to collect.
+                if (!returnedEarly) batchJob.cancel()
             }
-            true
-        } == true
-        val executions = completed.entries.sortedBy { it.key }.map { it.value }
-        if (!allFinished) logNuvio(
-            "timed out while running ${enabled.size} scraper(s) for $key; " +
-                "kept ${executions.size} completed result(s)",
-        )
-        val failures = executions.filter { it.error != null }
-        failures.forEach { execution ->
-            logNuvio(
-                "scraper ${execution.scraperId} failed for $key: " +
-                    execution.error?.message.orEmpty().ifBlank { execution.error?.javaClass?.simpleName.orEmpty() },
-            )
         }
-        val streams = executions.flatMap(ScraperExecution::streams)
+
+        // Ordered as the profile has them rather than as they happened to answer, so a given
+        // library and a given set of scrapers always produce the same list.
+        val streams = enabled.flatMap { scraper ->
+            cached[scraper.id] ?: ran[scraper.id] ?: emptyList()
+        }
+        val answered = cached.size + ran.size + failed.size
+        logNuvio(
+            "$key in ${System.currentTimeMillis() - startedAt} ms — ${enabled.size} scraper(s): " +
+                "${cached.size} cached, ${ran.size} ran, ${failed.size} failed, " +
+                "${enabled.size - answered} still out" +
+                when {
+                    returnedEarly -> " (returned early, ${pending.size - ran.size - failed.size} " +
+                        "still running into the cache)"
+                    allFinished -> ""
+                    else -> " (budget exhausted)"
+                },
+        )
+        // Named rather than summarised: the wait is whatever the slowest one costs, so knowing
+        // which they are is the whole basis for tuning any of the budgets above.
+        timings.entries.sortedByDescending { it.value }.take(3).takeIf { it.isNotEmpty() }?.let {
+            logNuvio("slowest for $key: " + it.joinToString { (id, ms) -> "$id ${ms}ms" })
+        }
+        failed.forEach { (scraperId, error) -> logNuvio("scraper $scraperId failed for $key: $error") }
+
         // A legitimate no-results response is cacheable. A runtime failure is not: caching
         // that as an empty result made a transient or compatibility error look like a healthy
-        // provider response for fifteen minutes and hid recovery after the first request.
-        if (allFinished && failures.isEmpty()) {
-            cache[key] = CachedStreams(streams, System.currentTimeMillis() + 15 * 60_000)
+        // provider response for fifteen minutes and hid recovery after the first request. A run
+        // that ran out of budget is incomplete for the same reason, even though nothing failed.
+        if (allFinished && failed.isEmpty() && answered == enabled.size) {
+            cache[key] = CachedStreams(streams, System.currentTimeMillis() + SCRAPER_CACHE_MILLIS)
         }
         return streams
     }
@@ -283,6 +394,7 @@ class NuvioManager internal constructor(
             store.updatedAt,
         )
         cache.clear()
+        scraperCache.clear()
     }
 
     private suspend fun resolveManifest(location: RepoLocation): Pair<String, String> {
@@ -365,6 +477,41 @@ class NuvioManager internal constructor(
         val streams: List<AddonStream>,
         val error: Throwable? = null,
     )
+
+    /**
+     * Deliberately not a CancellationException: a scraper that ran out of its slice is a failure
+     * of that scraper, and must not read as the batch or the caller being cancelled.
+     */
+    private class ScraperTimeout(millis: Long) : RuntimeException("timed out after $millis ms")
+
+    private companion object {
+        /** What the whole fan-out may cost the viewer waiting on "Finding sources". */
+        const val AGGREGATE_BUDGET_MILLIS = 20_000L
+
+        /**
+         * No single scraper may eat the whole budget. Several legitimately need more than ten
+         * seconds of provider round-trips, and cutting them there lost their results while the
+         * aggregate budget still had room; the worst case a viewer waits is unchanged either way.
+         */
+        const val PER_SCRAPER_CAP_MILLIS = 15_000L
+
+        /** Scrapers in flight within one request. They are network-bound once started. */
+        const val SCRAPER_CONCURRENCY = 12
+
+        /** Requests that may each hold a sandbox worker at once. */
+        const val MAX_CONCURRENT_BATCHES = 2
+
+        const val SCRAPER_CACHE_MILLIS = 15 * 60_000L
+
+        /** How often the wait checks whether answers are still arriving. */
+        const val QUIET_POLL_MILLIS = 200L
+
+        /** Consecutive quiet polls that mean the fan-out has stopped producing. */
+        const val QUIET_POLLS = 6
+
+        /** Never cut a run short before it has something worth offering. */
+        const val MIN_EARLY_RESULTS = 3
+    }
 }
 
 private fun logNuvio(message: String) = System.err.println("Cove Nuvio: $message")

@@ -108,6 +108,7 @@ class MpvOpenGlPlayer(
     }
 
     override fun load(source: String, startPositionSeconds: Double) {
+        _snapshot.value = _snapshot.value.copy(loadError = null)
         if (renderContext.get() == null) {
             // GL context not yet ready; queue until initialize() is called.
             pendingSource.set(PendingMedia(source, startPositionSeconds))
@@ -409,8 +410,19 @@ class MpvOpenGlPlayer(
                 Mpv.EVENT_FILE_LOADED ->
                     _snapshot.value = _snapshot.value.copy(fileLoaded = true)
 
-                Mpv.EVENT_END_FILE ->
-                    _snapshot.value = _snapshot.value.copy(fileLoaded = false)
+                Mpv.EVENT_END_FILE -> {
+                    // reason distinguishes "played to the end" from "could not be opened"; only
+                    // the latter is something to tell the viewer about.
+                    val failure = event.data
+                        ?.let { runCatching { MpvEndFile(it) }.getOrNull() }
+                        ?.takeIf { it.reason == Mpv.END_FILE_REASON_ERROR }
+                        ?.let { Mpv.library().mpv_error_string(it.error) }
+                        ?.takeIf(String::isNotBlank)
+                    _snapshot.value = _snapshot.value.copy(
+                        fileLoaded = false,
+                        loadError = failure ?: _snapshot.value.loadError,
+                    )
+                }
 
                 Mpv.EVENT_LOG_MESSAGE -> event.data?.let { pointer ->
                     val log = MpvLogMessage(pointer)

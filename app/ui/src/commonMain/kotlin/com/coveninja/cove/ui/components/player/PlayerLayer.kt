@@ -662,8 +662,12 @@ fun PlayerLayer(
                     )
                 }
 
+                // Deliberately not gated on hasMedia: a source that fails to open never loads
+                // any, and that is exactly when the viewer most needs the banner — it carries
+                // the only route to the next source. Requiring media meant an unplayable link
+                // left the player sitting on the backdrop with no error and no way forward.
                 status.error?.takeIf {
-                    status.hasMedia && !status.interrupted && !session.recoveryFailed
+                    !status.interrupted && !session.recoveryFailed
                 }?.let { error ->
                     PlaybackErrorBanner(
                         message = error,

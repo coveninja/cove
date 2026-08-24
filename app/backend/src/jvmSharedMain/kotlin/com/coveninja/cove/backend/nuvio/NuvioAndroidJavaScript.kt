@@ -9,10 +9,9 @@ package com.coveninja.cove.backend.nuvio
  * Keep this in jvmSharedMain so the complete Android guest contract can be exercised by desktop
  * tests without loading Android or running downloaded provider code in the app process.
  */
-internal fun androidNuvioBootstrap(moduleFactories: String): String =
+internal fun androidNuvioBootstrap(): String =
     ANDROID_NUVIO_BOOTSTRAP_PREFIX
         .replace("__COVE_BROWSER_COMPATIBILITY__", NUVIO_BROWSER_COMPATIBILITY_SCRIPT)
-        .replace("__COVE_MODULE_FACTORIES__", moduleFactories)
 
 internal fun synchronousNuvioScraperSource(source: String): String = source
     .replace(Regex("\\bfor\\s+await\\s*\\("), "for (")
@@ -291,7 +290,10 @@ private val ANDROID_NUVIO_BOOTSTRAP_PREFIX = """
     globalThis.base64Decode = globalThis.atob;
     globalThis.base64Encode = globalThis.btoa;
 
-    const __factories = {__COVE_MODULE_FACTORIES__};
+    // cheerio and crypto-js are a quarter of a megabyte of JavaScript between them, and used to
+    // be pasted into this bootstrap on every invocation — parsed by a fresh engine each time
+    // whether or not the scraper wanted either. The host hands over a module's source only when
+    // something actually requires it.
     const __moduleCache = {};
     const __moduleAliases = {
       'cheerio': 'cheerio-without-node-native',
@@ -300,11 +302,11 @@ private val ANDROID_NUVIO_BOOTSTRAP_PREFIX = """
     globalThis.require = requestedName => {
       const name = __moduleAliases[requestedName] || requestedName;
       if (__moduleCache[name]) return __moduleCache[name].exports;
-      const factory = __factories[name];
-      if (!factory) throw new Error('unsupported module: ' + name);
+      const source = __bridge.moduleSource(name);
+      if (!source) throw new Error('unsupported module: ' + name);
       const loaded = { exports: {} };
       __moduleCache[name] = loaded;
-      factory(loaded, loaded.exports);
+      Function('module', 'exports', 'require', source)(loaded, loaded.exports, globalThis.require);
       return loaded.exports;
     };
 

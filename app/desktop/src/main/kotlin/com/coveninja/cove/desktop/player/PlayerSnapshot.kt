@@ -73,6 +73,12 @@ data class PlayerSnapshot(
      */
     val endReached:      Boolean = false,
     val error:           String? = null,
+    /**
+     * Why the current file failed to open, held until the next load rather than cleared by the
+     * next state poll the way [error] is: the poll runs every few hundred milliseconds and would
+     * otherwise erase the one report a viewer needs to act on.
+     */
+    val loadError:       String? = null,
 ) {
     val usingHardwareDecoding: Boolean
         get() = hwdecCurrent.isNotBlank() && hwdecCurrent != "no"

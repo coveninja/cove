@@ -3,6 +3,7 @@ package com.coveninja.cove.backend.http
 import com.coveninja.cove.backend.backendScope
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
+import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.backend.torrent.TorrentPlaybackEngine
 import io.ktor.client.HttpClient
 import io.ktor.client.request.prepareGet
@@ -195,8 +196,12 @@ class MediaBoundary(
     override fun torrentProgress(hash: String) = torrentEngine?.progress(hash)
 
     override suspend fun probe(request: ProbeStreamsRequest): ProbeStreamsResponse {
-        require(request.streams.size in 1..10) { "streams must contain 1-10 entries" }
-        val timeout = (request.timeoutMs.takeIf { it > 0 } ?: 700).coerceIn(100, 800)
+        require(request.streams.size in 1..PlaybackRepository.MAX_PROBED_URLS) {
+            "streams must contain 1-${PlaybackRepository.MAX_PROBED_URLS} entries"
+        }
+        // The old 800 ms ceiling was under a cold TLS handshake to a distant CDN, so a healthy
+        // source could be judged dead for being far away.
+        val timeout = (request.timeoutMs.takeIf { it > 0 } ?: 2_000).coerceIn(100, 3_000)
         return ProbeStreamsResponse(coroutineScope {
             request.streams.map { stream ->
                 async {
@@ -207,7 +212,8 @@ class MediaBoundary(
                             val headers = registered.headers.toMutableMap()
                             headers[HttpHeaders.Range] = "bytes=0-0"
                             publicGet(stream.url, headers, allowLanStreamSources()) { response ->
-                                val alive = response.status.value in 200..399
+                                val alive = response.status.value in 200..399 &&
+                                    looksLikePlayableContentType(response.headers[HttpHeaders.ContentType])
                                 val length = response.headers[HttpHeaders.ContentRange]
                                     ?.substringAfterLast('/')?.toLongOrNull()
                                     ?: response.headers[HttpHeaders.ContentLength]?.toLongOrNull()

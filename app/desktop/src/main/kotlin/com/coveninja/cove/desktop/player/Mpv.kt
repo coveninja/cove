@@ -21,6 +21,9 @@ internal object Mpv {
     const val EVENT_LOG_MESSAGE = 2
     const val EVENT_START_FILE  = 6
     const val EVENT_END_FILE    = 7
+
+    /** mpv_end_file_reason: the file stopped because it could not be played. */
+    const val END_FILE_REASON_ERROR = 4
     const val EVENT_FILE_LOADED = 8
 
     // mpv_render_param_type enum values from render.h
@@ -216,6 +219,29 @@ internal open class MpvOpenGlFbo : Structure() {
     @JvmField var width:          Int = 0
     @JvmField var height:         Int = 0
     @JvmField var internalFormat: Int = 0
+}
+
+/**
+ * Mirrors mpv_event_end_file from client.h, which arrives as the data pointer of an
+ * MPV_EVENT_END_FILE. Without it a file that never opened is indistinguishable from one that
+ * played to its end, so an unplayable source produced no error anywhere — the viewer was left
+ * on a still frame with mpv's reason visible only in the log file.
+ */
+@Structure.FieldOrder(
+    "reason",
+    "error",
+    "playlistEntryId",
+    "playlistInsertId",
+    "playlistInsertNumEntries",
+)
+internal open class MpvEndFile(pointer: Pointer) : Structure(pointer) {
+    @JvmField var reason:                   Int = 0
+    @JvmField var error:                    Int = 0
+    @JvmField var playlistEntryId:          Int = 0
+    @JvmField var playlistInsertId:         Int = 0
+    @JvmField var playlistInsertNumEntries: Int = 0
+
+    init { read() }
 }
 
 /**

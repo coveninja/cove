@@ -385,7 +385,7 @@ class AndroidBackendRuntime private constructor(
                         addons = addonManager,
                         scope = scope,
                         warmScrapers = { type, id, imdb, title, year, season, episode ->
-                            nuvio.streams(type, id, imdb, title, year, season, episode)
+                            nuvio.streams(type, id, imdb, title, year, season, episode, background = true)
                         },
                     )
                     stores.progressEvents.subscribe { progress ->

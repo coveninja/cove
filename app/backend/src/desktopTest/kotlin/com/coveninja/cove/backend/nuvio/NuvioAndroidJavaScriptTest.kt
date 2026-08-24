@@ -10,7 +10,7 @@ class NuvioAndroidJavaScriptTest {
     fun transpiledPromiseProviderCompletesAgainstTheBlockingFetchFacade() {
         Context.newBuilder("js").build().use { context ->
             context.eval("js", TEST_BRIDGE)
-            context.eval("js", androidNuvioBootstrap(""))
+            context.eval("js", androidNuvioBootstrap())
             context.eval("js", synchronousNuvioScraperSource(TRANSPILED_PROVIDER))
             context.eval("js", ANDROID_NUVIO_INVOKE_SCRIPT)
 
@@ -24,6 +24,12 @@ class NuvioAndroidJavaScriptTest {
                 "application/json",
                 context.eval("js", "globalThis.__observedContentType").asString(),
             )
+            // The bootstrap used to carry cheerio and crypto-js inline, so every invocation paid
+            // to parse a quarter of a megabyte a provider like this one never touches.
+            assertEquals(
+                0,
+                context.eval("js", "globalThis.__moduleSourceRequests.length").asInt(),
+            )
         }
     }
 
@@ -31,7 +37,7 @@ class NuvioAndroidJavaScriptTest {
     fun literalAsyncProviderStillWorksAfterSynchronousSourceNormalization() {
         Context.newBuilder("js").build().use { context ->
             context.eval("js", TEST_BRIDGE)
-            context.eval("js", androidNuvioBootstrap(""))
+            context.eval("js", androidNuvioBootstrap())
             context.eval("js", synchronousNuvioScraperSource(LITERAL_ASYNC_PROVIDER))
             context.eval("js", ANDROID_NUVIO_INVOKE_SCRIPT)
 
@@ -48,7 +54,7 @@ class NuvioAndroidJavaScriptTest {
     fun officialRuntimeGlobalsAliasesAndGlobalExportAreAvailable() {
         Context.newBuilder("js").build().use { context ->
             context.eval("js", TEST_BRIDGE)
-            context.eval("js", androidNuvioBootstrap(TEST_MODULE_FACTORY))
+            context.eval("js", androidNuvioBootstrap())
             context.eval("js", GLOBAL_PROVIDER)
             context.eval("js", ANDROID_NUVIO_INVOKE_SCRIPT)
 
@@ -62,21 +68,33 @@ class NuvioAndroidJavaScriptTest {
                 "cheerio:movie-42",
                 context.eval("js", "JSON.parse(globalThis.__coveResult)[0].name").asString(),
             )
+            // Required on demand rather than pre-parsed, and only the alias target is asked for.
+            assertEquals(
+                listOf("cheerio-without-node-native"),
+                context.eval("js", "JSON.stringify(globalThis.__moduleSourceRequests)")
+                    .asString()
+                    .let(::parseNames),
+            )
         }
     }
 
-    private companion object {
-        const val TEST_MODULE_FACTORY = """
-            "cheerio-without-node-native": function(module) {
-              module.exports = {marker: "cheerio"};
-            }
-        """
+    private fun parseNames(json: String): List<String> =
+        json.removeSurrounding("[", "]").split(",").filter(String::isNotBlank).map { it.trim('"') }
 
+    private companion object {
         val TEST_BRIDGE = """
+            globalThis.__moduleSourceRequests = [];
             globalThis.__bridge = {
               log() {},
               base64Encode(value) { return String(value); },
               base64Decode(value) { return String(value); },
+              moduleSource(name) {
+                globalThis.__moduleSourceRequests.push(name);
+                if (name === 'cheerio-without-node-native') {
+                  return 'module.exports = {marker: "cheerio"};';
+                }
+                return '';
+              },
               request(url, options) {
                 const parsedOptions = JSON.parse(options);
                 if (parsedOptions.headers.Connection !== 'keep-alive') {

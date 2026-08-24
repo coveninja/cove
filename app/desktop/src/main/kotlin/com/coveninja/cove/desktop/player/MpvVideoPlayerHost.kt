@@ -655,5 +655,7 @@ private fun PlayerSnapshot.playbackStatus(
     renderWidth = renderWidth,
     renderHeight = renderHeight,
     renderTimeMillis = renderTimeMillis,
-    error = error,
+    // A load failure is reported once and then held; a transient error is whatever the last
+    // state poll saw. Either is worth surfacing, and the sticky one must not be overwritten.
+    error = error ?: loadError,
 )

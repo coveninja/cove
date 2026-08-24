@@ -12,6 +12,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.LibraryState
+import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
@@ -237,32 +238,45 @@ class PlaybackSession(
                 // because the dub is a bigger file.
                 val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
 
-                // Probing costs a round trip but happens while the viewer is
-                // already waiting, and it is far cheaper than picking a dead
-                // link and finding out after the eight seconds mpv needs to open
-                // one. Only direct URLs can be checked; torrents are left alone.
-                val checked = if (settings?.probeStreams == true) {
-                    val urls = playable.mapNotNull { it.url?.takeIf(String::isNotBlank) }
-                    val alive = graph.playback.aliveUrls(urls)
-                    playable.filter { it.url.isNullOrBlank() || it.url in alive }
-                        // Never probe every candidate out of existence: if nothing
-                        // survived, the check is more likely wrong than the sources.
-                        .ifEmpty { playable }
-                } else {
-                    playable
-                }
-                if (token != generation) return@onSuccess
-
                 val ranked = rankSources(
-                    sources = checked,
+                    sources = playable,
                     preferredAudioLanguage = settings?.defaultAudioLang,
                     originalLanguage = resolved.media.originalLanguage,
                     mode = StreamSelectionMode.from(settings?.streamSelectionMode),
                 )
+
+                // Probing costs a round trip but happens while the viewer is
+                // already waiting, and it is far cheaper than picking a dead
+                // link and finding out after the eight seconds mpv needs to open
+                // one. Only direct URLs can be checked; torrents are left alone.
+                //
+                // After ranking rather than before, and subtracting rather than
+                // intersecting. A probe covers only a handful of candidates, so
+                // ranking first is what puts the one about to be auto-played
+                // inside that handful — checking an arbitrary slice left the
+                // chosen source unverified. And keeping only what the probe
+                // reached treated every candidate it had no room for as dead,
+                // which cut the list to the probe's budget and then, when that
+                // left nothing, handed back the rejects along with the rest.
+                val checked = if (settings?.probeStreams == true) {
+                    val probed = ranked.mapNotNull { it.url?.takeIf(String::isNotBlank) }
+                        .take(PlaybackRepository.MAX_PROBED_URLS)
+                    val dead = probed.toSet() - graph.playback.aliveUrls(probed)
+                    ranked.filter { it.url.isNullOrBlank() || it.url !in dead }
+                        // Never probe every candidate out of existence: if nothing
+                        // survived, the check is more likely wrong than the sources.
+                        // With the subtraction above this is now the rare case it was
+                        // meant to be, rather than the usual one.
+                        .ifEmpty { ranked }
+                } else {
+                    ranked
+                }
+                if (token != generation) return@onSuccess
+
                 // Keep the source-ranking order within each compatibility tier,
                 // but never put a software-only or impossible stream ahead of a
                 // source Android can hardware-decode (or whose codec is unknown).
-                val choices = ranked
+                val choices = checked
                     .map { source ->
                         StreamChoice(
                             source = source,

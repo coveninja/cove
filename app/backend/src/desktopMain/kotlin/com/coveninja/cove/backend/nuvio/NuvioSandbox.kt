@@ -10,15 +10,22 @@ import java.net.http.HttpResponse
 import java.nio.file.Path
 import java.time.Duration
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
+import kotlin.system.exitProcess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import org.graalvm.polyglot.Context
+import org.graalvm.polyglot.Engine
 import org.graalvm.polyglot.HostAccess
 import org.graalvm.polyglot.PolyglotException
 import org.graalvm.polyglot.Source
@@ -26,15 +33,31 @@ import org.graalvm.polyglot.io.IOAccess
 
 internal interface NuvioSandbox {
     suspend fun run(invocation: NuvioInvocation): List<NuvioScrapedStream>
+
+    /**
+     * Runs a whole request's scrapers, reporting each answer through [onOutcome] as it lands
+     * rather than returning them together, so a batch abandoned at its deadline still yields
+     * everything that already came back.
+     */
+    suspend fun runBatch(batch: NuvioBatch, onOutcome: (NuvioBatchOutcome) -> Unit) =
+        runInvocationsIndividually(batch, onOutcome)
 }
 
 /**
- * Executes each untrusted scraper in a disposable, memory-capped JVM. The
- * guest gets no host classes, filesystem, processes, native access, threads,
- * or raw sockets; its only network path is the public-address fetch bridge.
+ * Executes a request's untrusted scrapers in one disposable, memory-capped JVM, each in its own
+ * Graal context off a shared engine. The guest gets no host classes, filesystem, processes,
+ * native access, threads, or raw sockets; its only network path is the public-address fetch
+ * bridge.
+ *
+ * One process per *request* rather than per scraper, because a child JVM costs about 1.2 s to
+ * start on a normal desktop however it is tuned — trimming the classpath and dropping to
+ * TieredStopAtLevel=1 together save under 15% — while a context off a warm shared engine costs
+ * about 2 ms. Two dozen enabled scrapers was therefore half a minute of pinned CPU per play, and
+ * no scheduling of it fit inside a budget a viewer would wait through.
  */
 internal class ProcessNuvioSandbox(
-    private val timeoutMillis: Long = 17_000,
+    private val timeoutMillis: Long = 12_000,
+    private val heapMegabytes: Int = 512,
     private val javaExecutable: Path = Path.of(
         System.getProperty("java.home"),
         "bin",
@@ -42,11 +65,36 @@ internal class ProcessNuvioSandbox(
     ),
     private val classpath: String = System.getProperty("java.class.path"),
 ) : NuvioSandbox {
-    override suspend fun run(invocation: NuvioInvocation): List<NuvioScrapedStream> = withContext(Dispatchers.IO) {
+    override suspend fun run(invocation: NuvioInvocation): List<NuvioScrapedStream> {
+        var outcome: NuvioBatchOutcome? = null
+        execute(
+            NuvioBatch(listOf(invocation), concurrency = 1, perScraperTimeoutMillis = timeoutMillis),
+            deadlineMillis = timeoutMillis,
+        ) { outcome = it }
+        val result = outcome ?: error("scraper worker produced no result")
+        require(result.error.isBlank()) { result.error }
+        return result.streams
+    }
+
+    override suspend fun runBatch(batch: NuvioBatch, onOutcome: (NuvioBatchOutcome) -> Unit) {
+        if (batch.invocations.isEmpty()) return
+        // Only a backstop: the caller's own budget is the authority and cancels this first.
+        execute(batch, deadlineMillis = batch.perScraperTimeoutMillis * 2 + STARTUP_ALLOWANCE_MILLIS, onOutcome)
+    }
+
+    private suspend fun execute(
+        batch: NuvioBatch,
+        deadlineMillis: Long,
+        onOutcome: (NuvioBatchOutcome) -> Unit,
+    ): Unit = withContext(Dispatchers.IO) {
         val process = ProcessBuilder(
             javaExecutable.toString(),
-            "-Xms16m",
-            "-Xmx128m",
+            "-Xms32m",
+            "-Xmx${heapMegabytes}m",
+            // A worker lives for one request, so JIT tiering and a concurrent collector never pay
+            // for themselves.
+            "-XX:TieredStopAtLevel=1",
+            "-XX:+UseSerialGC",
             "-Dpolyglot.engine.WarnInterpreterOnly=false",
             "-cp",
             classpath,
@@ -54,37 +102,46 @@ internal class ProcessNuvioSandbox(
         ).start()
         try {
             coroutineScope {
-                val stdout = async { process.inputStream.bufferedReader().readText() }
-                val stderr = async { process.errorStream.bufferedReader().readText() }
-                process.outputStream.bufferedWriter().use { writer ->
-                    writer.write(CoveJson.encodeToString(invocation))
-                }
-                var workerExited = false
-                try {
-                    withTimeout(timeoutMillis) {
-                        while (!process.waitFor(100, TimeUnit.MILLISECONDS)) {
-                            kotlinx.coroutines.yield()
+                val reader = launch {
+                    runCatching {
+                        process.inputStream.bufferedReader().forEachLine { line ->
+                            if (line.isNotBlank()) {
+                                runCatching { CoveJson.decodeFromString<NuvioBatchOutcome>(line) }
+                                    .onSuccess(onOutcome)
+                            }
                         }
                     }
-                    workerExited = true
+                }
+                val stderr = async {
+                    runCatching { process.errorStream.bufferedReader().readText() }.getOrDefault("")
+                }
+                runCatching {
+                    process.outputStream.bufferedWriter().use { it.write(CoveJson.encodeToString(batch)) }
+                }
+                var exited = false
+                try {
+                    exited = withTimeoutOrNull(deadlineMillis) {
+                        while (!process.waitFor(50, TimeUnit.MILLISECONDS)) {
+                            kotlinx.coroutines.yield()
+                        }
+                        true
+                    } == true
                 } finally {
-                    // Kill before coroutineScope waits for the blocking stdout
-                    // and stderr readers; otherwise a runaway guest leaves
-                    // those child coroutines waiting forever for EOF.
-                    if (!workerExited && process.isAlive) process.destroyForcibly()
+                    // Kill before coroutineScope waits for the blocking readers; otherwise a
+                    // runaway guest leaves those child coroutines waiting forever for EOF.
+                    if (!exited && process.isAlive) process.destroyForcibly()
                 }
-                val output = stdout.await()
-                val errorOutput = stderr.await().take(2_000)
-                require(process.exitValue() == 0) {
-                    "scraper worker failed${errorOutput.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
-                }
-                val result = CoveJson.decodeFromString<NuvioInvocationResult>(output)
-                require(result.error.isBlank()) { result.error }
-                result.streams
+                reader.join()
+                stderr.await()
             }
         } finally {
             if (process.isAlive) process.destroyForcibly()
         }
+    }
+
+    private companion object {
+        /** Room for JVM start plus however many waves the concurrency limit implies. */
+        const val STARTUP_ALLOWANCE_MILLIS = 15_000L
     }
 }
 
@@ -92,25 +149,77 @@ internal class ProcessNuvioSandbox(
 internal object NuvioSandboxWorker {
     @JvmStatic
     fun main(args: Array<String>) {
-        val invocation = CoveJson.decodeFromString<NuvioInvocation>(System.`in`.bufferedReader().readText())
-        val result = runCatching { execute(invocation) }
-            .fold(
-                onSuccess = { NuvioInvocationResult(it) },
-                onFailure = { NuvioInvocationResult(error = it.message ?: "scraper failed") },
-            )
-        print(CoveJson.encodeToString(result))
+        val batch = CoveJson.decodeFromString<NuvioBatch>(System.`in`.bufferedReader().readText())
+        // One engine, many contexts: the engine holds the parsed-language machinery that makes a
+        // cold context expensive, and sharing it is the whole reason a batch beats a process each.
+        val engine = Engine.create("js")
+        val out = System.out.bufferedWriter()
+        val emit = { outcome: NuvioBatchOutcome ->
+            synchronized(out) {
+                out.write(CoveJson.encodeToString(outcome))
+                out.newLine()
+                out.flush()
+            }
+        }
+        val threads = ThreadFactory { runnable -> Thread(runnable).apply { isDaemon = true } }
+        val watchdogs = Executors.newSingleThreadScheduledExecutor(threads)
+        val pool = Executors.newFixedThreadPool(batch.concurrency.coerceIn(1, 32), threads)
+        val finished = CountDownLatch(batch.invocations.size)
+        batch.invocations.forEach { invocation ->
+            pool.execute {
+                val startedAt = System.nanoTime()
+                val outcome = runCatching {
+                    execute(engine, invocation, batch.perScraperTimeoutMillis, watchdogs)
+                }.fold(
+                    onSuccess = { NuvioBatchOutcome(invocation.scraperId, it) },
+                    onFailure = { failure ->
+                        // Graal reports a watchdog interrupt as "Execution got interrupted.",
+                        // which in a log reads like a Cove fault rather than the scraper simply
+                        // running out of its slice.
+                        val reason = if (failure is PolyglotException && failure.isInterrupted) {
+                            "timed out after ${batch.perScraperTimeoutMillis} ms"
+                        } else {
+                            failure.describe()
+                        }
+                        NuvioBatchOutcome(invocation.scraperId, error = reason)
+                    },
+                )
+                emit(outcome.copy(elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000))
+                finished.countDown()
+            }
+        }
+        // Bounded so a guest that survives its interrupt cannot keep the worker alive; the parent
+        // kills the process anyway, but exiting on our own keeps a stray JVM off the machine.
+        finished.await(batch.perScraperTimeoutMillis * 2 + 5_000, TimeUnit.MILLISECONDS)
+        runCatching { out.flush() }
+        exitProcess(0)
     }
 
-    private fun execute(invocation: NuvioInvocation): List<NuvioScrapedStream> {
+    private fun execute(
+        engine: Engine,
+        invocation: NuvioInvocation,
+        timeoutMillis: Long,
+        watchdogs: ScheduledExecutorService,
+    ): List<NuvioScrapedStream> {
         val bridge = FetchBridge()
-        Context.newBuilder("js")
+        val context = Context.newBuilder("js")
+            .engine(engine)
             .allowHostAccess(HostAccess.EXPLICIT)
             .allowHostClassLookup { false }
             .allowIO(IOAccess.NONE)
             .allowCreateThread(false)
             .allowNativeAccess(false)
             .allowCreateProcess(false)
-            .build().use { context ->
+            .build()
+        // A scraper sharing the process with its siblings cannot be stopped by killing it, so the
+        // guest is interrupted where it runs instead.
+        val guard = watchdogs.schedule(
+            { runCatching { context.interrupt(Duration.ofMillis(500)) } },
+            timeoutMillis,
+            TimeUnit.MILLISECONDS,
+        )
+        try {
+            context.use {
                 context.getBindings("js").putMember("__bridge", bridge)
                 context.getBindings("js").putMember("__invocation", CoveJson.encodeToString(invocation))
                 context.eval(Source.newBuilder("js", bootstrap(), "cove-nuvio-bootstrap.js").build())
@@ -128,16 +237,15 @@ internal object NuvioSandboxWorker {
                 val json = context.eval("js", "globalThis.__coveResult || '[]'").asString()
                 return CoveJson.decodeFromString(json)
             }
+        } finally {
+            guard.cancel(false)
+        }
     }
 
+    private fun Throwable.describe(): String = message?.takeIf(String::isNotBlank)
+        ?: this::class.java.simpleName
+
     private fun bootstrap(): String {
-        val modules = mapOf(
-            "crypto-js" to resource("crypto-js.js"),
-            "cheerio-without-node-native" to resource("cheerio-without-node-native.js"),
-        )
-        val moduleFactories = modules.entries.joinToString(",") { (name, source) ->
-            "${CoveJson.encodeToString(name)}: function(module, exports) {\n$source\n}"
-        }
         return """
             globalThis.console = { log(){}, info(){}, debug(){}, warn(){}, error(){} };
             globalThis.logger = console;
@@ -187,7 +295,10 @@ internal object NuvioSandboxWorker {
               };
             }
             $NUVIO_BROWSER_COMPATIBILITY_SCRIPT
-            const __factories = {$moduleFactories};
+            // cheerio and crypto-js are a quarter of a megabyte of JavaScript between them, and
+            // used to be pasted into this bootstrap on every invocation — parsed by a fresh
+            // interpreted Graal context each time whether or not the scraper wanted either. The
+            // host hands over a module's source only when something actually requires it.
             const __moduleCache = {};
             const __moduleAliases = {
               'cheerio': 'cheerio-without-node-native',
@@ -196,11 +307,11 @@ internal object NuvioSandboxWorker {
             globalThis.require = requestedName => {
               const name = __moduleAliases[requestedName] || requestedName;
               if (__moduleCache[name]) return __moduleCache[name].exports;
-              const factory = __factories[name];
-              if (!factory) throw new Error('unsupported module: ' + name);
+              const source = __bridge.moduleSource(name);
+              if (!source) throw new Error('unsupported module: ' + name);
               const loaded = { exports: {} };
               __moduleCache[name] = loaded;
-              factory(loaded, loaded.exports);
+              Function('module', 'exports', 'require', source)(loaded, loaded.exports, globalThis.require);
               return loaded.exports;
             };
             const __coveHeaders = rawHeaders => {
@@ -263,10 +374,6 @@ internal object NuvioSandboxWorker {
           );
         })();
     """.trimIndent()
-
-    private fun resource(name: String): String = requireNotNull(
-        NuvioSandboxWorker::class.java.classLoader.getResourceAsStream(name),
-    ) { "missing Nuvio module $name" }.bufferedReader().use { it.readText() }
 }
 
 /**
@@ -279,6 +386,14 @@ internal class FetchBridge {
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NEVER)
         .build()
+
+    /** Empty rather than an exception for an unknown name: the guest's require() reports that. */
+    @HostAccess.Export
+    fun moduleSource(name: String): String = NUVIO_MODULE_RESOURCES[name]?.let { resource ->
+        FetchBridge::class.java.classLoader.getResourceAsStream(resource)
+            ?.bufferedReader()
+            ?.use { it.readText() }
+    }.orEmpty()
 
     @HostAccess.Export
     fun base64Encode(value: String): String = Base64.getEncoder().encodeToString(value.encodeToByteArray())
@@ -357,6 +472,11 @@ internal class FetchBridge {
         ))
     }
 }
+
+private val NUVIO_MODULE_RESOURCES = mapOf(
+    "crypto-js" to "crypto-js.js",
+    "cheerio-without-node-native" to "cheerio-without-node-native.js",
+)
 
 @Serializable
 private data class FetchOptions(

@@ -926,6 +926,46 @@ class PlaybackSessionTest {
         assertEquals(2, phase.sources.size, "every source should have survived")
     }
 
+    // The probe covers a handful of candidates, so what it could not reach must stay on offer.
+    // Intersecting with the reached set instead of subtracting the rejected one silently cut
+    // every list down to the probe's budget — and when that left nothing, the ifEmpty guard
+    // handed back the rejects too, which is how a dead link reached the player.
+    @Test
+    fun `only a source the probe actually rejected is dropped`() = playbackTest(
+        settings = AppSettings(probeStreams = true),
+        sources = (1..12).map { StreamSource(name = "S$it", url = "https://example.com/$it.mkv") },
+    ) { h ->
+        h.playback.deadUrls = setOf("https://example.com/1.mkv")
+
+        h.session.open(movie())
+        runCurrent()
+
+        val phase = h.session.phase
+        assertTrue(phase is PlaybackPhase.Choosing, "was: $phase")
+        val offered = phase.sources.mapNotNull { it.source.url }
+        assertTrue("https://example.com/1.mkv" !in offered, "the rejected source was still offered")
+        assertEquals(11, offered.size, "sources the probe had no room for were dropped")
+    }
+
+    // Ranking first is what puts the source about to be auto-played inside the probe's budget.
+    @Test
+    fun `the probe checks the highest ranked sources rather than an arbitrary slice`() =
+        playbackTest(
+            settings = AppSettings(probeStreams = true),
+            sources = (1..12).map {
+                StreamSource(name = "S$it", url = "https://example.com/$it.mkv", sizeBytes = it * 1_000L)
+            },
+        ) { h ->
+            h.session.open(movie())
+            runCurrent()
+
+            val probed = h.playback.probedUrls.orEmpty()
+            assertEquals(10, probed.size, "probe budget not filled")
+            // Biggest first under the default ranking, so the largest source — the one an
+            // automatic pick lands on — must be among those checked.
+            assertTrue("https://example.com/12.mkv" in probed, "top-ranked source went unchecked")
+        }
+
     // probeStreams defaults to true, so the setting has to be turned off
     // explicitly here — an earlier version of this test used the default harness
     // settings and asserted the probe had not run, which was simply wrong.

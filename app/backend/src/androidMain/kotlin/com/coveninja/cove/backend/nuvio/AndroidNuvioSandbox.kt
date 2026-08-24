@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.AssetManager
 import android.os.Binder
 import android.os.IBinder
 import android.os.Parcel
@@ -15,6 +16,7 @@ import com.coveninja.cove.backend.addons.AddonUrlPolicy
 import com.coveninja.cove.shared.network.CoveJson
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
@@ -25,9 +27,10 @@ import java.net.URI
 import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
@@ -35,6 +38,14 @@ import kotlinx.serialization.encodeToString
 
 internal interface NuvioSandbox {
     suspend fun run(invocation: NuvioInvocation): List<NuvioScrapedStream>
+
+    /**
+     * Runs a whole request's scrapers, reporting each answer through [onOutcome] as it lands.
+     * QuickJS has no process to start per scraper, so unlike the desktop sandbox this keeps the
+     * shared per-invocation fan-out.
+     */
+    suspend fun runBatch(batch: NuvioBatch, onOutcome: (NuvioBatchOutcome) -> Unit) =
+        runInvocationsIndividually(batch, onOutcome)
 }
 
 /**
@@ -46,13 +57,13 @@ internal class AndroidNuvioSandbox(
     context: Context,
     private val httpClient: HttpClient,
     private val urlPolicy: AddonUrlPolicy,
-    private val timeoutMillis: Long = 20_000,
+    private val timeoutMillis: Long = 14_000,
 ) : NuvioSandbox {
     private val appContext = context.applicationContext
 
     override suspend fun run(invocation: NuvioInvocation): List<NuvioScrapedStream> =
         withTimeout(timeoutMillis) {
-            runInterruptible(Dispatchers.IO) {
+            withContext(Dispatchers.IO) {
                 val binding = bindWorker()
                 try {
                     val input = ParcelFileDescriptor.createPipe()
@@ -84,10 +95,26 @@ internal class AndroidNuvioSandbox(
                         output[1].close()
                     }
                     writer.join(1_000)
-                    val encoded = ParcelFileDescriptor.AutoCloseInputStream(output[0])
-                        .bufferedReader()
-                        .use { it.readText() }
-                    val result = CoveJson.decodeFromString<NuvioInvocationResult>(encoded)
+                    // Read on a thread of its own and await the answer instead of blocking here.
+                    // A read on a pipe does not observe a thread interrupt, so runInterruptible
+                    // could not honour the timeout above: a worker that never wrote left this
+                    // coroutine blocked for good, and with it the whole stream request. Abandoned,
+                    // the reader unblocks when the finally below unbinds and the isolated process
+                    // is reaped.
+                    val encoded = CompletableDeferred<Result<String>>()
+                    Thread({
+                        encoded.complete(runCatching {
+                            ParcelFileDescriptor.AutoCloseInputStream(output[0])
+                                .bufferedReader()
+                                .use { it.readText() }
+                        })
+                    }, "cove-nuvio-output").apply {
+                        isDaemon = true
+                        start()
+                    }
+                    val result = CoveJson.decodeFromString<NuvioInvocationResult>(
+                        encoded.await().getOrThrow(),
+                    )
                     require(result.error.isBlank()) { result.error }
                     result.streams
                 } finally {
@@ -152,6 +179,10 @@ internal class AndroidNuvioSandbox(
             urlPolicy.validate(current.toString())
             val response = httpClient.request(current.toString()) {
                 this.method = HttpMethod.parse(method)
+                // The shared untrusted client allows a request longer than a whole scraper
+                // invocation is given, so a single slow host could outlive the deadline it sits
+                // inside and wedge the guest. Desktop's FetchBridge bounds itself the same way.
+                timeout { requestTimeoutMillis = FETCH_TIMEOUT_MILLIS }
                 header(HttpHeaders.UserAgent, "Cove Nuvio Sandbox")
                 options.headers.forEach { (name, value) ->
                     // Browser fetch implementations silently own transport headers. Nuvio
@@ -191,6 +222,7 @@ internal class AndroidNuvioSandbox(
     private data class WorkerBinding(val connection: ServiceConnection, val binder: IBinder)
 
     private companion object {
+        const val FETCH_TIMEOUT_MILLIS = 8_000L
         const val MAX_FETCH_BYTES = 20 * 1024 * 1024
         val ALLOWED_METHODS = setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
         val FORBIDDEN_HEADERS = setOf("host", "content-length", "connection")
@@ -218,6 +250,31 @@ class AndroidNuvioWorkerService : Service() {
     override fun onBind(intent: Intent?): IBinder = worker
 
     private fun execute(input: ParcelFileDescriptor, output: ParcelFileDescriptor, broker: IBinder) {
+        val answered = AtomicBoolean(false)
+        fun answer(result: NuvioInvocationResult) {
+            if (!answered.compareAndSet(false, true)) return
+            runCatching {
+                ParcelFileDescriptor.AutoCloseOutputStream(output).bufferedWriter().use {
+                    it.write(CoveJson.encodeToString(result))
+                }
+            }
+            stopSelf()
+        }
+
+        // This binding of QuickJS exposes no interrupt hook, and a guest fetch is a blocking call
+        // into the broker, so a scraper that never returns cannot be stopped from the inside. The
+        // watchdog owns the same descriptor, and writing an answer closes it — which is what lets
+        // the client's read return instead of waiting on a thread that is never coming back.
+        val watchdog = Thread({
+            runCatching {
+                Thread.sleep(WORKER_DEADLINE_MILLIS)
+                answer(NuvioInvocationResult(error = "scraper exceeded $WORKER_DEADLINE_MILLIS ms"))
+            }
+        }, "cove-nuvio-watchdog").apply {
+            isDaemon = true
+            start()
+        }
+
         val invocation = runCatching {
             val encoded = ParcelFileDescriptor.AutoCloseInputStream(input).bufferedReader().use { it.readText() }
             CoveJson.decodeFromString<NuvioInvocation>(encoded)
@@ -226,10 +283,8 @@ class AndroidNuvioWorkerService : Service() {
             onSuccess = { NuvioInvocationResult(streams = it) },
             onFailure = { NuvioInvocationResult(error = it.message ?: "scraper failed") },
         )
-        ParcelFileDescriptor.AutoCloseOutputStream(output).bufferedWriter().use {
-            it.write(CoveJson.encodeToString(result))
-        }
-        stopSelf()
+        watchdog.interrupt()
+        answer(result)
     }
 
     private fun executeQuickJs(invocation: NuvioInvocation, broker: IBinder): List<NuvioScrapedStream> {
@@ -237,12 +292,12 @@ class AndroidNuvioWorkerService : Service() {
             quickJs.set(
                 "__bridge",
                 JavascriptBridgeApi::class.java,
-                JavascriptBridge(broker, invocation.scraperId),
+                JavascriptBridge(broker, invocation.scraperId, assets),
             )
             quickJs.set("__invocationHost", InvocationHostApi::class.java, InvocationHost(
                 CoveJson.encodeToString(invocation),
             ))
-            quickJs.evaluate(bootstrap(), "cove-nuvio-bootstrap.js")
+            quickJs.evaluate(androidNuvioBootstrap(), "cove-nuvio-bootstrap.js")
             quickJs.evaluate(synchronousNuvioScraperSource(invocation.code), "${invocation.scraperId}.js")
             quickJs.evaluate(ANDROID_NUVIO_INVOKE_SCRIPT, "cove-nuvio-invoke.js")
             check(quickJs.evaluate("globalThis.__coveDone === true") == true) {
@@ -253,18 +308,6 @@ class AndroidNuvioWorkerService : Service() {
             val encoded = quickJs.evaluate("String(globalThis.__coveResult || '[]')") as String
             return CoveJson.decodeFromString(encoded)
         }
-    }
-
-    private fun bootstrap(): String {
-        val modules = mapOf(
-            "crypto-js" to assets.open("crypto-js.js").bufferedReader().use { it.readText() },
-            "cheerio-without-node-native" to assets.open("cheerio-without-node-native.js")
-                .bufferedReader().use { it.readText() },
-        )
-        val factories = modules.entries.joinToString(",") { (name, source) ->
-            "${CoveJson.encodeToString(name)}: function(module, exports) {\n$source\n}"
-        }
-        return androidNuvioBootstrap(factories)
     }
 
     private interface InvocationHostApi {
@@ -278,6 +321,7 @@ class AndroidNuvioWorkerService : Service() {
     private interface JavascriptBridgeApi {
         fun base64Encode(value: String): String
         fun base64Decode(value: String): String
+        fun moduleSource(name: String): String
         fun request(url: String, optionsJson: String): String
         fun log(level: String, message: String)
     }
@@ -285,8 +329,14 @@ class AndroidNuvioWorkerService : Service() {
     private class JavascriptBridge(
         private val broker: IBinder,
         private val scraperId: String,
+        private val assets: AssetManager,
     ) : JavascriptBridgeApi {
         private var logCount = 0
+
+        /** Empty rather than an exception for an unknown name: the guest's require() reports that. */
+        override fun moduleSource(name: String): String = NUVIO_MODULE_ASSETS[name]?.let { asset ->
+            runCatching { assets.open(asset).bufferedReader().use { it.readText() } }.getOrNull()
+        }.orEmpty()
 
         override fun base64Encode(value: String): String =
             Base64.getEncoder().encodeToString(value.encodeToByteArray())
@@ -328,7 +378,17 @@ class AndroidNuvioWorkerService : Service() {
             const val MAX_GUEST_LOG_LENGTH = 2_000
         }
     }
+
+    private companion object {
+        /** Shorter than the client's own deadline, so a wedged guest is answered rather than cut. */
+        const val WORKER_DEADLINE_MILLIS = 12_000L
+    }
 }
+
+private val NUVIO_MODULE_ASSETS = mapOf(
+    "crypto-js" to "crypto-js.js",
+    "cheerio-without-node-native" to "cheerio-without-node-native.js",
+)
 
 private object NuvioBinder {
     const val DESCRIPTOR = "com.coveninja.cove.nuvio.worker"

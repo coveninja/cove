@@ -15,11 +15,6 @@ import com.coveninja.cove.shared.network.CoveApi
  */
 class LivePlaybackRepository(private val api: CoveApi) : PlaybackRepository {
 
-    private companion object {
-        /** The backend rejects more than ten in one request. */
-        const val MAX_PROBED = 10
-    }
-
 
     override suspend fun streams(
         tmdbId: Int,
@@ -47,7 +42,7 @@ class LivePlaybackRepository(private val api: CoveApi) : PlaybackRepository {
     override suspend fun aliveUrls(urls: List<String>): Set<String> {
         if (urls.isEmpty()) return emptySet()
         return runCatching {
-            api.probeStreams(urls.take(MAX_PROBED))
+            api.probeStreams(urls.take(PlaybackRepository.MAX_PROBED_URLS))
                 .results
                 .filter { it.alive }
                 .map { it.url }

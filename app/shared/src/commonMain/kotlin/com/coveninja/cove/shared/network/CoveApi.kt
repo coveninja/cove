@@ -287,7 +287,7 @@ class CoveApi(
      * Checks whether stream URLs still answer. The backend accepts at most ten
      * and caps the per-stream timeout itself.
      */
-    suspend fun probeStreams(urls: List<String>, timeoutMs: Int = 700): StreamProbeResponse =
+    suspend fun probeStreams(urls: List<String>, timeoutMs: Int = 2_000): StreamProbeResponse =
         httpClient.post("${config.baseUrl}/api/streams/probe") {
             applyAuthHeaders()
             contentType(ContentType.Application.Json)
