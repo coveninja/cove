@@ -603,8 +603,10 @@ class PlaybackSessionTest {
         assertTrue(!saved.completed, "halfway is not completed")
     }
 
+    // Mutation applied to verify: made automaticRetryAllowed return false for retriesUsed == 0
+    // → test failed, the first interruption stopped the session instead of reconnecting.
     @Test
-    fun `the first interruption retries the same source once from its retained position`() =
+    fun `the first interruption retries the same source from its retained position`() =
         playbackTest { h ->
             h.session.open(movie())
             runCurrent()
@@ -621,19 +623,69 @@ class PlaybackSessionTest {
             h.host.reportPlayback(position = 401.0, duration = 1000.0)
             runCurrent()
             assertTrue(!h.session.reconnecting)
+        }
 
-            h.host.reportPlayback(position = 520.0, duration = 1000.0, interrupted = true)
+    // Mutation applied to verify: dropped the RETRY_RENEWAL_SECONDS comparison so any later
+    // interruption renewed → test failed, a source stuck at one offset reloaded three times.
+    @Test
+    fun `an interruption that repeats without progress is not retried again`() =
+        playbackTest { h ->
+            h.session.open(movie())
             runCurrent()
-            assertEquals(2, h.host.loads.size, "a repeated interruption must not loop")
+            val initialUrl = assertNotNull(h.host.loadedUrl)
+
+            h.host.reportPlayback(position = 400.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+            assertEquals(2, h.host.loads.size)
+
+            // Reopened, played nothing, died in the same place: the one case the budget exists
+            // to stop, and the only signal that tells it apart is the position not moving.
+            h.host.reportPlayback(position = 402.0, duration = 1000.0)
+            runCurrent()
+            h.host.reportPlayback(position = 402.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+
+            assertEquals(2, h.host.loads.size, "a source dying at one offset must not loop")
             assertTrue(!h.session.reconnecting)
             assertTrue(h.session.recoveryFailed)
 
             h.session.retryCurrentSource()
             runCurrent()
-            assertEquals(initialUrl to 520.0, h.host.loads.last())
+            assertEquals(initialUrl to 402.0, h.host.loads.last())
             assertEquals(3, h.host.loads.size)
             assertTrue(h.session.reconnecting)
             assertTrue(!h.session.recoveryFailed)
+        }
+
+    // Mutation applied to verify: raised the MAX_AUTOMATIC_RETRIES check to `> MAX` → test
+    // failed, a fourth automatic reload was issued instead of the banner.
+    @Test
+    fun `a stall after real progress earns another retry, up to the cap`() =
+        playbackTest { h ->
+            h.session.open(movie())
+            runCurrent()
+
+            // Three stalls, each a couple of minutes of watching apart — the ordinary shape of a
+            // phone on a weak connection, which used to end on a banner at the second one.
+            listOf(200.0, 400.0, 600.0).forEachIndexed { index, position ->
+                h.host.reportPlayback(position = position, duration = 1000.0)
+                runCurrent()
+                h.host.reportPlayback(position = position, duration = 1000.0, interrupted = true)
+                runCurrent()
+
+                assertEquals(index + 2, h.host.loads.size, "stall at $position was not retried")
+                assertTrue(h.session.reconnecting)
+                assertTrue(!h.session.recoveryFailed)
+            }
+
+            h.host.reportPlayback(position = 800.0, duration = 1000.0)
+            runCurrent()
+            h.host.reportPlayback(position = 800.0, duration = 1000.0, interrupted = true)
+            runCurrent()
+
+            assertEquals(4, h.host.loads.size, "the cap must hold however well playback recovers")
+            assertTrue(!h.session.reconnecting)
+            assertTrue(h.session.recoveryFailed)
         }
 
     @Test

@@ -41,6 +41,35 @@ fun filePieceRange(
 )
 
 /**
+ * The last byte, in file coordinates, of the piece holding [offset].
+ *
+ * A reader serves up to here and no further, so the bytes move as each piece lands rather than
+ * once a whole fixed-size buffer is complete. With a large piece length those are very different
+ * waits: the buffer's worth may be several pieces, and holding all of them back means the player
+ * sees nothing until the slowest arrives.
+ */
+fun pieceEndOffset(fileOffset: Long, pieceLength: Long, offset: Long): Long {
+    require(pieceLength > 0) { "piece length must be positive" }
+    val pieceIndex = (fileOffset + offset.coerceAtLeast(0)) / pieceLength
+    return (pieceIndex + 1) * pieceLength - 1 - fileOffset
+}
+
+/**
+ * The pieces to ask for beyond the chunk being served, so the next read is not cold.
+ *
+ * Empty when the chunk already reaches the last piece — there is nothing ahead to want. Always
+ * at least one piece otherwise, however small [aheadBytes] is against the piece length: a
+ * read-ahead rounded down to nothing is the stall it exists to prevent.
+ */
+fun readAheadPieces(lastPiece: Int, pieceLength: Long, aheadBytes: Long, numPieces: Int): IntRange {
+    require(pieceLength > 0) { "piece length must be positive" }
+    val ceiling = numPieces - 1
+    if (lastPiece >= ceiling) return IntRange.EMPTY
+    val count = (aheadBytes / pieceLength).toInt().coerceAtLeast(1)
+    return (lastPiece + 1)..(lastPiece + count).coerceAtMost(ceiling)
+}
+
+/**
  * How far ahead of the player the torrent is allowed to run.
  *
  * Without a bound, libtorrent downloads the entire file: the selected file is set to a normal

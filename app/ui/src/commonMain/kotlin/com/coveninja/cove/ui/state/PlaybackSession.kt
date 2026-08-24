@@ -98,7 +98,7 @@ class PlaybackSession(
     var phase by mutableStateOf<PlaybackPhase?>(null)
         private set
 
-    /** True only while the one automatic same-source reconnect is opening. */
+    /** True only while an automatic same-source reconnect is opening. */
     var reconnecting by mutableStateOf(false)
         private set
 
@@ -153,8 +153,11 @@ class PlaybackSession(
     private var progressJob: Job? = null
     private var playbackMonitorJob: Job? = null
     private var reloadJob: Job? = null
-    private var automaticRetryUsed = false
+    private var automaticRetriesUsed = 0
     private var interruptionPositionSeconds = 0.0
+
+    /** Where the last automatic reconnect resumed from; the yardstick for [automaticRetryAllowed]. */
+    private var lastRecoveryPositionSeconds = 0.0
 
     // Kept so a source that dies can be stepped over without resolving again.
     // Named apart from the lambda parameter it would otherwise shadow.
@@ -683,8 +686,14 @@ class PlaybackSession(
                         // Capture the rolled-back position before load() clears the
                         // terminal status for the reconnect attempt.
                         saveProgress()
-                        if (!automaticRetryUsed && phase is PlaybackPhase.Playing) {
-                            automaticRetryUsed = true
+                        val allowed = automaticRetryAllowed(
+                            retriesUsed = automaticRetriesUsed,
+                            positionSeconds = interruptionPositionSeconds,
+                            lastRecoveryPositionSeconds = lastRecoveryPositionSeconds,
+                        )
+                        if (allowed && phase is PlaybackPhase.Playing) {
+                            automaticRetriesUsed++
+                            lastRecoveryPositionSeconds = interruptionPositionSeconds
                             reloadCurrentSource(interruptionPositionSeconds, token)
                         } else {
                             reconnecting = false
@@ -714,8 +723,9 @@ class PlaybackSession(
     }
 
     private fun resetPlaybackRecovery() {
-        automaticRetryUsed = false
+        automaticRetriesUsed = 0
         interruptionPositionSeconds = 0.0
+        lastRecoveryPositionSeconds = 0.0
         reconnecting = false
         recoveryFailed = false
     }
@@ -939,6 +949,43 @@ fun PluginPlaybackEffect(session: PlaybackSession) {
         onDispose { graph.plugins.publishPlayback(PluginPlaybackActivity()) }
     }
 }
+
+/**
+ * Whether an interruption at [positionSeconds] earns another automatic reconnect.
+ *
+ * The budget used to be a single retry for the whole source, which was the right guard against
+ * the wrong thing. What it prevents is a source that dies the moment it is opened being reopened
+ * for ever, and that case is recognisable: playback never moves. It has nothing to say about a
+ * film that plays for twenty minutes, stalls once and would come back on its own — and on a
+ * phone, where a stall is an ordinary event, that was the common case. The second one ended the
+ * session on a banner.
+ *
+ * So the renewal is evidence of playback rather than a clock: an interruption gets a retry if
+ * the position has moved [RETRY_RENEWAL_SECONDS] past wherever the last reconnect resumed from.
+ * A stream failing repeatedly at the same offset still stops after one attempt, because it never
+ * clears that bar, and [MAX_AUTOMATIC_RETRIES] caps even a source that keeps limping forward so
+ * a bad evening cannot become an unbounded reload loop.
+ */
+internal fun automaticRetryAllowed(
+    retriesUsed: Int,
+    positionSeconds: Double,
+    lastRecoveryPositionSeconds: Double,
+): Boolean {
+    if (retriesUsed >= MAX_AUTOMATIC_RETRIES) return false
+    if (retriesUsed == 0) return true
+    if (!positionSeconds.isFinite() || !lastRecoveryPositionSeconds.isFinite()) return false
+    return positionSeconds - lastRecoveryPositionSeconds >= RETRY_RENEWAL_SECONDS
+}
+
+/**
+ * How far playback must advance past the last reconnect before another is earned. Long enough
+ * that a source dying in its opening moments cannot keep qualifying, short enough that a stall
+ * a few minutes into an episode still self-heals.
+ */
+internal const val RETRY_RENEWAL_SECONDS = 30.0
+
+/** The ceiling whatever the progress: past here the viewer is told, and chooses. */
+internal const val MAX_AUTOMATIC_RETRIES = 3
 
 internal fun pluginArtworkUrl(value: String?): String? = resolveTmdbImageUrl(value, "w500")
     ?.takeIf { it.length <= 300 && it.startsWith("https://image.tmdb.org/t/p/") }

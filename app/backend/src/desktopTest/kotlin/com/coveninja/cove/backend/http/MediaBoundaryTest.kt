@@ -11,18 +11,22 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.encodeURLParameter
 import io.ktor.http.headersOf
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO as ServerCIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
@@ -39,6 +43,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -313,6 +318,78 @@ class MediaBoundaryTest {
         }
     }
 
+    @Test
+    fun `a proxied body outlives the client's request timeout`() = runBlocking {
+        // The client the proxy borrows is the addon client, and it installs a request timeout.
+        // That is not a per-read deadline: Ktor enforces it by cancelling the whole call's
+        // execution context, so it applies to a body being read a chunk at a time just as much
+        // as to a JSON manifest. mpv fills its demuxer cache and then stops reading for minutes
+        // at a time, so every proxied episode sat on an open call far past the deadline and was
+        // cut off mid-body — surfacing only when the player next wanted bytes it had not read,
+        // which is why it read as seeking breaking the stream rather than as a proxy hanging up.
+        val head = ByteArray(64 * 1024) { 'a'.code.toByte() }
+        val tail = ByteArray(16 * 1024) { 'b'.code.toByte() }
+
+        // A real upstream rather than a MockEngine: the cancellation under test kills the
+        // engine's response channel, and only a real engine has one to kill.
+        val upstream = embeddedServer(ServerCIO, port = 0) {
+            routing {
+                get("/slow.mp4") {
+                    call.respondBytesWriter(
+                        contentType = ContentType.parse("video/mp4"),
+                        contentLength = (head.size + tail.size).toLong(),
+                    ) {
+                        writeFully(head)
+                        flush()
+                        // Longer than the deadline by enough that a scheduling delay cannot
+                        // make the two orders of events swap.
+                        delay(PROXY_REQUEST_TIMEOUT_MILLIS * 3)
+                        writeFully(tail)
+                        flush()
+                    }
+                }
+            }
+        }
+        upstream.start(wait = false)
+        val upstreamPort = upstream.engine.resolvedConnectors().first().port
+        val upstreamUrl = "http://127.0.0.1:$upstreamPort/slow.mp4"
+
+        val boundary = boundary(
+            HttpClient(ClientCIO) {
+                install(HttpTimeout) { requestTimeoutMillis = PROXY_REQUEST_TIMEOUT_MILLIS }
+            },
+        )
+        // Header-bearing, or the boundary redirects instead of proxying and nothing is proved.
+        boundary.registerStreams(
+            listOf(
+                AddonStream(
+                    url = upstreamUrl,
+                    headers = mapOf(HttpHeaders.Referrer to "https://provider.test/"),
+                ),
+            ),
+        )
+        val server = embeddedServer(ServerCIO, port = 0) { mediaRoutes(boundary) }
+        server.start(wait = false)
+        val port = server.engine.resolvedConnectors().first().port
+        val client = HttpClient(ClientCIO)
+        try {
+            withTimeout(STREAMING_TIMEOUT_MILLIS) {
+                client.prepareGet("http://127.0.0.1:$port/play?url=${upstreamUrl.encodeURLParameter()}")
+                    .execute { response ->
+                        val incoming = response.bodyAsChannel()
+                        assertContentEquals(head, incoming.readByteArray(head.size))
+                        // The whole assertion: without the streaming override the call has been
+                        // cancelled by now and this reads a truncated body instead.
+                        assertContentEquals(tail, incoming.readByteArray(tail.size))
+                    }
+            }
+        } finally {
+            client.close()
+            server.stop(0, 0)
+            upstream.stop(0, 0)
+        }
+    }
+
     private fun boundary(client: HttpClient) = MediaBoundary(
         httpClient = client,
         imageCacheDirectory = Files.createTempDirectory("cove-images"),
@@ -336,5 +413,8 @@ class MediaBoundaryTest {
     private companion object {
         // Generous: this bounds a hang, it does not time an operation.
         const val STREAMING_TIMEOUT_MILLIS = 30_000L
+
+        /** Short enough to keep the test quick, long enough to survive a slow CI machine. */
+        const val PROXY_REQUEST_TIMEOUT_MILLIS = 400L
     }
 }

@@ -14,7 +14,6 @@ import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +28,8 @@ internal class AndroidJlibtorrentPlaybackEngine(
     private val downloadDirectory: Path,
     private val lifecycle: TorrentCacheLifecycle,
     private val metadataTimeoutSeconds: Int = 45,
-    private val pieceTimeoutMillis: Long = 120_000,
+    /** Must stay below mpv's network-timeout — see the desktop engine for what happens if not. */
+    private val pieceTimeoutMillis: Long = 60_000,
     /** Read fresh each time, so a changed allowance applies without restarting the app. */
     private val policy: () -> TorrentCachePolicy = { TorrentCachePolicy() },
     private val journal: TorrentCacheJournal? = null,
@@ -68,16 +68,20 @@ internal class AndroidJlibtorrentPlaybackEngine(
                 it[selected.index] = Priority.NORMAL
             },
         )
+        // Set on the handle rather than only at add time. The magnet path passes the flag to
+        // download(), but a torrent whose metadata was cached — the second episode of a series,
+        // and every resume — is added without it, so on those plays libtorrent picked whatever
+        // was rarest in the swarm and the reader waited on pieces from the middle of the file.
+        torrent.handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
         val path = torrent.saveDirectory.resolve(selected.path).normalize()
         require(path.startsWith(torrent.saveDirectory)) { "torrent file escaped download directory" }
         val id = "$canonical:${selected.index}"
         // Reused across range requests: the resource remembers how far the download window has
         // been opened, and the player asks for a new range on every seek.
-        val managed = resources.computeIfAbsent(id) { ManagedResource(torrent, selected, path) }
-        if (managed.parked.compareAndSet(false, true)) {
-            prioritizeIndexTail(managed)
-            parkPiecesBeyondWindow(managed)
+        val managed = resources.computeIfAbsent(id) {
+            ManagedResource(torrent, selected, path, scheduler(torrent, selected))
         }
+        managed.scheduler.prepareForRead()
         TorrentResource(id, path.fileName.toString(), selected.size, contentType(path.fileName.toString()))
     }
 
@@ -112,12 +116,20 @@ internal class AndroidJlibtorrentPlaybackEngine(
             // holding it. Opening before that wait throws FileNotFoundException for
             // every freshly added torrent, and because respondBytesWriter has already
             // sent the 206 by then, the player sees a stream that dies at byte zero.
-            awaitPieces(managed, cursor, min(endInclusive, cursor + buffer.size - 1))
+            managed.scheduler.awaitPieces(cursor, cursor, pieceTimeoutMillis)
             awaitTorrentFile(managed.path, pieceTimeoutMillis)
             RandomAccessFile(managed.path.toFile(), "r").use { input ->
                 while (cursor <= endInclusive) {
-                    val chunkEnd = min(endInclusive, cursor + buffer.size - 1)
-                    awaitPieces(managed, cursor, chunkEnd)
+                    // A piece at a time, not a megabyte: the player is handed bytes the moment
+                    // the piece under the cursor lands, rather than waiting for every piece of a
+                    // megabyte to be complete before any of it moves. The read-ahead inside
+                    // awaitPieces keeps the pipe full, so the smaller step costs nothing in
+                    // throughput and removes the stall the viewer actually sees.
+                    val chunkEnd = min(
+                        min(endInclusive, managed.scheduler.pieceEndOffset(cursor)),
+                        cursor + buffer.size - 1,
+                    )
+                    managed.scheduler.awaitPieces(cursor, chunkEnd, pieceTimeoutMillis)
                     input.seek(cursor)
                     var remaining = (chunkEnd - cursor + 1).toInt()
                     while (remaining > 0) {
@@ -273,83 +285,6 @@ internal class AndroidJlibtorrentPlaybackEngine(
         }
     }
 
-    private suspend fun awaitPieces(resource: ManagedResource, start: Long, endInclusive: Long) {
-        val info = resource.torrent.info
-        val fileOffset = info.files().fileOffset(resource.file.index)
-        val firstPiece = ((fileOffset + start) / info.pieceLength()).toInt()
-        val lastPiece = ((fileOffset + endInclusive) / info.pieceLength()).toInt()
-            .coerceAtMost(info.numPieces() - 1)
-        for (piece in firstPiece..lastPiece) resource.torrent.handle.piecePriority(piece, Priority.SEVEN)
-        extendDownloadWindow(resource, start)
-        withTimeout(pieceTimeoutMillis) {
-            while ((firstPiece..lastPiece).any { !resource.torrent.handle.havePiece(it) }) delay(100)
-        }
-    }
-
-    /**
-     * Fetches the end of the file up front.
-     *
-     * An mp4 that was not written for streaming keeps its moov atom there, and a matroska file
-     * keeps its cues there; the demuxer reads them before it can decode a frame. Harmless when
-     * the whole file is being downloaded anyway, and mandatory once a window stops it from being
-     * downloaded — otherwise the bytes the player needs first are the ones parked furthest away.
-     */
-    private fun prioritizeIndexTail(resource: ManagedResource) {
-        val tail = indexTailRange(resource)
-        for (piece in tail.first..tail.last) {
-            if (resource.torrent.handle.havePiece(piece)) continue
-            resource.torrent.handle.piecePriority(piece, Priority.SEVEN)
-        }
-    }
-
-    private fun indexTailRange(resource: ManagedResource): PieceRange {
-        val info = resource.torrent.info
-        return pieceRangeOf(
-            fileOffset = info.files().fileOffset(resource.file.index),
-            pieceLength = info.pieceLength().toLong(),
-            start = (resource.file.size - INDEX_TAIL_BYTES).coerceAtLeast(0),
-            endInclusive = (resource.file.size - 1).coerceAtLeast(0),
-            numPieces = info.numPieces(),
-        )
-    }
-
-    /** Stops the download running past the window the viewer allowed. See the desktop engine. */
-    private fun parkPiecesBeyondWindow(resource: ManagedResource) {
-        val ahead = policy().downloadAheadBytes
-        if (ahead <= 0) return
-        val info = resource.torrent.info
-        val fileOffset = info.files().fileOffset(resource.file.index)
-        val pieceLength = info.pieceLength().toLong()
-        val file = filePieceRange(fileOffset, resource.file.size, pieceLength, info.numPieces())
-        val window = downloadWindow(fileOffset, resource.file.size, pieceLength, 0, ahead, info.numPieces())
-        val tail = indexTailRange(resource)
-        for (piece in (window.last + 1)..file.last) {
-            if (piece in tail) continue
-            if (resource.torrent.handle.havePiece(piece)) continue
-            resource.torrent.handle.piecePriority(piece, Priority.IGNORE)
-        }
-    }
-
-    /** Releases parked pieces as the reader advances, never re-treading ground already covered. */
-    private fun extendDownloadWindow(resource: ManagedResource, cursor: Long) {
-        val ahead = policy().downloadAheadBytes
-        if (ahead <= 0) return
-        val info = resource.torrent.info
-        val handle = resource.torrent.handle
-        val window = downloadWindow(
-            fileOffset = info.files().fileOffset(resource.file.index),
-            fileSize = resource.file.size,
-            pieceLength = info.pieceLength().toLong(),
-            cursor = cursor,
-            aheadBytes = ahead,
-            numPieces = info.numPieces(),
-        )
-        for (piece in maxOf(resource.raisedTo + 1, window.first)..window.last) {
-            if (!handle.havePiece(piece)) handle.piecePriority(piece, Priority.NORMAL)
-        }
-        if (window.last > resource.raisedTo) resource.raisedTo = window.last
-    }
-
     private data class ManagedTorrent(
         val info: TorrentInfo,
         val handle: TorrentHandle,
@@ -364,16 +299,18 @@ internal class AndroidJlibtorrentPlaybackEngine(
         val torrent: ManagedTorrent,
         val file: TorrentFile,
         val path: Path,
-    ) {
-        val parked = AtomicBoolean(false)
+        /** Owns every piece priority and deadline this reader issues, and the state behind them. */
+        val scheduler: TorrentPieceScheduler,
+    )
 
-        @Volatile
-        var raisedTo: Int = -1
-    }
+    private fun scheduler(torrent: ManagedTorrent, file: TorrentFile) = TorrentPieceScheduler(
+        handle = torrent.handle,
+        info = torrent.info,
+        fileIndex = file.index,
+        fileSize = file.size,
+        downloadAheadBytes = { policy().downloadAheadBytes },
+    )
 }
-
-/** How much of the end of the file is fetched up front, for the container index. */
-private const val INDEX_TAIL_BYTES = 2L * 1024 * 1024
 
 private fun contentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
     "mp4", "m4v" -> "video/mp4"

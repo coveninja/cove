@@ -427,6 +427,14 @@ class AndroidMpvVideoPlayerHost(
             setInitialOption("demuxer-readahead-secs", "4")
             setInitialOption("cache-pause-initial", "no")
             setInitialOption("cache-pause-wait", "2")
+            // Explicit rather than left to mpv's default, because the number on the other side
+            // of it is one of ours: the torrent engine waits up to its own pieceTimeoutMillis
+            // for the pieces under a read, and every one of those waits happens with mpv already
+            // blocked on the socket. Whichever of the two is shorter is the one that decides
+            // what the viewer is told, and the engine's version of the story is the useful one —
+            // it can say how many peers it had and how fast they were going, and the session can
+            // reconnect from it. So this stays comfortably the larger of the pair.
+            setInitialOption("network-timeout", "90")
             setInitialOption("terminal", "no")
             // mpv's ytdl_hook runs on load failure and shells out to a yt-dlp on PATH.
             // An app sandbox has no PATH to put one on, so it can only ever fail — and
@@ -438,6 +446,22 @@ class AndroidMpvVideoPlayerHost(
             // start the player over that would be worse than leaving the hook on.
             if (requireMpv().setOptionString("ytdl", "no") < 0) {
                 Log.w(MPV_LOG_TAG, "This libmpv has no ytdl option; its hook stays on")
+            }
+            // Lets ffmpeg re-issue the range request at the offset it had reached instead of
+            // reporting a body that died mid-file as the end of the film. With keep-open=yes a
+            // read error is otherwise permanent: mpv parks, PlaybackStatus.interrupted goes
+            // true, and the viewer is told the stream stopped before the end — of a source that
+            // would have answered a second request perfectly well.
+            //
+            // reconnect_at_eof is deliberately absent. It treats a clean end-of-file as an error
+            // too, and the natural end is what decides whether the next episode plays; the two
+            // flags here fire on errors only, and reconnect_delay_max bounds the retries so a
+            // genuinely dead upstream still gives up rather than looping.
+            //
+            // Not setInitialOption: a stream option this libmpv does not recognise must cost the
+            // reconnect, not the whole player, exactly as with ytdl above.
+            if (requireMpv().setOptionString("stream-lavf-o", RECONNECT_STREAM_OPTIONS) < 0) {
+                Log.w(MPV_LOG_TAG, "This libmpv rejected stream-lavf-o; streams will not reconnect")
             }
             // Caps mpv's own stdout only. The client API log the LogObserver reads is a
             // separate buffer whose level msg-level cannot lower — see
@@ -1045,6 +1069,15 @@ internal fun mpvEndOfFileIsFailure(
  * as --js-runtimes; on a host without one they return storyboards and nothing else.
  */
 internal const val YOUTUBE_PLAYER_CLIENTS = "youtube:player_client=mweb,tv_simply"
+
+/**
+ * ffmpeg's HTTP reconnect flags, as one `stream-lavf-o` value.
+ *
+ * `reconnect_streamed` is included because a response without a length is not seekable as far
+ * as ffmpeg is concerned, and those are exactly the addon streams that most need retrying.
+ */
+internal const val RECONNECT_STREAM_OPTIONS =
+    "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=10"
 
 /** The User-Agent mpv should send, or blank to leave mpv's own default alone. */
 internal fun mpvUserAgent(headers: Map<String, String>): String =

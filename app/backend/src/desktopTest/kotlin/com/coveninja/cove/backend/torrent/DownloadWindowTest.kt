@@ -86,6 +86,48 @@ class DownloadWindowTest {
     }
 
     @Test
+    fun `a chunk ends at the piece boundary, in file coordinates`() {
+        // Byte 0 of the file is byte 10,000 of the torrent, which is the start of piece 10, so
+        // the first chunk runs to file byte 999. Fails if the file offset is not subtracted back
+        // off: the chunk end would be a torrent coordinate, and the reader would seek past the
+        // bytes it just waited for.
+        assertEquals(999, pieceEndOffset(fileOffset, pieceLength, 0))
+        assertEquals(999, pieceEndOffset(fileOffset, pieceLength, 999))
+        assertEquals(1_999, pieceEndOffset(fileOffset, pieceLength, 1_000))
+    }
+
+    @Test
+    fun `a file that does not start on a piece boundary still ends chunks on one`() {
+        // The ordinary case in a multi-file torrent. From offset 10,500 the file's byte 0 sits
+        // mid-piece, so the first chunk is the 500 bytes to the end of piece 10. Fails on
+        // arithmetic that assumes the file begins where a piece does, which asks for a piece the
+        // reader has already been given and stalls a chunk behind for the whole episode.
+        assertEquals(499, pieceEndOffset(fileOffset = 10_500, pieceLength = pieceLength, offset = 0))
+        assertEquals(1_499, pieceEndOffset(fileOffset = 10_500, pieceLength = pieceLength, offset = 500))
+    }
+
+    @Test
+    fun `read-ahead asks for the pieces after the chunk being served`() {
+        // Four pieces of allowance beyond piece 12. Fails if the range starts at lastPiece, which
+        // re-requests the piece the reader is already waiting on and wastes the deadline on it.
+        assertEquals(13..16, readAheadPieces(12, pieceLength, aheadBytes = 4_000, numPieces = numPieces))
+    }
+
+    @Test
+    fun `read-ahead never rounds down to nothing and never runs off the end`() {
+        // An allowance smaller than one piece still has to name a piece, or the next read starts
+        // from cold — the stall this exists to prevent. Fails on a plain division.
+        assertEquals(13..13, readAheadPieces(12, pieceLength, aheadBytes = 1, numPieces = numPieces))
+        // At the last piece there is nothing ahead to want. Fails if the range is built before
+        // the ceiling is checked, which asks libtorrent for a piece index it does not have.
+        assertTrue(readAheadPieces(numPieces - 1, pieceLength, 4_000, numPieces).isEmpty())
+        assertEquals(
+            (numPieces - 1)..(numPieces - 1),
+            readAheadPieces(numPieces - 2, pieceLength, 100_000, numPieces),
+        )
+    }
+
+    @Test
     fun `a cursor past the end of the file clamps instead of throwing`() {
         // The engine rejects such a cursor before it gets here, so this guards the guard: with
         // the floor clamped only after it is used as one, coerceIn is handed a minimum above its

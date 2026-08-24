@@ -3,7 +3,9 @@ package com.coveninja.cove.backend.playback
 import com.coveninja.cove.backend.backendScope
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
+import com.coveninja.cove.backend.http.logTruncatedMediaBody
 import com.coveninja.cove.backend.http.looksLikePlayableContentType
+import com.coveninja.cove.backend.http.mediaStreamTimeouts
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.backend.http.ProbeStreamResult
 import com.coveninja.cove.backend.http.ProbeStreamsRequest
@@ -176,7 +178,7 @@ internal class AndroidPlaybackMediaHost private constructor(
         val requestHeaders = registered.headers.toMutableMap().also { headers ->
             call.request.header(HttpHeaders.Range)?.let { headers[HttpHeaders.Range] = it }
         }
-        publicGet(url, requestHeaders, allowLanStreamSources()) { upstream ->
+        publicGet(url, requestHeaders, allowLanStreamSources(), streaming = true) { upstream ->
             val contentType = upstream.headers[HttpHeaders.ContentType]
                 ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
                 ?: ContentType.Application.OctetStream
@@ -199,6 +201,7 @@ internal class AndroidPlaybackMediaHost private constructor(
                     upstream.bodyAsChannel().copyTo(this)
                     copied.complete(Unit)
                 } catch (failure: Throwable) {
+                    logTruncatedMediaBody(url, failure, isClosedForWrite)
                     copied.completeExceptionally(failure)
                     throw failure
                 }
@@ -320,6 +323,12 @@ internal class AndroidPlaybackMediaHost private constructor(
         initialUrl: String,
         headers: Map<String, String>,
         allowLan: Boolean,
+        /**
+         * Whether the body being fetched is a media stream, and so must outlive the client's
+         * request timeout. Set by [playDirect] and nothing else: a subtitle, an image or a
+         * liveness probe is a small body that should still fail fast. See [mediaStreamTimeouts].
+         */
+        streaming: Boolean = false,
         consume: suspend (HttpResponse) -> T,
     ): T {
         var current = initialUrl
@@ -333,6 +342,7 @@ internal class AndroidPlaybackMediaHost private constructor(
                 headers.filterKeys { it.lowercase() !in SENSITIVE_REDIRECT_HEADERS }
             }
             val hop = httpClient.prepareGet(current) {
+                if (streaming) mediaStreamTimeouts()
                 requestHeaders.forEach { (name, value) -> header(name, value) }
             }.execute { response ->
                 val location = response.headers[HttpHeaders.Location]

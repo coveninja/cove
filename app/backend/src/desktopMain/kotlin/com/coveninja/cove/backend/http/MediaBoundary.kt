@@ -92,7 +92,7 @@ class MediaBoundary(
         val requestHeaders = registered.headers.toMutableMap().also { headers ->
             call.request.headers[HttpHeaders.Range]?.let { headers[HttpHeaders.Range] = it }
         }
-        publicGet(url, requestHeaders, allowLanStreamSources()) { upstream ->
+        publicGet(url, requestHeaders, allowLanStreamSources(), streaming = true) { upstream ->
             val contentType = upstream.headers[HttpHeaders.ContentType]
                 ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
                 ?: ContentType.Application.OctetStream
@@ -121,6 +121,7 @@ class MediaBoundary(
                     upstream.bodyAsChannel().copyTo(this)
                     copied.complete(Unit)
                 } catch (failure: Throwable) {
+                    logTruncatedMediaBody(url, failure, isClosedForWrite)
                     copied.completeExceptionally(failure)
                     throw failure
                 }
@@ -306,6 +307,12 @@ class MediaBoundary(
         initialUrl: String,
         headers: Map<String, String>,
         allowLan: Boolean,
+        /**
+         * Whether the body being fetched is a media stream, and so must outlive the client's
+         * request timeout. Set by [playDirect] and nothing else: a subtitle, an image or a
+         * liveness probe is a small body that should still fail fast. See [mediaStreamTimeouts].
+         */
+        streaming: Boolean = false,
         consume: suspend (HttpResponse) -> T,
     ): T {
         var current = initialUrl
@@ -319,6 +326,7 @@ class MediaBoundary(
                 headers.filterKeys { it.lowercase() !in SENSITIVE_REDIRECT_HEADERS }
             }
             val hop = httpClient.prepareGet(current) {
+                if (streaming) mediaStreamTimeouts()
                 requestHeaders.forEach { (name, value) -> header(name, value) }
             }.execute { response ->
                 val location = response.headers[HttpHeaders.Location]
