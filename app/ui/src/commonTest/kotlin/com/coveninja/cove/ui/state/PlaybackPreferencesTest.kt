@@ -7,9 +7,6 @@ import kotlin.test.assertTrue
 
 class PlaybackPreferencesTest {
 
-    // Mutation applied to verify: resolved Original to the literal string
-    // "original" → test failed, the player would have been given a language code
-    // that no file declares.
     @Test
     fun `original resolves to the title's own language`() {
         val settings = AppSettings(defaultAudioLang = AUDIO_LANGUAGE_ORIGINAL)
@@ -22,8 +19,6 @@ class PlaybackPreferencesTest {
     // The bug this exists for: TMDB says "ja", the file says "jpn", and "jpn" does
     // not start with "ja" — so asking for the original audio of a Japanese title
     // matched nothing and left the English dub selected.
-    // Mutation applied to verify: returned listOf(code) with no aliases → test
-    // failed, jpn was absent.
     @Test
     fun `a two-letter language also asks for its three-letter forms`() {
         val settings = AppSettings(defaultAudioLang = AUDIO_LANGUAGE_ORIGINAL)
@@ -35,8 +30,6 @@ class PlaybackPreferencesTest {
 
     // Both ISO 639-2 forms, because releases use both: German tracks are tagged
     // "ger" about as often as "deu", and only one of them is a prefix match for "de".
-    // Mutation applied to verify: kept only the terminological form → test failed,
-    // "ger" was missing and half of German releases would still not match.
     @Test
     fun `languages with two three-letter codes ask for both`() {
         assertTrue(languageAliases("de").containsAll(listOf("de", "deu", "ger")))
@@ -45,8 +38,6 @@ class PlaybackPreferencesTest {
 
     // The preferred code has to stay first, or the alias outranks the thing it is
     // an alias for and a file carrying both tracks picks the wrong one.
-    // Mutation applied to verify: appended the code after its aliases → test failed
-    // with "jpn" first.
     @Test
     fun `the requested code outranks its aliases`() {
         assertEquals("ja", languageAliases("ja").first())
@@ -66,8 +57,6 @@ class PlaybackPreferencesTest {
         assertEquals(listOf("mi"), languageAliases("mi"))
     }
 
-    // Mutation applied to verify: removed the isEmpty guard → test failed with a
-    // list containing one empty string, which mpv treats as a language named "".
     @Test
     fun `a blank language asks for nothing`() {
         assertTrue(languageAliases("").isEmpty())
@@ -75,7 +64,6 @@ class PlaybackPreferencesTest {
     }
 
     // Settings and file tags disagree about case often enough to matter.
-    // Mutation applied to verify: dropped the lowercase() → test failed with "JA".
     @Test
     fun `language codes are normalised before use`() {
         assertEquals("ja", languageAliases(" JA ").first())
@@ -83,8 +71,6 @@ class PlaybackPreferencesTest {
 
     // An explicit choice gets the same treatment as Original; there is nothing
     // special about the language happening to be the title's own.
-    // Mutation applied to verify: expanded only the Original branch → test failed,
-    // "deu" was absent.
     @Test
     fun `an explicitly chosen language is expanded too`() {
         val settings = AppSettings(defaultAudioLang = "de")
@@ -94,7 +80,6 @@ class PlaybackPreferencesTest {
 
     // A title with no declared language leaves the preference empty rather than
     // inventing one, so the player falls back to the file's own default.
-    // Mutation applied to verify: substituted "en" when unknown → test failed.
     @Test
     fun `original with no known language expresses no preference`() {
         val settings = AppSettings(defaultAudioLang = AUDIO_LANGUAGE_ORIGINAL)
@@ -103,17 +88,12 @@ class PlaybackPreferencesTest {
         assertTrue(settings.playbackPreferences(originalLanguage = "").audioLanguages.isEmpty())
     }
 
-    // Mutation applied to verify: passed the percentage through unscaled → test
-    // failed with 100.0, which would have rendered subtitles a hundred times
-    // their normal size.
     @Test
     fun `subtitle size becomes a multiplier`() {
         assertEquals(1.0, AppSettings(subtitleSize = 100.0).playbackPreferences(null).subtitleScale)
         assertEquals(1.5, AppSettings(subtitleSize = 150.0).playbackPreferences(null).subtitleScale)
     }
 
-    // Mutation applied to verify: removed the clamp → test failed, a stored zero
-    // produced a scale of 0 and subtitles that could not be seen at all.
     @Test
     fun `an extreme stored size is clamped to something usable`() {
         assertEquals(0.25, AppSettings(subtitleSize = 0.0).playbackPreferences(null).subtitleScale)
@@ -122,16 +102,12 @@ class PlaybackPreferencesTest {
 
     // The setting measures up from the bottom; mpv's sub-pos measures down from
     // the top. Getting this backwards puts subtitles at the top of the picture.
-    // Mutation applied to verify: passed the value straight through → test failed
-    // with 8 instead of 92.
     @Test
     fun `subtitle position is inverted for the player`() {
         assertEquals(92, AppSettings(subtitlePosition = 8.0).playbackPreferences(null).subtitlePosition)
         assertEquals(100, AppSettings(subtitlePosition = 0.0).playbackPreferences(null).subtitlePosition)
     }
 
-    // Mutation applied to verify: read defaultAudioLang for both → test failed,
-    // the subtitle language followed the audio setting.
     @Test
     fun `audio and subtitle languages come from their own settings`() {
         val settings = AppSettings(defaultAudioLang = "ja", defaultSubtitleLang = "en")

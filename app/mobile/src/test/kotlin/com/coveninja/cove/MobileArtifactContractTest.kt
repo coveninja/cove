@@ -29,7 +29,6 @@ class MobileArtifactContractTest {
     // are what make that possible: a required touchscreen hides it from every television, and a
     // missing leanback launcher category leaves it installed but unopenable on one — the app is
     // simply absent from the launcher. Requiring leanback would cost every phone instead.
-    // Mutation applied to verify: put touchscreen back to required="true" → test failed.
     @Test
     fun `one artifact stays installable and launchable on both phones and televisions`() {
         val manifest = File("src/main/AndroidManifest.xml").readText()
@@ -53,7 +52,6 @@ class MobileArtifactContractTest {
     // packaging/icons/cove.svg. The notification icon is the exception that proves it: Android
     // draws those as a single-colour mask, so the full-colour logo would come out as a filled
     // blob and it gets its own silhouette instead.
-    // Mutation applied to verify: pointed android:icon back at @drawable/ic_cove → test failed.
     @Test
     fun `the launcher wears Cove's own mark on every host`() {
         val manifest = File("src/main/AndroidManifest.xml").readText()
@@ -75,7 +73,6 @@ class MobileArtifactContractTest {
 
     // A television launcher shows android:banner, not android:icon, and an app without one is
     // drawn as a blank tile rather than falling back to the icon.
-    // Mutation applied to verify: removed android:banner from <application> → test failed.
     @Test
     fun `the television launcher has a banner to draw`() {
         val manifest = File("src/main/AndroidManifest.xml").readText()
@@ -87,8 +84,6 @@ class MobileArtifactContractTest {
     // The shell is chosen from the device, not the build. If this detection is ever dropped, a
     // television silently gets the touch UI — which looks correct and is entirely unusable,
     // because none of its affordances can be reached without a pointer.
-    // Mutation applied to verify: replaced PackageManager.FEATURE_LEANBACK with the bare
-    // string it resolves to → test failed.
     @Test
     fun `the activity picks its shell from the device`() {
         val activity = File("src/main/kotlin/com/coveninja/cove/MainActivity.kt").readText()

@@ -15,9 +15,6 @@ class TorrentMetadataTest {
         val magnet = magnetUri(hash)
 
         assertTrue(magnet.startsWith("magnet:?xt=urn:btih:$hash"))
-        // Mutation check: dropping the tracker loop leaves only the xt parameter and fails
-        // here. This is the difference between a cold start that can reach a tracker and one
-        // that can only wait out a DHT lookup.
         assertEquals(DEFAULT_TRACKERS.size, magnet.split("&tr=").size - 1)
         // Percent-encoded, or the ':' and '/' in a tracker URL would terminate the parameter
         // early and every announce would go to a truncated address.
@@ -39,8 +36,6 @@ class TorrentMetadataTest {
             nowMillis = { 0 },
         )
 
-        // Mutation check: returning true immediately makes this 1, and inverting the
-        // condition never terminates.
         assertEquals(4, polls)
         assertTrue(lines.single().contains("metadata in"))
     }
@@ -62,8 +57,6 @@ class TorrentMetadataTest {
             )
         }
 
-        // Mutation check: removing the dead-swarm branch makes this report the 45s timeout
-        // instead, and raising DEAD_SWARM_MILLIS above the timeout does the same.
         assertContains(failure.message.orEmpty(), "the source looks dead")
         assertTrue(clock < 45_000, "gave up at ${clock}ms, which is not early")
     }
@@ -85,8 +78,6 @@ class TorrentMetadataTest {
             )
         }
 
-        // Mutation check: dropping `peers == 0` from the dead-swarm branch fails here, because
-        // a torrent that is merely slow would be abandoned at 20s with peers in hand.
         assertContains(failure.message.orEmpty(), "timed out fetching torrent metadata")
         assertTrue(clock >= 45_000, "gave up at ${clock}ms, before the timeout")
         // The wait says what it is waiting on rather than going quiet for 45 seconds.

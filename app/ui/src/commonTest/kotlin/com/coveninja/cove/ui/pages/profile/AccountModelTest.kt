@@ -20,9 +20,6 @@ import kotlin.time.Instant
 class AccountModelTest {
     private val now = Instant.parse("2026-08-11T12:00:00Z")
 
-    // Mutation applied to verify: checked `failed` before `running` → this failed,
-    // reporting a sync in flight as already broken because the previous attempt
-    // had been.
     @Test
     fun `a running sync says so whatever the last one did`() {
         assertEquals("Syncing…", syncHeadline(SyncStatus(running = true)))
@@ -33,9 +30,6 @@ class AccountModelTest {
         assertEquals(SyncTone.Working, syncTone(SyncStatus(running = true, failed = true)))
     }
 
-    // Mutation applied to verify: made the headline treat any lastError as a
-    // failure → this failed on the partial case, which tells someone whose
-    // library did sync that nothing did.
     @Test
     fun `a sync that finished with problems is not the same as one that failed`() {
         val partial = SyncStatus(lastSyncedAt = now - 1.minutes, lastError = "addons not merged")
@@ -48,9 +42,6 @@ class AccountModelTest {
         assertEquals(SyncTone.Attention, syncTone(failed))
     }
 
-    // Mutation applied to verify: dropped the null-lastSyncedAt branch so it fell
-    // through to "Up to date" → this failed; a device that has never synced would
-    // claim to be current.
     @Test
     fun `never having synced is not being up to date`() {
         assertEquals("Not synced yet", syncHeadline(SyncStatus()))
@@ -59,8 +50,6 @@ class AccountModelTest {
         assertEquals(SyncTone.Settled, syncTone(SyncStatus(lastSyncedAt = now)))
     }
 
-    // Mutation applied to verify: had the detail line prefer the timestamp over
-    // the error → this failed, hiding the only text that says what went wrong.
     @Test
     fun `the detail line carries the error when there is one`() {
         assertEquals(
@@ -72,9 +61,6 @@ class AccountModelTest {
         )
     }
 
-    // Mutation applied to verify: dropped the minutes branch so everything under
-    // an hour read "just now" → this failed at 5 minutes, which is the difference
-    // between "up to date" and "stale" for someone deciding whether to press Sync.
     @Test
     fun `elapsed time is reported at the coarsest useful unit`() {
         assertEquals("Last synced just now.", detail(now - 20.seconds))
@@ -86,16 +72,11 @@ class AccountModelTest {
         assertEquals("Last synced 4 days ago.", detail(now - 4.days))
     }
 
-    // Mutation applied to verify: removed the `minutes < 1` guard → this failed
-    // with "-1 minutes ago" for a clock a little ahead of the server's.
     @Test
     fun `a timestamp slightly in the future reads as just now`() {
         assertEquals("Last synced just now.", detail(now + 10.seconds))
     }
 
-    // Mutation applied to verify: dropped the awaitingToken branch → this failed,
-    // because confirming a code would demand the password again and leave the
-    // button dead with nothing left to fill in.
     @Test
     fun `confirming a code needs only the code`() {
         assertTrue(
@@ -120,9 +101,6 @@ class AccountModelTest {
         )
     }
 
-    // Mutation applied to verify: let Register through without a profile name →
-    // this failed; the backend requires one and the request would be refused after
-    // the round trip instead of before it.
     @Test
     fun `each sign-in path requires exactly its own fields`() {
         assertTrue(canSubmit(AuthMode.SignIn, password = "hunter2"))
@@ -135,8 +113,6 @@ class AccountModelTest {
         assertTrue(canSubmit(AuthMode.Code))
     }
 
-    // Mutation applied to verify: dropped the blank-email guard → this failed, and
-    // every path would post an empty address the server can only reject.
     @Test
     fun `nothing submits without an email address`() {
         AuthMode.entries.forEach { mode ->
@@ -147,10 +123,6 @@ class AccountModelTest {
         }
     }
 
-    // Mutation applied to verify: mapped every Success to SignedIn, which is what
-    // the onboarding step used to do → this failed on the emailed code, where the
-    // viewer would be told they had an account while the app stayed signed out and
-    // the code that was sitting in their inbox was never asked for.
     @Test
     fun `an emailed code is only sent, not signed in`() {
         assertEquals(
@@ -164,9 +136,6 @@ class AccountModelTest {
         )
     }
 
-    // Mutation applied to verify: dropped the mode check, so any first Success
-    // asked for a code → this failed; an ordinary password sign-in would sit there
-    // waiting for a token nobody had been sent.
     @Test
     fun `a password sign-in is never waiting on a code`() {
         assertEquals(
@@ -179,9 +148,6 @@ class AccountModelTest {
         )
     }
 
-    // Mutation applied to verify: folded ConfirmationRequired in with Success →
-    // this failed; a registration awaiting its emailed token would be reported as
-    // a finished sign-in.
     @Test
     fun `a registration awaiting confirmation asks for the code whatever the mode`() {
         AuthMode.entries.forEach { mode ->
@@ -193,9 +159,6 @@ class AccountModelTest {
         }
     }
 
-    // Mutation applied to verify: had Failure carry a fixed string rather than the
-    // server's → this failed, replacing "Invalid login credentials" with wording
-    // that says nothing about what to change.
     @Test
     fun `a failure carries the server's own message and changes nothing else`() {
         assertEquals(

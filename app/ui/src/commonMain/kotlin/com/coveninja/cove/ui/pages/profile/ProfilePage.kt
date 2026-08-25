@@ -86,9 +86,7 @@ private val SelfContainedCategories = setOf(
 private val RailBreakpoint = 900.dp
 private val RailWidth = 216.dp
 
-// One width for every block on the page. The header, the identity card and the
-// settings body all share these gutters; letting the settings area run wider than
-// the header above it is the kind of misalignment that reads as unfinished.
+// Shared width for the header, identity card, and settings body.
 private val PageMaxWidth = 1000.dp
 private val PageBlock = Modifier.fillMaxWidth().widthIn(max = PageMaxWidth)
 
@@ -96,19 +94,14 @@ private val PageBlock = Modifier.fillMaxWidth().widthIn(max = PageMaxWidth)
 fun ProfilePage(
     profileName: String = "Cove",
     onNavigateBack: () -> Unit = {},
-    // Insights shows posters of the titles behind the numbers, and a poster the viewer
-    // cannot open is a dead end — this is the same details route every other page uses.
     onOpenMedia: (Media) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     var tab by remember { mutableStateOf(ProfileTab.Settings) }
-    // Hoisted above the tab AnimatedContent: that lambda disposes the state it
-    // owns once a transition ends, so keeping this inside would quietly send you
-    // back to the category list every time you looked at Insights.
+    // Keep settings navigation state outside tab transitions so it is not disposed.
     var openedCategory by remember { mutableStateOf<SettingsCategory?>(null) }
-    // Same reasoning as openedCategory: the tab AnimatedContent disposes whichever tab is
-    // not showing, and the insights fetches are far too expensive to repeat on every switch.
+    // Retain insights state across tab transitions to avoid repeated fetches.
     val insightsState = rememberInsightsState()
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
@@ -131,8 +124,6 @@ fun ProfilePage(
                 start = PageLayoutDefaults.HorizontalPadding,
                 end = PageLayoutDefaults.HorizontalPadding,
                 top = 12.dp,
-                // Clears the floating bar and the system navigation area the page now
-                // paints into; the last settings card would otherwise sit under both.
                 bottom = 12.dp + PageLayoutDefaults.BottomClearance,
             ),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -162,7 +153,6 @@ fun ProfilePage(
         }
 
         Box(modifier = PageBlock.padding(top = 16.dp, bottom = 36.dp)) {
-            // Siblings, not a hierarchy, so they cross-fade rather than slide.
             AnimatedContent(
                 targetState = tab,
                 transitionSpec = {
@@ -179,8 +169,7 @@ fun ProfilePage(
             ) { target ->
                 when (target) {
                     ProfileTab.Insights -> InsightsTab(state = insightsState, onOpenMedia = onOpenMedia)
-                    // Drilling in or back on a narrow window would otherwise land
-                    // you wherever the previous screen happened to be scrolled to.
+                    // Reset scroll when narrow layouts drill in or back.
                     ProfileTab.Settings -> SettingsTab(
                         opened = openedCategory,
                         onOpenedChange = { openedCategory = it },
@@ -196,9 +185,7 @@ fun ProfilePage(
 
 @Composable
 private fun SettingsTab(
-    // Null means "no category chosen yet", which only narrow layouts can show —
-    // that is the category list. A sidebar always has something selected, so it
-    // falls back to the first category rather than rendering an empty pane.
+    // Wide layouts always select a category; null represents the narrow category list.
     opened: SettingsCategory?,
     onOpenedChange: (SettingsCategory?) -> Unit,
     onNavigate: () -> Unit,
@@ -215,15 +202,9 @@ private fun SettingsTab(
         val wide = maxWidth >= RailBreakpoint
         val category = opened?.takeIf { it in categories } ?: categories.first()
 
-        // These own their own repositories and stay usable while preferences are
-        // still loading, so they are routed directly rather than through the settings
-        // content. None must ever be handed a SettingsEditor built over a default
-        // AppSettings either — writing through one of those would replace the whole
-        // stored object with defaults.
-        // Takes the category as a parameter rather than closing over the selected
-        // one: during a transition the outgoing pane is composed with the previous
-        // value, and a captured variable would make it render the incoming content
-        // instead — an animation between two identical panes.
+        // Repository-backed categories remain usable while preferences load and must not
+        // receive an editor over default settings. Passing category also keeps outgoing
+        // transition content bound to its previous value.
         val body: @Composable (SettingsCategory, Modifier) -> Unit = { shown, bodyModifier ->
             if (shown in SelfContainedCategories) {
                 when (shown) {
@@ -271,8 +252,6 @@ private fun SettingsTab(
                     modifier = Modifier.width(RailWidth),
                 )
                 Column(modifier = Modifier.weight(1f)) {
-                    // Swapping panes instantly reads as a flicker; a short lift and
-                    // fade says the pane was replaced rather than redrawn.
                     AnimatedContent(
                         targetState = category,
                         transitionSpec = {
@@ -297,14 +276,9 @@ private fun SettingsTab(
                 }
             }
         } else {
-            // Narrow layouts drill in rather than showing a strip of categories:
-            // a horizontal rail of eight items is unusable on a phone, and it
-            // leaves no room for the section it is meant to introduce.
+            // Narrow layouts drill into categories instead of showing a sidebar.
             AnimatedContent(
                 targetState = opened,
-                // Direction carries the meaning: going deeper slides forward,
-                // coming back slides the other way, so the gesture is legible
-                // without reading anything.
                 transitionSpec = {
                     val forward = targetState != null
                     val enterDuration = if (reducedMotion) 0 else 260
@@ -568,9 +542,6 @@ private fun ProfileIdentityCard(fallbackName: String, modifier: Modifier = Modif
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // Signing in changes what this profile *is*, so the badge swaps
-            // rather than recolouring in place — and it carries the icon that
-            // says which, for the same reason the sync card does.
             val badgeTint by animateColorAsState(
                 targetValue = if (signedIn != null) {
                     MaterialTheme.colorScheme.tertiary

@@ -22,8 +22,6 @@ class VideoCategoryTest {
 
     // TMDB's type field is contributor-entered, so the same category arrives
     // spelled several ways across titles.
-    // Mutation applied to verify: matched the raw string instead of the letters-only
-    // one → test failed on "behind the scenes" and "Trailer ".
     @Test
     fun `spelling and spacing do not split a category`() {
         assertEquals(VideoCategory.BehindTheScenes, videoCategoryOf("Behind the Scenes"))
@@ -34,8 +32,6 @@ class VideoCategoryTest {
 
     // Anything unrecognised has to stay reachable: a video filed under a type
     // nobody anticipated is still a video someone can watch.
-    // Mutation applied to verify: returned Trailer for unknown types → test failed,
-    // "Making Of" came back as Trailer.
     @Test
     fun `an unrecognised type falls into Other`() {
         assertEquals(VideoCategory.Other, videoCategoryOf("Making Of"))
@@ -43,8 +39,6 @@ class VideoCategoryTest {
         assertEquals(VideoCategory.Other, videoCategoryOf(null))
     }
 
-    // Mutation applied to verify: returned VideoCategory.entries unfiltered
-    // → test failed with all nine categories instead of the two present.
     @Test
     fun `only categories with videos behind them become chips`() {
         val videos = listOf(
@@ -59,8 +53,6 @@ class VideoCategoryTest {
         )
     }
 
-    // Mutation applied to verify: made inCategory return the whole list
-    // → test failed, the Clips filter kept three videos instead of one.
     @Test
     fun `a category keeps only its own videos and null keeps everything`() {
         val videos = listOf(
@@ -75,8 +67,6 @@ class VideoCategoryTest {
 
     // The first card is the one most people click, and TMDB's own order routinely
     // puts a decade-old teaser there.
-    // Mutation applied to verify: dropped the category comparator and sorted on the
-    // date alone → test failed, the 2021 clip came first.
     @Test
     fun `trailers lead, then official uploads, then the newest`() {
         val videos = listOf(

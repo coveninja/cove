@@ -86,8 +86,6 @@ private val TMDB_PERSON = """
 
 class PersonDetailsTest {
 
-    // Mutation applied to verify: dropped @SerialName("place_of_birth") so the field
-    // fell back to its Kotlin name → test failed, place of birth came back null.
     @Test
     fun `a real TMDB person decodes`() {
         val person = CoveJson.decodeFromString<PersonDetails>(TMDB_PERSON)
@@ -104,10 +102,6 @@ class PersonDetailsTest {
 
     // deathday is null for the living and absent from some records entirely; both have
     // to mean "no death date" rather than an exception.
-    // Mutation applied to verify: made deathday a non-null String → test failed, and
-    // notably *not* with a decode error: CoveJson sets coerceInputValues, so the null
-    // arrived as "" — a death date the person does not have. Nullability is the only
-    // thing keeping "absent" distinguishable here.
     @Test
     fun `an explicit null and a missing key both mean absent`() {
         val living = CoveJson.decodeFromString<PersonDetails>(TMDB_PERSON)
@@ -122,8 +116,6 @@ class PersonDetailsTest {
 
     // combined_credits mixes films and shows in one array, and the two shapes disagree
     // about nearly every field: title vs name, release_date vs first_air_date.
-    // Mutation applied to verify: pointed PersonCredit.name at a different JSON key
-    // → test failed, the show's displayTitle came back empty while the film's was fine.
     @Test
     fun `movie and tv credits both survive the same list`() {
         val credits = CoveJson.decodeFromString<PersonDetails>(TMDB_PERSON).combinedCredits

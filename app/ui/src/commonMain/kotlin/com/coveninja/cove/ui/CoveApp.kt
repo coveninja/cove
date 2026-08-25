@@ -200,33 +200,23 @@ private fun SharedTransitionScope.SharedMediaCard(
 @Composable
 fun CoveApp(
     graph: AppGraph,
-    // Null on any target without a player; the Watch button then reports that
-    // playback is unavailable instead of crashing.
+    // Null on targets without playback support.
     videoPlayerHost: VideoPlayerHost? = null,
-    // Absent on mobile, where the player is already fullscreen.
     fullscreenController: FullscreenController? = null,
-    // Desktop keeps the floating bar over the top edge; the Android host opts into
-    // bottom placement without making a narrow desktop window behave like a phone.
+    // The host, not viewport width, decides navigation placement.
     navBarPlacement: NavBarPlacement = NavBarPlacement.Top,
-    // The Android host uses this to enter immersive mode while a details sheet owns
-    // the screen. Desktop and other hosts can ignore it.
     onDetailsOverlayVisibilityChanged: (Boolean) -> Unit = {},
-    // Android combines this with the details callback to manage immersive mode
-    // and keep-awake state. Desktop does not need a window callback here.
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
-    // Desktop closes its graph and releases the single-instance lock after a verified
-    // detached updater has started. Android's PackageInstaller does not use this.
+    // Desktop exits only after its detached updater starts successfully.
     onUpdateExitRequested: () -> Unit = {},
-    // Re-opens the first-run flow on a device that has already been through it — the
-    // `--onboarding` harness, and nothing else. See OnboardingController's `preview`.
+    // Allows the explicit onboarding preview harness to bypass completion state.
     forceOnboarding: Boolean = false,
 ) {
     val performance by graph.device.performance.collectAsState()
     LaunchedEffect(graph.updates) { graph.updates.start() }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val resolvedPlacement = resolveNavBarPlacement(navBarPlacement, maxWidth)
-        // One viewport drives both the gutter and every size-class decision below it, so a
-        // phone, a tablet and a desktop window can't drift apart per call site.
+        // Share one viewport classification across all layout decisions.
         val viewport = PageViewport(
             width = maxWidth,
             height = maxHeight,
@@ -241,9 +231,7 @@ fun CoveApp(
             LocalFullscreenController provides fullscreenController,
             LocalPageHorizontalPadding provides viewport.gutter,
             LocalPageViewport provides viewport,
-            // The bar floats over content, so this is what keeps the last row of a list
-            // reachable above it — and, on mobile, above the system navigation area the
-            // page now paints into.
+            // Keep scrollable content clear of the floating navigation and system inset.
             LocalPageBottomClearance provides if (
                 resolvedPlacement == NavBarPlacement.Bottom
             ) {
@@ -269,17 +257,12 @@ fun CoveApp(
             }
         }
 
-        // Outside the gate, so a fixtures run says so during the first-run flow as well as
-        // after it. The top end is the one corner nothing else claims: the nav bar floats
-        // top-centre on a desktop window and bottom-centre on a phone.
         if (graph.fixtures) {
             FixtureDataBadge(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(10.dp)
-                    // Above the details sheet and the player, which otherwise cover it for
-                    // as long as they are open.
                     .zIndex(1000f),
             )
         }
@@ -333,9 +316,7 @@ private fun CoveAppContent(
     val playback = rememberPlaybackSession()
     PluginPlaybackEffect(playback)
     val search = rememberSearchSession()
-    // These page sessions live above the destination switch. Returning to a primary tab keeps
-    // its loaded optional content and every vertical/horizontal scroll position instead of
-    // rebuilding request-owning controllers from scratch.
+    // Keep page sessions above navigation so returning to a tab preserves data and scroll state.
     val homeController = rememberHomeController(graph.content, graph.discovery, graph.addons)
     val homePageState = rememberHomePageState()
     val exploreController = rememberExploreController(graph.discovery, graph.addons)
@@ -427,10 +408,7 @@ private fun CoveAppContent(
                     )
                 }
 
-            // A full-bleed hero owns its own top inset on both hosts: the artwork runs under
-            // the status bar and the hero pads its own copy instead. Consuming the inset here
-            // would leave a band of window background above the image, which is what mobile
-            // used to do — desktop always skipped it, and a phone needs the same treatment.
+            // Full-bleed heroes draw under the status bar and consume their own top inset.
             val heroDestination = selectedDestination == NavDestination.Home ||
                 selectedDestination == NavDestination.Explore
             val pageModifier = when {
@@ -443,11 +421,8 @@ private fun CoveAppContent(
                         .safeContentPadding()
                         .padding(top = NavBarClearance)
 
-                // Mobile pages reach the physical bottom edge on purpose: padding them clear
-                // of the gesture area left an unpainted strip that read as a black bar under
-                // the floating navigation. Scroll containers keep content clear of the bar
-                // via LocalPageBottomClearance instead. Only the top and sides are consumed,
-                // and a hero destination consumes nothing at all.
+                // Pages paint through the bottom gesture area; scroll content uses
+                // LocalPageBottomClearance to remain reachable above floating navigation.
                 heroDestination -> Modifier.fillMaxSize()
 
                 else ->
@@ -471,8 +446,6 @@ private fun CoveAppContent(
                         catalog = catalog,
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,
-                        // Home's resume goes straight to playback rather than via the details
-                        // sheet: the whole claim of "carry on watching" is that it is one press.
                         onPlayMedia = { playback.open(it) },
                         onExplore = { selectedDestination = NavDestination.Explore },
                         onExploreCatalog = { catalogDescriptor ->
@@ -530,19 +503,15 @@ private fun CoveAppContent(
                 }
             }
 
-            // Floating nav: it no longer consumes vertical layout space.
             NavBar(
                 selectedDestination = selectedDestination,
                 searchMode = searchMode,
                 listCategoryMode = drag.draggedPayload != null,
                 hoveredListCategory = drag.hoveredCategory,
                 searchQuery = search.query,
-                // Deliberately draft-only: the overlay can be typed into from any page, and
-                // debouncing here would spend upstream requests filling a page nobody has
-                // navigated to. The page's own field is the one that searches as you type.
+                // Overlay typing remains a draft until navigation to Search.
                 onSearchQueryChange = search::setDraft,
-                // Already on Search, the overlay would be a second field over the top of the
-                // page's own. Hand focus to that one instead.
+                // Search already owns its own field, so focus that instead of opening another.
                 onOpenSearch = {
                     if (selectedDestination == NavDestination.Search) {
                         search.requestFocus()
@@ -575,11 +544,7 @@ private fun CoveAppContent(
                             Alignment.BottomCenter
                         },
                     )
-                    // safeDrawing rather than safeContent, then the IME only while the bar
-                    // owns the focused field. Tracking the keyboard unconditionally lifted
-                    // the bar whenever the Search page's own field was focused, which reads
-                    // as the bar wandering; ignoring it entirely would bury the bar's inline
-                    // search field under the keyboard.
+                    // Track the IME only while the navigation bar owns the focused field.
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .then(if (searchMode) Modifier.imePadding() else Modifier)
                     .padding(
@@ -602,9 +567,7 @@ private fun CoveAppContent(
             }
 
             val overlayEntry = detailsState.overlayMedia?.let { index.entryOf(it.id) }
-            // An extra playing embedded belongs to the sheet it was started from,
-            // so it follows that sheet: it is only drawn while the same title is
-            // open, and it ends when the sheet does.
+            // Embedded extras share the lifetime of their originating details sheet.
             val inlineExtra = playback.active &&
                 playback.presentation == PlaybackPresentation.Inline &&
                 playback.request?.extra != null &&
@@ -614,13 +577,7 @@ private fun CoveAppContent(
             }
             MediaDetailsSharedOverlay(
                 media = detailsState.overlayMedia,
-                // Hidden, not dismissed, while playback owns the window: the
-                // selection survives, so closing the player brings the same sheet
-                // back without refetching anything. An embedded video is the
-                // opposite case — the sheet is the thing it is drawn inside.
-                //
-                // The person sheet is the same bargain: one sheet at a time, but the
-                // title stays selected underneath so coming back costs nothing.
+                // Fullscreen playback and person sheets hide, but do not discard, title state.
                 visible = detailsState.selected != null &&
                     personState.selected == null &&
                     !(playback.active && playback.presentation == PlaybackPresentation.Fullscreen),
@@ -633,22 +590,15 @@ private fun CoveAppContent(
                 watchLabel = detailsState.overlayMedia?.let { media ->
                     mediaWatchAction(media, overlayEntry, progressRows).label
                 } ?: "Watch",
-                // The details sheet deliberately stays open underneath. Playback
-                // covers it completely, and leaving it in place means closing the
-                // player returns you to the title you were looking at — ready to
-                // pick a different source rather than having to find it again.
+                // Preserve the details sheet under fullscreen playback for a cheap return path.
                 onWatch = { media -> playback.open(media) },
                 onChooseSource = { media -> playback.open(media, forcePicker = true) },
                 onListCategorySelected = actions::setListCategory,
                 onRatingSelected = actions::setRating,
-                // Another title replaces this sheet, and an extra of the one being
-                // left has nowhere to be drawn.
                 onMediaSelected = {
                     closeInlineExtra()
                     detailsState.open(it)
                 },
-                // An extra playing inside this sheet has nowhere to be drawn once the
-                // person sheet covers it.
                 onPersonSelected = { person ->
                     closeInlineExtra()
                     personState.open(person)
@@ -658,18 +608,13 @@ private fun CoveAppContent(
                 } else {
                     null
                 },
-                // Extras are YouTube pages, not media files. Where yt-dlp is
-                // installed to unwrap one, it plays embedded in the sheet just
-                // below; where it is not, the browser is the only thing that can
-                // open it at all — and it is one click either way.
+                // Extras are page URLs: play through yt-dlp when available, otherwise use a browser.
                 onVideoSelected = { media, video ->
                     val url = video.url
                     if (videoPlayerHost?.playsWebVideos == true || url == null) {
-                        // With no address, this reports why rather than doing nothing.
                         playback.openExtra(media, video)
                     } else {
-                        // openUri throws where AWT has no browser to hand the link
-                        // to — a machine with neither a desktop nor xdg-open.
+                        // openUri may fail on systems without a browser handler.
                         runCatching { uriHandler.openUri(url) }.onFailure { error ->
                             playback.failExtra(
                                 media = media,
@@ -706,9 +651,7 @@ private fun CoveAppContent(
                     actions.setEpisodeWatched(media, season, episode, watched)
                 },
                 onMediaDragStart = { payload, position ->
-                    // Prefer the recommendation's own Media from moreLikeThis; fall back
-                    // to the cross-page catalog (home/explore/search), then to the library,
-                    // which is the only source for a saved title no feed happens to list.
+                    // Prefer the recommendation payload, then visible catalogs, then the library.
                     val source = detailsState.detailed
                         ?.moreLikeThis
                         .orEmpty()
@@ -729,16 +672,12 @@ private fun CoveAppContent(
                 visible = personState.selected != null &&
                     !(playback.active && playback.presentation == PlaybackPresentation.Fullscreen),
                 onDismiss = { personState.dismiss() },
-                // Only shown when there is a title to go back to; the sheet underneath
-                // is still selected, so dismissing is all it takes.
                 backTitle = detailsState.selected?.let { selected ->
                     detailsState.detailed?.title
                         ?: detailsState.detailed?.name
                         ?: selected.title
                         ?: selected.name
                 },
-                // One sheet at a time in both directions: leaving for a title closes
-                // the person rather than stacking a second sheet behind it.
                 onMediaSelected = { media ->
                     personState.dismiss()
                     detailsState.open(media)
@@ -746,8 +685,6 @@ private fun CoveAppContent(
                 modifier = Modifier.zIndex(210f),
             )
 
-            // A person that failed to load is only worth reporting while their sheet is
-            // the one on screen.
             val overlayError = if (personState.selected != null) {
                 personState.error
             } else {
@@ -789,8 +726,6 @@ private fun CoveAppContent(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        // Matches the primary bar above. This instance only appears during a
-                        // drag, where no field is focused, so it never tracks the keyboard.
                         .windowInsetsPadding(WindowInsets.safeDrawing)
                         .padding(
                             top = if (navBarPlacement == NavBarPlacement.Top) 16.dp else 0.dp,
@@ -831,7 +766,6 @@ private fun CoveAppContent(
                 modifier = Modifier.zIndex(600f),
             )
 
-            // Above every other layer: playback owns the window while it is open.
             PlayerLayer(
                 session = playback,
                 modifier = Modifier.zIndex(500f),

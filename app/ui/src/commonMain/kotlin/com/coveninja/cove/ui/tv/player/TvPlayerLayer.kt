@@ -98,9 +98,7 @@ internal fun TvPlayerLayer(
     if (session.presentation != PlaybackPresentation.Fullscreen) return
 
     val host = LocalVideoPlayerHost.current
-    // Resolved to a flow first so collectAsState is called unconditionally — a composable
-    // behind a null check is only safe while the host never changes, which is a property of
-    // the composition local rather than of this code.
+    // Resolve a flow first so collectAsState remains unconditional if the host changes.
     val statusFlow = remember(host) { host?.status ?: MutableStateFlow(PlaybackStatus()) }
     val status by statusFlow.collectAsState()
     val settings = (LocalAppGraph.current.settings.settings.value as? SettingsState.Ready)?.settings
@@ -114,8 +112,7 @@ internal fun TvPlayerLayer(
     var seekFeedback by remember { mutableStateOf<SeekFeedback?>(null) }
     var lastSeekAt by remember { mutableStateOf<TimeMark?>(null) }
 
-    // The phase turns Playing when the URL is handed over, which on a torrent is a long way
-    // before the first frame. Both the chrome and the remote wait for this.
+    // Playing can precede the first frame, especially for torrents.
     val start = rememberPlaybackStart(
         status,
         request.media.id,
@@ -123,14 +120,7 @@ internal fun TvPlayerLayer(
         request.episode,
     )
 
-    // Re-requested on every phase change rather than once: the layer composes while sources
-    // are still resolving, so an early request can be taken back by whatever had focus on the
-    // page underneath.
-    //
-    // The frame wait is not optional. `requestFocus` throws if the node is not attached yet,
-    // which is exactly the state this is in on the pass that mounts the player — and because
-    // the failure is swallowed, the result was a player that held no focus at all and a remote
-    // whose every press went nowhere.
+    // Retry after attachment and phase changes; requestFocus throws on an unattached node.
     LaunchedEffect(phase) {
         withFrameNanos { }
         runCatching { rootFocus.requestFocus() }.let { }
@@ -161,8 +151,7 @@ internal fun TvPlayerLayer(
         host?.seekRelative(delta)
     }
 
-    // Auto-skip is the session's own settings applied to the best source-specific metadata;
-    // the only reason it lives in a view file at all is that it needs the live position.
+    // Segment skipping depends on the live playback position.
     val segments = remember(session.timestamps, status.chapters, status.durationSeconds) {
         playbackSegments(session.timestamps, status.chapters, status.durationSeconds)
     }
@@ -183,9 +172,7 @@ internal fun TvPlayerLayer(
 
     val dimens = TvTheme.dimens
 
-    // A segment the viewer can skip by hand: one that exists, that Cove is not already skipping
-    // for them, and that has somewhere to land. Null the rest of the time, which is what keeps
-    // the hint off screen and centre free to summon the controls.
+    // Offer manual skip only for actionable segments not already auto-skipped.
     val manualSkipTarget = if (settings?.skipsAutomatically(currentSegment?.kind ?: SegmentKind.Intro) == true) {
         null
     } else {
@@ -193,7 +180,6 @@ internal fun TvPlayerLayer(
     }
     val skipLabel = currentSegment?.kind?.skipLabel()?.takeIf { manualSkipTarget != null }
 
-    // What follows this episode, once the credits make it the more useful thing to offer.
     val atEnd = phase is PlaybackPhase.Playing && !status.interrupted &&
         !session.reconnecting && !session.recoveryFailed &&
         showUpNext(
@@ -224,14 +210,8 @@ internal fun TvPlayerLayer(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 activityPulse++
                 val action = tvKeyAction(event.key)
-                // Nothing below can be done to a file that is still opening: there is no
-                // position to seek, nothing to pause, and a bar summoned over the opening
-                // stage would take focus and answer to nothing. What is on screen then is
-                // that stage's own Cancel button, so centre and Back are handed down to it
-                // — while the arrows stay swallowed rather than going to the focus engine,
-                // which would walk focus onto the page hidden behind the overlay. Only the
-                // opening window: the earlier phases put a list on screen and are the focus
-                // engine's to arbitrate.
+                // While media opens, leave centre and Back to Cancel but swallow arrows so
+                // focus cannot escape to the page behind the player.
                 if (phase is PlaybackPhase.Playing && !start.started) {
                     return@onPreviewKeyEvent when (action) {
                         null, TvKeyAction.Select, TvKeyAction.Back -> false
@@ -247,9 +227,7 @@ internal fun TvPlayerLayer(
                             jump(if (forward) seekStep else -seekStep)
                             true
                         }
-                        // Consumed even though it only reveals: letting it through would move
-                        // focus in the same press that summoned the bar, so the viewer would
-                        // never see where focus started.
+                        // Consume the reveal press so it does not also move focus.
                         TvPlayerArrowOutcome.RevealControls -> {
                             controlsVisible = true
                             runCatching { playFocus.requestFocus() }.let { }
@@ -269,15 +247,12 @@ internal fun TvPlayerLayer(
                         runCatching { playFocus.requestFocus() }.let { }
                         true
                     } else {
-                        // The focused control is the one that should act on this.
                         false
                     }
 
                     TvKeyAction.PlayPause -> { host?.togglePause(); true }
                     TvKeyAction.FastForward -> { jump(seekStep * 3); true }
                     TvKeyAction.Rewind -> { jump(-seekStep * 3); true }
-                    // Back is layered by the handler the shell installs; nothing to do here
-                    // beyond hiding a bar that is up.
                     TvKeyAction.Back -> if (controlsVisible) {
                         controlsVisible = false
                         runCatching { rootFocus.requestFocus() }.let { }
@@ -290,18 +265,12 @@ internal fun TvPlayerLayer(
                 }
             },
     ) {
-        // Mounted only once there is a file to draw. The player surface is an opaque native
-        // view, not a Compose layer, so anything drawn underneath it is simply covered — mount
-        // it while sources are still resolving and every pre-playback state becomes the black
-        // rectangle it was hiding behind.
+        // Mount the opaque native surface only once there is media to draw.
         if (host != null && phase is PlaybackPhase.Playing) {
             host.Surface(Modifier.fillMaxSize())
         }
 
-        // Before there is a picture, the title's own artwork stands in for one — and "before
-        // there is a picture" is not the same as "before playback started". The phase turns
-        // Playing the moment the URL is handed over, while the first frame can be many seconds
-        // later on a torrent, so this waits for media rather than for the phase.
+        // Keep artwork visible until the first frame rather than only until phase Playing.
         if (phase !is PlaybackPhase.Playing || !status.hasMedia) {
             PlayerBackdrop(
                 backdropUrl = request.media.backdropUrl ?: request.media.posterUrl,
@@ -341,9 +310,7 @@ internal fun TvPlayerLayer(
             )
 
             is PlaybackPhase.Playing -> {
-                // The latch, not the live status alone: mpv drops hasMedia again at the end of
-                // a file and briefly whenever it reloads, and without it the opening stage
-                // slides back over a session that is playing perfectly well.
+                // Latch first media because mpv briefly clears hasMedia during reload and EOF.
                 if (!status.hasMedia && !start.opened) {
                     TvStartingStage(
                         media = request.media,
@@ -359,8 +326,6 @@ internal fun TvPlayerLayer(
 
         seekFeedback?.let { feedback -> SeekBurst(feedback = feedback) }
 
-        // Buffering says so quietly and only while it is true. A spinner that outstays the
-        // stall is what makes a working player feel broken.
         AnimatedVisibility(
             visible = phase is PlaybackPhase.Playing && status.hasMedia &&
                 status.waitingForData && !session.reconnecting,
@@ -371,9 +336,7 @@ internal fun TvPlayerLayer(
             TvBufferingIndicator(percent = status.bufferingPercent)
         }
 
-        // The skip affordance. Deliberately not focusable: it appears mid-film, and something
-        // that stole focus from the picture — or that had to be navigated to before it could be
-        // used — would be worse than no affordance at all. While it is up, centre skips.
+        // Keep the transient skip affordance unfocusable; centre activates it while visible.
         AnimatedVisibility(
             visible = skipLabel != null && !controlsVisible,
             modifier = Modifier
@@ -407,9 +370,7 @@ internal fun TvPlayerLayer(
         }
 
         AnimatedVisibility(
-            // Absent rather than disabled while the file opens. A bar on a television is
-            // reached by moving focus onto it, and focus parked on a dead button is a remote
-            // that has stopped working as far as the room can tell.
+            // Keep focus away from disabled transport controls while media opens.
             visible = controlsVisible && phase is PlaybackPhase.Playing && start.started,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = fadeIn(tween(180)),

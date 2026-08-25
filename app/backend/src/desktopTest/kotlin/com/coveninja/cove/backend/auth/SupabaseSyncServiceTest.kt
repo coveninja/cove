@@ -123,10 +123,6 @@ class SupabaseSyncServiceTest {
      * Decoding those into a non-null String threw, and because the pull is the
      * first thing a sync does, one such row from 2026-07 aborted *everything* —
      * library, settings, addons — on every sync attempt.
-     *
-     * Mutation applied to verify: made the merge write progress.libraryEntryId
-     * straight through instead of relinking → this failed on the entry-id
-     * assertion, leaving the progress row pointing at nothing.
      */
     @Test
     fun `progress with no library entry id merges and relinks to the local entry`() = runTest {
@@ -175,10 +171,6 @@ class SupabaseSyncServiceTest {
      * profile still knows which entry the progress belongs to — so the push sends
      * that rather than writing the gap out to every other device. An empty string
      * is never an option: the column is a uuid upstream and would be rejected.
-     *
-     * Mutation applied to verify: dropped the entryIds lookup and pushed
-     * progress.libraryEntryId as-is → this failed with a null on the wire, leaving
-     * the row unlinked everywhere.
      */
     @Test
     fun `progress with no entry id is pushed linked to its library entry`() = runTest {
@@ -227,10 +219,6 @@ class SupabaseSyncServiceTest {
      * because the push is one batch, that single row costs the entire library.
      * Seen for real: 229 of 230 entries agreed, one did not, and no library sync
      * had worked since.
-     *
-     * Mutation applied to verify: kept the local id when the local row was newer
-     * (the previous behaviour) → this failed, leaving the two ids divergent
-     * forever.
      */
     @Test
     fun `an entry adopts the id the account already uses for that title`() = runTest {
@@ -279,10 +267,6 @@ class SupabaseSyncServiceTest {
      * problem above, and the one that blocked this account after the entries were
      * fixed. (profile_id, tmdb_id, media_type, season, episode) is unique
      * upstream, so a divergent id fails the whole progress batch.
-     *
-     * Mutation applied to verify: dropped the adoption branch, keeping the local
-     * id whenever the local row was newer → this failed with the two ids still
-     * divergent.
      */
     @Test
     fun `progress adopts the id the account already uses for that episode`() = runTest {
@@ -324,10 +308,6 @@ class SupabaseSyncServiceTest {
      * column is a foreign key — so one leftover row rejects the entire progress
      * batch. Four of these were sitting in a real library and no progress had
      * synced since.
-     *
-     * Mutation applied to verify: sent progress.libraryEntryId without checking
-     * it against the entries being pushed → this failed, putting the dangling id
-     * on the wire.
      */
     @Test
     fun `progress pointing at a deleted entry is pushed unlinked`() = runTest {
@@ -370,10 +350,6 @@ class SupabaseSyncServiceTest {
      * That is easy to reintroduce, because the wire encoder omits null fields by
      * default: one film with a rating and one without is enough to produce two
      * shapes and fail every library push. Hit exactly this against a real account.
-     *
-     * Mutation applied to verify: encoded rows with CoveJson instead of
-     * SyncRowJson → this failed with mismatched key sets, i.e. a library that
-     * never syncs.
      */
     @Test
     fun `every row in a bulk push carries the same keys`() = runTest {
@@ -408,11 +384,6 @@ class SupabaseSyncServiceTest {
 
     /**
      * One row this build cannot read must cost that row, not the sync.
-     *
-     * Mutation applied to verify: made the per-row decode rethrow instead of
-     * counting the row as skipped → this failed with the decoding exception,
-     * which is the original bug: nothing syncs at all until the offending remote
-     * row is fixed by hand.
      */
     @Test
     fun `an unreadable row is skipped and reported rather than aborting the sync`() = runTest {
@@ -453,10 +424,6 @@ class SupabaseSyncServiceTest {
      * generation of this app omit fields the current models require, and the
      * merge sits before every push, so one such row meant *nothing* synced —
      * library, settings and watch progress included.
-     *
-     * Mutation applied to verify: removed the runCatching around the participant
-     * merge → this failed with the decoding exception instead of reporting it,
-     * which is the whole-sync abort.
      */
     @Test
     fun `an unreadable payload blob is reported without failing the whole sync`() = runTest {
@@ -496,9 +463,6 @@ class SupabaseSyncServiceTest {
      * `cove.justwatch` and `cove.introdb` are dispatched by id and have no
      * manifest to fetch, so the previous generation of this app stored them with
      * no url field. Requiring one failed the decode of the whole addon list.
-     *
-     * Mutation applied to verify: made AddonEntry.url required again → this
-     * failed, reporting the addon blob as unreadable instead of merging it.
      */
     @Test
     fun `official addons sync without a url and get the local synthetic one`() = runTest {
@@ -534,10 +498,6 @@ class SupabaseSyncServiceTest {
      * all. If a sync from there pushed what it knows — nothing — the desktop's
      * configured providers would be wiped on its next pull, and playback would
      * quietly stop finding sources everywhere.
-     *
-     * Mutation applied to verify: made the pull drop payload kinds with no
-     * participant instead of calling persistOpaque → this failed both assertions,
-     * because the blob is then neither kept locally nor pushed back.
      */
     @Test
     fun `a host with no addon manager round-trips the addon blob untouched`() = runTest {
@@ -587,10 +547,6 @@ class SupabaseSyncServiceTest {
      * first time, before any device has pushed addons — must not push an empty
      * list. An empty push is indistinguishable from "I deliberately have no
      * addons", and carries a fresh timestamp that beats every other device's.
-     *
-     * Mutation applied to verify: made pushPayload() fall back to
-     * SyncSnapshot("[]", "") instead of returning → this failed, having posted
-     * profile_addons with an empty array.
      */
     @Test
     fun `a host with nothing to say about a payload pushes nothing`() = runTest {
@@ -623,8 +579,6 @@ class SupabaseSyncServiceTest {
     // exactly why none of them noticed that a second profile never left the
     // device it was made on.
 
-    // Mutation applied to verify: dropped the mergeRoster() call from
-    // reconcileRoster → test failed with one local profile, the pre-fix behaviour.
     @Test
     fun `a profile from another device is added to this one`() = runTest {
         fixture(
@@ -644,8 +598,6 @@ class SupabaseSyncServiceTest {
 
     // The first half of the household scenario: a profile made on the desktop and
     // never switched to still belongs to the account.
-    // Mutation applied to verify: pushed only profiles.activeSyncRecord() rather
-    // than syncRecords() → test failed, the roster carried one row.
     @Test
     fun `a profile created here and never activated is pushed`() = runTest {
         var pushed: String? = null
@@ -672,9 +624,6 @@ class SupabaseSyncServiceTest {
         }
     }
 
-    // Mutation applied to verify: made deleteFromRemote() skip the "activate a
-    // survivor first" step → test failed on the ON DELETE RESTRICT foreign key
-    // from active_profile.
     @Test
     fun `a tombstoned profile is removed even while it is the active one`() = runTest {
         var kidsDeleted = false
@@ -703,8 +652,6 @@ class SupabaseSyncServiceTest {
     // Child RLS proves ownership by looking the parent row up, so a tombstone
     // written first would put every one of that profile's rows beyond reach — a
     // property invisible in the result and only checkable in the request order.
-    // Mutation applied to verify: patched the parent before deleting the children
-    // → test failed on the ordering assertion.
     @Test
     fun `a removal clears the child rows before tombstoning the profile`() = runTest {
         val calls = mutableListOf<String>()
@@ -754,8 +701,6 @@ class SupabaseSyncServiceTest {
     // enough: the tombstone goes up before the roster is read, and a removal still
     // pending is skipped on the way back in. So neither is a mutation this test can
     // discriminate on its own — the test above pins the second directly.
-    // Mutation applied to verify: pushed removals last *and* dropped the pending
-    // guard → test failed, the deleted profile was re-inserted and pushed back up.
     @Test
     fun `a profile deleted here is not pushed back`() = runTest {
         val pushes = mutableListOf<String>()
@@ -796,8 +741,6 @@ class SupabaseSyncServiceTest {
     // The identity step has to run before the roster merge. Merging first would add
     // the account's primary as a *second* local profile, and the adoption would then
     // find the id taken and leave this device permanently duplicated.
-    // Mutation applied to verify: ran mergeRoster before reconcileIdentity → test
-    // failed with three profiles.
     @Test
     fun `a fresh device adopts the primary rather than gaining a third profile`() = runTest {
         fixture(
@@ -822,8 +765,6 @@ class SupabaseSyncServiceTest {
     // the account still lists the profile. Re-adding it from that listing would undo
     // the deletion on every sync until the device got online — the resurrection this
     // whole mechanism exists to prevent, arriving from the device that did the delete.
-    // Mutation applied to verify: dropped the pending-removal guard from mergeRoster
-    // → test failed, the deleted profile came straight back.
     @Test
     fun `a removal that cannot be pushed yet still keeps the profile deleted`() = runTest {
         fixture(

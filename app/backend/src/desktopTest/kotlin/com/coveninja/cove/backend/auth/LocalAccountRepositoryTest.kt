@@ -49,9 +49,6 @@ private const val PROFILE_ID = "local-primary"
  * line is the only evidence the user gets that any of this happened.
  */
 class LocalAccountRepositoryTest {
-    // Mutation applied to verify: had refreshAccountState() report SignedIn
-    // whenever me() returned without throwing → this failed, showing a signed-in
-    // account with no session at all.
     @Test
     fun `starts signed out with no stored session`() = runTest {
         fixture { graph ->
@@ -60,9 +57,6 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: dropped the sync() from onSignedIn() → this
-    // failed on lastSyncedAt, i.e. signing in would leave the device out of step
-    // until something else triggered a sync.
     @Test
     fun `signing in reports the account and syncs immediately`() = runTest {
         fixture { graph ->
@@ -78,10 +72,6 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: returned Failure(error.message) instead of the
-    // SupabaseException detail → this failed with "Supabase auth (400): Invalid
-    // login credentials", which is our plumbing shown to someone who mistyped a
-    // password.
     @Test
     fun `a refused sign-in reports Supabase's own wording and stays signed out`() = runTest {
         fixture(signInStatus = HttpStatusCode.BadRequest) { graph ->
@@ -92,9 +82,6 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: made sync() treat a non-empty pushError as a
-    // full failure and leave lastSyncedAt untouched → this failed, because a sync
-    // that pulled fine and failed one push would then look like it never ran.
     @Test
     fun `a partial push failure is reported without discarding the sync`() = runTest {
         // Only the profile upsert fails; everything pulled still merged.
@@ -110,10 +97,6 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: had syncNow() rethrow the 401 instead of
-    // refreshing → this failed, which is the bug as reported: a device whose clock
-    // says the token is fine never recovers, and every sync from then on reads
-    // "Sync failed / JWT expired".
     @Test
     fun `an access token the server has stopped accepting is refreshed and the sync retried`() =
         runTest {
@@ -143,10 +126,6 @@ class LocalAccountRepositoryTest {
             }
         }
 
-    // Mutation applied to verify: let the push wrapper in SupabaseSyncService
-    // collect the 401 as a partial-push error again → this failed with the sync
-    // reporting rows it could not push, because a refused token never reaches the
-    // one caller that can do something about it.
     @Test
     fun `a token that dies mid-sync is refreshed rather than reported as a partial push`() =
         runTest {
@@ -166,10 +145,6 @@ class LocalAccountRepositoryTest {
             }
         }
 
-    // Mutation applied to verify: had renew() rethrow Supabase's own exception
-    // rather than classifying it → this failed with "Invalid Refresh Token: Refresh
-    // Token Not Found" on the account page, which names a token the user has never
-    // seen and says nothing about signing in again.
     @Test
     fun `a refused refresh asks for a new sign-in and keeps the session`() = runTest {
         fixture { graph ->
@@ -192,10 +167,6 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: ran attempt() on the caller's coroutine again,
-    // as it used to → this failed with the account still signed out, which is the
-    // bug as reported: the onboarding step's scope dies the moment the viewer
-    // presses Continue, and it took the accepted session with it.
     @Test
     fun `a caller that goes away mid sign-in still ends up signed in`() = runTest {
         fixture { graph ->
@@ -229,8 +200,6 @@ class LocalAccountRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: had signOut() leave _account untouched → this
-    // failed, leaving the page claiming a session that had just been cleared.
     @Test
     fun `signing out clears the account and its sync status`() = runTest {
         fixture { graph ->
@@ -245,8 +214,6 @@ class LocalAccountRepositoryTest {
     // A profile that arrived from another device has no data here yet, and the
     // policy's 30s debounce and 2-minute floor would leave it looking empty for
     // minutes. Switching is the one roster event worth bypassing the pacing for.
-    // Mutation applied to verify: routed the switch through markLocalChange() like
-    // the other watchers → this failed on the timeout, no sync ever followed.
     @Test
     fun `switching profile syncs at once`() = runTest {
         fixture { graph ->
@@ -274,8 +241,6 @@ class LocalAccountRepositoryTest {
     // A sync can change the active profile itself: a device signing in for the
     // first time is re-keyed onto the account's primary. The watcher must not treat
     // that as the viewer switching profile and sync all over again.
-    // Mutation applied to verify: dropped the lastSyncedActiveId check from
-    // syncForProfileSwitch() → this failed with two roster reads for one sign-in.
     @Test
     fun `adopting the account's primary does not cost a second sync`() = runTest {
         fixture(remotePrimaryId = "account-primary") { graph ->

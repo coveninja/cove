@@ -41,9 +41,6 @@ class AddonCatalogServiceTest {
     /**
      * The row is drawn from resolved media, and drawing it twice must not re-resolve it —
      * every entry costs a metadata request, which is the whole reason the cache exists.
-     *
-     * Mutation applied to verify: returned the page without ever reading or writing
-     * `cache` → test failed, the second call issued a second /catalog request.
      */
     @Test
     fun `resolves a catalog page once and serves the repeat from cache`() = runBlocking {
@@ -83,10 +80,6 @@ class AddonCatalogServiceTest {
      * Every addon mutation bumps the profile's addon store version, which is folded into
      * the cache key. Without that the viewer would disable a catalog and keep seeing its
      * row for the next quarter of an hour.
-     *
-     * Mutation applied to verify: dropped the store version from
-     * `AddonManager.cacheToken()`, leaving only the profile id → test failed, the request
-     * count stayed at 1 after the toggle.
      */
     @Test
     fun `an addon mutation invalidates the cached page`() = runBlocking {
@@ -127,9 +120,6 @@ class AddonCatalogServiceTest {
      * `nextSkip` counts what the source handed over, not what survived resolution. Paging
      * by the survivors would ask for the dropped entries again on every page and never
      * advance past a run of them.
-     *
-     * Mutation applied to verify: changed the service to `skip + medias.size` → test
-     * failed with nextSkip 2 rather than 3.
      */
     @Test
     fun `paging advances past entries that could not be resolved`() = runBlocking {
@@ -167,9 +157,6 @@ class AddonCatalogServiceTest {
     /**
      * A catalog that cannot answer without the viewer typing something first is not a row.
      * The manifest above offers one such catalog alongside an ordinary one.
-     *
-     * Mutation applied to verify: made `isHomeEligible` return true unconditionally →
-     * test failed, both catalogs came back.
      */
     @Test
     fun `only catalogs that need no input are offered as rows`() = runBlocking {

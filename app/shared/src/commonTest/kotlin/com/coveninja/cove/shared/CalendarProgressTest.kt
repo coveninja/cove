@@ -51,8 +51,6 @@ class CalendarProgressTest {
 
     // The reported bug: both aired episodes of the season were finished, and the entry went
     // on advertising two waiting because the snapshot predated the viewing.
-    // Mutation applied to verify: made `recount` return `this` instead of null on an empty
-    // pending list → test failed, the finished show was still on the calendar.
     @Test
     fun `a backlog watched to the end leaves the calendar`() {
         val items = applyWatchProgress(
@@ -63,8 +61,6 @@ class CalendarProgressTest {
         assertTrue(items.isEmpty(), "a show with nothing left to watch is not waiting")
     }
 
-    // Mutation applied to verify: kept `waitingCount` at the snapshot's value in the copy →
-    // test failed, the badge still claimed two episodes waiting.
     @Test
     fun `finishing one episode advances the entry and decrements the count`() {
         val item = applyWatchProgress(listOf(backlog()), listOf(watched(season = 18, episode = 1)))
@@ -77,8 +73,6 @@ class CalendarProgressTest {
 
     // The name and still came from the episode the snapshot named. Once the head moves past
     // it they describe something already watched, so the card must not keep showing them.
-    // Mutation applied to verify: carried `episodeName` through unchanged → test failed, the
-    // entry for episode 2 was captioned with episode 1's title.
     @Test
     fun `an advanced entry drops the episode name and still it no longer describes`() {
         val item = applyWatchProgress(listOf(backlog()), listOf(watched(season = 18, episode = 1)))
@@ -90,8 +84,6 @@ class CalendarProgressTest {
 
     // The other half of the rule above: an entry whose head has not moved still describes
     // the episode it names, so recounting must leave it exactly as it was.
-    // Mutation applied to verify: blanked the episode name unconditionally in the copy →
-    // test failed, an untouched entry lost the name it should have kept.
     @Test
     fun `an entry nothing has been watched from is returned untouched`() {
         val item = backlog()
@@ -103,8 +95,6 @@ class CalendarProgressTest {
 
     // Watching out of order still counts: the head is the first episode that is *not* done,
     // not the one after the last one that is.
-    // Mutation applied to verify: replaced the pending scan with all aired episodes minus
-    // the first `completed.size` of them → test failed, the head skipped to episode 2.
     @Test
     fun `the head is the earliest unwatched episode, not the one after the newest`() {
         val item = applyWatchProgress(
@@ -118,8 +108,6 @@ class CalendarProgressTest {
 
     // Progress rows are per title, and a set keyed by episode alone would let one show's
     // viewing erase another's backlog.
-    // Mutation applied to verify: keyed the completed set by season/episode only, ignoring
-    // the tmdb id → test failed, the second show came back with one waiting instead of two.
     @Test
     fun `another show's viewing does not count against this one`() {
         val items = applyWatchProgress(
@@ -130,8 +118,6 @@ class CalendarProgressTest {
         assertEquals(listOf(1, 2), items.map { it.waitingCount })
     }
 
-    // Mutation applied to verify: dropped the `completed` filter on the progress rows →
-    // test failed, an episode merely started counted as watched.
     @Test
     fun `an episode left part-way through is still waiting`() {
         val item = applyWatchProgress(
@@ -145,8 +131,6 @@ class CalendarProgressTest {
 
     // A dated entry is about when something comes out, not about whether it has been seen —
     // a re-release the viewer already watched still has a date worth showing.
-    // Mutation applied to verify: recounted dated entries as well → test failed, the
-    // upcoming release was dropped as watched.
     @Test
     fun `a dated release stays on the calendar even when it has been watched`() {
         val upcoming = CalendarItem(
@@ -166,8 +150,6 @@ class CalendarProgressTest {
         assertEquals(upcoming, result.single())
     }
 
-    // Mutation applied to verify: passed movies through untouched → test failed, a film
-    // finished after the snapshot was built stayed on the calendar.
     @Test
     fun `a watched movie leaves the calendar`() {
         val movie = CalendarItem(
@@ -189,8 +171,6 @@ class CalendarProgressTest {
 
     // Snapshots written before the aired seasons existed cannot be recounted, and guessing
     // is worse than waiting for the refresh the schema bump forces.
-    // Mutation applied to verify: recounted an entry with no aired seasons → test failed,
-    // the legacy entry was dropped outright.
     @Test
     fun `an entry from an older snapshot is passed through`() {
         val legacy = backlog(airedSeasons = emptyList())
@@ -203,8 +183,6 @@ class CalendarProgressTest {
         assertEquals(legacy, result.single())
     }
 
-    // Mutation applied to verify: dropped the completed check from the per-season walk →
-    // test failed, the finished episode was listed as pending.
     @Test
     fun `pending episodes run season by season and stop at what has aired`() {
         val pending = pendingEpisodes(

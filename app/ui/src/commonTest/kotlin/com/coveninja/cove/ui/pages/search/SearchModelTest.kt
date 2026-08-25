@@ -47,8 +47,6 @@ class SearchModelTest {
 
     // ── applySearchFilters: narrowing ───────────────────────────────────────
 
-    // Mutation applied to verify: dropped the `filters.type == null || media.type ==
-    // filters.type` clause → test failed, the series came back in a films-only result.
     @Test
     fun `the format filter keeps only that format`() {
         val results = listOf(
@@ -62,8 +60,6 @@ class SearchModelTest {
         assertEquals(listOf("Arrival", "Dune"), titles(films))
     }
 
-    // Mutation applied to verify: changed the genre clause to `filters.genreId == null ||
-    // true` → test failed, the horror-only title survived a sci-fi filter.
     @Test
     fun `the genre filter matches on ids rather than names`() {
         val results = listOf(
@@ -76,8 +72,6 @@ class SearchModelTest {
         assertEquals(listOf("Arrival"), titles(sciFi))
     }
 
-    // Mutation applied to verify: inverted the hideSaved clause to `!filters.hideSaved ||
-    // saved(it.id)` → test failed, hiding saved titles left only the saved one.
     @Test
     fun `hide saved drops what is already in the library`() {
         val results = listOf(media("Arrival"), media("Dune"))
@@ -92,8 +86,6 @@ class SearchModelTest {
         assertEquals(listOf("Arrival"), titles(unsaved))
     }
 
-    // Mutation applied to verify: made hideSaved unconditional by dropping the
-    // `!filters.hideSaved` guard → test failed, the saved title vanished with the toggle off.
     @Test
     fun `saved titles are kept while the toggle is off`() {
         val results = listOf(media("Arrival"), media("Dune"))
@@ -105,8 +97,6 @@ class SearchModelTest {
 
     // ── applySearchFilters: ordering ────────────────────────────────────────
 
-    // Mutation applied to verify: made the Relevance branch sort by title → test failed, the
-    // backend's own ranking was replaced by an alphabetical one.
     @Test
     fun `best match leaves the backend ordering alone`() {
         val results = listOf(media("Zodiac"), media("Arrival"), media("Mad Max"))
@@ -116,9 +106,6 @@ class SearchModelTest {
         assertEquals(listOf("Zodiac", "Arrival", "Mad Max"), titles(ordered))
     }
 
-    // Mutation applied to verify: changed the unrated fallback from NEGATIVE_INFINITY to 0.0
-    // → the assertion still held (nothing here scores below zero), so the second assertion
-    // was added with a negative-rated title, which then failed. Both are kept.
     @Test
     fun `top rated puts unrated titles last rather than treating them as zero`() {
         val results = listOf(
@@ -140,8 +127,6 @@ class SearchModelTest {
         assertEquals(listOf("Awful", "Unrated"), titles(withFloor))
     }
 
-    // Mutation applied to verify: swapped compareByDescending for compareBy → test failed,
-    // the oldest title led a "newest first" ordering.
     @Test
     fun `newest first reads the year from whichever field the format uses`() {
         val results = listOf(
@@ -156,10 +141,6 @@ class SearchModelTest {
         assertEquals(listOf("New", "Show", "Old", "Undated"), titles(ordered))
     }
 
-    // Mutation applied to verify: dropped `.lowercase()` from the Title comparator → test
-    // failed with [Alpha, Yankee, beta, zulu]: raw string ordering puts every capital ahead
-    // of every lowercase letter. The mixed case in the data is the whole point of it — an
-    // all-lowercase-but-one list sorts identically either way and pins nothing down.
     @Test
     fun `A to Z ignores case`() {
         val results = listOf(media("zulu"), media("Alpha"), media("beta"), media("Yankee"))
@@ -171,8 +152,6 @@ class SearchModelTest {
 
     // ── topResult ───────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: removed the exact-match tier → test failed, the sequel the
-    // backend ranked first was returned for a query naming the original exactly.
     @Test
     fun `an exact title match beats whatever the backend ranked first`() {
         val results = listOf(media("Alien: Romulus"), media("Alien"), media("Aliens"))
@@ -180,8 +159,6 @@ class SearchModelTest {
         assertEquals("Alien", topResult(results, "alien")?.displayTitle())
     }
 
-    // Mutation applied to verify: removed the prefix tier → test failed, the first result was
-    // returned instead of the title actually beginning with the query.
     @Test
     fun `a prefix match wins when nothing matches exactly`() {
         val results = listOf(media("The Blade"), media("Blade Runner"))
@@ -189,8 +166,6 @@ class SearchModelTest {
         assertEquals("Blade Runner", topResult(results, "blade")?.displayTitle())
     }
 
-    // Mutation applied to verify: made the fallback return null → test failed; every keyword
-    // hit is a result that does not contain the query, and those must still lead.
     @Test
     fun `a query matching no title at all still leads with the first result`() {
         val results = listOf(media("Heat"), media("Inside Man"))
@@ -198,8 +173,6 @@ class SearchModelTest {
         assertEquals("Heat", topResult(results, "heist")?.displayTitle())
     }
 
-    // Mutation applied to verify: removed the `if (results.isEmpty()) return null` guard →
-    // test failed, the `?: results.first()` fallback threw on an empty list.
     @Test
     fun `there is no top result without results`() {
         assertNull(topResult(emptyList(), "alien"))
@@ -207,8 +180,6 @@ class SearchModelTest {
 
     // ── genreFacets ─────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: sorted facets by id instead of by count → test failed,
-    // Drama led a set where Action accounted for three of the four results.
     @Test
     fun `facets count the results and lead with the commonest`() {
         val results = listOf(
@@ -223,8 +194,6 @@ class SearchModelTest {
         assertEquals(listOf("Action" to 3, "Drama" to 2), facets.map { it.name to it.count })
     }
 
-    // Mutation applied to verify: counted `media.genreIds` without `.distinct()` → test
-    // failed, one title listing a genre twice counted as two results for it.
     @Test
     fun `a title listing a genre twice counts once`() {
         val results = listOf(media("A", genreIds = listOf(28, 28)))
@@ -232,8 +201,6 @@ class SearchModelTest {
         assertEquals(listOf(1), genreFacets(results).map { it.count })
     }
 
-    // Mutation applied to verify: passed emptyMap() to resolveGenreName instead of the
-    // supplied names → test failed, the baked-in English name came back over the backend's.
     @Test
     fun `the backend vocabulary wins over the baked-in one`() {
         val results = listOf(media("A", genreIds = listOf(28)))
@@ -243,8 +210,6 @@ class SearchModelTest {
         assertEquals(listOf("Akcja"), facets.map { it.name })
     }
 
-    // Mutation applied to verify: dropped the `.take(limit)` → test failed, all three facets
-    // came back where two were asked for.
     @Test
     fun `the facet row is capped`() {
         val results = listOf(media("A", genreIds = listOf(28, 18, 27)))
@@ -252,8 +217,6 @@ class SearchModelTest {
         assertEquals(2, genreFacets(results, limit = 2).size)
     }
 
-    // Mutation applied to verify: replaced mapNotNull with a map producing a placeholder name
-    // → test failed, an id in no vocabulary became a pill that filters to nothing.
     @Test
     fun `an unrecognised genre id is not offered as a filter`() {
         val results = listOf(media("A", genreIds = listOf(999_999)))
@@ -263,8 +226,6 @@ class SearchModelTest {
 
     // ── recordRecent ────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped the filterNot → test failed, re-running a past
-    // search left two spellings of it in the list.
     @Test
     fun `re-searching moves the entry to the front instead of duplicating it`() {
         val recents = listOf("dune", "arrival", "heat")
@@ -272,15 +233,11 @@ class SearchModelTest {
         assertEquals(listOf("Dune", "arrival", "heat"), recordRecent(recents, "Dune"))
     }
 
-    // Mutation applied to verify: made the filterNot case-sensitive → test failed, "Dune"
-    // and "dune" were kept as two separate searches.
     @Test
     fun `history is case-insensitive`() {
         assertEquals(1, recordRecent(listOf("dune"), "DUNE").size)
     }
 
-    // Mutation applied to verify: dropped the `.take(limit)` → test failed, the list grew
-    // past the cap and the oldest entry survived.
     @Test
     fun `history is capped, oldest first out`() {
         val full = (1..8).map { "query $it" }
@@ -292,8 +249,6 @@ class SearchModelTest {
         assertFalse(next.contains("query 8"))
     }
 
-    // Mutation applied to verify: removed the blank guard → test failed, whitespace became a
-    // history entry.
     @Test
     fun `blank queries are not history`() {
         assertEquals(listOf("dune"), recordRecent(listOf("dune"), "   "))
@@ -301,23 +256,17 @@ class SearchModelTest {
 
     // ── matchSpan ───────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped `ignoreCase = true` → test failed, a lowercase
-    // query found nothing in a capitalised title.
     @Test
     fun `the highlight span ignores case and takes the first occurrence`() {
         assertEquals(6..11, matchSpan("Blade Runner", "runner"))
         assertEquals(0..1, matchSpan("Alien Aliens", "al"))
     }
 
-    // Mutation applied to verify: removed the blank guard → test failed, an empty query
-    // matched at index 0 and highlighted nothing at the start of every title.
     @Test
     fun `nothing is highlighted for a blank query`() {
         assertNull(matchSpan("Blade Runner", "   "))
     }
 
-    // Mutation applied to verify: changed `start < 0` to `start < -1` → test failed, an
-    // absent query produced a span starting at -1.
     @Test
     fun `nothing is highlighted when the query is absent`() {
         assertNull(matchSpan("Heat", "heist"))
@@ -325,23 +274,17 @@ class SearchModelTest {
 
     // ── Labels and filter state ─────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped the singular branch → test failed, one result was
-    // reported as "1 matches".
     @Test
     fun `the count label is singular for one result`() {
         assertEquals("1 match", resultCountLabel(1, 1))
         assertEquals("24 matches", resultCountLabel(24, 24))
     }
 
-    // Mutation applied to verify: made the label always use the plain form → test failed,
-    // filtering 24 results down to 12 still claimed 12 matches with no sign of the 24.
     @Test
     fun `the count label says how much is being hidden`() {
         assertEquals("12 of 24 matches", resultCountLabel(12, 24))
     }
 
-    // Mutation applied to verify: added `|| sort != SearchSort.Relevance` to narrowed → test
-    // failed, choosing an ordering lit up a "clear filters" button that had nothing to clear.
     @Test
     fun `changing the order is not narrowing`() {
         assertFalse(SearchFilters(sort = SearchSort.Rating).narrowed)
@@ -350,8 +293,6 @@ class SearchModelTest {
         assertTrue(SearchFilters(hideSaved = true).narrowed)
     }
 
-    // Mutation applied to verify: made cleared() return SearchFilters() → test failed, the
-    // chosen ordering was thrown away along with the narrowing.
     @Test
     fun `clearing the filters keeps the ordering`() {
         val filters = SearchFilters(
@@ -403,9 +344,6 @@ class SearchModelTest {
     // that was typed. The name that *is* the query has to beat the more popular one that
     // merely begins with it — otherwise typing somebody's full name still leads with
     // whichever near-namesake is hot this week.
-    // Mutation applied to verify: dropped the `name == needle` tier → test failed, the more
-    // popular "Chris Evanson" led, since an exact name also starts with itself and the two
-    // collapsed into one tier.
     @Test
     fun `an exact name beats a more popular name that starts the same way`() {
         val ranked = rankedPeople(
@@ -419,8 +357,6 @@ class SearchModelTest {
         assertEquals(listOf("Chris Evans", "Chris Evanson"), ranked.map { it.name })
     }
 
-    // Mutation applied to verify: collapsed startsWith and contains into one tier → test
-    // failed, "Ana de Armas" and "Deana Ross" came back in input order.
     @Test
     fun `a name that starts with the query beats one that merely contains it`() {
         val ranked = rankedPeople(
@@ -436,8 +372,6 @@ class SearchModelTest {
 
     // Within a tier the backend's popularity order is the better answer than anything a
     // name can be scored on, so the sort has to leave it alone.
-    // Mutation applied to verify: sorted by name inside the tier → test failed, the
-    // alphabetical order replaced the popularity order.
     @Test
     fun `equally good matches keep the order they arrived in`() {
         val ranked = rankedPeople(
@@ -451,8 +385,6 @@ class SearchModelTest {
         assertEquals(listOf("Zoe Saldana", "Adam Sandler"), ranked.map { it.name })
     }
 
-    // Mutation applied to verify: dropped distinctBy and the blank-name filter → test
-    // failed with 3 rows, one of them nameless.
     @Test
     fun `duplicates and nameless records are dropped`() {
         val ranked = rankedPeople(
@@ -467,8 +399,6 @@ class SearchModelTest {
         assertEquals(listOf("Tilda Swinton"), ranked.map { it.name })
     }
 
-    // Mutation applied to verify: returned every match instead of take(limit) → test
-    // failed with 12 rows.
     @Test
     fun `the rail is capped`() {
         val people = (1..12).map { person(it, "Person $it") }
@@ -478,8 +408,6 @@ class SearchModelTest {
 
     // Two people with the same name are told apart by their work, never by the fact that
     // both of them act.
-    // Mutation applied to verify: billed everyone with their department → test failed,
-    // both rows read "Acting".
     @Test
     fun `people are billed with what they are known for`() {
         val ranked = rankedPeople(

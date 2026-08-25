@@ -148,15 +148,12 @@ fun ExplorePage(
 
     LaunchedEffect(filters.type, seed) { controller.loadShelves(filters.type, seed) }
 
-    // Only once the grid is actually on screen. Loading it alongside the rails would spend
-    // a catalog request on a page nobody is looking at, and the rails already cost several.
-    // `setGridFilters` no-ops on an unchanged filter, so toggling back and forth is free.
+    // Load grid data only while the grid is visible.
     LaunchedEffect(filters.catalogKey, layout) {
         if (layout == ExploreLayout.Grid) controller.setGridFilters(filters)
     }
 
-    // Anything but the format switch is a request to go looking, and looking happens in
-    // the grid. The format switch is not: it re-shelves rather than narrowing.
+    // Narrowing filters open the grid; format changes only re-shelve rails.
     val onFiltersChange: (ExploreFilters) -> Unit = { next ->
         if (next.catalogKey != filters.catalogKey && next.type == filters.type) {
             pageState.layout = ExploreLayout.Grid
@@ -174,9 +171,7 @@ fun ExplorePage(
         applyQuery(controller.gridItems, filters.query)
     }
 
-    // Back to where the viewer came from: a catalog grid is only ever reached from its
-    // rail, and leaving the filter set behind would keep the page narrowed to a catalog
-    // nothing on screen still mentions.
+    // Leaving a catalog grid clears the catalog-specific filter.
     fun leaveCatalog() {
         pageState.filters = filters.copy(catalog = null)
         pageState.layout = ExploreLayout.Shelves
@@ -193,9 +188,6 @@ fun ExplorePage(
             layout = layout,
             genres = controller.genres,
             onFiltersChange = onFiltersChange,
-            // Switching arrangement by hand leaves the catalog too. Keeping it would
-            // hold the page narrowed to something only the grid ever named, and send the
-            // viewer back into it the next time they picked Grid.
             onLayoutChange = { next ->
                 if (next == ExploreLayout.Shelves && filters.catalog != null) {
                     pageState.filters = filters.copy(catalog = null)
@@ -253,10 +245,7 @@ fun ExplorePage(
                         }
                     },
                     onSeeAll = { shelf ->
-                        // An addon catalog replaces the ordinary filters rather than
-                        // joining them: the addon decides its own contents and order, so
-                        // carrying a genre or sort across would describe a page the grid
-                        // is not about to show.
+                        // Addon catalogs own their contents and ordering, replacing local filters.
                         pageState.filters = if (shelf.catalog != null) {
                             filters.copy(genreId = null, catalog = shelf.catalog)
                         } else {
@@ -313,8 +302,7 @@ private fun ShelvesLayout(
 ) {
     val scope = rememberCoroutineScope()
 
-    // Rails are the better source once they exist — they are ordered and complete — but
-    // the seed is here first, and a hero is the one thing that must never be blank.
+    // Use seed media until ordered rail data is available for the hero.
     val picks = remember(controller.shelves, seed, filters.type) {
         val pool = controller.shelves.firstOrNull { it.kind == ShelfKind.Trending }?.media
             ?: seed.filter { it.type == filters.type }
@@ -336,9 +324,7 @@ private fun ShelvesLayout(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(26.dp),
             contentPadding = PaddingValues(
-                // On desktop, a hero passes *under* the top bar and its scrim keeps the bar
-                // legible. Without a hero, the toolbar needs top clearance. The mobile bar
-                // floats over the page, so neither case needs extra room here.
+                // Desktop needs top clearance only when no hero runs beneath its top bar.
                 top = if (
                     picks.isEmpty() && navBarPlacement == NavBarPlacement.Top
                 ) {
@@ -357,8 +343,6 @@ private fun ShelvesLayout(
                         onOpen = onOpenMedia,
                         onToggleList = onToggleList,
                         scrollOffset = {
-                            // Only meaningful while the hero is the first visible item;
-                            // past that it has left the screen and the value is unused.
                             if (listState.firstVisibleItemIndex == 0) {
                                 listState.firstVisibleItemScrollOffset.toFloat()
                             } else {
@@ -426,9 +410,7 @@ private fun GridLayout(
     val scope = rememberCoroutineScope()
     val scrolled by remember { derivedStateOf { gridState.firstVisibleItemIndex > 6 } }
 
-    // The grid has no hero to run under the system bars, so it takes the safe insets that
-    // its edge-to-edge page wrapper omits on both hosts — Explore is treated as a full-bleed
-    // destination for the sake of the spotlight, and only the shelves layout has one.
+    // The hero-less grid consumes safe insets omitted by Explore's full-bleed wrapper.
     Box(
         modifier = if (navBarPlacement == NavBarPlacement.Top) {
             Modifier
@@ -436,9 +418,7 @@ private fun GridLayout(
                 .safeContentPadding()
                 .padding(top = NavBarClearance)
         } else {
-            // Top and sides only. The bottom is deliberately left unconsumed so the grid
-            // paints into the gesture area rather than leaving a bar there; ExploreGrid's
-            // contentPadding carries the clearance instead.
+            // Let the grid paint through the bottom gesture area; content padding adds clearance.
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(
@@ -451,9 +431,6 @@ private fun GridLayout(
         Column(modifier = Modifier.fillMaxSize()) {
             toolbar()
 
-            // A catalog grid is the one arrangement the viewer arrives at from somewhere
-            // else, so it is also the only one that has to say where it is and offer a way
-            // back. Every other grid is a filter of the page the toolbar already describes.
             val activeCatalog = filters.catalog
             if (activeCatalog != null) {
                 Row(
@@ -472,8 +449,6 @@ private fun GridLayout(
                         description = "Back to shelves",
                         onClick = onExitCatalog,
                     )
-                    // Weighted so a long catalog name ellipsizes instead of pushing the
-                    // row past the screen edge; addon names are not length-bounded.
                     Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
                         Text(
                             text = activeCatalog.name.ifBlank { activeCatalog.catalogId },
@@ -509,9 +484,7 @@ private fun GridLayout(
                 )
             }
 
-            // An empty result is only an empty *state* once loading has finished; showing
-            // "nothing matches" over an in-flight first page would be a lie that corrects
-            // itself a moment later.
+            // Do not show an empty state while the first page is still loading.
             if (visible.isEmpty() && !controller.gridLoading && controller.gridError == null) {
                 PageEmptyState(
                     iconName = if (filters.narrowed) "lucide:filter-x" else "lucide:compass",

@@ -16,7 +16,6 @@ class CoveColorsTest {
     fun `library category accents stay mutually distinguishable`() {
         // All five appear side by side as drag targets in the nav bar, so a duplicate makes
         // two drop targets indistinguishable rather than merely looking odd.
-        // Mutation check: pointing Category.WatchLater at Status.Success fails this.
         val accents = listOf(
             CoveColors.Category.Watching,
             CoveColors.Category.WatchLater,
@@ -31,7 +30,6 @@ class CoveColorsTest {
     @Test
     fun `player segment accents stay mutually distinguishable`() {
         // These sit adjacent on the seek bar; two matching segments read as one long segment.
-        // Mutation check: pointing Segment.Preview at Segment.Credits fails this.
         val segments = listOf(
             CoveColors.Segment.Recap,
             CoveColors.Segment.Intro,
@@ -46,7 +44,6 @@ class CoveColorsTest {
     fun `one hue per meaning across categories and statuses`() {
         // A category and the status that means the same thing must not drift apart, or
         // "finished" is one green on the library page and a different green in a toast.
-        // Mutation check: giving Category.Finished its own green fails this.
         assertEquals(CoveColors.Status.Success, CoveColors.Category.Finished)
         assertEquals(CoveColors.Status.Danger, CoveColors.Category.Dropped)
         assertEquals(CoveColors.Status.Info, CoveColors.Category.Watching)
@@ -58,7 +55,6 @@ class CoveColorsTest {
         // A ramp that does not climb is not a ramp. Anything reaching for "two steps lighter"
         // would silently get something darker, and the onboarding backdrop leans on the spread
         // for the sense of depth in its wall of cards.
-        // Mutation check: swapping Seafoam.Pale and Seafoam.Deep fails the ordering.
         CoveColors.Seafoam.ramp.zipWithNext { darker, lighter ->
             assertTrue(
                 darker.luminance() < lighter.luminance(),
@@ -72,7 +68,6 @@ class CoveColorsTest {
         // The point of the ramp is that six shades read as one colour. Green has to dominate in
         // every step, or a "shade" has drifted into being a different hue and the backdrop is
         // back to looking like a colour test.
-        // Mutation check: pointing any step at Status.Warning or Segment.Recap fails this.
         CoveColors.Seafoam.ramp.forEach { shade ->
             assertTrue(shade.green > shade.red, "$shade is not green-dominant")
             assertTrue(shade.green > shade.blue, "$shade is not green-dominant")
@@ -84,7 +79,6 @@ class CoveColorsTest {
         // Two steps are the app's existing greens rather than near-misses of them. New values a
         // few points away would put three almost-identical greens in the palette with nothing to
         // say which was which — and the backdrop would drift away from the brand as either moved.
-        // Mutation check: giving Seafoam.Bright its own hex fails this.
         assertEquals(CoveColors.Brand.Accent, CoveColors.Seafoam.Bright)
         assertEquals(CoveColors.Segment.Credits, CoveColors.Seafoam.Mid)
     }
@@ -94,7 +88,6 @@ class CoveColorsTest {
         // The dark surfaces are separated by only a few points of lightness, and a card reads
         // as raised because each step is strictly lighter than the one under it. Equal steps
         // would flatten the stack with no error anywhere.
-        // Mutation check: setting SurfaceHigh equal to Surface fails the strict ordering.
         val stack = listOf(
             CoveColors.Neutral.Background,
             CoveColors.Neutral.Surface,
@@ -112,7 +105,6 @@ class CoveColorsTest {
 
     @Test
     fun `text outranks muted text which outranks the border`() {
-        // Mutation check: swapping Muted and MutedDim fails the middle comparison.
         assertTrue(CoveColors.Neutral.Text.lightness() > CoveColors.Neutral.Muted.lightness())
         assertTrue(CoveColors.Neutral.Muted.lightness() > CoveColors.Neutral.MutedDim.lightness())
         assertTrue(CoveColors.Neutral.MutedDim.lightness() > CoveColors.Neutral.Border.lightness())
@@ -124,7 +116,6 @@ class CoveColorsTest {
         // android:windowBackground from res/values/themes.xml before any Compose code runs,
         // so it cannot read this object. If this fails, the palette moved and
         // app/mobile/src/main/res/values/themes.xml has to move with it.
-        // Mutation check: changing Neutral.Background fails this.
         assertEquals(Color(0xFF0A0A0A), CoveColors.Neutral.Background)
     }
 

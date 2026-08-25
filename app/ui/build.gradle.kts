@@ -39,9 +39,6 @@ kotlin {
             implementation(compose.foundation)
             implementation(compose.material3)
 
-            // materialIconsExtended was used only by the old iconify shim (com.ongshok.iconify).
-            // That shim is replaced by CoveIcons.kt + IconifyIcon.kt which need no Material icons.
-
             implementation(libs.coil3.compose)
             implementation(libs.coil3.network.ktor)
 
@@ -49,8 +46,6 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
         }
 
-        // Presentation state (PlaybackSession in particular) carries real decision
-        // logic that no other module's suite reaches.
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
@@ -65,20 +60,10 @@ kotlin {
 
 // ── Icon pipeline ─────────────────────────────────────────────────────────────
 //
-// Icons are real Iconify artwork baked in at build time: `generateIcons` fetches the
-// SVGs and writes CoveIcons.kt; `verifyIcons` fails the build if source uses an icon
-// that was never generated. See docs/APP.md.
-//
-// Everything below lives in a top-level object and typed task classes rather than in
-// `doLast { }` blocks calling script-level helpers. A lambda that reaches back into the
-// build script captures the script object, which the configuration cache cannot
-// serialize — that made `./gradlew hotRun` fail on the second run with
-// "cannot deserialize Gradle script object references".
+// generateIcons bakes Iconify SVGs into CoveIcons.kt; verifyIcons checks every use.
+// Top-level helpers and typed tasks avoid configuration-cache captures of this script.
 
-/**
- * Pure helpers, deliberately outside the build script's own scope. A top-level object
- * compiles to a standalone class, so task actions calling into it hold no script reference.
- */
+/** Helpers kept outside the build script scope for configuration-cache serialization. */
 object IconGen {
 
     /** Matches quoted icon-name literals in Kotlin source, e.g. "lucide:x". */

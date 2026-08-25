@@ -55,8 +55,6 @@ class InsightsModelTest {
 
     // ── Durations ────────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped the `minutes > 0` branch so hours always printed
-    // alone → test failed, "5h 30m" came back as "5h".
     @Test
     fun `watch time reads as hours and minutes`() {
         assertEquals("5h 30m", formatWatchDuration(5 * 3600 + 30 * 60L))
@@ -65,8 +63,6 @@ class InsightsModelTest {
         assertEquals("342h 18m", formatWatchDuration(342 * 3600 + 18 * 60L))
     }
 
-    // Mutation applied to verify: returned "0m" for everything under a minute → test
-    // failed, ten seconds of playback was reported as nothing watched at all.
     @Test
     fun `a few seconds of playback is not rounded away to nothing`() {
         assertEquals("<1m", formatWatchDuration(10))
@@ -78,8 +74,6 @@ class InsightsModelTest {
 
     // ── Year over year ───────────────────────────────────────────────────────
 
-    // Mutation applied to verify: divided by thisYearSeconds instead of lastYearSeconds →
-    // test failed, a doubling reported +50% instead of +100%.
     @Test
     fun `year over year is a percentage of the previous year`() {
         val doubled = yearOverYearDelta(thisYearSeconds = 200, lastYearSeconds = 100)
@@ -92,9 +86,6 @@ class InsightsModelTest {
         assertEquals(YearDelta(0, TrendDirection.Flat), same)
     }
 
-    // Mutation applied to verify: removed the zero guard → test failed, dividing by zero
-    // gave Infinity, which rounds to Int.MAX_VALUE and would have put "+2147483647%" on
-    // the badge.
     @Test
     fun `a first year has nothing to compare against`() {
         assertNull(yearOverYearDelta(thisYearSeconds = 5_000, lastYearSeconds = 0))
@@ -102,8 +93,6 @@ class InsightsModelTest {
 
     // ── Monthly bars ─────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: scaled each year against its own maximum → test failed,
-    // last year's 50 drew the same height as this year's 100.
     @Test
     fun `both years are scaled against one shared peak`() {
         val bars = monthBars(
@@ -115,8 +104,6 @@ class InsightsModelTest {
         assertEquals(0.5f, bars[0].lastYearFraction)
     }
 
-    // Mutation applied to verify: indexed the lists directly instead of getOrElse → test
-    // failed with an index-out-of-bounds rather than an empty tail.
     @Test
     fun `a short month list leaves the rest of the chart empty`() {
         val bars = monthBars(thisYear = listOf(10L), lastYear = emptyList())
@@ -128,9 +115,6 @@ class InsightsModelTest {
 
     // ── Heatmap ──────────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: took the window back `weeks * 7` days instead of
-    // `(weeks - 1) * 7` → test failed, the grid opened on 26 July and showed a fourth week
-    // that the caller never asked for.
     @Test
     fun `heatmap columns start on Sunday and end on the current week`() {
         val weeks = heatmapWeeks(calendar = emptyMap(), today = today, weeks = 3)
@@ -149,8 +133,6 @@ class InsightsModelTest {
     // on any other weekday — on a Monday, `1 % 7` and `1` are the same number — so it takes
     // a Sunday to pin down. Without the modulo a Sunday shifts back a whole week.
     //
-    // Mutation applied to verify: dropped the `% 7` → test failed, today fell outside the
-    // grid entirely and the final column drew seven days that had already passed.
     @Test
     fun `on a Sunday the current week opens a new column`() {
         val sunday = LocalDate.parse("2026-08-16")
@@ -162,8 +144,6 @@ class InsightsModelTest {
         assertTrue(weeks.flatten().filterNotNull().any { it.date == sunday })
     }
 
-    // Mutation applied to verify: emitted a cell for every date regardless of today → test
-    // failed, the last column drew five future days as if they were skipped days.
     @Test
     fun `days after today are absent rather than empty`() {
         val weeks = heatmapWeeks(calendar = emptyMap(), today = today, weeks = 3)
@@ -174,9 +154,6 @@ class InsightsModelTest {
         assertNull(weeks.last()[2])
     }
 
-    // Mutation applied to verify: took the peak from the whole calendar instead of the
-    // visible range → test failed, the busiest visible day dropped from level 4 to level 1
-    // because a long-past day dwarfed it.
     @Test
     fun `intensity is scaled against the busiest visible day`() {
         val calendar = mapOf(
@@ -196,8 +173,6 @@ class InsightsModelTest {
         assertEquals(0, cells.getValue("2026-08-04").level)
     }
 
-    // Mutation applied to verify: returned level 1 for a zero peak → test failed, a profile
-    // with no history drew a fully shaded year.
     @Test
     fun `intensity buckets cover the range and handle no history`() {
         assertEquals(0, intensityLevel(seconds = 0, peak = 100))
@@ -208,8 +183,6 @@ class InsightsModelTest {
         assertEquals(0, intensityLevel(seconds = 10, peak = 0))
     }
 
-    // Mutation applied to verify: labelled every column instead of only month changes →
-    // test failed with a label above each of the three weeks.
     @Test
     fun `heatmap labels a month only where it starts`() {
         val weeks = heatmapWeeks(calendar = emptyMap(), today = today, weeks = 3)
@@ -218,8 +191,6 @@ class InsightsModelTest {
         assertEquals(listOf(0 to "Aug"), heatmapMonthLabels(weeks))
     }
 
-    // Mutation applied to verify: indexed the weekday list with isoDayNumber instead of
-    // isoDayNumber - 1 → test failed, Monday the 10th was labelled "Tue".
     @Test
     fun `heatmap cells name their own day`() {
         // 2026-08-10 is a Monday; today is the 17th.
@@ -230,9 +201,6 @@ class InsightsModelTest {
         assertEquals("Today", heatDayLabel(today, today))
     }
 
-    // Mutation applied to verify: ended the last-year window on today rather than on that
-    // year's 31 December → test failed, selecting last year drew a grid running into the
-    // current year and left the earlier months it was meant to show off the left edge.
     @Test
     fun `each range ends its heatmap on the last day it covers`() {
         val (thisEnd, thisWeeks) = heatmapWindow(InsightsRange.ThisYear, today)
@@ -251,8 +219,6 @@ class InsightsModelTest {
 
     // ── Rhythm ───────────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: returned the index without the all-zero check → test
-    // failed, a profile with no history claimed midnight was its peak hour.
     @Test
     fun `peaks are null until something has actually been watched`() {
         assertNull(peakHour(List(24) { 0L }))
@@ -262,8 +228,6 @@ class InsightsModelTest {
         assertEquals(6, busiestWeekday(List(7) { if (it == 6) 500L else 10L }))
     }
 
-    // Mutation applied to verify: dropped the `% 12` remap so noon printed as "0 pm" →
-    // test failed on both midnight and noon.
     @Test
     fun `hours read as a twelve hour clock`() {
         assertEquals("12 am", formatHour(0))
@@ -273,8 +237,6 @@ class InsightsModelTest {
         assertEquals("11 pm", formatHour(23))
     }
 
-    // Mutation applied to verify: built the sentence before the null checks → test failed,
-    // an empty profile produced "around 12 am, and Sunday is your biggest day".
     @Test
     fun `the rhythm sentence stays quiet with nothing to say`() {
         assertNull(rhythmSummary(ActivityStats()))
@@ -291,8 +253,6 @@ class InsightsModelTest {
 
     // ── Library composition ──────────────────────────────────────────────────
 
-    // Mutation applied to verify: built statusCounts from the entries' own statuses only →
-    // test failed, Dropped was missing from the map instead of counting zero.
     @Test
     fun `every status is counted even when nothing is in it`() {
         val breakdown = libraryBreakdown(
@@ -312,8 +272,6 @@ class InsightsModelTest {
         assertEquals(1, breakdown.shows)
     }
 
-    // Mutation applied to verify: defaulted the average to 0.0 when nothing was rated →
-    // test failed, an unrated library advertised an average rating of zero stars.
     @Test
     fun `an unrated library has no average rather than an average of zero`() {
         val unrated = libraryBreakdown(listOf(entry(1, LibraryStatus.Finished)))
@@ -333,9 +291,6 @@ class InsightsModelTest {
 
     // ── Taste ────────────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: normalised against the raw maximum instead of the largest
-    // magnitude → test failed, an all-negative list produced negative fractions that drew
-    // as bars pointing the wrong way.
     @Test
     fun `disliked genres still produce bars that grow with strength`() {
         val bars = normalizeTaste(
@@ -351,8 +306,6 @@ class InsightsModelTest {
         assertEquals(-8.0, bars[0].score)
     }
 
-    // Mutation applied to verify: removed the zero-peak guard → test failed with a
-    // NaN fraction from dividing by zero.
     @Test
     fun `taste bars survive an all-zero profile`() {
         val bars = normalizeTaste(listOf(DiscoveryTaste(1, "Drama", 0.0)))
@@ -361,8 +314,6 @@ class InsightsModelTest {
         assertTrue(normalizeTaste(emptyList()).isEmpty())
     }
 
-    // Mutation applied to verify: divided by the total seconds instead of the peak → test
-    // failed, the top title's bar came back at 0.6 rather than filling the row.
     @Test
     fun `leaderboard shares are relative to the most watched title`() {
         val shares = titleShares(
@@ -379,9 +330,6 @@ class InsightsModelTest {
 
     // ── You against the crowd ────────────────────────────────────────────────
 
-    // Mutation applied to verify: compared the raw star rating against the ten-point public
-    // score without converting → test failed, ★4 against a crowd 8.0 reported a gap of -4
-    // instead of agreement, making every viewer look like a harsh critic.
     @Test
     fun `ratings are compared on the same scale`() {
         val comparison = ratingComparison(
@@ -400,8 +348,6 @@ class InsightsModelTest {
         assertEquals(0, comparison.lower)
     }
 
-    // Mutation applied to verify: treated a missing public score as 0.0 instead of skipping
-    // it → test failed, an unscored title reported a −8 gap and dragged the average with it.
     @Test
     fun `titles the crowd has not scored are left out`() {
         val comparison = ratingComparison(
@@ -418,8 +364,6 @@ class InsightsModelTest {
         assertEquals(0.0, comparison.averageDelta)
     }
 
-    // Mutation applied to verify: sorted by raw delta rather than magnitude → test failed,
-    // the strongest disagreement was listed last because it was negative.
     @Test
     fun `the biggest disagreement leads regardless of direction`() {
         val comparison = ratingComparison(
@@ -434,8 +378,6 @@ class InsightsModelTest {
 
     // ── Finishing what you start ─────────────────────────────────────────────
 
-    // Mutation applied to verify: counted every unfinished row as stalled → test failed, a
-    // title abandoned 30 seconds in was listed beside one abandoned at the halfway mark.
     @Test
     fun `a title barely started does not count as abandoned`() {
         val stats = finishStats(
@@ -452,8 +394,6 @@ class InsightsModelTest {
         assertEquals(2, stats.stalled.single().tmdbId)
     }
 
-    // Mutation applied to verify: divided finished by the stalled count → test failed with
-    // a rate above 1, which the bar would have drawn past the end of its track.
     @Test
     fun `the finish rate is a share of everything started`() {
         val stats = finishStats(
@@ -469,9 +409,6 @@ class InsightsModelTest {
 
     // ── Library growth ───────────────────────────────────────────────────────
 
-    // Mutation applied to verify: stepped back by subtracting from the month number without
-    // rolling the year → test failed, walking back from August 2026 produced month -3
-    // instead of May 2025 and the counts landed in the wrong buckets.
     @Test
     fun `library growth walks back twelve months across a year boundary`() {
         val growth = libraryGrowth(
@@ -494,8 +431,6 @@ class InsightsModelTest {
 
     // ── All time ─────────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: sorted years descending → test failed, the all-time chart
-    // ran newest to oldest and read as a decline instead of growth.
     @Test
     fun `year bars run oldest first and scale to the biggest year`() {
         val bars = yearBars(mapOf("2026" to 50L, "2024" to 100L, "2025" to 25L))
@@ -507,8 +442,6 @@ class InsightsModelTest {
 
     // ── Labels ───────────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: returned the raw code for everything → test failed,
-    // "Japanese" came back as "ja" and the chart listed codes nobody reads.
     @Test
     fun `languages are named where known and echoed where not`() {
         assertEquals("Japanese", languageName("ja"))
@@ -518,9 +451,6 @@ class InsightsModelTest {
         assertEquals("1990s", decadeLabel(1990))
     }
 
-    // Mutation applied to verify: grouped by code instead of by display name → test failed,
-    // zh and cn both came back as "Chinese" and the chart drew the same language twice with
-    // its count split between the two rows.
     @Test
     fun `languages sharing a name are merged into one row`() {
         val merged = namedLanguages(
@@ -539,9 +469,6 @@ class InsightsModelTest {
 
     // ── Empty state ──────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: made the check an `or` across the three sources → test
-    // failed, a library with saved titles but no playback was declared empty and the whole
-    // page collapsed to the placeholder.
     @Test
     fun `saved titles alone are enough to have something to show`() {
         assertTrue(insightsAreEmpty(ActivityStats(), DiscoveryInsights(), libraryCount = 0))

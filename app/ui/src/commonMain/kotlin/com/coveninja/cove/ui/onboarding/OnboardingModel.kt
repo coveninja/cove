@@ -173,8 +173,7 @@ fun nextStep(step: OnboardingStep, steps: List<OnboardingStep>): OnboardingStep?
  * The step before [step], or null at the start.
  *
  * No explicit bounds check: `indexOf` returns -1 for an absent step and 0 for the first one, and
- * `getOrNull` rejects both -2 and -1 already. A guard here would be unreachable — which is
- * exactly what the mutation check found when one was written.
+ * `getOrNull` rejects both -2 and -1 already.
  */
 fun previousStep(step: OnboardingStep, steps: List<OnboardingStep>): OnboardingStep? =
     steps.getOrNull(steps.indexOf(step) - 1)

@@ -28,8 +28,6 @@ class CoveApiTest {
 
     // ── Auth headers ─────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: removed the `tokenProvider()?.let { header(...) }`
-    // line → test failed because Authorization header was absent.
     @Test
     fun `auth headers are present when providers return values`() = runTest {
         var capturedHeaders: Headers? = null
@@ -52,9 +50,6 @@ class CoveApiTest {
         assertEquals("dev456", capturedHeaders!!["X-Cove-Token"])
     }
 
-    // Mutation applied to verify: changed `tokenProvider()?.let { ... }` to always
-    // add a header with empty string → test failed because Authorization was
-    // present (with "") when it should have been absent.
     @Test
     fun `auth headers are absent when providers return null`() = runTest {
         var capturedHeaders: Headers? = null
@@ -80,8 +75,6 @@ class CoveApiTest {
 
     // ── TV stream query parameters ───────────────────────────────────────────
 
-    // Mutation applied to verify: removed `season?.let { parameter("season", it) }`
-    // → test failed because "season=2" was absent from the captured URL.
     @Test
     fun `streams with type=tv includes season and episode query params`() = runTest {
         var capturedUrl: String? = null
@@ -100,8 +93,6 @@ class CoveApiTest {
         assertTrue(capturedUrl!!.contains("episode=3"), "Expected episode=3 in '$capturedUrl'")
     }
 
-    // Mutation applied to verify: changed movie branch to always append season
-    // and episode params → test failed because "season" appeared for a movie request.
     @Test
     fun `streams with type=movie omits season and episode params`() = runTest {
         var capturedUrl: String? = null
@@ -143,8 +134,6 @@ class CoveApiTest {
 
     // Confirms requireSuccess() throws on non-2xx so repositories can catch and
     // emit Failed rather than crashing the UI with an unhandled exception.
-    // Mutation applied to verify: removed `requireSuccess()` call from discover()
-    // → test failed because no RuntimeException was thrown.
     @Test
     fun `500 response from discover throws RuntimeException with status in message`() = runTest {
         val client = HttpClient(MockEngine {

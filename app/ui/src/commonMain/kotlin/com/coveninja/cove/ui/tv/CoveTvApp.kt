@@ -101,15 +101,11 @@ import kotlin.math.roundToInt
 @Composable
 fun CoveTvApp(
     graph: AppGraph,
-    // Null on a host with no player; the watch action then reports that playback is
-    // unavailable rather than crashing.
+    // Null on hosts without playback support.
     videoPlayerHost: VideoPlayerHost? = null,
-    // The Android host uses this to hold the screen awake while something is playing.
     onFullscreenPlaybackVisibilityChanged: (Boolean) -> Unit = {},
-    // Desktop closes its graph after a verified detached updater starts.
     onUpdateExitRequested: () -> Unit = {},
-    // Re-opens the first-run flow on a device that has already been through it — the
-    // `--onboarding` harness, and nothing else.
+    // Allows the explicit onboarding preview harness to bypass completion state.
     forceOnboarding: Boolean = false,
 ) {
     val performance by graph.device.performance.collectAsState()
@@ -120,10 +116,7 @@ fun CoveTvApp(
             LocalAppGraph provides graph,
             LocalMotionPolicy provides MotionPolicy(reducedMotion = performance.lowPerformanceMode),
             LocalVideoPlayerHost provides videoPlayerHost,
-            // A television window is already the whole screen; there is nothing to toggle.
             LocalFullscreenController provides null,
-            // Shared components that read the phone/desktop page metrics still have to land
-            // somewhere sensible when the TV shell reuses them.
             LocalPageHorizontalPadding provides dimens.overscanHorizontal,
             LocalPageViewport provides PageViewport(
                 width = maxWidth,
@@ -133,9 +126,7 @@ fun CoveTvApp(
             LocalPageBottomClearance provides dimens.overscanVertical,
         ) {
             TvTheme(dimens) {
-                // The marker is a sibling of the whole shell rather than something a page
-                // draws, so it survives every destination, the details screen and the
-                // onboarding flow alike — a canned catalog is a property of the run.
+                // Keep the fixture marker visible across every TV layer.
                 Box(modifier = Modifier.fillMaxSize()) {
                     OnboardingGate(
                         graph = graph,
@@ -159,8 +150,6 @@ fun CoveTvApp(
                                     top = dimens.overscanVertical,
                                     end = dimens.overscanHorizontal,
                                 )
-                                // Above the player and the update overlay, the two layers
-                                // that would otherwise hide it for the rest of the run.
                                 .zIndex(1000f),
                         )
                     }
@@ -212,8 +201,7 @@ private fun TvAppContent(
     val personState = rememberPersonDetailsState()
     val playback = rememberPlaybackSession()
     PluginPlaybackEffect(playback)
-    // Above the destination switch, so returning to Home keeps its loaded rails and every
-    // scroll position instead of rebuilding the controllers that own those requests.
+    // Keep Home state above navigation so loaded rails and scroll positions survive.
     val homeController = rememberHomeController(graph.content, graph.discovery, graph.addons)
     val homePageState = rememberTvHomePageState()
     val myListPageState = rememberTvMyListPageState()
@@ -243,14 +231,10 @@ private fun TvAppContent(
 
     val detailsOpen = detailsState.selected != null
     val personOpen = personState.selected != null
-    // Focus must not be able to wander back into the page while a sheet or the player owns the
-    // screen. The old TV shell learned this the hard way: pressing down behind an open overlay
-    // scrolled a page nobody could see, and coming back left focus somewhere unrelated.
+    // Trap focus while a sheet or the player owns the screen.
     val pageReachable = !detailsOpen && !personOpen && !fullscreenPlaybackVisible
 
-    // Closing a layer removes whatever held focus from the composition, and Compose does not
-    // hand it anywhere else. With no pointer to click something with, that leaves the whole
-    // interface dead — so every dismissal has to say where focus goes next.
+    // Every overlay dismissal must restore focus explicitly.
     val overlayOpen = detailsOpen || personOpen || fullscreenPlaybackVisible
     var overlayHasBeenOpen by remember { mutableStateOf(false) }
     LaunchedEffect(overlayOpen) {
@@ -263,9 +247,7 @@ private fun TvAppContent(
         }
         overlayHasBeenOpen = false
         withFrameNanos { }
-        // The rail is the fallback rather than an afterthought: a destination with nothing
-        // focusable in it — a placeholder, an empty list — would otherwise swallow the request
-        // and leave the viewer exactly as stuck as before.
+        // Fall back to the rail when the destination has no focusable content.
         if (runCatching { pageFocusRequester.requestFocus() }.isFailure) {
             runCatching { railFocusRequester.requestFocus() }.let { }
         }
@@ -275,9 +257,7 @@ private fun TvAppContent(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            // Bubble phase, not preview: whatever holds focus gets first refusal, so a seek bar
-            // or a text field can claim the arrows before they become navigation. Only what
-            // nothing wanted turns into a focus move.
+            // Let focused controls consume arrows before treating them as navigation.
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 val action = tvKeyAction(event.key)
@@ -295,14 +275,9 @@ private fun TvAppContent(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // The rail's collapsed width is a permanent gutter. It expands over this, so
-                // the page never reflows when navigation is entered.
                 .padding(start = dimens.railCollapsedWidth)
                 .focusGate(pageReachable)
-                // A group with a restorer, so handing focus back here after an overlay closes
-                // lands on the card the overlay was opened from rather than at the top of the
-                // page. Safe alongside the rail hand-off: a focus search that cannot leave this
-                // group simply fails, and a failed Left is exactly what reaches for navigation.
+                // Restore focus to the card that opened an overlay.
                 .focusRequester(pageFocusRequester)
                 .focusRestorer()
                 .focusGroup(),
@@ -316,8 +291,6 @@ private fun TvAppContent(
                     watchProgress = watchProgress,
                     catalog = catalog,
                     onOpenMedia = { detailsState.open(it) },
-                    // Carrying on goes straight to playback rather than via the details
-                    // screen: the whole claim of "where you left off" is that it is one press.
                     onPlayMedia = { playback.open(it) },
                 )
 
@@ -342,8 +315,7 @@ private fun TvAppContent(
                     session = search,
                     pageState = searchPageState,
                     onOpenMedia = { media ->
-                        // A result the viewer acted on is what proves the query was the one
-                        // they meant, which is when it earns a place in their history.
+                        // Record a query only after the viewer acts on a result.
                         search.submitted?.let(search::rememberQuery)
                         detailsState.open(media)
                     },
@@ -353,8 +325,6 @@ private fun TvAppContent(
             }
         }
 
-        // Above the rail: a title fills the screen, and navigation is reachable by Back rather
-        // than by being drawn over the thing the viewer just opened.
         detailsState.overlayMedia?.takeIf { detailsOpen }?.let { overlay ->
             val entry = index.entryOf(overlay.id)
             TvDetailsScreen(
@@ -385,8 +355,7 @@ private fun TvAppContent(
             )
         }
 
-        // One sheet at a time, and the title stays selected underneath: closing the person
-        // lands back on the title they were reached from, having refetched nothing.
+        // Preserve the selected title beneath the person sheet.
         personState.overlayPerson?.takeIf { personState.selected != null }?.let { person ->
             TvPersonScreen(
                 person = person,
@@ -407,9 +376,7 @@ private fun TvAppContent(
             selectedFocusRequester = railFocusRequester,
             modifier = Modifier
                 .zIndex(50f)
-                // Navigation is behind the details screen and the player, so it has to be
-                // unreachable while either is up — otherwise Left from an open title walks
-                // focus into a rail nobody can see.
+                // Keep the hidden navigation rail unfocusable under overlays.
                 .focusGate(pageReachable),
         )
 

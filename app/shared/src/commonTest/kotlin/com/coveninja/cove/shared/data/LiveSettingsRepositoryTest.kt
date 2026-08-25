@@ -88,10 +88,6 @@ class LiveSettingsRepositoryTest {
     // object, every other setting would be zeroed on the backend side because
     // PUT /api/settings is a whole-object replace with no server-side merge.
     //
-    // Mutation applied to verify: changed update() to send AppSettings() (all
-    // Kotlin defaults) instead of the caller-supplied settings → test failed
-    // because defaultProvider was "" instead of "nuvio" and discoveryAlgorithm
-    // was "smart" instead of "custom".
     @Test
     fun `changing one field sends every other field at its original value`() = runTest {
         var capturedPutBody: String? = null
@@ -186,9 +182,6 @@ class LiveSettingsRepositoryTest {
         )
     }
 
-    // Mutation applied to verify: removed try/catch in load() so the thrown
-    // exception propagated out of the coroutine instead of setting Failed →
-    // test failed because state remained Loading (the coroutine died).
     @Test
     fun `500 from settings GET maps to SettingsState Failed with status in message`() = runTest {
         val client = HttpClient(MockEngine {

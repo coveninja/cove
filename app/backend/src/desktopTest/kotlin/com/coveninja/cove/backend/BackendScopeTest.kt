@@ -33,9 +33,6 @@ class BackendScopeTest {
         }
     }
 
-    // Mutation applied to verify: dropped the handler from backendScope, leaving
-    // SupervisorJob + Dispatchers.IO → test failed, the throw reached the uncaught handler,
-    // which on Android is the thing that kills the app.
     @Test
     fun `a failed background task never reaches the handler that would kill the app`() {
         withRecordedUncaughtExceptions { uncaught ->
@@ -107,8 +104,6 @@ class BackendScopeTest {
         }
     }
 
-    // Mutation applied to verify: returned a bare CoroutineScope(SupervisorJob() +
-    // Dispatchers.IO) from backendScope → test failed.
     @Test
     fun `every backend scope carries a handler`() {
         assertNotNull(

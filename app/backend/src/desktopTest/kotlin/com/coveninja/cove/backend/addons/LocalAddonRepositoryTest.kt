@@ -110,10 +110,6 @@ class LocalAddonRepositoryTest {
 
     // The two fields AddonManagerTest cannot see, because both are added on the
     // way out of the backend rather than in it.
-    // Mutation applied to verify: dropped `managed = managed` from toSharedModel
-    // → test failed, the inherited addon reached the UI as an ordinary editable
-    // row; dropped `addons.sharing()` from AddonsState.Ready → test failed with
-    // the default AddonSharing() and no primary to name.
     @Test
     fun `an inherited addon reaches the UI marked and explained`() = runTest {
         val http = providerHttpClient()
@@ -226,9 +222,6 @@ class LocalAddonRepositoryTest {
      * manifest's catalogs have to survive the mapping into the shared model — and only
      * the drawable ones, since a switch for a search-gated catalog would toggle a row
      * that can never appear.
-     *
-     * Mutation applied to verify: dropped the `filter(AddonCatalog::isHomeEligible)` from
-     * `toSharedModel` → test failed, the search catalog came back too.
      */
     @Test
     fun `an addon reports its drawable catalogs and their enabled state`() = runTest {

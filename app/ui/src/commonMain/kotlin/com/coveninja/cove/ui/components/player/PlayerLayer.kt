@@ -142,38 +142,22 @@ fun PlayerLayer(
     }
 
     val focusRequester = remember { FocusRequester() }
-    // Re-requested on every phase change, not once on mount. The layer composes while
-    // sources are still being resolved, and the request can land before the node is
-    // attached or be taken by whatever was focused on the page underneath — either
-    // way the keys then go nowhere until something inside the player is clicked,
-    // which is not a thing anyone should have to discover. Also re-requested on any
-    // press below, so a click anywhere over the player hands the keyboard back.
+    // A request made while sources resolve can precede attachment, so retry on phase changes.
     val takeFocus = { runCatching { focusRequester.requestFocus() }.let { } }
     LaunchedEffect(phase) { takeFocus() }
 
-    // Controls fade out while the pointer is still, and any movement brings them
-    // back. Tracked as a counter rather than a boolean so each movement restarts
-    // the timer instead of extending a single pending one.
-    // Reset to Fit for every session: the layer leaves the composition when
-    // playback closes, so a previous title's crop never carries over.
+    // A counter lets every pointer movement restart the hide timer.
     var scaling by remember { mutableStateOf(VideoScaling.Fit) }
     var activityPulse by remember { mutableStateOf(0) }
     var controlsVisible by remember { mutableStateOf(true) }
-    // Set while a picker is open or the pointer is on the bar. Pointer movement
-    // inside a dropdown happens in a popup of its own and never reaches this
-    // layer's handler, so without this the controls time out from under an open
-    // menu while it is being read.
+    // Popup pointer events do not reach this layer, so an open picker must hold the controls.
     var controlsHeld by remember { mutableStateOf(false) }
 
-    // What a tap means depends on how the picture looked when the finger landed,
-    // and on whether it was a finger at all — both are recorded at press time,
-    // because the press itself wakes the controls long before the tap resolves.
+    // Interpret taps using the state at press time, before the press wakes the controls.
     var pressWasTouch by remember { mutableStateOf(false) }
     var controlsShownAtPress by remember { mutableStateOf(true) }
 
-    // Nothing here can drive a file that has not opened yet, and the phase turns Playing
-    // the moment the URL is handed over — many seconds before the first frame on a
-    // torrent. Everything that acts on the player is gated on this.
+    // Playing can precede the first frame, especially for torrents.
     val start = rememberPlaybackStart(
         status,
         request.media.id,
@@ -188,39 +172,28 @@ fun PlayerLayer(
     val currentSegment = segmentAt(status.positionSeconds, segments)
     val seekStep = settings?.seekStepSeconds?.takeIf { it > 0.0 } ?: SEEK_STEP_SECONDS
 
-    // Transient on-screen replies. Each is a piece of state plus a timestamp, because
-    // they all answer "something just happened" and have to expire on their own.
     var seekFeedback by remember { mutableStateOf<SeekFeedback?>(null) }
-    // Monotonic: this measures a gap between two presses, and a wall clock that the
-    // system adjusts underneath it would measure something else.
+    // Double-tap timing must use a monotonic clock.
     var lastSeekAt by remember { mutableStateOf<TimeMark?>(null) }
     var volumePulse by remember { mutableStateOf(0) }
     var transportPulse by remember { mutableStateOf(0) }
     var statsVisible by remember { mutableStateOf(false) }
     var shortcutsVisible by remember { mutableStateOf(false) }
-    // A subtitle file being dragged over the picture, and the reply once it lands.
-    // The pulse is what restarts the timer: dropping the same wrong file twice would
-    // otherwise leave the second attempt with no answer at all.
     var subtitleDragActive by remember { mutableStateOf(false) }
     var subtitleNotice by remember { mutableStateOf<String?>(null) }
     var subtitleNoticePulse by remember { mutableStateOf(0) }
 
-    // One route for both the drop and the file chooser, so they cannot disagree about
-    // what happened. Nothing here is gated on playback having started: the file is
-    // recorded either way and applied when the stream opens.
+    // Use the same validation for drops and the file chooser, even before playback starts.
     val useSubtitleFiles: (List<String>) -> Unit = { paths ->
         val file = subtitleFilesAmong(paths).firstOrNull()
         subtitleNotice = when {
             file != null && session.addUserSubtitle(file) -> "Using ${subtitleFileName(file)}"
             file != null -> "That subtitle file could not be loaded."
-            // Nothing came through at all, which is not the same as the wrong kind of
-            // file arriving — and telling someone their subtitle is not a subtitle when
-            // the drop itself was unreadable sends them looking in the wrong place.
+            // An unreadable drop is distinct from a readable, unsupported file.
             paths.isEmpty() -> "Cove could not read that drop — try Load subtitle file\u2026"
             else -> "That is not a subtitle file Cove can read."
         }
         subtitleNoticePulse++
-        // The subtitle menu is where the file now lives, and it rides with the controls.
         activityPulse++
     }
 
@@ -231,20 +204,14 @@ fun PlayerLayer(
         }
     }
 
-    // Every command the player takes passes through here, and none of them is a
-    // question a file that is still opening can answer: there is no position to seek,
-    // no track to choose, nothing to pause. Gating the commands rather than the keys
-    // that carry them is what leaves the keys falling through as before — Tab and
-    // Enter still reach the Cancel button on the opening stage. Returns true so a key
-    // branch can be written as one call: the press was ours whether or not it did
-    // anything, and must not also reach the page underneath.
+    // Gate player commands rather than keys so opening-state controls still receive input.
+    // A handled player key must not also reach the page below, even when no command runs.
     val onPlayer: (() -> Unit) -> Boolean = { action ->
         if (start.started) action()
         true
     }
 
-    // One place every jump goes through, so the burst on screen and the seek sent to
-    // the player can never disagree about what happened.
+    // Keep seek feedback and the requested jump in sync.
     val jump: (Double) -> Unit = { delta ->
         onPlayer {
             seekFeedback = accumulateSeekFeedback(
@@ -272,7 +239,6 @@ fun PlayerLayer(
         }
     }
 
-    // The burst clears itself; nothing else is watching to take it away.
     LaunchedEffect(seekFeedback?.id) {
         if (seekFeedback != null) {
             delay(SEEK_FEEDBACK_WINDOW_MILLIS.milliseconds)
@@ -301,9 +267,7 @@ fun PlayerLayer(
         skipTarget(segment, status.positionSeconds, status.durationSeconds)
             ?.let { host?.seek(it) }
     }
-    // A long open outlasts the auto-hide timer, so by the time there is something to
-    // control the timer has usually run out on a bar that was never on screen. One pulse
-    // puts it up at the moment it becomes worth showing, and restarts the timer with it.
+    // Restart auto-hide when the first frame makes the controls usable.
     LaunchedEffect(start.started) {
         if (start.started) activityPulse++
     }
@@ -319,8 +283,6 @@ fun PlayerLayer(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
-            // Only composed while a session is open, so there is no separate "is this
-            // worth accepting" condition to keep in step with anything.
             .subtitleFileDropTarget(
                 onDragChange = { subtitleDragActive = it },
                 onFiles = useSubtitleFiles,
@@ -329,15 +291,9 @@ fun PlayerLayer(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                // Any key counts as activity, so the controls come back for the
-                // keyboard the same way they do for the mouse.
                 val handled = when (event.key) {
                     Key.Escape -> {
-                        // Leaves fullscreen first if it is on, so one Escape does
-                        // not both un-maximise and abandon what you were watching.
-                        // An extra has one more step below that: it came from a
-                        // slot on the details sheet, and going back there is not
-                        // the same as giving up on it.
+                        // Escape unwinds fullscreen and embedded playback before closing playback.
                         when {
                             shortcutsVisible -> shortcutsVisible = false
                             fullscreen?.isFullscreen?.value == true -> fullscreen.toggle()
@@ -353,10 +309,7 @@ fun PlayerLayer(
                     Key.M -> onPlayer {
                         host?.setMuted(!status.muted); volumePulse++
                     }
-                    // Relative, not position + step: the position here is whatever the
-                    // last poll reported, so two presses inside one interval would both
-                    // start from the same place and collapse into a single jump. The
-                    // host tracks the seek it has not yet arrived at; this cannot.
+                    // The host accumulates relative seeks between status polls.
                     Key.DirectionRight, Key.L -> {
                         jump(if (event.isShiftPressed) FINE_SEEK_SECONDS else seekStep); true
                     }
@@ -365,8 +318,7 @@ fun PlayerLayer(
                     }
                     Key.DirectionUp -> { changeVolume(VOLUME_STEP); true }
                     Key.DirectionDown -> { changeVolume(-VOLUME_STEP); true }
-                    // Frame stepping only makes sense against a still picture, and
-                    // mpv pauses itself on the first step anyway.
+                    // Frame stepping is meaningful only while paused.
                     Key.Comma -> onPlayer { host?.stepFrame(-1) }
                     Key.Period -> onPlayer { host?.stepFrame(1) }
                     Key.LeftBracket -> onPlayer { host?.setSpeed(stepSpeed(status.speed, -1)) }
@@ -375,8 +327,7 @@ fun PlayerLayer(
                     Key.PageUp -> onPlayer { host?.stepChapter(-1) }
                     Key.PageDown -> onPlayer { host?.stepChapter(1) }
                     Key.MoveHome -> onPlayer { host?.seek(0.0) }
-                    // The clamp inside the host keeps this clear of the last frame,
-                    // which is the whole reason End is safe to offer at all.
+                    // The host clamps this clear of the final frame.
                     Key.MoveEnd -> onPlayer { host?.seek(status.durationSeconds) }
                     Key.C -> onPlayer { host?.selectSubtitleTrack(cycleTrack(status.subtitleTracks, status.selectedSubtitleId, allowOff = true)) }
                     Key.A -> onPlayer {
@@ -385,10 +336,7 @@ fun PlayerLayer(
                     }
                     Key.S -> onPlayer { host?.takeScreenshot() }
                     Key.I -> { statsVisible = !statsVisible; true }
-                    // Bound to the key rather than to the shifted character. `?` is
-                    // Shift+/ on some layouts, AltGr+something on others, and its own
-                    // key on a few; plain / does nothing else here, so accepting both
-                    // is one fewer layout to be wrong about.
+                    // Bind the physical slash key because producing `?` varies by layout.
                     Key.Slash -> { shortcutsVisible = !shortcutsVisible; true }
                     else -> percentJumpFor(event.key)?.let { fraction ->
                         onPlayer {
@@ -402,32 +350,24 @@ fun PlayerLayer(
                 handled
             }
 
-            // Blank while the controls are gone: an arrow parked over the picture is
-            // the one thing on screen that cannot be part of the film. Applied to the
-            // whole layer rather than to the video surface so it also covers the
-            // margins, and so nothing drawn over the video reinstates the arrow.
+            // Hide the cursor over the whole layer, including video margins.
             .hideCursorWhen(!controlsVisible && !controlsHeld)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     var lastPosition: Offset? = null
                     while (true) {
                         val event = awaitPointerEvent()
-                        // Any press hands the keyboard back to the player, whatever
-                        // had it before.
                         if (event.type == PointerEventType.Press) {
                             takeFocus()
                             pressWasTouch = event.changes.any {
                                 it.type == PointerType.Touch || it.type == PointerType.Stylus
                             }
                             controlsShownAtPress = controlsVisible || controlsHeld
-                            // A phone has no hover movement to wake hidden controls.
-                            // Treat the touch itself as activity before the tap is
-                            // interpreted as pause, seek, or another player action.
+                            // Touch has no preceding hover event to wake the controls.
                             activityPulse++
                         }
                         when (event.type) {
                             PointerEventType.Move -> {
-                                // Only real movement counts — see pointerMovedEnough.
                                 val position = event.changes.lastOrNull()?.position
                                 if (position != null &&
                                     pointerMovedEnough(lastPosition, position)
@@ -436,11 +376,8 @@ fun PlayerLayer(
                                     activityPulse++
                                 }
                             }
-                            // Wheel over the picture is volume, the convention
-                            // every desktop player follows. Handled here rather
-                            // than with onPointerEvent, which is desktop-only and
-                            // would not compile for the Android target. Scroll
-                            // deltas are inverted: up is negative.
+                            // This common-source handler avoids desktop-only onPointerEvent.
+                            // Scroll deltas are inverted: up is negative.
                             PointerEventType.Scroll -> {
                                 val scrolled = event.changes
                                     .firstOrNull()
@@ -457,21 +394,15 @@ fun PlayerLayer(
                 }
             },
     ) {
-        // Mounted only once there is video to show. The mpv surface is an opaque
-        // AWT interop panel, and Compose composites over interop only when
-        // compose.interop.blending is on — so anything drawn beneath it during
-        // Resolving would be an unexplained black rectangle rather than a
-        // progress spinner. Every pre-playback state below is pure Compose and
-        // therefore always visible and always cancellable.
+        // Mount the opaque mpv interop surface only once there is video to show;
+        // pre-playback states must remain visible and cancellable in Compose.
         if (host != null && phase is PlaybackPhase.Playing) {
             host.Surface(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(seekStep) {
                         detectTapGestures(
-                            // detectTapGestures resolves this itself: onTap only
-                            // fires once the double-tap window has closed, so a
-                            // double tap never pauses on its way past.
+                            // detectTapGestures suppresses onTap when a double tap resolves.
                             onTap = {
                                 if (tapTogglesPause(pressWasTouch, controlsShownAtPress)) {
                                     toggleTransport()
@@ -481,8 +412,6 @@ fun PlayerLayer(
                                 when {
                                     offset.x < size.width * EDGE_TAP_FRACTION -> jump(-seekStep)
                                     offset.x > size.width * (1f - EDGE_TAP_FRACTION) -> jump(seekStep)
-                                    // Framing the window is not a player command, so unlike
-                                    // the two above it works while the file is still opening.
                                     else -> fullscreen?.toggle()
                                 }
                             },
@@ -491,8 +420,6 @@ fun PlayerLayer(
             )
         }
 
-        // Everything before the first frame sits on the title's own artwork
-        // rather than on flat black, which read as an error dialog.
         if (phase !is PlaybackPhase.Playing || !status.hasMedia) {
             PlayerBackdrop(backdropUrl = request.media.backdropUrl)
         }
@@ -586,11 +513,8 @@ fun PlayerLayer(
             }
 
             is PlaybackPhase.Playing -> {
-                // mpv reports no media until the stream opens, which for a torrent
-                // means waiting on the first pieces. Without this the window is
-                // simply black for as long as that takes. Anything that goes wrong
-                // after the first frame is the error banner's to report, which is why
-                // this asks the latch rather than the live status alone.
+                // Keep the starting state until the first frame; torrents may report no media
+                // while waiting for their first pieces.
                 if (!status.hasMedia && !start.opened) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -602,9 +526,7 @@ fun PlayerLayer(
                             source = phase.source,
                             status = status,
                             torrent = rememberTorrentProgress(session, phase.source),
-                            // Reopening the source list is meaningless for an
-                            // extra, which has exactly one address; reloading it
-                            // is the only recovery there is.
+                            // An extra has one URL, so its only recovery is reload.
                             onRetry = {
                                 if (request.extra != null) {
                                     session.retry()
@@ -617,8 +539,6 @@ fun PlayerLayer(
                     }
                 }
 
-                // Feedback for things that leave no other trace. Placed above the
-                // controls in the stack so a burst is never half-hidden behind them.
                 seekFeedback?.let { feedback ->
                     SeekBurst(
                         feedback = feedback,
@@ -628,8 +548,7 @@ fun PlayerLayer(
                     )
                 }
 
-                // Keyed on the pulse rather than made visible: it plays once and
-                // removes itself, and pressing again mid-fade restarts it cleanly.
+                // Keying by pulse restarts feedback pressed again mid-fade.
                 key(transportPulse) {
                     if (transportPulse > 0) {
                         TransportPulse(
@@ -657,9 +576,7 @@ fun PlayerLayer(
                     VolumeOverlay(volume = status.volume, muted = status.muted)
                 }
 
-                // A stall after playback has started, which nothing reported before:
-                // the starting stage covers the wait for the first frame and then
-                // never comes back, so a torrent running dry mid-episode simply froze.
+                // Report stalls after the starting stage has left composition.
                 AnimatedVisibility(
                     visible = status.waitingForData && status.hasMedia && !session.reconnecting,
                     modifier = Modifier.align(Alignment.Center),
@@ -706,17 +623,13 @@ fun PlayerLayer(
                     )
                 }
 
-                // Deliberately not gated on hasMedia: a source that fails to open never loads
-                // any, and that is exactly when the viewer most needs the banner — it carries
-                // the only route to the next source. Requiring media meant an unplayable link
-                // left the player sitting on the backdrop with no error and no way forward.
+                // Load failures have no media, so this banner cannot be gated on hasMedia.
                 status.error?.takeIf {
                     !status.interrupted && !session.recoveryFailed
                 }?.let { error ->
                     PlaybackErrorBanner(
                         message = error,
-                        // Both actions collapse onto a reload for an extra, for
-                        // the same reason: there is no second source to walk to.
+                        // An extra has no alternate source to select.
                         onTryNextSource = {
                             if (request.extra != null) {
                                 session.retry()
@@ -736,8 +649,6 @@ fun PlayerLayer(
                     )
                 }
 
-                // Title block and window actions ride with the controls: they are
-                // chrome over the picture, and should leave together.
                 AnimatedVisibility(
                     visible = controlsVisible,
                     modifier = Modifier.align(Alignment.TopStart),
@@ -758,8 +669,6 @@ fun PlayerLayer(
                     exit = fadeOut(tween(200)) + slideOutVertically { -it / 3 },
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        // Only for an extra: it has a slot on the page waiting for
-                        // it, which the film and its episodes do not.
                         if (request.extra != null) {
                             ControlButton(
                                 icon = "lucide:picture-in-picture-2",
@@ -795,9 +704,6 @@ fun PlayerLayer(
                     )
                 }
 
-                // At the end of an episode, what comes next. Shown whether or not
-                // autoplay is on: with it off this is the way to continue, with
-                // it on it is the way to stop it happening.
                 val atEnd = !status.interrupted && !session.reconnecting &&
                     !session.recoveryFailed && showUpNext(
                     positionSeconds = status.positionSeconds,
@@ -831,8 +737,6 @@ fun PlayerLayer(
                     )
                 }
 
-                // Offered only where auto-skip is off: with it on the segment is
-                // already gone, and a button for it would never be reachable.
                 val manualSkip = currentSegment?.takeIf { segment ->
                     settings?.skipsAutomatically(segment.kind) != true &&
                         skipTarget(segment, status.positionSeconds, status.durationSeconds) != null
@@ -862,9 +766,7 @@ fun PlayerLayer(
                 }
 
                 AnimatedVisibility(
-                    // Nothing to show until there is something to control: a transport
-                    // over a file that has not opened has no position to draw, no tracks
-                    // to list and nothing to pause.
+                    // Do not expose transport controls before media is available.
                     visible = controlsVisible && start.started,
                     modifier = Modifier.align(Alignment.BottomCenter),
                     enter = fadeIn(tween(120)) + slideInVertically { it / 4 },
@@ -894,8 +796,6 @@ fun PlayerLayer(
                             host?.setScaling(it)
                         },
                         onSelectSpeed = { host?.setSpeed(it) },
-                        // An extra came with its own URL; there is no list of
-                        // alternatives behind it to change to.
                         canChangeSource = request.extra == null,
                         onChangeSource = session::reopenSources,
                         episodeBrowser = request.episodeBrowser(
@@ -906,8 +806,6 @@ fun PlayerLayer(
                     )
                 }
 
-                // Last in the layer, so the invitation and the answer are never drawn
-                // under the chrome they are about.
                 AnimatedVisibility(
                     visible = subtitleDragActive,
                     modifier = Modifier.align(Alignment.Center),
@@ -923,7 +821,7 @@ fun PlayerLayer(
                     enter = fadeIn(tween(140)) + slideInVertically { it / 3 },
                     exit = fadeOut(tween(180)),
                 ) {
-                    // Held so the sentence does not vanish a frame before the fade does.
+                    // Retain the message until its fade completes.
                     val message = remember(subtitleNoticePulse) { subtitleNotice }
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -1069,8 +967,7 @@ private fun StagePanel(
                 }
             }
 
-            // A determinate bar once the player reports real buffer progress; an
-            // indeterminate one until then, so the two never contradict.
+            // Show determinate progress only once the player reports it.
             if (progress != null) {
                 LinearProgressIndicator(
                     progress = { progress },
@@ -1298,13 +1195,11 @@ private const val SEEK_STEP_SECONDS = 10.0
 /** Shift-arrow: for lining up a subtitle or finding the exact frame something happens. */
 private const val FINE_SEEK_SECONDS = 1.0
 private const val VOLUME_STEP = 5.0
-// Long enough to read the card and stop it, short enough not to feel stuck.
 private const val AUTOPLAY_COUNTDOWN_SECONDS = 8
 /** When the countdown starts pulsing, because stopping it is about to stop being possible. */
 private const val UP_NEXT_URGENT_SECONDS = 3
 private const val TORRENT_POLL_MILLIS = 1500L
 private const val RESUME_NOTICE_MILLIS = 7000L
-// Shorter than the resume notice, which offers an action: this one only reports.
 private const val SUBTITLE_NOTICE_MILLIS = 4000L
 // A remote mkv with many tracks routinely needs ten seconds of probing
 // before mpv reports anything, so patience here is normal, not a fault.
@@ -1347,9 +1242,7 @@ private fun StartingStage(
         else -> "Opening the file"
     }
 
-    // Only a real buffer reading drives the determinate bar. mpv reports no
-    // buffering figure at all until its demuxer is up — the property is simply
-    // unavailable — so anything else here would be an invented number.
+    // mpv exposes buffer progress only after its demuxer starts.
     val progress = when {
         torrent != null && torrent.totalBytes > 0 ->
             (torrent.downloadedBytes.toDouble() / torrent.totalBytes).toFloat()
@@ -1360,15 +1253,12 @@ private fun StartingStage(
 
     val detail = buildString {
         when {
-            // A torrent knows far more about itself than mpv does at this point:
-            // peers and rate say whether anything is coming at all, where mpv's
-            // buffer figure is simply unavailable until its demuxer is up.
+            // Torrent peer and rate data are available before mpv buffer progress.
             torrent != null -> {
                 append("${torrent.peers} peers · ${formatBytes(torrent.downloadRate.toLong())}/s")
             }
 
             buffering > 0 -> append("Buffered $buffering%")
-            // mpv's own log is the only running commentary during an open.
             status.statusMessage.isNotBlank() -> append(status.statusMessage.take(90))
             else -> append("Reading the stream")
         }
@@ -1412,9 +1302,6 @@ private fun PlayerTitleBlock(title: String, episode: String?, onBack: () -> Unit
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // A back arrow next to what you are watching, rather than a bare X over
-        // the picture. It rides with the rest of the chrome, so it is only ever
-        // present while the controls are.
         ControlButton(icon = "iconamoon:arrow-left-1", onClick = onBack)
 
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1441,8 +1328,7 @@ private fun PlayerTitleBlock(title: String, episode: String?, onBack: () -> Unit
 
 /** "S2E4 · Episode name", or null for a film. */
 private fun PlaybackRequest.episodeSubtitle(): String? {
-    // For an extra the title block reads "Dune" over "Official Trailer", which is
-    // the same shape as a series reading "Breaking Bad" over "S1E1".
+    // Extras use the media title as the heading and the video title as context.
     extra?.let { return it.title }
     val season = season ?: return null
     val number = episode ?: return null
@@ -1540,9 +1426,6 @@ private fun SkipSegmentButton(
             )
         }
 
-        // A line under the button that drains as the segment plays out, so how long
-        // the offer stands is visible rather than something you find out by watching
-        // it vanish. Drawn over the bottom edge, inside the same rounded corners.
         Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -1606,17 +1489,12 @@ private fun UpNextCard(
                 fontWeight = FontWeight.Bold,
             )
 
-            // The countdown as a bar rather than only a number in the button label.
-            // Something is about to happen without being asked, and a shrinking line
-            // reads at a glance where a digit has to be found and then read.
             if (autoAdvance && !cancelled) {
                 val sweep by animateFloatAsState(
                     targetValue = remaining.toFloat() / AUTOPLAY_COUNTDOWN_SECONDS,
                     animationSpec = tween(durationMillis = 980, easing = LinearEasing),
                     label = "UpNextCountdown",
                 )
-                // The last few seconds pulse, because that is when stopping it stops
-                // being optional.
                 val urgency = rememberInfiniteTransition(label = "UpNextUrgency")
                 val flash by urgency.animateFloat(
                     initialValue = 0.55f,
@@ -1753,8 +1631,7 @@ private fun PlaybackErrorBanner(
     onPickSource: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Latched: once the walk runs out there is nothing left to offer, and a
-    // button that silently does nothing is worse than no button.
+    // Once failover is exhausted, hide the action rather than offer a no-op.
     var exhausted by remember(message) { mutableStateOf(false) }
 
     Surface(
@@ -1802,7 +1679,6 @@ private fun ResumeNotice(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Long enough to read and act on, then out of the way on its own.
     LaunchedEffect(seconds) {
         delay(RESUME_NOTICE_MILLIS)
         onDismiss()

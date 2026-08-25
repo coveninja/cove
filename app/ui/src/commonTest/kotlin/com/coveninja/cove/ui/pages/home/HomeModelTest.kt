@@ -131,8 +131,6 @@ class HomeModelTest {
 
     // ── continueWatchingRows ────────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped the `watchFraction != null` term from the filter →
-    // test failed, the part-watched film disappeared from the result.
     @Test
     fun `a part-watched title is offered even when it is not marked as watching`() {
         val entries = listOf(
@@ -143,8 +141,6 @@ class HomeModelTest {
         assertEquals(listOf("Half Done"), rows(entries, progress).map { it.displayTitle })
     }
 
-    // Mutation applied to verify: dropped the `status == Watching` term → test failed, the
-    // started-but-unplayed show vanished.
     @Test
     fun `a show marked as watching is offered with no progress recorded at all`() {
         assertEquals(listOf("Started"), rows(listOf(entry(1, "Started"))).map { it.displayTitle })
@@ -154,8 +150,6 @@ class HomeModelTest {
     // *completed* progress row, which leaves no resume fraction, so the row used to survive
     // purely on the show-level status — putting a finished episode on a rail headed "where
     // you left off".
-    // Mutation applied to verify: re-added `status == Watching` as a qualifying term → test
-    // failed, the caught-up show came back.
     @Test
     fun `a show whose last episode is finished is not offered`() {
         val entries = listOf(entry(1, "Caught Up", watched = 1 to 6))
@@ -166,8 +160,6 @@ class HomeModelTest {
 
     // The same shape without a progress row at all: episodes ticked off by hand still move
     // the library counters, and a show marked Watching forever must not outlive them.
-    // Mutation applied to verify: dropped the `lastWatchedSeason == null` term from
-    // `neverPlayed` → test failed, the show reappeared as "unstarted".
     @Test
     fun `a show with watched episodes is not mistaken for an unstarted one`() {
         assertTrue(rows(listOf(entry(1, "Ticked Off", watched = 2 to 4))).isEmpty())
@@ -175,8 +167,6 @@ class HomeModelTest {
 
     // A show with episodes waiting belongs to the backlog rail, which knows how many are
     // waiting; carrying it here too would list one show twice for two different reasons.
-    // Mutation applied to verify: re-added `hasNewEpisodes` as a qualifying term → test
-    // failed, the show appeared on both rails.
     @Test
     fun `a show with episodes waiting is left to the backlog rail`() {
         val entries = listOf(entry(1, "Aired Ahead", watched = 2 to 3, aired = 2 to 5))
@@ -184,8 +174,6 @@ class HomeModelTest {
         assertTrue(rows(entries).isEmpty())
     }
 
-    // Mutation applied to verify: removed the `status != Dropped` filter → test failed, the
-    // abandoned show came back.
     @Test
     fun `a dropped show is never offered however recently it was watched`() {
         val entries = listOf(
@@ -197,8 +185,6 @@ class HomeModelTest {
 
     // Finishing something should clear it off the page. Its episode counters may still argue
     // it is behind, and offering to resume a finished title reads as a bug.
-    // Mutation applied to verify: removed the Finished guard → test failed, the completed
-    // show was offered again.
     @Test
     fun `a finished show with nothing part-watched is not offered`() {
         val entries = listOf(
@@ -208,8 +194,6 @@ class HomeModelTest {
         assertTrue(rows(entries).isEmpty())
     }
 
-    // Mutation applied to verify: sorted ascending instead of descending → test failed, the
-    // stale title led.
     @Test
     fun `the most recently watched title comes first`() {
         val entries = listOf(
@@ -222,8 +206,6 @@ class HomeModelTest {
 
     // The library row also moves for things that are not watching — rating a title, dragging
     // it to another list — so the progress row is the better clock when there is one.
-    // Mutation applied to verify: read `entry.lastWatchedAt` first in `activityKey` → test
-    // failed, the title with the stale library timestamp but fresher playback sorted last.
     @Test
     fun `playback timestamps outrank library timestamps when ordering`() {
         val entries = listOf(
@@ -242,8 +224,6 @@ class HomeModelTest {
         )
     }
 
-    // Mutation applied to verify: removed the `take(limit)` → test failed, all six rows came
-    // back.
     @Test
     fun `the rail stops at the limit`() {
         val entries = (1..6).map { entry(it, "Show $it") }
@@ -253,9 +233,6 @@ class HomeModelTest {
 
     // ── ContinueRow labels ──────────────────────────────────────────────────
 
-    // Mutation applied to verify: read the entry's watched season/episode before the progress
-    // row's in `episodeMarker` → test failed, it reported S1 E2 rather than where playback
-    // actually is.
     @Test
     fun `the episode marker follows playback rather than the library counter`() {
         val entries = listOf(entry(1, "Show", watched = 1 to 2))
@@ -271,8 +248,6 @@ class HomeModelTest {
     // The one fact that distinguishes this card from the resume cards beside it. Naming an
     // episode would invent a position the viewer has never reached, and the format label is
     // already obvious from the artwork.
-    // Mutation applied to verify: gave `Unstarted` the same caption branch as `Resume` →
-    // test failed, the card captioned itself "Series".
     @Test
     fun `an unstarted title says so rather than naming a position`() {
         val row = rows(listOf(entry(1, "Fresh", type = MediaType.Tv))).single()
@@ -285,8 +260,6 @@ class HomeModelTest {
 
     // The frame you stopped on beats every other image the card could carry, so playback wins
     // even when the library counters point at a different episode.
-    // Mutation applied to verify: checked the library counters before the progress row → test
-    // failed, it asked for the still of S1 E2.
     @Test
     fun `the thumbnail follows the episode being played`() {
         val entries = listOf(entry(1, "Show", watched = 1 to 2, aired = 4 to 1))
@@ -297,8 +270,6 @@ class HomeModelTest {
 
     // A still from an episode the viewer has not reached is both a spoiler and a lie about
     // where they are; a film has no episode to take one from at all.
-    // Mutation applied to verify: defaulted the missing watched counters to season 1
-    // episode 1 → test failed, both asked for a still that means nothing.
     @Test
     fun `an unstarted title or a film has no episode thumbnail`() {
         val unstarted = rows(listOf(entry(1, "Fresh"))).single()
@@ -313,8 +284,6 @@ class HomeModelTest {
     }
 
     // A film has no episode to take a frame from, and neither has a show never started.
-    // Mutation applied to verify: defaulted the missing counters to season 1 episode 1 → test
-    // failed, both asked for a still that means nothing.
     @Test
     fun `a film or an unstarted show has no episode thumbnail`() {
         val film = entry(1, "Film", type = MediaType.Movie, status = LibraryStatus.Watching)
@@ -328,15 +297,11 @@ class HomeModelTest {
 
     // Deliberately not a whole number of minutes: 1530 seconds is 25.5, which rounds to 26
     // and truncates to 25. A remainder that divided evenly would pass either way.
-    // Mutation applied to verify: replaced `roundToInt` with `toInt` → test failed, the
-    // countdown reported "25 min left".
     @Test
     fun `remaining time is reported in whole minutes`() {
         assertEquals("26 min left", remainingLabel(progress(1, position = 100.0, duration = 1_630.0)))
     }
 
-    // Mutation applied to verify: dropped the hours branch → test failed, a 95-minute
-    // remainder came back as "95 min left".
     @Test
     fun `over an hour remaining is reported in hours and minutes`() {
         assertEquals("1 h 35 min left", remainingLabel(progress(1, position = 0.0, duration = 5_700.0)))
@@ -344,8 +309,6 @@ class HomeModelTest {
     }
 
     // "0 min left" on something effectively over is worse than saying nothing.
-    // Mutation applied to verify: removed the `remaining < 60` guard → test failed, the
-    // nearly-finished title reported "1 min left".
     @Test
     fun `no countdown is shown for a title that is over or unplayable`() {
         assertNull(remainingLabel(null))
@@ -359,8 +322,6 @@ class HomeModelTest {
     private fun backlog(vararg items: CalendarItem): List<BacklogRow> =
         backlogRows(items.toList()) { item -> media(item.title, UiMediaType.Series) }
 
-    // Mutation applied to verify: swapped the resume and backlog branches → test failed, the
-    // hero led with the show that merely had episodes waiting.
     @Test
     fun `something half-watched outranks something with new episodes`() {
         val entries = listOf(entry(2, "Half Watched", lastWatchedAt = "2026-01-01T00:00:00Z"))
@@ -375,8 +336,6 @@ class HomeModelTest {
         assertEquals(HomeHeroKind.Resume, hero?.kind)
     }
 
-    // Mutation applied to verify: returned the spotlight before checking the backlog → test
-    // failed, a merely-popular title displaced the show waiting for the viewer.
     @Test
     fun `a show with new episodes outranks whatever is trending`() {
         val waiting = backlog(
@@ -391,8 +350,6 @@ class HomeModelTest {
     }
 
     // A poster stretched into the hero's wide frame renders as a smear behind unreadable copy.
-    // Mutation applied to verify: took `trending.first()` outright → test failed, the hero
-    // picked the backdrop-less title.
     @Test
     fun `the spotlight prefers a title that actually has a backdrop`() {
         val trending = listOf(media("No Art", backdrop = null), media("Has Art"))
@@ -403,15 +360,12 @@ class HomeModelTest {
         assertEquals(HomeHeroKind.Spotlight, hero?.kind)
     }
 
-    // Mutation applied to verify: returned a hero built from an empty list → test failed with
-    // an index error rather than a null.
     @Test
     fun `there is no hero when there is nothing at all`() {
         assertNull(heroPick(emptyList(), emptyList(), emptyList()))
     }
 
     // Resume and Play are different promises; a spotlight can offer neither.
-    // Mutation applied to verify: made every hero playable → test failed on the spotlight.
     @Test
     fun `only a personal hero offers playback`() {
         val resume = heroPick(
@@ -430,8 +384,6 @@ class HomeModelTest {
 
     // A card whose buttons cannot resolve a title would open and play nothing at all, which
     // is worse than the card simply not being there.
-    // Mutation applied to verify: mapped unresolved items to a card anyway → test failed, the
-    // orphaned entry produced a row.
     @Test
     fun `a calendar entry with no library title is dropped`() {
         val items = listOf(
@@ -448,8 +400,6 @@ class HomeModelTest {
 
     // The entry is on the calendar precisely because something waits, so a reported zero
     // would contradict the rail it sits on.
-    // Mutation applied to verify: dropped the `coerceAtLeast(1)` → test failed, the badge
-    // read "0 waiting".
     @Test
     fun `a backlog entry always claims at least one waiting episode`() {
         val row = backlog(
@@ -465,8 +415,6 @@ class HomeModelTest {
     private val today = LocalDate(2026, 8, 11)
 
     // Backlog dates point backwards and would sort to the wrong end of a countdown.
-    // Mutation applied to verify: removed the `!it.available` filter → test failed, the
-    // watchable-now entry appeared on the upcoming strip.
     @Test
     fun `an already-watchable item is not something coming up`() {
         // Both dated inside the window, so only the availability check can separate them —
@@ -479,8 +427,6 @@ class HomeModelTest {
         assertEquals(listOf("Soon"), comingUp(items, today).map { it.title })
     }
 
-    // Mutation applied to verify: widened the window to `days >= 0` → test failed, the entry
-    // three weeks out appeared on a strip headed "this week".
     @Test
     fun `only the next week counts as coming up`() {
         val items = listOf(
@@ -493,7 +439,6 @@ class HomeModelTest {
         assertEquals(listOf("Today", "In A Week"), comingUp(items, today).map { it.title })
     }
 
-    // Mutation applied to verify: sorted by title alone → test failed, the later date led.
     @Test
     fun `coming up is ordered soonest first`() {
         val items = listOf(
@@ -506,8 +451,6 @@ class HomeModelTest {
 
     // ── greetingFor ─────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: shifted the evening band to start at 16 → test failed, 4pm
-    // greeted the viewer with "Good evening".
     @Test
     fun `the greeting follows the hour`() {
         assertEquals("Good morning", greetingFor(8))
@@ -518,8 +461,6 @@ class HomeModelTest {
 
     // ── libraryStats ────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: counted every entry rather than filtering by status → test
-    // failed, the finished title inflated both counters.
     @Test
     fun `stats count each status separately`() {
         val entries = listOf(
@@ -537,8 +478,6 @@ class HomeModelTest {
 
     // A backlog entry is on the calendar *because* something waits, so a reported zero would
     // contradict the rail sitting right below the number.
-    // Mutation applied to verify: dropped the `coerceAtLeast(1)` → test failed, the
-    // uncounted backlog entry contributed nothing.
     @Test
     fun `every backlog entry counts at least one waiting episode`() {
         val items = listOf(
@@ -552,8 +491,6 @@ class HomeModelTest {
 
     // ── buildHomeRails ──────────────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped the `distinct.size < minimumSize` guard → test
-    // failed, the two-title rail survived.
     @Test
     fun `a rail with too few titles is not worth a heading`() {
         val long = rail("long", (1..6).map { media("Long $it") })
@@ -564,8 +501,6 @@ class HomeModelTest {
         assertEquals(listOf("long"), buildHomeRails(listOf(long, short)).map { it.id })
     }
 
-    // Mutation applied to verify: ignored the `ordered` flag → test failed, "Trending now"
-    // was dropped for repeating the personal rail above it and the page lost its fallback.
     @Test
     fun `an ordered rail survives repeating what came before it`() {
         val shared = (1..6).map { media("Shared $it") }
@@ -575,8 +510,6 @@ class HomeModelTest {
         assertEquals(listOf("personal", "trending"), kept.map { it.id })
     }
 
-    // Mutation applied to verify: applied the unseen check to ordered rails only → test
-    // failed, the duplicate membership rail survived.
     @Test
     fun `a membership rail that only repeats earlier titles is dropped`() {
         val shared = (1..6).map { media("Shared $it") }

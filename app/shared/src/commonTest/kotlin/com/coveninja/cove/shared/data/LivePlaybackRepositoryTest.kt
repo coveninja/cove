@@ -43,8 +43,6 @@ private fun repositoryWith(
 
 class LivePlaybackRepositoryTest {
 
-    // Mutation applied to verify: dropped `season` from the streams() call chain
-    // → test failed, season was absent from the query string.
     @Test
     fun `tv stream lookup sends season and episode`() = runTest {
         var captured: HttpRequestData? = null
@@ -59,8 +57,6 @@ class LivePlaybackRepositoryTest {
         assertEquals("7", parameters["episode"])
     }
 
-    // Mutation applied to verify: made playUrl always append season/episode
-    // → test failed, the movie URL carried a stray season parameter.
     @Test
     fun `movie stream lookup omits season and episode`() = runTest {
         var captured: HttpRequestData? = null
@@ -75,8 +71,6 @@ class LivePlaybackRepositoryTest {
         assertEquals(null, parameters["episode"])
     }
 
-    // Mutation applied to verify: reordered playUrl to check infoHash first
-    // → test failed, it produced the hash form for a source that had both.
     @Test
     fun `playUrl prefers a direct url over an info hash`() {
         val repository = repositoryWith()
@@ -91,8 +85,6 @@ class LivePlaybackRepositoryTest {
         assertTrue("hash=" !in url, "direct playback must not carry a hash: $url")
     }
 
-    // Mutation applied to verify: stopped passing source.fileIdx into api.playUrl
-    // → test failed, fileIdx was missing from the query string.
     @Test
     fun `playUrl carries season episode and file index for a torrent`() {
         val repository = repositoryWith()
@@ -108,8 +100,6 @@ class LivePlaybackRepositoryTest {
 
     // A direct URL already points at one file, and the backend's playDirect ignores
     // these, so appending them would only make the registry lookup key noisier.
-    // Mutation applied to verify: made the direct branch forward the coordinates,
-    // `api.playUrl(url = url, season = season, episode = episode)` → test failed.
     @Test
     fun `playUrl omits episode coordinates for a direct url`() {
         val repository = repositoryWith()
@@ -121,8 +111,6 @@ class LivePlaybackRepositoryTest {
         assertTrue("episode=" !in url, "was: $url")
     }
 
-    // Mutation applied to verify: replaced the throw with a return of the base URL
-    // → test failed, no exception was raised.
     @Test
     fun `playUrl rejects a source with nothing to play`() {
         val repository = repositoryWith()
@@ -132,8 +120,6 @@ class LivePlaybackRepositoryTest {
         }
     }
 
-    // Mutation applied to verify: made UnavailablePlaybackRepository return an
-    // empty list instead of throwing → test failed, no exception was raised.
     @Test
     fun `unavailable playback reports why rather than failing later`() = runTest {
         val error = assertFailsWith<IllegalStateException> {

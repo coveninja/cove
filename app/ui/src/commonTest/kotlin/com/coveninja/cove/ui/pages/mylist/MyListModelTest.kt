@@ -96,8 +96,6 @@ class MyListModelTest {
     // The reported bug: marking an episode watched writes a *completed* progress row, which
     // leaves no resume fraction, so the hero fell back to the `Watching` category alone —
     // offering Resume on an episode already finished.
-    // Mutation applied to verify: dropped the `hasSomethingToPlay` term → test failed, the
-    // finished show became the hero again.
     @Test
     fun `the hero skips a title whose last episode is finished`() {
         val rows = listOf(
@@ -115,8 +113,6 @@ class MyListModelTest {
     }
 
     // No hero beats a hero pointing at something that is over.
-    // Mutation applied to verify: returned the most recent row regardless → test failed, the
-    // finished show was offered with nothing left to play.
     @Test
     fun `there is no hero when everything is finished`() {
         val rows = listOf(
@@ -133,15 +129,11 @@ class MyListModelTest {
 
     // A title marked Watching that has never been played is a legitimate offer — the hero
     // says Play rather than Resume.
-    // Mutation applied to verify: required a non-null `watchFraction` → test failed, the
-    // untouched title was skipped and the hero disappeared.
     @Test
     fun `the hero offers a title that has never been started`() {
         assertEquals("Fresh", continueWatching(listOf(row("Fresh")))?.displayTitle)
     }
 
-    // Mutation applied to verify: dropped the category filter → test failed, a part-watched
-    // Watch Later title displaced the show actually being watched.
     @Test
     fun `the hero only considers the watching category`() {
         val rows = listOf(
@@ -153,7 +145,6 @@ class MyListModelTest {
         assertEquals("Watching Now", continueWatching(rows)?.displayTitle)
     }
 
-    // Mutation applied to verify: used `minByOrNull` → test failed, the stalest title led.
     @Test
     fun `the hero picks the most recently watched of the candidates`() {
         val rows = listOf(
@@ -164,8 +155,6 @@ class MyListModelTest {
         assertEquals("Fresh", continueWatching(rows)?.displayTitle)
     }
 
-    // Mutation applied to verify: dropped the `descending` branch so the comparator was
-    // always ascending → test failed, the oldest title came first.
     @Test
     fun `recently added sorts newest first and flips on demand`() {
         val rows = listOf(
@@ -186,8 +175,6 @@ class MyListModelTest {
 
     // A blank date is not "the oldest" — the backend simply never recorded one, and
     // flipping the order should not parade those titles first.
-    // Mutation applied to verify: treated "" as a sortable value instead of partitioning
-    // it out → test failed, Undated led the ascending list.
     @Test
     fun `titles with no added date sort last in both directions`() {
         val rows = listOf(
@@ -211,8 +198,6 @@ class MyListModelTest {
         )
     }
 
-    // Mutation applied to verify: fell back to addedAt instead of updatedAt → test failed,
-    // the title watched yesterday ranked below one added later but never played.
     @Test
     fun `recently watched falls back to the updated timestamp`() {
         val rows = listOf(
@@ -227,8 +212,6 @@ class MyListModelTest {
         )
     }
 
-    // Mutation applied to verify: dropped the title tiebreaker → test failed
-    // intermittently, two titles sharing a date came back in input order.
     @Test
     fun `titles sharing a sort key are ordered by name`() {
         val rows = listOf(
@@ -242,8 +225,6 @@ class MyListModelTest {
         )
     }
 
-    // Mutation applied to verify: used a case-sensitive contains → test failed on the
-    // lowercase query.
     @Test
     fun `search matches case-insensitively and ignores surrounding space`() {
         val rows = listOf(row("Breaking Bad"), row("Better Call Saul"))
@@ -259,8 +240,6 @@ class MyListModelTest {
         )
     }
 
-    // Mutation applied to verify: ORed the category and type filters instead of ANDing
-    // them → test failed, a finished movie survived a "watching series" filter.
     @Test
     fun `category and type filters both have to pass`() {
         val rows = listOf(
@@ -277,8 +256,6 @@ class MyListModelTest {
         assertEquals(listOf("Watched series"), titles(filtered))
     }
 
-    // Mutation applied to verify: counted the filtered list rather than every row → test
-    // failed, the pills reported one entry per category regardless of the library.
     @Test
     fun `category counts cover every saved title`() {
         val rows = listOf(
@@ -295,9 +272,6 @@ class MyListModelTest {
 
     // A series carries a full first-air date and a movie only a year, so the series key
     // has to be truncated or every series outranks a movie from the same year.
-    // Mutation applied to verify: compared the series' full date against the movie's bare
-    // year → test failed, the 2011 series jumped above the 2011 movie instead of tying
-    // and falling back to the title.
     @Test
     fun `release year compares movies and series on the same scale`() {
         val rows = listOf(
@@ -313,8 +287,6 @@ class MyListModelTest {
         )
     }
 
-    // Mutation applied to verify: returned null only for a null input, letting a rating of
-    // 0.0 sort as "unrated" → test failed, the unrated title outranked the rated one.
     @Test
     fun `unrated titles sort after rated ones`() {
         val rows = listOf(
@@ -329,8 +301,6 @@ class MyListModelTest {
         )
     }
 
-    // Mutation applied to verify: built the marker from lastAired instead of lastWatched
-    // → test failed, the row claimed the viewer was further along than they were.
     @Test
     fun `the episode marker reports where the viewer stopped`() {
         val watched = row("Show", lastWatchedSeason = 3, lastWatchedEpisode = 7)
@@ -338,8 +308,6 @@ class MyListModelTest {
         assertNull(row("Movie").episodeMarker)
     }
 
-    // Mutation applied to verify: always appended the year → test failed, a date in the
-    // current year read "12 Aug 2026".
     @Test
     fun `short dates name the year only when it is not this one`() {
         val today = LocalDate.parse("2026-08-10")
@@ -349,8 +317,6 @@ class MyListModelTest {
         assertEquals("1 Feb", shortDateLabel("2026-02-01", today))
     }
 
-    // Mutation applied to verify: returned the raw string on a parse failure → test
-    // failed, "not a date" appeared where a date belongs.
     @Test
     fun `an unreadable timestamp produces no label at all`() {
         val today = LocalDate.parse("2026-08-10")
@@ -360,8 +326,6 @@ class MyListModelTest {
         assertNull(shortDateLabel(null, today))
     }
 
-    // Mutation applied to verify: dropped the shortViewport term → the landscape-phone case
-    // started reporting "pinned" and that assertion failed.
     @Test
     fun `filters pin only where there is height to spare`() {
         // Desktop and tablet: room for them, and a filter stays one click away.
@@ -385,7 +349,6 @@ class MyListModelTest {
     fun `an empty list keeps its filters reachable everywhere`() {
         // Otherwise a filter that hides every row also scrolls away the control that clears it,
         // and there are no rows left to scroll it back with.
-        // Mutation check: dropping the listEmpty term fails both of these.
         assertTrue(
             shouldPinListFilters(compactWidth = true, shortViewport = false, listEmpty = true),
         )

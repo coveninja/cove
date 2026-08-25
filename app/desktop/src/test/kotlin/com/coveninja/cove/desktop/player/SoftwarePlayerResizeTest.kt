@@ -18,8 +18,6 @@ class SoftwarePlayerResizeTest {
 
     // The original used a single `w != x || h != y` expression, whose
     // short-circuit meant a changed width skipped the height store entirely.
-    // Mutation applied to verify: restored the short-circuiting form → test
-    // failed with height stuck at 720.
     @Test
     fun `changing both dimensions stores both`() {
         val player = player()
@@ -33,8 +31,6 @@ class SoftwarePlayerResizeTest {
 
     // The case the short-circuit hid: width differs, height differs, and the
     // width comparison alone is enough to satisfy the condition.
-    // Mutation applied to verify: restored the short-circuiting form → test
-    // failed, the height was still 1080.
     @Test
     fun `a width-only comparison still stores the new height`() {
         val player = player()
@@ -45,8 +41,6 @@ class SoftwarePlayerResizeTest {
         assertEquals(2560 to 1081, player.renderSize)
     }
 
-    // Mutation applied to verify: dropped the coerceIn → test failed, a zero
-    // dimension reached mpv and the render buffer would have been empty.
     @Test
     fun `degenerate sizes are clamped to something renderable`() {
         val player = player()
@@ -56,8 +50,6 @@ class SoftwarePlayerResizeTest {
         assertEquals(1 to 1, player.renderSize)
     }
 
-    // Mutation applied to verify: raised the upper clamp → test failed; an
-    // enormous surface would allocate a buffer of width * height * 4 bytes.
     @Test
     fun `absurd sizes are capped`() {
         val player = player()

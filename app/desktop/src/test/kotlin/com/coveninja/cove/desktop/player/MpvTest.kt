@@ -93,8 +93,6 @@ class MpvTest {
      * parsed" while the test stayed green. Hence the size assertion below is
      * exact: three arguments, whatever the resume point.
      */
-    // Mutation applied to verify: appended the start option again → test failed
-    // on the argument count.
     @Test
     fun `loadfile is always three arguments`() {
         assertEquals(3, mpvLoadFileArgs("file.mkv").size)
@@ -104,23 +102,17 @@ class MpvTest {
         )
     }
 
-    // Mutation applied to verify: returned "0" unconditionally → test failed,
-    // the resume point was dropped.
     @Test
     fun `a resume point becomes the start option`() {
         assertEquals("90", mpvStartOption(90.0))
     }
 
-    // Mutation applied to verify: dropped the `> 0.0` guard so negatives passed
-    // through → test failed with "-5" instead of "0".
     @Test
     fun `no resume point starts at the beginning`() {
         assertEquals("0", mpvStartOption(0.0))
         assertEquals("0", mpvStartOption(-5.0))
     }
 
-    // Mutation applied to verify: switched toLong() to the raw double → test
-    // failed with "90.7".
     @Test
     fun `fractional resume points truncate to whole seconds`() {
         assertEquals("90", mpvStartOption(90.7))

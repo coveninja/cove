@@ -17,8 +17,6 @@ class TvMyListSectionsTest {
 
     private val today = LocalDate(2026, 8, 18)
 
-    // Mutation applied to verify: dropped the takeIf { it.isNotEmpty() } → test failed, every
-    // category produced a section and the page drew four headings over nothing.
     @Test
     fun `a category with nothing in it gets no row at all`() {
         val sections = tvMyListSections(
@@ -36,7 +34,6 @@ class TvMyListSectionsTest {
     }
 
     // The order is the phone's, so the two screens do not disagree about which pile comes first.
-    // Mutation applied to verify: reversed the category iteration → test failed.
     @Test
     fun `categories keep the order the rest of the app uses`() {
         val sections = tvMyListSections(
@@ -59,8 +56,6 @@ class TvMyListSectionsTest {
     // The one that fails quietly. An available entry's date points backwards — often by months —
     // so grouping it by day as well would list it twice, with the second copy filed under a date
     // far enough in the past that nobody scrolls to it.
-    // Mutation applied to verify: passed the unfiltered items to groupByDay → test failed, the
-    // available title appeared in a day section too.
     @Test
     fun `a watchable entry appears once and never under its air date`() {
         val available = item(id = "waiting", date = "2026-06-01", available = true)
@@ -79,8 +74,6 @@ class TvMyListSectionsTest {
         assertTrue(sections.first() is TvMyListSection.Available)
     }
 
-    // Mutation applied to verify: emitted the Available section unconditionally → test failed,
-    // an empty "Ready to watch" row was drawn with no cards under it.
     @Test
     fun `with nothing waiting the calendar is only its day sections`() {
         val sections = tvMyListSections(

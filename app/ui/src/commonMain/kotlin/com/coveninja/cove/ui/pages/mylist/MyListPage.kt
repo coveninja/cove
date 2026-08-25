@@ -88,9 +88,7 @@ fun MyListPage(
         is LibraryState.Ready -> {
             val actions = rememberMediaActions(index)
 
-            // Enrich each library entry with the fuller domain object from the
-            // cross-page catalog (home/explore/search), falling back to the thin
-            // library-row version when no richer record is cached yet.
+            // Prefer richer cached catalog media over the library-row fallback.
             val rows = remember(state, catalog, index, progress) {
                 state.entries.mapNotNull { entry ->
                     val media = catalog.enrich(entry)
@@ -137,15 +135,10 @@ private fun MyListReady(
 ) {
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     var view by remember { mutableStateOf(MyListView.Library) }
-    // Owned here rather than inside the calendar so a trip to the Library tab does not
-    // silently unfold everything the viewer collapsed.
+    // Preserve collapsed calendar groups across tab changes.
     val sections = rememberCalendarSections()
 
     Column(modifier = modifier.fillMaxSize()) {
-        // The switch sits beside the title where there is room and beneath it where there
-        // is not; on a phone the two together are wider than the screen.
-        // A landscape phone has ~411.dp of height for everything; the title block's breathing
-        // room is the first thing that has to give.
         val shortViewport = PageLayoutDefaults.Viewport.isShort
         BoxWithConstraints(
             modifier = Modifier
@@ -249,14 +242,12 @@ private fun LibraryView(
     val counts = remember(rows) { categoryCounts(rows) }
     val visible = remember(rows, filters) { applyFilters(rows, filters) }
 
-    // A title removed while ticked must not stay ticked, or a later bulk action would
-    // reach for something that no longer exists.
+    // Drop selections for titles removed from the library.
     LaunchedEffect(rows) { selection.retainAll(rows.map { it.id }.toSet()) }
 
     val hero = remember(rows) { continueWatching(rows) }
 
-    // Only the layout on screen has a meaningful scroll position; reading both would let
-    // the other one's stale offset keep the button up after a layout switch.
+    // Read scroll state only from the visible layout.
     val scrolled by remember {
         derivedStateOf {
             when (layout) {
@@ -273,16 +264,8 @@ private fun LibraryView(
         selection.clear()
     }
 
-    // The pills and the toolbar come to roughly 180.dp — a fifth of a portrait phone and most
-    // of a landscape one, permanently, before a single title is visible. A desktop window has
-    // the room and wants them pinned so a filter is always one click away; a phone scrolls them
-    // away with the content, the way Explore's shelves layout already does with its toolbar.
-    // An empty list is the exception: the controls have to stay put, or a filter that hides
-    // everything also hides the way to clear it.
-    //
-    // Height matters as much as width here. A phone in landscape is ~914.dp wide, so it is not
-    // "compact" by width at all, yet it has only ~411.dp of height to spend — the case where a
-    // pinned header leaves nothing visible. isShort is exactly that viewport.
+    // Let headers scroll on compact or short screens, except when an empty result needs
+    // the filters to remain available.
     val pinFilters = shouldPinListFilters(
         compactWidth = PageLayoutDefaults.IsCompact,
         shortViewport = PageLayoutDefaults.Viewport.isShort,
@@ -346,8 +329,6 @@ private fun LibraryView(
                         )
                     }
                 }
-                // The list's own contentPadding supplies the gutter here, so these carry only
-                // vertical spacing — padding them horizontally again would double the inset.
                 val headerContent: (@Composable () -> Unit)? = if (pinFilters) {
                     heroContent
                 } else {
@@ -434,9 +415,7 @@ private fun LibraryView(
                 MyListSelectionBar(
                     count = selection.count,
                     onMoveTo = { category ->
-                        // Resolved against every row, not the filtered view: changing a
-                        // filter after ticking must not silently drop titles from the
-                        // action the viewer is about to confirm.
+                        // Resolve bulk actions against the full library, not the filtered view.
                         selection.selected
                             .mapNotNull { id -> rows.firstOrNull { it.id == id } }
                             .forEach { actions.setListCategory(it.media, category) }
@@ -471,8 +450,6 @@ private fun CalendarView(
     var month by remember { mutableStateOf(today.yearMonth) }
     val listState = rememberLazyListState()
 
-    // The repository decides whether this actually costs anything: it serves the cache
-    // until the library changes or the window lapses.
     LaunchedEffect(Unit) { graph.calendar.refresh(force = false) }
 
     when (val state = calendarState) {
@@ -506,7 +483,6 @@ private fun CalendarView(
                     available = available,
                     days = days,
                     today = today,
-                    // Backlog belongs to now, not to whichever month is being browsed.
                     showAvailable = month == today.yearMonth,
                     sections = sections,
                     state = listState,

@@ -13,8 +13,7 @@ class TorrentFileAvailabilityTest {
 
     /**
      * The read side must keep looking until libtorrent has actually created the
-     * file. Mutation check: dropping the polling loop and returning after the
-     * first probe leaves probes == 1 and fails this.
+     * file.
      */
     @Test
     fun `waits until the file appears`() = runTest {
@@ -32,8 +31,7 @@ class TorrentFileAvailabilityTest {
 
     /**
      * A file that never arrives has to end the read rather than hang the
-     * response forever. Mutation check: removing withTimeout makes this loop
-     * until the test framework gives up instead of throwing.
+     * response forever.
      */
     @Test
     fun `gives up when the file never appears`() = runTest {

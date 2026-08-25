@@ -15,8 +15,7 @@ val generateCoveConfig by tasks.registering {
         "PLUGIN_CATALOG_API_BASE",
     )
     val values = keys.associateWith { providers.environmentVariable(it).orElse("") }
-    // Captured as locals so the doLast lambda holds plain values and Providers rather than a
-    // reference to this build script — the configuration cache cannot serialize the latter.
+    // Avoid capturing the non-serializable build script in doLast.
     val version = coveVersion
     val outputDir = generatedCoveConfig
     inputs.property("COVE_VERSION", version)
@@ -65,18 +64,11 @@ dependencies {
     implementation(project(":shared"))
     implementation(project(":ui"))
     implementation(compose.desktop.currentOs)
-    // The backend-gate screens shown before :ui takes over (starting / failed /
-    // update-pending) need Material widgets in this module directly.
+    // Used by backend-gate screens before :ui takes over.
     implementation(compose.material3)
-    // Swing dispatcher integration — required so Compose Desktop coroutines land
-    // on the right thread after process events.
     implementation(libs.kotlinx.coroutines.swing)
-    // Core coroutines used by the backend supervisor package.
     implementation(libs.kotlinx.coroutines.core)
-    // mpv reports its track list as a JSON string property; parsing it is the
-    // only place this module needs serialization.
     implementation(libs.kotlinx.serialization.json)
-    // In-process libmpv via JNA.
     implementation(libs.jna)
     // JOGL for the OpenGL render path — GLJPanel composites as Swing pixels so
     // it z-orders and clips correctly inside Compose Desktop's SwingPanel.
@@ -104,9 +96,7 @@ dependencies {
 
 compose.desktop {
     application {
-        // Compose's run/jlink/jpackage tasks otherwise use the JVM that happens
-        // to run Gradle. Iconify and Cove target Java 21, so pin the actual app
-        // launcher and bundled runtime to the same provisioned toolchain.
+        // Pin the launcher and bundled runtime to the provisioned Java 21 toolchain.
         javaHome = desktopJava.get().metadata.installationPath.asFile.absolutePath
         mainClass = "com.coveninja.cove.desktop.MainKt"
         nativeDistributions {
@@ -124,10 +114,7 @@ compose.desktop {
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)
             packageName    = "Cove"
             packageVersion = coveVersion
-            // The same mark the Windows installer, the Flatpak and the README already use.
-            // jpackage wants a different container per platform and silently falls back to a
-            // generic Java icon when one is missing, which is what every package shipped until
-            // now. All three are generated from packaging/icons/cove.svg.
+            // jpackage requires a platform-specific icon container.
             val iconDir = rootProject.file("../packaging/icons")
             linux { iconFile.set(iconDir.resolve("cove.png")) }
             windows { iconFile.set(iconDir.resolve("cove.ico")) }
@@ -142,17 +129,8 @@ compose.desktop {
     }
 }
 
-// libtorrent installs its own SIGSEGV handler once a torrent has been added, and
-// that is the handler HotSpot needs: JIT-compiled code omits null tests and lets
-// the CPU fault, then turns the fault into a NullPointerException. With libtorrent
-// owning it, the next null dereference anywhere in the process is fatal — on
-// whichever thread reaches one first, which is why the crash never landed near the
-// torrent code.
-//
-// libjsig is the JDK's answer: it interposes sigaction so both handlers live. It
-// has to be preloaded before the JVM installs its own handlers, though, so it
-// cannot be loaded from inside the app the way the libstdc++ fix is — hence this,
-// on the task that launches the JVM.
+// libtorrent replaces HotSpot's SIGSEGV handler after torrent use. Preload libjsig
+// before the JVM starts so both handlers remain active.
 tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
     val runtime = desktopJava.get().metadata.installationPath.asFile
     val jsig = sequenceOf("lib/libjsig.so", "lib/libjsig.dylib")

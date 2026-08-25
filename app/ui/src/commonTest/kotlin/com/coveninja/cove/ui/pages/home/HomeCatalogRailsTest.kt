@@ -25,9 +25,6 @@ class HomeCatalogRailsTest {
      * Nothing draws catalog rows unless the controller asks the addon repository for them
      * and turns the answer into rails — the wiring between two layers that each have their
      * own tests and no shared one.
-     *
-     * Mutation applied to verify: made `loadCatalogs()` return without launching → test
-     * failed, catalogRails stayed empty.
      */
     @Test
     fun `catalog rails are built from the addon repository`() = runTest {
@@ -61,9 +58,6 @@ class HomeCatalogRailsTest {
     /**
      * Disabling a catalog has to remove its row, which is the whole point of the switch
      * the settings screen now draws.
-     *
-     * Mutation applied to verify: made `FixtureAddonRepository.catalogs()` ignore the
-     * per-catalog enabled flag → test failed, both rails came back.
      */
     @Test
     fun `a disabled catalog contributes no rail`() = runTest {
@@ -81,9 +75,6 @@ class HomeCatalogRailsTest {
      * The stage runs once per session. It is kicked off from a `LaunchedEffect` that
      * re-runs whenever content readiness changes, so a second call has to be a no-op or
      * every one of those would re-resolve every catalog against the metadata provider.
-     *
-     * Mutation applied to verify: removed the `catalogStarted` guard → test failed, the
-     * repository was asked a second time.
      */
     @Test
     fun `the catalog stage runs once`() = runTest {
@@ -103,9 +94,6 @@ class HomeCatalogRailsTest {
      * What HomePage and TvHomePage actually draw: the controller's rails run through
      * `buildHomeRails` alongside Trending. The earlier tests stop at `catalogRails` and
      * would not notice a catalog row that is built correctly and then dropped here.
-     *
-     * Mutation applied to verify: built the catalog rails with `ordered = false` → test
-     * failed, both were dropped as redundant against Trending.
      */
     @Test
     fun `catalog rails survive the rail assembly both shells run`() = runTest {

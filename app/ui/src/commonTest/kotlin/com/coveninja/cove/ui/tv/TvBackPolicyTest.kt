@@ -7,8 +7,6 @@ import kotlin.test.assertEquals
 
 class TvBackPolicyTest {
 
-    // Mutation applied to verify: moved the detailsOpen branch above fullscreenPlayback →
-    // test failed, Back closed the sheet behind the player instead of the player.
     @Test
     fun `back closes the topmost layer first`() {
         assertEquals(
@@ -31,8 +29,6 @@ class TvBackPolicyTest {
     // The step the phone does not have. Back from content lands in navigation rather than
     // jumping the viewer somewhere else entirely, which is also what stops the next press
     // from being an accidental exit.
-    // Mutation applied to verify: dropped the !railFocused branch → test failed, Back from
-    // Explore content went straight Home.
     @Test
     fun `back out of content goes to the rail before it goes anywhere else`() {
         assertEquals(
@@ -45,8 +41,6 @@ class TvBackPolicyTest {
         )
     }
 
-    // Mutation applied to verify: returned None for every destination once the rail had focus
-    // → test failed, Back from Explore's rail no longer reached Home.
     @Test
     fun `from the rail back returns home and only then leaves`() {
         assertEquals(
@@ -62,8 +56,6 @@ class TvBackPolicyTest {
     // Only reachable from Home with navigation already focused — three deliberate presses from
     // anywhere in content. None is what hands Back to the system, which closes Cove; a
     // television remote's Back sits under the thumb and a one-press exit is a real annoyance.
-    // Mutation applied to verify: made the Home case return GoHome → test failed, the app
-    // could never be left at all.
     @Test
     fun `leaving the app takes the whole walk outward`() {
         assertEquals(
@@ -75,7 +67,6 @@ class TvBackPolicyTest {
     // Left off the page's edge is the one move focus search cannot make on its own — the rail
     // is a sibling subtree over the page's gutter, not a neighbour inside the page — so it
     // reported failure and focus was left nowhere at all.
-    // Mutation applied to verify: returned false for every direction → test failed.
     @Test
     fun `left off the edge of a page hands focus to the rail`() {
         assertEquals(
@@ -88,8 +79,6 @@ class TvBackPolicyTest {
         )
     }
 
-    // Mutation applied to verify: dropped the direction check → test failed, every dead end in
-    // the page threw focus sideways into navigation.
     @Test
     fun `the other three directions stop at the edge as they should`() {
         listOf(TvDirection.Right, TvDirection.Up, TvDirection.Down).forEach { direction ->
@@ -107,7 +96,6 @@ class TvBackPolicyTest {
 
     // Repeating Left inside navigation would otherwise keep re-requesting the selected
     // destination's button, pinning focus there however far the viewer had walked down the rail.
-    // Mutation applied to verify: dropped the railFocused check → test failed.
     @Test
     fun `left inside the rail does not re-grab the selected destination`() {
         assertEquals(
@@ -122,7 +110,6 @@ class TvBackPolicyTest {
 
     // While a title or the player owns the screen the rail is behind them and unreachable by
     // design; Back is the way out. Reaching for it here would focus something invisible.
-    // Mutation applied to verify: dropped the pageReachable check → test failed.
     @Test
     fun `left behind an open title does not reach the rail underneath`() {
         assertEquals(
@@ -137,8 +124,6 @@ class TvBackPolicyTest {
 
     // Closing a layer removes the node that held focus and Compose hands it nowhere, which on
     // a device with no pointer leaves the whole interface dead. The page has to reclaim it.
-    // Mutation applied to verify: returned !overlayOpen alone → test failed, the page grabbed
-    // focus at startup and fought the destination for it.
     @Test
     fun `the page reclaims focus only after a layer that was open has closed`() {
         assertEquals(
@@ -152,8 +137,6 @@ class TvBackPolicyTest {
         )
     }
 
-    // Mutation applied to verify: dropped the !overlayOpen check → test failed, the page pulled
-    // focus out from under an open title.
     @Test
     fun `nothing is reclaimed while a layer is still on screen`() {
         assertEquals(

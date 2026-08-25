@@ -13,16 +13,12 @@ import kotlin.test.assertTrue
  */
 class PlaybackStartTest {
 
-    // Mutation applied to verify: returned true whenever a status existed → test failed,
-    // which is the bar live over the "finding the first pieces" stage.
     @Test
     fun `a file that has not opened has not started`() {
         assertFalse(playbackHasStarted(PlaybackStatus(hasMedia = false)))
     }
 
     // The reported case: opened, but still filling its first buffer.
-    // Mutation applied to verify: dropped the waitingForData term → test failed, so the
-    // controls would have come alive during the opening stall.
     @Test
     fun `an open file still filling its buffer has not started`() {
         assertFalse(
@@ -30,9 +26,6 @@ class PlaybackStartTest {
         )
     }
 
-    // Mutation applied to verify: required !paused as well → test failed, and a title that
-    // opens paused — a resumed one, or one paused before the first frame — would have had
-    // controls that could never be used to start it.
     @Test
     fun `media plus a buffer that is not empty has started`() {
         assertTrue(

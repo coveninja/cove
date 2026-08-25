@@ -96,8 +96,6 @@ class LiveAddonRepositoryTest {
 
     // The UI only models part of the backend payload; ignoreUnknownKeys has to
     // carry the rest (resources, catalogs, scraper code) without failing.
-    // Mutation applied to verify: renamed the `kind` property so it no longer
-    // matched the wire name → test failed on the decoded kind.
     @Test
     fun `addon and scraper payloads decode into the client models`() = runTest {
         val recorder = Recorder()
@@ -120,8 +118,6 @@ class LiveAddonRepositoryTest {
     // runs. Without that, the init GET satisfies this assertion on its own and the
     // test passes even with mutate's reload deleted — which is exactly what an
     // earlier version of it did.
-    // Mutation applied to verify: dropped the reload() from mutate → test failed,
-    // only the POST was recorded.
     @Test
     fun `adding an addon refetches rather than guessing the result`() = runTest {
         val recorder = Recorder()
@@ -136,8 +132,6 @@ class LiveAddonRepositoryTest {
         assertEquals(listOf(HttpMethod.Post, HttpMethod.Get, HttpMethod.Get), methods)
     }
 
-    // Mutation applied to verify: removed the trim() → test failed, the pasted
-    // URL kept its surrounding whitespace.
     @Test
     fun `a pasted url is trimmed before it is sent`() = runTest {
         val recorder = Recorder()
@@ -156,8 +150,6 @@ class LiveAddonRepositoryTest {
 
     // A bad manifest URL is ordinary user input; it must surface next to the field
     // rather than propagate as an exception.
-    // Mutation applied to verify: rethrew from mutate instead of recording
-    // → test failed with the exception escaping runTest.
     @Test
     fun `a rejected addon reports through lastError`() = runTest {
         val client = HttpClient(MockEngine {
@@ -178,8 +170,6 @@ class LiveAddonRepositoryTest {
 
     // Nuvio is optional on the backend; losing it must not blank the addon list,
     // which is the part that makes playback work.
-    // Mutation applied to verify: dropped the runCatching around nuvioRepos()
-    // → test failed, the whole state went Failed.
     @Test
     fun `a failing nuvio endpoint still yields the addon list`() = runTest {
         val client = HttpClient(MockEngine { request ->

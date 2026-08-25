@@ -13,8 +13,6 @@ class SeekChunksTest {
 
     // The pieces are laid out with weights, so any hole or overlap shows up as a
     // bar that does not reach its own end.
-    // Mutation applied to verify: dropped the trailing `cursor < duration` chunk
-    // → test failed, the pieces stopped at 90 instead of 600.
     @Test
     fun `chunks tile the whole duration without gaps`() {
         val chunks = seekChunks(
@@ -29,8 +27,6 @@ class SeekChunksTest {
         }
     }
 
-    // Mutation applied to verify: emitted only the labelled segments → test
-    // failed, the unlabelled stretches were missing.
     @Test
     fun `the space between segments becomes its own piece`() {
         val chunks = seekChunks(
@@ -49,8 +45,6 @@ class SeekChunksTest {
 
     // Providers do supply overlapping ranges; two pieces claiming the same
     // stretch would render on top of each other.
-    // Mutation applied to verify: removed the `end <= cursor` skip and the
-    // `maxOf(start, cursor)` trim → test failed with overlapping pieces.
     @Test
     fun `overlapping segments are trimmed rather than stacked`() {
         val chunks = seekChunks(
@@ -71,8 +65,6 @@ class SeekChunksTest {
         assertEquals(100.0, chunks[1].startSeconds)
     }
 
-    // Mutation applied to verify: removed the coerceIn clamps → test failed, a
-    // piece ran past the end of the bar.
     @Test
     fun `segments beyond the duration are clamped`() {
         val chunks = seekChunks(
@@ -97,8 +89,6 @@ class SeekChunksTest {
     // zero-length segment reaching the layout is a crash rather than a cosmetic
     // problem. An earlier version of this suite never fed one in, and removing the
     // filter went unnoticed.
-    // Mutation applied to verify: dropped the `end > start` filter → test failed
-    // with an extra zero-length piece.
     @Test
     fun `zero-length segments never reach the layout`() {
         val chunks = seekChunks(
@@ -127,9 +117,6 @@ class SeekChunksTest {
 
     // ── Per-piece fill, shared by the played and buffered layers ─────────────
 
-    // Mutation applied to verify: measured from zero rather than from the piece's
-    // own start → test failed at 1.0, and every piece behind the playhead would
-    // have been drawn full regardless of where the playhead was inside it.
     @Test
     fun `a piece fills in proportion to how far into it the mark is`() {
         val chunk = SeekChunk(startSeconds = 100.0, endSeconds = 200.0, kind = null)
@@ -138,8 +125,6 @@ class SeekChunksTest {
         assertEquals(0.5f, chunk.fillFraction(150.0))
     }
 
-    // Mutation applied to verify: removed the coerceIn → test failed at -1.0 and
-    // 2.0, which Modifier.fillMaxWidth rejects outright.
     @Test
     fun `a mark outside the piece clamps rather than running past it`() {
         val chunk = SeekChunk(startSeconds = 100.0, endSeconds = 200.0, kind = null)
@@ -150,7 +135,6 @@ class SeekChunksTest {
 
     // The buffered layer is fed a polled value that is briefly absent, and NaN
     // reaching fillMaxWidth is a crash rather than a wrong-looking bar.
-    // Mutation applied to verify: dropped the isFinite guard → test failed with NaN.
     @Test
     fun `a non-finite mark fills nothing`() {
         val chunk = SeekChunk(startSeconds = 0.0, endSeconds = 100.0, kind = null)
@@ -165,8 +149,6 @@ class SeekChunksTest {
 
     // Chapters have a start and no end; the one you are in is the last one to have
     // begun. Searching for a range instead would find nothing.
-    // Mutation applied to verify: used firstOrNull → test failed, every position
-    // past the first chapter still reported chapter one.
     @Test
     fun `the current chapter is the last one to have started`() {
         val chapters = listOf(chapter(0, 0.0), chapter(1, 300.0), chapter(2, 900.0))
@@ -175,8 +157,6 @@ class SeekChunksTest {
         assertEquals(2, chapterAt(1200.0, chapters)?.index)
     }
 
-    // Mutation applied to verify: changed >= to > in chapterAt → test failed,
-    // landing exactly on a chapter boundary reported the previous chapter.
     @Test
     fun `landing exactly on a boundary is inside the new chapter`() {
         val chapters = listOf(chapter(0, 0.0), chapter(1, 300.0))
@@ -185,8 +165,6 @@ class SeekChunksTest {
     }
 
     // A tick on the first pixel is indistinguishable from the end cap of the bar.
-    // Mutation applied to verify: removed the `it > 0.0` filter → test failed with
-    // an extra mark at 0.0.
     @Test
     fun `a chapter starting at zero draws no mark`() {
         val marks = chapterMarks(
@@ -197,8 +175,6 @@ class SeekChunksTest {
         assertEquals(listOf(0.5f), marks)
     }
 
-    // Mutation applied to verify: removed the `it < duration` filter → test failed
-    // with a mark at 1.0 sitting on the far end cap.
     @Test
     fun `a chapter at or past the end draws no mark`() {
         val marks = chapterMarks(
@@ -209,8 +185,6 @@ class SeekChunksTest {
         assertTrue(marks.isEmpty(), "was: $marks")
     }
 
-    // Mutation applied to verify: removed the duration guard → test failed with a
-    // division by zero producing infinite offsets.
     @Test
     fun `no duration yields no chapter marks`() {
         assertTrue(chapterMarks(listOf(chapter(0, 30.0)), durationSeconds = 0.0).isEmpty())

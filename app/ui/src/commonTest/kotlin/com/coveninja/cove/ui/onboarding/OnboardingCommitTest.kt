@@ -31,7 +31,6 @@ class OnboardingCommitTest {
 
     // The single most important guarantee in the whole flow. Without it the first run repeats
     // on every launch forever.
-    // Mutation applied to verify: removed `onboardingDone` from the copy() → test failed.
     @Test
     fun `finishing records that onboarding happened`() = runTest {
         val graph = FixtureAppGraph()
@@ -45,8 +44,6 @@ class OnboardingCommitTest {
     // `--onboarding` exists because `onboardingDone` is OR-merged on every write path in
     // LocalSettingsRepository and can never go back to false. A preview that set it would burn
     // the harness on its first use against a real backend.
-    // Mutation applied to verify: made the copy() set `onboardingDone = true` unconditionally →
-    // test failed, and the second `make onboarding` run would have shown the app instead.
     @Test
     fun `a preview run deliberately leaves the flag alone`() = runTest {
         val graph = FixtureAppGraph()
@@ -59,8 +56,6 @@ class OnboardingCommitTest {
 
     // Everything the viewer chose is still written in preview mode — the point of the harness
     // is to exercise the real thing, not a mock of it.
-    // Mutation applied to verify: skipped the whole commit when `preview` was set → test failed,
-    // and the harness would have silently stopped testing anything.
     @Test
     fun `a preview run still writes every other choice`() = runTest {
         val graph = FixtureAppGraph()
@@ -75,9 +70,6 @@ class OnboardingCommitTest {
     // Settings are a whole-object replace with no server-side merge, so the commit has to copy()
     // from the current value. Constructing a fresh AppSettings would write every field this flow
     // never asked about back to its default.
-    // Mutation applied to verify: replaced the copy() with `AppSettings(onboardingDone = true)` →
-    // test failed; defaultVolume came back as 1.0 having been set to 0.4, and in a real profile
-    // that pattern silently resets thirty-odd settings.
     @Test
     fun `unrelated settings survive the commit`() = runTest {
         val graph = FixtureAppGraph()
@@ -94,8 +86,6 @@ class OnboardingCommitTest {
     // Watch Later rather than Watching: the viewer said these look good, not that they started
     // them. It is also what DiscoveryService reads to build a taste profile, which is the only
     // reason the taste step writes anything.
-    // Mutation applied to verify: wrote LibraryStatus.Watching → test failed. Home's "carry on
-    // watching" rail would have opened on five titles nobody had played.
     @Test
     fun `liked titles land in the library as watch later`() = runTest {
         val graph = FixtureAppGraph()
@@ -111,8 +101,6 @@ class OnboardingCommitTest {
 
     // A series pick must not be stored as a film. The library is keyed on (tmdbId, mediaType)
     // and the two vocabularies genuinely collide — the same number is a different title in each.
-    // Mutation applied to verify: hardcoded MediaType.Movie in the commit → test failed, and a
-    // saved series would have shown up as somebody else's movie.
     @Test
     fun `a series pick is stored as a series`() = runTest {
         val graph = FixtureAppGraph()
@@ -126,8 +114,6 @@ class OnboardingCommitTest {
 
     // Un-picking has to actually un-pick. The draft is the only record of the selection, so a
     // toggle that appended twice would save something the viewer removed.
-    // Mutation applied to verify: made togglePick always append → test failed with the entry
-    // present after being deselected.
     @Test
     fun `a title that was picked and unpicked is not written`() = runTest {
         val graph = FixtureAppGraph()
@@ -140,8 +126,6 @@ class OnboardingCommitTest {
         assertEquals(null, graph.entryFor(4242, DomainMediaType.Movie))
     }
 
-    // Mutation applied to verify: dropped the `normalizedProfileName` guard and always renamed →
-    // test failed; the active profile came back named "" and the store had lost the name it had.
     @Test
     fun `a blank profile name leaves the existing profile untouched`() = runTest {
         val graph = FixtureAppGraph()
@@ -154,9 +138,6 @@ class OnboardingCommitTest {
         assertEquals(before, graph.activeProfileName())
     }
 
-    // Mutation applied to verify: called `create` instead of `rename` when a profile was already
-    // active → test failed with two profiles. A fresh install already has a primary profile, so
-    // creating another would leave every device with a spare empty one.
     @Test
     fun `naming the profile renames the active one rather than adding another`() = runTest {
         val graph = FixtureAppGraph()
@@ -173,9 +154,6 @@ class OnboardingCommitTest {
     // The commit wraps each write on its own so one failure cannot cost the others. The library
     // write is the one most likely to fail in the wild — it is per-title and hits the network on
     // a real backend — and it must not be able to take the flag down with it.
-    // Mutation applied to verify: hoisted the whole commit body into a single runCatching → test
-    // failed, because a pick with no resolvable type aborted before the settings write and
-    // onboardingDone was never recorded.
     @Test
     fun `a pick that cannot be stored does not cost the rest of the commit`() = runTest {
         val graph = FixtureAppGraph()

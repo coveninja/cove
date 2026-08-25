@@ -10,8 +10,7 @@ class StreamSizeTest {
     // The reason the 💾 marker is tried before the bare pattern. Release names
     // carry sizes of their own, and the one the provider put behind the marker
     // is the file being offered — the one in the name is whatever the encoder
-    // felt like mentioning. Mutation applied to verify: dropped the MARKED_SIZE
-    // attempt → returned 2 GiB, the size in the release name, not 12.4 GiB.
+    // felt like mentioning.
     @Test
     fun `the marked size wins over one written into the release name`() {
         val title = "Movie.Name.2019.1080p.BluRay.x264-GRP [2GB]\n👤 51 💾 12.4 GB ⚙️ 1337x"
@@ -30,8 +29,7 @@ class StreamSizeTest {
     }
 
     // The form Nuvio scrapers hand over in their own size field, which shares
-    // this parser and predates the marker. Mutation applied to verify: dropped
-    // the BARE_SIZE fallback → both returned 0.
+    // this parser and predates the marker.
     @Test
     fun `a plain size with no marker still parses`() {
         assertEquals(gib, humanSizeToBytes("1 GB"))
@@ -39,8 +37,7 @@ class StreamSizeTest {
     }
 
     // Callers use `> 0` to decide whether a size is known at all, so a miss has
-    // to stay a miss. Mutation applied to verify: made the no-match branch
-    // return 1 → failed.
+    // to stay a miss.
     @Test
     fun `text with no size at all yields zero`() {
         assertEquals(0, humanSizeToBytes("The.Matrix.1999.2160p.x265"))

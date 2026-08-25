@@ -279,10 +279,6 @@ class CoreRoutesTest {
      * [AddonCatalogService]. What is worth pinning here is the contract the old inline
      * version had and a delegating one could quietly lose: which catalogs are offered as
      * rows, and that `nextSkip` counts source entries rather than surviving ones.
-     *
-     * Mutation applied to verify: made the /catalog route respond
-     * `AddonCatalogPage(medias, skip + medias.size)` from the service's own medias →
-     * test failed with next_skip 2 rather than 3.
      */
     @Test
     fun addonCatalogRoutesListAndPageThroughACatalog() {

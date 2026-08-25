@@ -74,9 +74,7 @@ import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.shared.model.Media as DomainMedia
 import com.coveninja.cove.shared.model.MediaType as DomainMediaType
 
-// The sections that are too big to sit inline in InsightsTab, plus the small shared pieces
-// they lean on. Split by size rather than by kind — the page reads top to bottom in
-// InsightsTab.kt, and anything long enough to obscure that shape lives here instead.
+// Larger Insights sections and their shared UI pieces.
 
 // ── Hero ─────────────────────────────────────────────────────────────────────
 
@@ -97,9 +95,6 @@ internal fun InsightsHero(
     val accent = MaterialTheme.colorScheme.tertiary
     val delta = yearOverYearDelta(activity.thisYearSeconds, activity.lastYearSeconds)
     val counted = rememberCountUp(activity.totalSeconds)
-    // A long, shallow drift. The glow is meant to be noticed only if you look for it —
-    // fast enough to see and the panel becomes something that moves rather than something
-    // that reads.
     val drift = rememberDrift(durationMillis = 16_000, label = "HeroGlow")
 
     Surface(
@@ -120,8 +115,6 @@ internal fun InsightsHero(
                     ),
                 )
                 .drawBehind {
-                    // Painted behind the content and clipped by the Surface, so the glow
-                    // reads as light under the panel rather than as a shape on it.
                     drawRect(
                         brush = Brush.radialGradient(
                             colors = listOf(accent.copy(alpha = 0.20f), Color.Transparent),
@@ -151,9 +144,6 @@ internal fun InsightsHero(
                 ) {
                     Text(
                         text = formatWatchDuration(counted),
-                        // A gradient fill rather than a flat accent. At display size a solid
-                        // block of one colour looks printed on; the shift across the glyphs
-                        // is what makes the number read as the lit part of the panel.
                         style = (
                             if (compact) {
                                 MaterialTheme.typography.headlineMedium
@@ -172,16 +162,12 @@ internal fun InsightsHero(
                         ),
                         maxLines = 1,
                     )
-                    // The counting number changes width as it climbs. Pushing the badge to
-                    // the far edge keeps it still while that happens, instead of letting it
-                    // jitter along beside the digits.
+                    // Keep the badge stable while the count-up changes the number's width.
                     Spacer(modifier = Modifier.weight(1f))
                     delta?.let { DeltaPill(it, thisYear - 1) }
                 }
                 Text(
-                    // titlesThisYear is scoped to whatever range is selected — the wire name
-                    // predates the range control. Using totalTitles here would pair a single
-                    // year's hours with an all-time title count.
+                    // Despite its wire name, titlesThisYear follows the selected range.
                     text = "across ${activity.titlesThisYear} " +
                         if (activity.titlesThisYear == 1) "title" else "titles",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -208,8 +194,6 @@ private fun DeltaPill(delta: YearDelta, comparedYear: Int) {
     }
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val entrance = remember { Animatable(if (reducedMotion) 1f else 0f) }
-    // Deliberately delayed past the count-up. Arriving with the number would make the two
-    // compete; arriving after it reads as the verdict on a figure you have just taken in.
     LaunchedEffect(reducedMotion) {
         if (reducedMotion) {
             entrance.snapTo(1f)
@@ -341,10 +325,6 @@ private fun TopTitleCard(
                     ),
                 contentScale = ContentScale.Crop,
             )
-            // The rank is the whole point of the row, so it sits on the artwork rather than
-            // under it where the eye would have to hunt for it. The top three are a podium:
-            // gold, silver and bronze say "first, second, third" before the digit is read,
-            // and everything below fourth is just a number.
             Box(
                 modifier = Modifier
                     .padding(6.dp)
@@ -356,8 +336,6 @@ private fun TopTitleCard(
                 Text(
                     text = rank.toString(),
                     color = if (medal != null) {
-                        // Dark on a bright medal; these are light metallics and white on
-                        // gold is unreadable.
                         Color.Black.copy(alpha = 0.78f)
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -544,8 +522,6 @@ internal fun TasteChips(
                         scaleY = 1f + 0.05f * lift
                     }
                     .clip(CircleShape)
-                    // The resting fill already encodes rank, so hovering adds to it rather
-                    // than replacing it — a weak chip under the pointer stays visibly weak.
                     .background(tone.copy(alpha = 0.08f + 0.16f * chip.weight + 0.14f * lift))
                     .padding(horizontal = 11.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -756,10 +732,7 @@ internal fun SectionEmpty(text: String, modifier: Modifier = Modifier) {
 
 // ── Mappers ──────────────────────────────────────────────────────────────────
 
-// Both of these carry a tmdb id, a wire media type and a poster path, which is exactly
-// enough to build the shared Media the details overlay opens from. Going through the
-// existing domain→UI mapper rather than constructing a UI Media directly keeps the id
-// format and the image-URL rewriting in one place.
+// Use the domain mapper so media ids and image URL rewriting stay consistent.
 
 internal fun ActivityTitle.toDomainMedia(): DomainMedia =
     insightMedia(tmdbId, mediaType, title, posterPath)

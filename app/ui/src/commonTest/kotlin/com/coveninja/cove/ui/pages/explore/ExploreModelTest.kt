@@ -53,8 +53,6 @@ class ExploreModelTest {
 
     // ── buildShelves ────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: dropped the `distinct.size < minimumSize` guard → test
-    // failed, the two-title rail came back in the result.
     @Test
     fun `a rail with too few titles is not worth a heading`() {
         val long = (1..6).map { media("Long $it") }
@@ -70,8 +68,6 @@ class ExploreModelTest {
 
     // A rail that repeats what the page already showed teaches the viewer that scrolling
     // is pointless, however long it is.
-    // Mutation applied to verify: compared against `distinct.size` instead of the unseen
-    // count so only length mattered → test failed, the duplicate rail survived.
     @Test
     fun `a rail that only repeats earlier titles is dropped however long it is`() {
         val shared = (1..8).map { media("Shared $it") }
@@ -88,8 +84,6 @@ class ExploreModelTest {
     // The dedupe is between rails, not between titles: stripping a film from a later rail
     // because an earlier one already had it would hollow it out and, for an ordered rail
     // like "top rated", silently reorder it into something that is no longer top-rated.
-    // Mutation applied to verify: subtracted `seen` from each shelf's media before keeping
-    // it → test failed, the second rail lost its overlapping titles and its ordering.
     @Test
     fun `a title may appear in more than one kept rail`() {
         val overlap = (1..3).map { media("Both $it") }
@@ -109,8 +103,6 @@ class ExploreModelTest {
     // the same films as "Trending" above it. Without this exemption a catalog smaller than
     // a few hundred titles collapses to a single rail — which is exactly what the fixture
     // backend is, so the whole page would look broken with no backend running.
-    // Mutation applied to verify: applied the novelty guard to every kind → test failed,
-    // the top-rated rail was dropped for overlapping with trending.
     @Test
     fun `an ordered rail survives overlapping with the rail above it`() {
         val catalog = (1..8).map { media("Film $it") }
@@ -134,8 +126,6 @@ class ExploreModelTest {
 
     // The exemption is about overlap, not about length: an ordered rail still needs enough
     // titles to fill a row.
-    // Mutation applied to verify: skipped the size guard for ordered rails → test failed,
-    // the three-title top-rated rail was kept.
     @Test
     fun `an ordered rail still has to be long enough`() {
         val kept = buildShelves(
@@ -146,8 +136,6 @@ class ExploreModelTest {
         assertTrue(kept.isEmpty())
     }
 
-    // Mutation applied to verify: dropped the `distinctBy` so a repeated title counted
-    // twice → test failed, a rail of one title repeated six times was kept.
     @Test
     fun `a rail padded with one repeated title does not count as full`() {
         val repeated = List(6) { media("Same") }
@@ -161,8 +149,6 @@ class ExploreModelTest {
 
     // The hero is a wide image with text over it; a poster-only title renders as a
     // stretched smear behind unreadable copy.
-    // Mutation applied to verify: removed the backdrop filter → test failed, the title
-    // with no backdrop was picked.
     @Test
     fun `the spotlight never picks a title with no backdrop`() {
         val picks = spotlightPicks(
@@ -177,8 +163,6 @@ class ExploreModelTest {
         assertEquals(listOf("Fine"), titles(picks))
     }
 
-    // Mutation applied to verify: dropped `distinctBy` → test failed, the same title
-    // appeared twice and the rotation would have shown it back to back.
     @Test
     fun `the spotlight shows each title at most once and honours its cap`() {
         val repeated = listOf(media("A"), media("A"), media("B"), media("C"), media("D"))
@@ -190,8 +174,6 @@ class ExploreModelTest {
 
     // ── applyQuery ──────────────────────────────────────────────────────────
 
-    // Mutation applied to verify: matched only `title` and not `name` → test failed, the
-    // series (which carries its title in `name`) was filtered out.
     @Test
     fun `the query matches either title field, ignoring case`() {
         val items = listOf(
@@ -209,8 +191,6 @@ class ExploreModelTest {
 
     // The catalog already ranked these; re-sorting by match quality would fight whichever
     // order the viewer chose in the toolbar.
-    // Mutation applied to verify: sorted matches by title length → test failed, the
-    // shortest title led instead of the catalog's own order.
     @Test
     fun `filtering by query preserves the catalog's order`() {
         val items = listOf(media("Star Wars"), media("Star"), media("A Star Is Born"))
@@ -223,8 +203,6 @@ class ExploreModelTest {
 
     // ── titleCountLabel ─────────────────────────────────────────────────────
 
-    // Mutation applied to verify: always used the plural noun → test failed on the
-    // single-title case, which read "1 titles".
     @Test
     fun `the count label reads naturally and admits when more is reachable`() {
         assertEquals("1 title", titleCountLabel(1, moreAvailable = false))
@@ -236,8 +214,6 @@ class ExploreModelTest {
 
     // TMDB's two vocabularies disagree on ids they both use, so a single flat table would
     // mislabel a large share of all series.
-    // Mutation applied to verify: made nameOf consult one combined map → test failed,
-    // 10765 resolved for films and 878 resolved for series, neither of which is real.
     @Test
     fun `genre ids resolve against the vocabulary for their own format`() {
         assertEquals("Science Fiction", TmdbGenres.nameOf(878, MediaType.Movie))
@@ -254,8 +230,6 @@ class ExploreModelTest {
 
     // An id TMDB added after this table was written must drop out of a filter row, not
     // appear as a pill that matches nothing recognisable.
-    // Mutation applied to verify: returned "Genre $id" instead of null → test failed,
-    // namesOf emitted a label for the unknown id.
     @Test
     fun `an unknown genre id is dropped rather than labelled`() {
         assertNull(TmdbGenres.nameOf(999_999, MediaType.Movie))
@@ -266,8 +240,6 @@ class ExploreModelTest {
     }
 
     // The backend's list is localized and current; the baked-in one is only the floor.
-    // Mutation applied to verify: consulted the static table first → test failed, the
-    // English fallback won over the backend's own name.
     @Test
     fun `the backend genre vocabulary outranks the baked-in fallback`() {
         val backend = mapOf(28 to "Aksiyon")
@@ -295,9 +267,6 @@ class ExploreModelTest {
      * reloading. Two different addon catalogs are two different pages, so they must not
      * compare equal — otherwise "See all" on the second row would show the first row's
      * results.
-     *
-     * Mutation applied to verify: dropped `catalog?.addonId` and `catalog?.key` from
-     * `catalogKey` → test failed, the two keys compared equal.
      */
     @Test
     fun `two addon catalogs are two different grid pages`() {
@@ -314,9 +283,6 @@ class ExploreModelTest {
      * A catalog is a narrowing of the page just as a genre is, which is what puts the
      * "Clear filters" affordance in reach — the only way back out of a catalog grid whose
      * results are empty.
-     *
-     * Mutation applied to verify: removed `|| catalog != null` from `narrowed` → test
-     * failed, a catalog-filtered page reported itself unnarrowed.
      */
     @Test
     fun `a catalog narrows the page`() {
@@ -328,9 +294,6 @@ class ExploreModelTest {
      * The catalog grid is the one arrangement reached from somewhere else, so it has to
      * name itself. The addon is the identifying half — "Popular" is what half the
      * catalogs in circulation are called, and it says nothing on its own.
-     *
-     * Mutation applied to verify: dropped `catalog.addonName` from
-     * `catalogGridSubtitle` → test failed, the provider was no longer named.
      */
     @Test
     fun `a catalog grid names its addon alongside the count`() {
@@ -344,9 +307,6 @@ class ExploreModelTest {
     /**
      * Leaving the catalog has to leave the page unnarrowed, or Explore stays filtered to
      * something nothing on screen still mentions.
-     *
-     * Mutation applied to verify: made the exit `filters.copy()` without clearing the
-     * catalog → test failed, the page was still narrowed.
      */
     @Test
     fun `clearing the catalog unnarrows the page`() {
@@ -363,9 +323,6 @@ class ExploreModelTest {
      * every title on it has already appeared. A membership rail in the same position would
      * be dropped as saying nothing new — that difference is the whole point of
      * [ShelfKind.definedByOrder].
-     *
-     * Mutation applied to verify: declared `AddonCatalog(definedByOrder = false)` → test
-     * failed, the catalog shelf was dropped as redundant.
      */
     @Test
     fun `an addon catalog rail survives overlapping an earlier rail`() {

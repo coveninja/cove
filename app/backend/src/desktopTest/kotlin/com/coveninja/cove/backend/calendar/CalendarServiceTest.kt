@@ -67,8 +67,6 @@ class CalendarServiceTest {
             // The five-episode season is counted only as far as the third episode, which is
             // what has aired. Travelling with the entry is what lets the count be redone
             // later against watch progress without asking TMDB again.
-            // Mutation applied to verify: left the field off the entry → test failed, the
-            // snapshot carried nothing to recount and the backlog could only go stale.
             assertEquals(listOf(AiredSeason(1, 3)), backlog.airedSeasons)
             assertEquals(listOf("2026-08-10", "2026-08-17"), items.filter { it.kind == "episode" }.map { it.date })
         }

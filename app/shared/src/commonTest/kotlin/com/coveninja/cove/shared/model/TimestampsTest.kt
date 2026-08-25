@@ -6,8 +6,6 @@ import kotlin.test.assertTrue
 
 class TimestampsTest {
 
-    // Mutation applied to verify: dropped the `end > start` condition → test
-    // failed, the zero-length and reversed segments were both emitted.
     @Test
     fun `segments without two usable ends are discarded`() {
         val timestamps = MediaTimestamps(
@@ -34,8 +32,6 @@ class TimestampsTest {
     // in (recap, intro, credits, preview). An earlier version of this test used a
     // fixture that was already in collection order, so deleting the sort changed
     // nothing and the test passed regardless.
-    // Mutation applied to verify: removed the sortedBy → test failed, the kinds
-    // came back in collection order.
     @Test
     fun `segments are ordered by position, not by kind`() {
         val timestamps = MediaTimestamps(
@@ -49,7 +45,6 @@ class TimestampsTest {
         assertEquals(listOf(SegmentKind.Intro, SegmentKind.Credits, SegmentKind.Recap), kinds)
     }
 
-    // Mutation applied to verify: made isEmpty always false → test failed.
     @Test
     fun `a title with no timestamps reports empty`() {
         assertTrue(MediaTimestamps.None.isEmpty)
@@ -62,7 +57,6 @@ class TimestampsTest {
     }
 
     // Milliseconds on the wire, seconds everywhere the player works.
-    // Mutation applied to verify: divided by 100 instead of 1000 → test failed.
     @Test
     fun `wire milliseconds convert to seconds`() {
         val segment = TimestampSegment(startMs = 65_000, endMs = 152_500)

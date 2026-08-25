@@ -21,8 +21,6 @@ class TrackGroupsTest {
 
     // The case that prompted this: one release carrying Latin American and
     // European Spanish, which a flat list shows as two identical-looking rows.
-    // Mutation applied to verify: dropped the substringBefore('-') so the region
-    // stayed in the key → test failed with two Spanish groups.
     @Test
     fun `regional variants collapse into one language`() {
         val groups = groupTracksByLanguage(
@@ -41,8 +39,6 @@ class TrackGroupsTest {
     // plain alphabetical ordering and the unknown-last rule disagree. An earlier
     // version used Russian, where both orderings happen to agree, and deleting
     // the rule changed nothing.
-    // Mutation applied to verify: sorted only by label → test failed, Unknown
-    // came before Vietnamese.
     @Test
     fun `unknown languages sort last`() {
         val groups = groupTracksByLanguage(
@@ -59,8 +55,6 @@ class TrackGroupsTest {
 
     // A file lists its tracks in a deliberate order; reordering within a language
     // would put the full subtitle below the signs-only one for no reason.
-    // Mutation applied to verify: sorted group members by title → test failed,
-    // "Signs & Songs" came before "Full".
     @Test
     fun `order within a language follows the file`() {
         val groups = groupTracksByLanguage(
@@ -77,8 +71,6 @@ class TrackGroupsTest {
         )
     }
 
-    // Mutation applied to verify: mapped only two-letter codes → test failed,
-    // the three-letter forms fell through to their uppercased code.
     @Test
     fun `two and three letter codes name the same language`() {
         val groups = groupTracksByLanguage(listOf(track(1, "jpn"), track(2, "fre")))
@@ -87,8 +79,6 @@ class TrackGroupsTest {
     }
 
     // Hiding an unrecognised code behind a guess would be worse than showing it.
-    // Mutation applied to verify: made the else branch return "Unknown" → test
-    // failed, the code was lost and it sorted to the end.
     @Test
     fun `an unrecognised code is shown as itself`() {
         val groups = groupTracksByLanguage(listOf(track(1, "qq")))
@@ -96,8 +86,6 @@ class TrackGroupsTest {
         assertEquals("QQ", groups.single().languageLabel)
     }
 
-    // Mutation applied to verify: returned the title unconditionally → test
-    // failed with an empty label for the untitled track.
     @Test
     fun `a track with no title falls back to something identifying`() {
         assertEquals("Track 3", track(3, "en").detailLabel())

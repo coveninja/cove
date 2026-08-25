@@ -400,8 +400,6 @@ private fun playbackTest(
 
 class PlaybackSessionTest {
 
-    // Mutation applied to verify: made the no-entry branch return season 2
-    // → test failed on the expected season.
     @Test
     fun `a series never watched starts at season one episode one`() = playbackTest { h ->
         h.session.open(series(listOf(MediaSeason(1, "Season 1", episodeCount = 7))))
@@ -411,8 +409,6 @@ class PlaybackSessionTest {
         assertEquals(1, h.playback.requestedEpisode)
     }
 
-    // Mutation applied to verify: skipped the episodeCompleted check and always
-    // advanced → test failed, it asked for episode 8 instead of 7.
     @Test
     fun `an unfinished episode resumes rather than advancing`() = playbackTest { h ->
         h.library.entriesList.value = LibraryState.Ready(listOf(entry(season = 3, episode = 7)))
@@ -424,8 +420,6 @@ class PlaybackSessionTest {
         assertEquals(7, h.playback.requestedEpisode)
     }
 
-    // Mutation applied to verify: dropped the `episodesInSeason > lastEpisode`
-    // branch → test failed, it replayed episode 7 instead of moving to 8.
     @Test
     fun `a finished episode advances within the season`() = playbackTest { h ->
         h.library.entriesList.value = LibraryState.Ready(listOf(entry(season = 3, episode = 7)))
@@ -438,8 +432,6 @@ class PlaybackSessionTest {
         assertEquals(8, h.playback.requestedEpisode)
     }
 
-    // Mutation applied to verify: removed the nextSeason branch → test failed,
-    // it stayed on season 3 instead of rolling over.
     @Test
     fun `the last episode of a season rolls into the next`() = playbackTest { h ->
         h.library.entriesList.value = LibraryState.Ready(listOf(entry(season = 3, episode = 13)))
@@ -460,8 +452,6 @@ class PlaybackSessionTest {
     }
 
     // An explicit pick from the episode browser must beat any resume logic.
-    // Mutation applied to verify: ignored the explicit arguments and always
-    // resolved from the library → test failed, it asked for S3E7.
     @Test
     fun `an explicitly chosen episode wins over the resume point`() = playbackTest { h ->
         h.library.entriesList.value = LibraryState.Ready(listOf(entry(season = 3, episode = 7)))
@@ -473,8 +463,6 @@ class PlaybackSessionTest {
         assertEquals(2, h.playback.requestedEpisode)
     }
 
-    // Mutation applied to verify: passed season/episode through for movies
-    // → test failed, the movie request carried coordinates.
     @Test
     fun `a movie asks for no season or episode`() = playbackTest { h ->
         h.session.open(movie())
@@ -523,8 +511,6 @@ class PlaybackSessionTest {
     // The select flag is the whole difference between the two kinds of external
     // subtitle, and it is also the only automated check that both player hosts are
     // asked for the same thing — neither mpv binding is reachable from here.
-    // Mutation applied to verify: passed select = true for the fetched ones
-    // → test failed, an addon subtitle claimed the picture over the viewer's file.
     @Test
     fun `a supplied file is selected while fetched ones are only offered`() = playbackTest(
         settings = AppSettings(subtitlesEnabled = true),
@@ -546,8 +532,6 @@ class PlaybackSessionTest {
         assertEquals("en", h.host.addedSubtitles.last().language)
     }
 
-    // Mutation applied to verify: dropped the userSubtitles loop from loadCurrentSource
-    // → test failed, the reconnect came back with the viewer's file gone.
     @Test
     fun `a supplied file is loaded again after a reconnect`() = playbackTest { h ->
         h.session.open(movie())
@@ -567,8 +551,6 @@ class PlaybackSessionTest {
         assertTrue(h.host.addedSubtitles.all(AddedSubtitle::select))
     }
 
-    // Mutation applied to verify: removed the userSubtitles reset from open()
-    // → test failed, the film's subtitle file was loaded over an episode of Breaking Bad.
     @Test
     fun `another title does not inherit the file`() = playbackTest { h ->
         h.session.open(movie())
@@ -581,8 +563,6 @@ class PlaybackSessionTest {
         assertEquals(1, h.host.addedSubtitles.size)
     }
 
-    // Mutation applied to verify: made addUserSubtitle skip the isSubtitleFile check
-    // → test failed, the video file was handed to sub-add and reported as in use.
     @Test
     fun `a file that is not a subtitle is refused`() = playbackTest { h ->
         h.session.open(movie())
@@ -594,8 +574,6 @@ class PlaybackSessionTest {
 
     // Dropping again is what someone does when the first drop looked like it did
     // nothing; two identical entries in the menu is the wrong answer to that.
-    // Mutation applied to verify: dropped the already-added branch
-    // → test failed with the same file listed twice.
     @Test
     fun `the same file supplied twice is reselected rather than added again`() = playbackTest { h ->
         h.session.open(movie())
@@ -611,8 +589,6 @@ class PlaybackSessionTest {
 
     // AppSettings.defaultVolume is a 0..1 fraction and mpv's is 0..100; the ×100
     // is the whole point of this test.
-    // Mutation applied to verify: passed defaultVolume through unscaled
-    // → test failed, volume arrived as 0.8 instead of 80.
     @Test
     fun `default volume is scaled from the settings fraction to mpv's range`() =
         playbackTest(settings = AppSettings(defaultVolume = 0.8)) { h ->
@@ -622,8 +598,6 @@ class PlaybackSessionTest {
             assertEquals(80.0, h.host.volumeSet)
         }
 
-    // Mutation applied to verify: ignored rememberPosition and always resumed
-    // → test failed, playback started at 610 seconds instead of 0.
     @Test
     fun `a stored position is ignored when rememberPosition is off`() =
         playbackTest(settings = AppSettings(rememberPosition = false)) { h ->
@@ -642,8 +616,6 @@ class PlaybackSessionTest {
             assertEquals(0.0, h.host.loadedFrom)
         }
 
-    // Mutation applied to verify: removed the rememberPosition condition so the
-    // stored point always applied → test failed, playback started at 0.
     @Test
     fun `a stored position resumes when rememberPosition is on`() = playbackTest { h ->
         h.library.storedProgress = WatchProgress(
@@ -661,8 +633,6 @@ class PlaybackSessionTest {
         assertEquals(610.0, h.host.loadedFrom)
     }
 
-    // Mutation applied to verify: dropped the `progress.completed` early return
-    // → test failed, a finished film resumed at 6900 instead of restarting.
     @Test
     fun `a finished title restarts rather than resuming at the credits`() = playbackTest { h ->
         h.library.storedProgress = WatchProgress(
@@ -681,8 +651,6 @@ class PlaybackSessionTest {
         assertEquals(0.0, h.host.loadedFrom)
     }
 
-    // Mutation applied to verify: raised COMPLETED_FRACTION above 1.0 → test
-    // failed, the saved record was not marked completed.
     @Test
     fun `closing past ninety percent records the title as completed`() = playbackTest { h ->
         h.session.open(movie())
@@ -697,8 +665,6 @@ class PlaybackSessionTest {
         assertEquals(950.0, saved.positionSeconds)
     }
 
-    // Mutation applied to verify: dropped the `>= COMPLETED_FRACTION` comparison
-    // in favour of a constant true → test failed, half-watched counted as done.
     @Test
     fun `closing halfway does not mark the title completed`() = playbackTest { h ->
         h.session.open(movie())
@@ -712,8 +678,6 @@ class PlaybackSessionTest {
         assertTrue(!saved.completed, "halfway is not completed")
     }
 
-    // Mutation applied to verify: made automaticRetryAllowed return false for retriesUsed == 0
-    // → test failed, the first interruption stopped the session instead of reconnecting.
     @Test
     fun `the first interruption retries the same source from its retained position`() =
         playbackTest { h ->
@@ -734,8 +698,6 @@ class PlaybackSessionTest {
             assertTrue(!h.session.reconnecting)
         }
 
-    // Mutation applied to verify: dropped the RETRY_RENEWAL_SECONDS comparison so any later
-    // interruption renewed → test failed, a source stuck at one offset reloaded three times.
     @Test
     fun `an interruption that repeats without progress is not retried again`() =
         playbackTest { h ->
@@ -766,8 +728,6 @@ class PlaybackSessionTest {
             assertTrue(!h.session.recoveryFailed)
         }
 
-    // Mutation applied to verify: raised the MAX_AUTOMATIC_RETRIES check to `> MAX` → test
-    // failed, a fourth automatic reload was issued instead of the banner.
     @Test
     fun `a stall after real progress earns another retry, up to the cap`() =
         playbackTest { h ->
@@ -828,8 +788,6 @@ class PlaybackSessionTest {
             assertEquals(2, h.host.loads.size)
         }
 
-    // Mutation applied to verify: removed the `position <= 0.0` guard → test
-    // failed, a zero position was written over the stored resume point.
     @Test
     fun `closing before playback starts records nothing`() = playbackTest { h ->
         h.session.open(movie())
@@ -842,8 +800,6 @@ class PlaybackSessionTest {
         assertTrue(h.library.recorded.isEmpty(), "was: ${h.library.recorded}")
     }
 
-    // Mutation applied to verify: removed the size check so a single source also
-    // opened the picker → test failed, the phase was Choosing not Playing.
     @Test
     fun `a lone source plays without asking`() = playbackTest { h ->
         h.session.open(movie())
@@ -853,8 +809,6 @@ class PlaybackSessionTest {
         assertNotNull(h.host.loadedUrl)
     }
 
-    // Mutation applied to verify: auto-played the first of several sources
-    // → test failed, the phase was Playing not Choosing.
     @Test
     fun `several sources ask the viewer to choose`() = playbackTest(
         sources = listOf(
@@ -871,8 +825,6 @@ class PlaybackSessionTest {
         assertEquals("B", phase.sources.first().source.name)
     }
 
-    // Mutation applied to verify: kept sources with neither url nor hash
-    // → test failed, an unplayable entry was offered as a choice.
     @Test
     fun `sources with nothing to play are discarded`() = playbackTest(
         sources = listOf(
@@ -887,8 +839,6 @@ class PlaybackSessionTest {
         assertTrue(h.session.phase is PlaybackPhase.Playing, "was: ${h.session.phase}")
     }
 
-    // Mutation applied to verify: reported Failed only on an exception, not on an
-    // empty list → test failed, the phase stayed Resolving.
     @Test
     fun `no sources reports why instead of hanging`() = playbackTest(sources = emptyList()) { h ->
         h.session.open(movie())
@@ -901,8 +851,6 @@ class PlaybackSessionTest {
 
     // The "choose a source" entry point exists to show what is on offer, so it
     // must ask even when asking looks pointless.
-    // Mutation applied to verify: let the size==1 shortcut run before the
-    // forcePicker branch → test failed, it played instead of asking.
     @Test
     fun `forcing the picker asks even for a single source`() = playbackTest { h ->
         h.session.open(movie(), forcePicker = true)
@@ -912,8 +860,6 @@ class PlaybackSessionTest {
         assertEquals(null, h.host.loadedUrl, "nothing should have started playing")
     }
 
-    // Mutation applied to verify: ignored autoSelectStream → test failed, the
-    // picker opened for a viewer who asked never to be asked.
     @Test
     fun `autoSelectStream plays the top candidate without asking`() = playbackTest(
         settings = AppSettings(autoSelectStream = true),
@@ -1017,8 +963,6 @@ class PlaybackSessionTest {
     }
 
     // autoSelectStream must not override an explicit request to choose.
-    // Mutation applied to verify: ordered the autoSelectStream branch before the
-    // forcePicker branch → test failed, it auto-played.
     @Test
     fun `forcing the picker overrides autoSelectStream`() = playbackTest(
         settings = AppSettings(autoSelectStream = true),
@@ -1033,8 +977,6 @@ class PlaybackSessionTest {
         assertTrue(h.session.phase is PlaybackPhase.Choosing, "was: ${h.session.phase}")
     }
 
-    // Mutation applied to verify: dropped forcePicker from reopenSources → test
-    // failed, the lone source replayed instead of the list reappearing.
     @Test
     fun `reopening sources returns to the list mid-playback`() = playbackTest { h ->
         h.session.open(movie())
@@ -1048,8 +990,6 @@ class PlaybackSessionTest {
     }
 
     // Reopening keeps the episode it was already on rather than re-deriving one.
-    // Mutation applied to verify: passed null season/episode from reopenSources
-    // → test failed, resolution fell back to S1E1.
     @Test
     fun `reopening sources stays on the same episode`() = playbackTest { h ->
         h.session.open(series(emptyList()), season = 2, episode = 4)
@@ -1065,8 +1005,6 @@ class PlaybackSessionTest {
     // A probe that rejects everything is far more likely to be wrong than every
     // source being dead at once, so the list
     // survives it.
-    // Mutation applied to verify: removed the ifEmpty fallback → test failed with
-    // "no sources found" despite three perfectly good candidates.
     @Test
     fun `a probe that kills every source is not believed`() = playbackTest(
         settings = AppSettings(probeStreams = true),
@@ -1130,8 +1068,6 @@ class PlaybackSessionTest {
     // probeStreams defaults to true, so the setting has to be turned off
     // explicitly here — an earlier version of this test used the default harness
     // settings and asserted the probe had not run, which was simply wrong.
-    // Mutation applied to verify: probed regardless of the setting → test failed,
-    // the probe ran with probeStreams off.
     @Test
     fun `probing only happens when it is switched on`() =
         playbackTest(settings = AppSettings(probeStreams = false)) { h ->
@@ -1141,9 +1077,6 @@ class PlaybackSessionTest {
             assertEquals(null, h.playback.probedUrls, "probe ran with the setting off")
         }
 
-    // Mutation applied to verify: let failover pick any candidate rather than
-    // skipping tried ones → test failed, it handed back the source that had just
-    // failed and the walk never advanced.
     @Test
     fun `failover walks past sources that already failed`() = playbackTest(
         sources = listOf(
@@ -1215,8 +1148,6 @@ class PlaybackSessionTest {
         assertTrue(!h.session.failoverToNextSource())
     }
 
-    // Mutation applied to verify: cycled back to the start when the list ran out
-    // → test failed, failover reported success forever.
     @Test
     fun `failover stops when every source has been tried`() = playbackTest { h ->
         h.session.open(movie())
@@ -1226,8 +1157,6 @@ class PlaybackSessionTest {
         assertTrue(!h.session.failoverToNextSource(), "only one source exists")
     }
 
-    // Mutation applied to verify: dropped the generation check before applying the
-    // resolved result → test failed, the abandoned first open still drove playback.
     @Test
     fun `closing mid-resolve abandons the result`() = playbackTest { h ->
         h.session.open(movie())
@@ -1238,8 +1167,6 @@ class PlaybackSessionTest {
         assertEquals(null, h.host.loadedUrl)
     }
 
-    // Mutation applied to verify: routed openExtra through open() → test failed,
-    // the trailer resolved addon sources and played a .mkv instead of the video.
     @Test
     fun `an extra plays its own address without resolving sources`() = playbackTest { h ->
         h.session.openExtra(movie(), trailer())
@@ -1252,8 +1179,6 @@ class PlaybackSessionTest {
 
     // Watching two minutes of a trailer is not watching two minutes of the film,
     // and a resume point written here would appear on a title never started.
-    // Mutation applied to verify: dropped the extra guard in saveProgress
-    // → test failed, closing the trailer recorded progress against Fight Club.
     @Test
     fun `an extra leaves no watch progress behind`() = playbackTest { h ->
         h.session.openExtra(movie(), trailer())
@@ -1269,8 +1194,6 @@ class PlaybackSessionTest {
         )
     }
 
-    // Mutation applied to verify: removed the extra guard from reopenSources
-    // → test failed, the trailer was replaced by the film's own source list.
     @Test
     fun `an extra cannot be swapped for the film through the source list`() = playbackTest { h ->
         h.session.openExtra(movie(), trailer())
@@ -1285,8 +1208,6 @@ class PlaybackSessionTest {
 
     // The bug this whole path exists to fix was a click that did nothing at all,
     // so the one case with nowhere to go has to say so.
-    // Mutation applied to verify: returned from openExtra without setting a phase
-    // → test failed, the click produced no state at all.
     @Test
     fun `an extra with no address says so rather than doing nothing`() = playbackTest { h ->
         h.session.openExtra(movie(), trailer().copy(url = null))
@@ -1299,8 +1220,6 @@ class PlaybackSessionTest {
 
     // The player header reads off this label, and "Fight Club" alone would not say
     // which of the twenty extras is playing.
-    // Mutation applied to verify: dropped the extra branch from label → test failed,
-    // the label was the film's title on its own.
     @Test
     fun `the label names the extra that is playing`() {
         assertEquals(
@@ -1325,8 +1244,6 @@ class PlaybackSessionTest {
 
     // An extra opens embedded in the sheet it was started from; the film itself
     // always takes the window.
-    // Mutation applied to verify: had openExtra leave the presentation alone
-    // → test failed, the trailer opened fullscreen over the sheet.
     @Test
     fun `an extra opens embedded and a film opens fullscreen`() = playbackTest { h ->
         h.session.openExtra(movie(), trailer())
@@ -1340,8 +1257,6 @@ class PlaybackSessionTest {
 
     // The failure has to appear in the slot on the page, not by blacking out the
     // window for a trailer that never started.
-    // Mutation applied to verify: left failExtra at whatever presentation was set
-    // → test failed, a failure after fullscreen stayed fullscreen.
     @Test
     fun `a failed extra is reported in the page it was started from`() = playbackTest { h ->
         h.session.openExtra(movie(), trailer())
@@ -1354,8 +1269,6 @@ class PlaybackSessionTest {
 
     // The handle now outlives the surface it was drawn on, so opening the film
     // over a playing trailer is the only thing that can silence it.
-    // Mutation applied to verify: dropped the host.stop() from open() → test
-    // failed, the trailer was still loaded while sources were being resolved.
     @Test
     fun `starting a title silences whatever was playing`() = playbackTest(
         sources = emptyList(),
@@ -1372,8 +1285,6 @@ class PlaybackSessionTest {
 
     // A page URL needs an extractor in hand before the load, and when there is
     // none the viewer has to be told rather than left with a black box.
-    // Mutation applied to verify: loaded regardless of what prepareWebVideo said
-    // → test failed, the trailer was handed to a player that could not open it.
     @Test
     fun `an extra that cannot be prepared is not loaded`() = playbackTest { h ->
         h.host.webVideoProblem = "yt-dlp is not installed."
@@ -1389,8 +1300,6 @@ class PlaybackSessionTest {
 
     // Downloading a 40 MB helper is the viewer's call, so the setting travels with
     // the request rather than being read inside the player.
-    // Mutation applied to verify: passed a hardcoded true → test failed, the
-    // player was told it could install with the setting off.
     @Test
     fun `the helper setting decides whether the player may fetch one`() = playbackTest(
         settings = AppSettings(manageYtDlp = false),

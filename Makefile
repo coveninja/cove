@@ -91,14 +91,8 @@ tv-install: mobile
 
 # ── First-run onboarding ──────────────────────────────────────────────────────
 #
-# The flow only appears once per profile: `AppSettings.onboardingDone` is OR-merged on every
-# write path in LocalSettingsRepository, so once it is true nothing can put it back. That makes
-# a launch override the only way to look at the screen a second time, which is what
-# `--onboarding` is for. Choices made under it are still written; the flag itself is not, so the
-# harness stays repeatable.
-#
-# Fixtures by default, so no TMDB_API_KEY is needed to look at the layout. Pass BACKEND=kotlin
-# for real posters, real genres and an addon field that actually installs something:
+# `--onboarding` previews the one-time flow without changing its completion flag. Fixtures are
+# the default; use BACKEND=kotlin for live content and addon installation:
 #
 #   make onboarding BACKEND=kotlin
 BACKEND ?= fixtures
@@ -119,17 +113,8 @@ hot-onboarding:
 hot-onboarding-tv:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:hotRun --auto --args="--backend-mode $(BACKEND) --tv --onboarding"
 
-# Installing the flow on a real Android device or emulator.
-#
-# One APK serves phones and televisions — MainActivity picks the shell at runtime from the
-# leanback feature — so which onboarding you see is decided entirely by which device adb talks
-# to. That is why these are two targets rather than a flag: with both emulators running, an
-# unqualified adb command fails outright, and each target knows which kind of device it wants.
-#
-# Both extras are read only when BuildConfig.DEBUG is set, so nothing here is reachable from a
-# release build. FIXTURES=false runs against the real backend instead of the canned catalog.
-# DEVICE=<serial> picks one when several of the same kind are attached, and ABI=all builds
-# native code for every architecture rather than only the target's.
+# Device targets select phone or TV from the APK's leanback feature. Debug-only extras choose
+# fixtures; DEVICE selects among matching devices and ABI=all disables the single-ABI build.
 FIXTURES ?= true
 ABI ?=
 DEVICE ?=
@@ -158,14 +143,8 @@ test: test-kotlin
 test-build:
 	cd $(KOTLIN_DIR) && ./gradlew :desktop:createDistributable :mobile:assembleDebug
 
-## Rehearse the release-only steps of .github/workflows/release.yml.
-##
-## ci.yml and release.yml share exactly one job. Key derivation, tarball and PKGBUILD
-## assembly, NSIS staging, and update-manifest generation and signing all run for the first
-## time when a tag is pushed — this runs them locally, against a throwaway signing key, and
-## checks their output still satisfies the PKGBUILD, the Flatpak manifest, the NSIS script
-## and the Kotlin updater's SignedManifestVerifier. Seconds, no build; run `make test-build`
-## first to check the real jpackage layout instead of a stub.
+## Rehearse release packaging and signing contracts with a throwaway key. Run
+## `make test-build` first to validate the real jpackage layout instead of a stub.
 test-release:
 	bash scripts/release-dry-run.sh
 
@@ -192,24 +171,11 @@ test-site-docs:
 ## Broadest local approximation of CI.
 test-all: test-workflows test test-build
 
-## Bump the version in the root VERSION file, stage all pending changes,
-## commit, and tag for release. `make patch` bumps 0.22.5 -> 0.22.6, `make
-## minor` bumps 0.22.5 -> 0.23.0, `make major` bumps 0.22.5 -> 1.0.0.
-## VERSION replaced web/package.json as the source of truth when the Svelte
-## frontend was removed; app/desktop reads it for packageVersion. Pass
-## TITLE="..." to override
-## the default commit title and/or MSG="..." to add a commit message body
-## note (multi-line is fine). User-facing `fix` and `feat` conventional commits
-## since the last release tag are appended to the commit body underneath MSG as
-## markdown links ([subject](commit url)). Merge, chore, docs, dependency, and
-## other internal commits are omitted from the GitHub release notes.
+## Bump VERSION, stage all changes, commit, and tag. `patch`, `minor`, and `major` apply
+## semantic version increments. TITLE overrides the commit title; MSG adds a body before
+## generated user-facing fix/feat notes.
 ## Then push with: git push origin master v<version>
-##
-## TITLE/MSG reach the recipe via the environment ($$TITLE/$$MSG), NOT via
-## make's $(...) substitution: make pastes $(MSG) into the recipe text
-## verbatim, so a message containing real newlines used to split the recipe
-## into broken shell lines ("unexpected EOF while looking for matching quote").
-## Environment values pass through the shell untouched, newlines and all.
+## TITLE and MSG use the environment so multiline values are not expanded into recipe text.
 export TITLE MSG
 patch minor major:
 	@CUR=$$(cat VERSION); \

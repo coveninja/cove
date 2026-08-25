@@ -132,11 +132,7 @@ fun PlayerControls(
     LaunchedEffect(openMenu, barHovered) {
         onInteractingChange(openMenu != null || barHovered)
     }
-    // Released on the way out. These controls live inside the visibility animation,
-    // so they leave the composition whenever they hide — and a "being used" reported
-    // on the last frame before that would never be taken back, leaving the layer
-    // above convinced the bar was still under the pointer. The controls then stayed
-    // up, and the cursor with them, for the rest of the session.
+    // Clear interaction state when hidden so the parent can resume auto-hide.
     DisposableEffect(Unit) {
         onDispose { onInteractingChange(false) }
     }
@@ -163,10 +159,7 @@ fun PlayerControls(
             onSeek = onSeek,
         )
 
-        // Below roughly a tablet's width there is not room for the transport, the
-        // clock, the volume strip and five menus on one line. The volume strip goes
-        // first — it is the one thing on the row with a wheel, a keyboard shortcut
-        // and a mute button all doing the same job.
+        // Drop the redundant volume strip first on narrow layouts.
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val compact = maxWidth < COMPACT_CONTROLS_WIDTH
             Row(
@@ -174,9 +167,6 @@ fun PlayerControls(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
             ) {
-                // No skip buttons: double-clicking either side of the picture already
-                // seeks, and a pair of buttons duplicating that would be two more
-                // things between the viewer and the film.
                 PlayPauseButton(
                     paused = status.paused,
                     ended = status.endReached,
@@ -199,8 +189,6 @@ fun PlayerControls(
                         onSetMuted = onSetMuted,
                     )
                 } else {
-                    // Mute alone, which is the part with no other affordance on a narrow
-                    // window — the level still answers to the wheel and the arrow keys.
                     ControlButton(
                         icon = if (status.muted || status.volume <= 0.0) {
                             "lucide:volume-x"
@@ -213,10 +201,7 @@ fun PlayerControls(
 
                 Box(modifier = Modifier.weight(1f))
 
-                // Shown for a release with no subtitles of its own too, wherever a file
-                // can be loaded: that is precisely the case the entry below exists for,
-                // and a button that appears only once there is already something to
-                // choose would hide it exactly then.
+                // Keep the menu available when there are no tracks so a file can still be added.
                 if (status.subtitleTracks.isNotEmpty() || onLoadSubtitleFile != null) {
                     TrackMenuButton(
                         icon = "lucide:captions",
@@ -244,15 +229,10 @@ fun PlayerControls(
                         onSetDelay = onSetAudioDelay,
                     )
                 }
-                // The keyboard map, which is otherwise reachable only by pressing the
-                // key that opens it — which is the thing it exists to tell you about.
-                // Nothing to tell a touch screen, which has no keys to press.
                 if (!compact && hasHardwareKeyboard) {
                     ControlButton(icon = "lucide:keyboard", onClick = onShowShortcuts)
                 }
 
-                // Speed and framing are set once and left alone, so they are the two
-                // that fold away when the row runs out of room.
                 if (!compact) {
                     SpeedMenuButton(
                         speed = status.speed,
@@ -278,8 +258,6 @@ fun PlayerControls(
                     )
                 }
 
-                // A series shows its episodes here; a film has none, so the slot
-                // keeps the source picker instead of sitting empty.
                 if (episodeBrowser != null) {
                     EpisodeMenuButton(
                         browser = episodeBrowser,
@@ -446,8 +424,7 @@ private fun SegmentedSeekBar(
         }
         val playedSeconds = shown * durationSeconds
 
-        // Only animated while the cache is genuinely growing. A shimmer that never
-        // stops is decoration; one that stops when the buffer is full is a signal.
+        // Animate only while the cache is growing.
         val filling = buffering
         val shimmerTransition = rememberInfiniteTransition(label = "BufferShimmer")
         val shimmer by shimmerTransition.animateFloat(
@@ -460,8 +437,6 @@ private fun SegmentedSeekBar(
         )
 
         if (chunks.isEmpty()) {
-            // No duration yet: a single plain track, so the bar does not pop into
-            // existence once the file loads.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -475,9 +450,6 @@ private fun SegmentedSeekBar(
                 horizontalArrangement = Arrangement.spacedBy(SEGMENT_GAP),
             ) {
                 chunks.forEach { chunk ->
-                    // Entering a labelled stretch brightens it, once. The bar already
-                    // says where the intro is; this says you are in it, without
-                    // spending a word on saying so.
                     val inThisChunk = chunk.kind != null &&
                         playedSeconds >= chunk.startSeconds &&
                         playedSeconds < chunk.endSeconds
@@ -490,7 +462,6 @@ private fun SegmentedSeekBar(
                         ?: Color.White.copy(alpha = 0.22f)
                     val played = chunk.kind?.color()
                         ?: MaterialTheme.colorScheme.onSurface
-                    // Each piece fills itself, so the progress never bridges a gap.
                     val fill = chunk.fillFraction(playedSeconds)
                     val buffered = chunk.fillFraction(bufferedSeconds)
 
@@ -501,20 +472,12 @@ private fun SegmentedSeekBar(
                             .clip(RoundedCornerShape(SEGMENT_RADIUS))
                             .background(base),
                     ) {
-                        // How far ahead the data reaches. On a torrent this is the
-                        // difference between a seek that lands and one that stalls,
-                        // and it was previously visible nowhere at all.
                         if (buffered > fill) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth(buffered)
                                     .fillMaxHeight()
                                     .background(
-                                        // A sweep along the buffered stretch while it
-                                        // is still growing: the edge creeping forward
-                                        // is too slow to notice on its own, and a
-                                        // static band says "downloaded" where this
-                                        // says "downloading".
                                         if (filling) {
                                             Brush.horizontalGradient(
                                                 colorStops = shimmerStops(shimmer),
@@ -538,9 +501,7 @@ private fun SegmentedSeekBar(
             }
         }
 
-        // Chapter divisions, drawn over the pieces because the two carve the bar up
-        // differently: chapters divide the file structurally, while segments label
-        // only semantic stretches, and their boundaries need not coincide.
+        // Chapter and semantic-segment boundaries can overlap independently.
         val marks = remember(chapters, durationSeconds) {
             chapterMarks(chapters, durationSeconds)
         }
@@ -554,7 +515,6 @@ private fun SegmentedSeekBar(
             )
         }
 
-        // Thumb, positioned by the same fraction as the fill.
         val density = LocalDensity.current
         Box(
             modifier = Modifier
@@ -568,12 +528,10 @@ private fun SegmentedSeekBar(
                 .background(MaterialTheme.colorScheme.onSurface),
         )
 
-        // Scrub preview: what time the pointer is over, and what happens there.
         val preview = hoverFraction
         if (active && preview != null && durationSeconds > 0.0) {
             val previewSeconds = preview * durationSeconds
-            // A labelled segment names the stretch; failing that, the file's own
-            // chapter does. Both beat a bare timestamp when deciding where to land.
+            // Prefer a semantic segment label, then the media chapter title.
             val label = segments
                 .firstOrNull { previewSeconds >= it.startSeconds && previewSeconds <= it.endSeconds }
                 ?.kind
@@ -584,9 +542,7 @@ private fun SegmentedSeekBar(
                 modifier = Modifier
                     .onSizeChanged { pillWidth = it.width }
                     .offset {
-                        // Centred on the pointer, then held inside the track. Without
-                        // the clamp the pill runs off both ends of the bar, and at the
-                        // right-hand end it takes the last minutes of the film with it.
+                        // Clamp the centred preview inside the seek track.
                         val centred = (trackWidth * preview).toInt() - pillWidth / 2
                         val bounded = if (trackWidth > pillWidth) {
                             centred.coerceIn(0, trackWidth - pillWidth)
@@ -663,7 +619,6 @@ private fun PlayPauseButton(paused: Boolean, ended: Boolean, onClick: () -> Unit
 
     Box(
         modifier = Modifier
-            // A finger in a dark room needs the full 48 dp; a cursor does not.
             .size(if (hasPointerHover) 44.dp else 48.dp)
             .graphicsLayer {
                 scaleX = scale
@@ -679,8 +634,6 @@ private fun PlayPauseButton(paused: Boolean, ended: Boolean, onClick: () -> Unit
             ),
         contentAlignment = Alignment.Center,
     ) {
-        // Crossfaded and scaled rather than swapped, so the state change is
-        // something you see happen.
         AnimatedContent(
             targetState = if (ended) TransportIcon.Replay
                 else if (paused) TransportIcon.Play
@@ -731,9 +684,7 @@ private fun VolumeControl(
             onClick = {
                 if (silent) {
                     onSetMuted(false)
-                    // A player left at zero volume needs a level to come back to;
-                    // restore to full rather than track a pre-mute level this
-                    // control does not own.
+                    // Restore a zero-volume player to full when unmuting.
                     if (volume <= 0.0) onSetVolume(100.0)
                 } else {
                     onSetMuted(true)
@@ -775,15 +726,10 @@ private fun VolumeControl(
                     .fillMaxWidth((volume / 100.0).coerceIn(0.0, 1.0).toFloat())
                     .height(barHeight)
                     .clip(RoundedCornerShape(3.dp))
-                    // Dimmed while muted: the level is still what it was, but nothing
-                    // is coming out, and a bright full bar over silence reads as a bug.
                     .background(Color.White.copy(alpha = if (silent) 0.3f else 0.9f)),
             )
         }
 
-        // The exact level, while the pointer is on the strip. Dragging a bar to a
-        // remembered position is guesswork without a number to aim at, and a number
-        // permanently on the row would be one more thing over the picture.
         AnimatedVisibility(
             visible = hovered,
             enter = fadeIn(tween(120)),
@@ -832,7 +778,6 @@ private fun TrackMenuButton(
             onDismissRequest = { onExpandedChange(false) },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = RoundedCornerShape(14.dp),
-            // A release with ten subtitle languages otherwise runs off the screen.
             modifier = Modifier.heightIn(max = 420.dp),
         ) {
             if (allowOff) {
@@ -864,8 +809,6 @@ private fun TrackMenuButton(
                     )
                 }
             }
-            // Below the tracks and above the timing: this is the last resort when none
-            // of the above fits, and it is also the only entry here that is not a track.
             onLoadFile?.let { loadFile ->
                 LanguageHeader("Your own")
                 CMenuItem(
@@ -877,9 +820,7 @@ private fun TrackMenuButton(
                     },
                 )
             }
-            // Addon subtitles are matched to a release by name and frequently run
-            // early or late against the one actually playing. Without this the only
-            // remedy is a different subtitle file.
+            // Addon subtitles may need timing correction for a different release cut.
             DelayStepper(
                 delaySeconds = delaySeconds,
                 onSetDelay = onSetDelay,

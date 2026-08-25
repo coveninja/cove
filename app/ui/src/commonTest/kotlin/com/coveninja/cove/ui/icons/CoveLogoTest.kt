@@ -22,8 +22,6 @@ class CoveLogoTest {
     private val pathPattern = Regex("""parsePathString\("([^"]+)"\)""")
     private val svgPathPattern = Regex("""<path d="([^"]+)"""")
 
-    // Mutation applied to verify: dropped a single space from one path string in CoveLogo.kt →
-    // test failed, which is exactly the corruption that shipped a broken mark.
     @Test
     fun `every path is the one the source artwork draws`() {
         assertTrue(svg.isFile, "source artwork missing at ${svg.absolutePath}")

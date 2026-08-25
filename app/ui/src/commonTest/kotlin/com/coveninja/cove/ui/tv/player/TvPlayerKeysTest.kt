@@ -6,7 +6,6 @@ import kotlin.test.assertEquals
 
 class TvPlayerKeysTest {
 
-    // Mutation applied to verify: returned Navigate for Left and Right → test failed.
     @Test
     fun `with the controls away left and right move through the film`() {
         assertEquals(TvPlayerArrowOutcome.Seek, outcome(TvDirection.Left))
@@ -16,7 +15,6 @@ class TvPlayerKeysTest {
     // Up and down have nothing to steer while the bar is gone, so they summon it. Volume is
     // deliberately not bound here: a television's own remote owns volume, and a viewer who
     // presses up expecting the controls is not expecting the sound to change.
-    // Mutation applied to verify: mapped Up and Down to Seek → test failed.
     @Test
     fun `with the controls away up and down bring them back`() {
         assertEquals(TvPlayerArrowOutcome.RevealControls, outcome(TvDirection.Up))
@@ -26,7 +24,6 @@ class TvPlayerKeysTest {
     // The window this closes: the bar has appeared but focus is still on the player behind it.
     // Checking visibility alone let a second press fall through to the page's focus search and
     // walk focus off the video entirely — the bug this condition was written for.
-    // Mutation applied to verify: dropped barHasFocus from the guard → test failed.
     @Test
     fun `a visible bar that has not taken focus yet still seeks`() {
         assertEquals(
@@ -39,8 +36,6 @@ class TvPlayerKeysTest {
         )
     }
 
-    // Mutation applied to verify: returned Seek for Left and Right regardless of focus → test
-    // failed, the transport row could never be walked along.
     @Test
     fun `once the bar holds focus every arrow belongs to it`() {
         TvDirection.entries.forEach { direction ->
@@ -54,16 +49,12 @@ class TvPlayerKeysTest {
 
     // The skip hint is not focusable — it appears mid-film and grabbing focus from the picture
     // would be worse than not offering the skip — so centre has to carry it while it is up.
-    // Mutation applied to verify: returned skipAvailable alone → test failed, centre skipped
-    // instead of pressing the focused transport button during an intro.
     @Test
     fun `centre skips a segment only while the controls are away`() {
         assertEquals(true, tvSelectSkipsSegment(controlsVisible = false, skipAvailable = true))
         assertEquals(false, tvSelectSkipsSegment(controlsVisible = true, skipAvailable = true))
     }
 
-    // Mutation applied to verify: dropped the skipAvailable check → test failed, centre stopped
-    // summoning the controls because it was always claiming to skip something.
     @Test
     fun `with nothing to skip centre is left alone`() {
         assertEquals(false, tvSelectSkipsSegment(controlsVisible = false, skipAvailable = false))

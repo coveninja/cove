@@ -12,8 +12,6 @@ class TvDimensTest {
 
     // The grid is built by chunking results into rows this wide, so a column count that does
     // not actually fit produces a row that scrolls sideways when it is supposed to be a grid.
-    // Mutation applied to verify: dropped the cardSpacing term from `usable` → test failed, the
-    // last column overflowed the safe area.
     @Test
     fun `every column fits inside the content area`() {
         val columns = television.posterColumns
@@ -26,7 +24,6 @@ class TvDimensTest {
     }
 
     // One more column would not fit, or the grid is wasting a poster's width of screen.
-    // Mutation applied to verify: subtracted one from the result → test failed.
     @Test
     fun `the grid uses every column that fits`() {
         val columns = television.posterColumns
@@ -41,8 +38,6 @@ class TvDimensTest {
 
     // A narrow window is the desktop harness, not a television, and the floor is what stops it
     // resolving to a single enormous poster per row.
-    // Mutation applied to verify: removed the coerceAtLeast → test failed, a 320 dp viewport
-    // asked for one column.
     @Test
     fun `a viewport too narrow to matter still gets a grid`() {
         assertEquals(3, tvDimensFor(width = 320.dp, height = 240.dp).posterColumns)
@@ -50,7 +45,6 @@ class TvDimensTest {
 
     // Overscan is a fraction of the panel, but a fraction of a very large one runs away with
     // the screen and a fraction of a small one stops protecting anything.
-    // Mutation applied to verify: removed the coerceIn on overscanHorizontal → test failed.
     @Test
     fun `overscan stays within its bounds at any size`() {
         listOf(320.dp, 960.dp, 3840.dp).forEach { width ->

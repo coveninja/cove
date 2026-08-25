@@ -76,8 +76,6 @@ class AddonManagerTest {
     // Official integrations are gated on the same enabled flag, so they have to be
     // switchable. setEnabled used to carry a copy of remove()'s source guard —
     // message and all — which turned every built-in toggle into an HTTP 400.
-    // Mutation applied to verify: restored `require(existing.source == "stremio")`
-    // in setEnabled → test failed with IllegalArgumentException.
     @Test
     fun `official addons can be switched off`() = runBlocking {
         val http = HttpClient(MockEngine { respond("{}", HttpStatusCode.OK) })
@@ -103,8 +101,6 @@ class AddonManagerTest {
     }
 
     // selectAddons orders by rowid, so the storage write has to preserve it.
-    // Mutation applied to verify: reverted upsertAddon to INSERT OR REPLACE
-    // → test failed, the toggled addon had moved to the end of the list.
     @Test
     fun `toggling an addon does not reorder the list`() = runBlocking {
         val http = HttpClient(MockEngine { request ->
@@ -170,14 +166,6 @@ class AddonManagerTest {
     // it there directly rather than through the active profile's repository —
     // which is the same asymmetry the feature has in the app.
 
-    // Mutation applied to verify: dropped the `.map { it.copy(managed = true) }`
-    // from inheritedEntries → test failed on the managed assertion.
-    //
-    // The officials assertion below does *not* discriminate the `source ==
-    // "stremio"` filter, and is not claimed to: every official carries the same
-    // synthetic `official:<id>` URL in both profiles, so the own-URL dedupe drops
-    // them with or without it. The filter earns its place in
-    // findIncludingInherited, which has no own-list to dedupe against.
     @Test
     fun `a secondary profile inherits the primary's stremio addons`() = runBlocking {
         val http = HttpClient(MockEngine {
@@ -225,9 +213,6 @@ class AddonManagerTest {
         http.close()
     }
 
-    // Mutation applied to verify: made inheritedFrom() ignore policySetOn and
-    // return the primary unconditionally → test failed, the child saw
-    // provider.one with no policy ever having been switched on.
     @Test
     fun `a secondary profile inherits nothing while the policy is off`() = runBlocking {
         val http = HttpClient(MockEngine {
@@ -262,9 +247,6 @@ class AddonManagerTest {
         http.close()
     }
 
-    // Mutation applied to verify: pointed the four mutations at
-    // findIncludingInherited instead of find → test failed, setEnabled(false)
-    // silently wrote a second copy of the primary's addon into the child.
     @Test
     fun `a secondary cannot change an inherited addon but keeps its own`() = runBlocking {
         val http = HttpClient(MockEngine { request ->
@@ -320,8 +302,6 @@ class AddonManagerTest {
     // the primary's addons to Supabase under its own profile carries a newer
     // timestamp than every other device, so the next pull duplicates them across
     // the account — and a later removal on the primary never propagates.
-    // Mutation applied to verify: routed snapshotForSync through entries()
-    // → test failed with two entries in the child's snapshot.
     @Test
     fun `an inherited addon is never pushed under the secondary's own profile`() = runBlocking {
         val http = HttpClient(MockEngine { request ->
@@ -360,9 +340,6 @@ class AddonManagerTest {
     // primary does to its own addons can leave a secondary stale. Switching the
     // policy is the exception: it is a settings write that never reaches this
     // class, and only the cache key notices it.
-    // Mutation applied to verify: dropped $inheritedVersion from the streams cache
-    // key → test failed, the child kept serving the empty fan-out it had cached
-    // before the policy was switched on.
     @Test
     fun `a secondary resolves streams through the inherited provider`() = runBlocking {
         val requested = mutableListOf<String>()
@@ -413,9 +390,6 @@ class AddonManagerTest {
         http.close()
     }
 
-    // Mutation applied to verify: dropped the `it.url !in ownUrls` filter from
-    // inheritedEntries → test failed with the addon listed twice, the second
-    // copy locked.
     @Test
     fun `an addon both profiles installed stays the secondary's own`() = runBlocking {
         val http = HttpClient(MockEngine {
