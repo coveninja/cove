@@ -95,7 +95,8 @@
 ### Sources and extensions
 
 - Stremio-compatible addons for catalogs, streams, subtitles, and metadata.
-- Opt-in community scraper plugins executed behind platform-specific isolation.
+- Opt-in Nuvio-compatible scrapers executed behind platform-specific isolation.
+- Signed desktop plugins with per-profile permissions and isolated workers.
 - Legal watch-option discovery alongside configured playback sources.
 - Local-first profiles and settings: signing in is optional.
 
@@ -225,7 +226,7 @@ release is signed with the same key and carries a higher version code.
 
 - JDK 21
 - libmpv (`mpv` on Arch/CachyOS and Homebrew, or `libmpv-dev` on Debian/Ubuntu)
-- Android SDK platform and build-tools 36 for Android builds
+- Android SDK platform and build-tools 37 for Android builds
 - A TMDB API key for live catalog data
 
 Clone the repository, create your local configuration, and launch the desktop app
@@ -298,12 +299,18 @@ For the detailed module and security model, read [ARCHITECTURE.md](ARCHITECTURE.
 
 ## Documentation
 
+- [User guide hub](https://cove.ninja/docs) — installation, everyday use, settings, integrations, and troubleshooting
 - [Application and presentation guide](docs/APP.md)
 - [Architecture](ARCHITECTURE.md)
 - [HTTP compatibility API](docs/API.md)
+- [Desktop plugin development](docs/PLUGINS.md)
 - [Application updates and signing](docs/UPDATES.md)
 - [Testing and release checks](docs/TESTING.md)
 - [Contributing guide](CONTRIBUTING.md)
+
+The website serves version-matched user guides from `docs/site/` at the latest
+stable Cove tag. Contributor references above follow the active `master` tree
+and can describe behavior newer than the current release.
 
 Translations recovered from Cove's former frontend remain under
 `app/i18n/messages/`; they are not yet connected to the current Compose UI.

@@ -27,6 +27,40 @@ Use `--no-daemon` for CI-equivalent runs. Tests that exercise config or stores
 should use temporary directories and mock HTTP engines; they must not read a
 developer's real account, `.env`, or SQLite database.
 
+## Choose tests by subsystem
+
+| Changed behavior | Focused tests | Additional evidence |
+|---|---|---|
+| Shared models or settings | Owning shared/common test | Serialization/default compatibility |
+| SQLDelight schema or legacy import | Migration and repository tests | Upgrade from every supported prior schema |
+| HTTP route | `CoreRoutesTest` filter | Status, body, headers, size limits, and legacy-prefix parity |
+| Account sync or Trakt | Owning backend service tests | Conflict, offline, auth-expiry, and profile-scope cases |
+| Addons or Nuvio | Manager/runtime tests | URL policy, invalidation, timeout, and sandbox behavior |
+| Desktop plugin | Package, manager, process, and protocol tests | Permission denial, shutdown, staged update, and result sanitization |
+| Shared Compose state | Owning `:ui` test | Phone/tablet behavior and stable state restoration |
+| Desktop native player | `:desktop:test` filter | Live mpv smoke on the affected OS/GPU path |
+| Android player or services | Mobile unit/connected tests | Physical device or emulator lifecycle evidence |
+| TV UI | Shared TV tests | Desktop harness plus Android TV D-pad smoke |
+| Packaging or updater | Artifact contract and updater tests | Disposable packaged-image install/replace exercise |
+
+Green JVM tests establish contract safety; they do not prove that a native
+decoder, CoreAudio device change, graphics driver, Android service lifecycle, or
+nondeterministic shutdown race is resolved. Name the required runtime soak and
+platform when the test environment cannot provide it.
+
+## Documentation checks
+
+Versioned website guides use `docs/site/manifest.json` as their public contract:
+
+```sh
+make test-site-docs
+```
+
+The validator checks manifest structure, source ownership, H1/title agreement,
+relative links, and corpus limits. Run it whenever a guide is added, renamed, or
+linked. Contributor Markdown is not served through that manifest, so also review
+its relative links and finish every documentation change with `git diff --check`.
+
 ## Packaged images and smoke runs
 
 ```sh
@@ -76,6 +110,39 @@ playback controls. The manifest must keep both touchscreen and Leanback optional
 and retain both launcher categories so the single APK remains installable and
 discoverable on every Android form factor. CI currently smoke-launches a phone
 image; TV runtime behavior remains an explicit manual/device check.
+
+### Scraper and plugin isolation
+
+Nuvio tests must exercise JavaScript compatibility, bounded fetches, blocked
+private targets, timeouts, malformed results, and worker cleanup. Android
+connected tests should cross the isolated-process pipe; a JVM fake does not
+prove the Android service boundary.
+
+Desktop plugin validation covers package, manager, and worker layers:
+
+```sh
+cd app
+./gradlew :backend:desktopTest --tests '*PluginPackagesTest' --no-daemon
+./gradlew :backend:desktopTest --tests '*DesktopPluginManagerTest' --no-daemon
+./gradlew :backend:desktopTest --tests '*PluginProcessTest' --no-daemon
+```
+
+Also test the visible permission flow with an ephemeral local package. Never use
+the production catalog signing key in tests. A shutdown or update race needs
+repeated worker start/stop and staged-activation coverage on the affected
+desktop OS; one green Linux execution is not proof of macOS timing.
+
+### Playback and media boundaries
+
+Separate source discovery, registration, and native playback when diagnosing a
+failure. Route tests can prove redirects, headers, range requests, subtitle
+conversion, torrent selection, and progress contracts. Only a live player can
+prove surface rendering, hardware decoding, audio-device behavior, track
+selection, or local subtitle loading.
+
+For segment skipping, cover embedded chapters alone, external timestamps alone,
+both sources with overlapping kinds, manual skip, automatic skip, seeking back,
+and up-next interaction. Embedded media must win per matching segment type.
 
 ## Workflow checks
 

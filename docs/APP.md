@@ -298,6 +298,47 @@ editor.edit { copy(autoPlay = enabled) }
 
 Never call `graph.settings.update()` with a hand-built `AppSettings`.
 
+The visible settings categories are declared by `SettingsCategory`; keep the
+category label, TV equivalent, persisted field, and user documentation together.
+The UI deliberately does not expose machine-managed fields such as
+`defaultProvider`, measured bandwidth, source preference, onboarding state,
+remote token generation, or server timestamps.
+
+Profile scope is not universal. Remote access, the pairing token, storage
+retention, low-performance mode, mpv text, and application updates belong to the
+device. Addon sharing reads only the primary profile's `addonsFollowPrimary`
+flag and provider/catalog configuration. It must not be reused as a generic
+"share this profile" switch.
+
+### Add a catalog-backed addon row
+
+`AddonRepository` publishes both providers and their catalog descriptors.
+Enabling a catalog changes Home and Explore data without changing whether the
+same addon may answer stream or subtitle requests. Keep those capabilities
+separate in UI state.
+
+When primary-profile sharing is active, `AddonsState.Ready.sharing` identifies
+the owner and the current profile receives a read-only effective provider set.
+Render the inherited catalogs and switches, but send mutations only from the
+primary profile. Nuvio repositories and plugins remain active-profile state.
+
+### Work with playback UI
+
+`PlaybackSession` owns source lookup, retry, resume targeting, segment policy,
+progress persistence, and up-next behavior. `VideoPlayerHost` owns the native
+surface and reports duration, position, buffering, chapters, tracks, decode
+state, and errors. A Compose control should request an operation from the
+session or host; it should not infer native state from its last click.
+
+`playbackSegments()` merges timestamp providers with recognized embedded
+chapters. Media wins per segment type. Feed that single resolved list to
+automatic skipping, the manual skip action, and seek-bar marks so they cannot
+disagree.
+
+Local subtitle loading is a host capability. Desktop supplies a file chooser
+and window drop target; platforms without that seam pass `null`, which removes
+the action. Do not show a control that cannot complete on the current host.
+
 ### Image URLs
 
 Models can contain a raw TMDB path (`/abc.jpg`), a TMDB CDN URL, a legacy
@@ -363,6 +404,24 @@ Colour follows `LocalContentColor` unless you pass `tint`, so icons adapt to the
 without per-call-site colouring. Names built dynamically escape the source scan — add
 those to the `extraIcons` list in `app/ui/build.gradle.kts`.
 
+## Adaptive and TV presentation
+
+Phone, tablet, and desktop use the adaptive `CoveApp` root. Android TV and the
+desktop TV harness use `CoveTvApp`, which owns D-pad focus, ten-foot density,
+remote Back policy, and TV-specific page composition. Share repository state,
+models, media actions, and playback policy; do not add `isTv` branches through
+touch layouts.
+
+Every focusable TV row needs a stable key and a restoration target. An overlay
+must consume Back before the page or application does, then restore focus to the
+control that opened it. Test initial focus, directional traversal, overlay
+close, destination return, and player picker nesting.
+
+The TV settings surface intentionally omits controls that require long text,
+filesystem paths, or pointer interaction. A setting can still be shared in the
+model while having different presentation, but device-local values must remain
+editable on the device that owns them.
+
 ## Adding a page
 
 A page owns its own data and its own loading and error rendering. The shape:
@@ -425,6 +484,6 @@ Shared state holders live in `app/ui/.../ui/state/`:
 - **`/api/streams` must run before `/api/play`.** The play route only serves URLs a prior streams call registered, and the registry entry expires after 30 minutes.
 - **`/api/streams` requires season and episode for TV** and rejects the request without them, so Watch on a series must resolve an episode first.
 - **`AppSettings.defaultVolume` is 0..1; mpv's volume is 0..100.** Passing it through unscaled is near-silent audio, with nothing in the logs to say so.
-- **No third-party stream provider ships by default.** A fresh profile resolves zero playable sources, so playback cannot be exercised end-to-end until one is added — Profile → Settings → Provider addons is where they go in.
+- **No third-party stream provider ships by default.** A fresh profile resolves zero playable sources, so playback cannot be exercised end-to-end until one is added under Profile → Addons.
 - **Compose cannot draw over a `SwingPanel` except on Direct3D and Metal.** Interop blending is unsupported on an OpenGL render API, so anything composed over an embedded video panel is invisible on Linux. The in-app player reads frames back and draws them itself for this reason.
 - **Fixtures are a real backend substitute.** `FixtureAppGraph` implements every repository, so `--backend-mode fixtures` exercises these paths with no server. If a recipe here does not work against fixtures, the fixture is missing a case.

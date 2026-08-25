@@ -51,6 +51,31 @@ certificate. Android's package installer retains its normal confirmation flow.
 Pre-`1.0.0` APKs can upgrade in place when they were signed with the same
 production keystore; Android rejects a build from a different certificate.
 
+## Failure and recovery contract
+
+Update failures remain device-local and must leave the running installation
+usable. A check or download failure changes only updater state. A signature,
+digest, size, asset-name, version, platform, or package-identity mismatch rejects
+the staged payload before replacement.
+
+The Windows helper owns backup, replacement, rollback, and restart. Test both
+installed and portable marker layouts in disposable directories; success in one
+mode is not evidence for the other. A failed replacement must restore
+application-owned files before it restarts Cove.
+
+Android hands a verified APK to the system installer and cannot bypass the
+system confirmation, unknown-app-source permission, storage checks, or signing
+rules. Cancellation is not an updater corruption. Preserve the verified staged
+file only according to the repository's retry policy.
+
+Never broaden the compatibility HTTP API to accept an update URL, manifest,
+signature, or key from a caller. `UpdateRepository` is the sole application
+interface, and the trusted public-key set comes from packaged configuration.
+
+User-facing package selection, manual checksums, and troubleshooting belong in
+the versioned [site update guide](site/guides/updates.md). Keep that guide in the
+same release change whenever target availability or replacement behavior moves.
+
 ## Release key setup
 
 Generate the offline Ed25519 key once and store only its base64 DER form in the

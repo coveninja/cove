@@ -95,6 +95,10 @@ security-sensitive implementations remain platform-owned.
 - `AddonManager` handles Stremio manifests, streams, subtitles, catalogs, the
   official watch-option/timestamp integrations, bounded caching, and explicit
   invalidation when provider state changes.
+- Enabled addon catalogs become attributed Home and Explore rows. The primary
+  profile can provide addon and catalog configuration to secondary profiles,
+  but that read-only sharing does not cross library, progress, Nuvio, plugin,
+  or ordinary settings boundaries.
 - `DiscoveryService` builds profile-scoped taste signals from watch recency,
   genres, keywords, people, studios, ratings, and status. Watched/dismissed/
   removed items and age-inappropriate results are excluded before ranking. A
@@ -117,15 +121,43 @@ modules from `app/backend/src/desktopMain/resources`; the Android build packages
 that directory as assets. Repository and scraper activation remain
 profile-scoped and opt-in.
 
+## Desktop plugin isolation
+
+Desktop plugins use a signed package and permission model separate from addons
+and Nuvio. `DesktopPluginManager` verifies the signed catalog, package/manifest
+equality, digest, declared size, API compatibility, archive paths, file count,
+and extraction size before installation. Updates are staged and activate only
+after the current worker stops. A package requesting a new capability cannot
+start until that capability is approved for the active profile.
+
+Every enabled plugin runs in a dedicated 128 MiB child JVM. GraalJS receives no
+host-class lookup, host IO, native access, process creation, or thread creation.
+The line-framed protocol caps messages and enforces timeouts. Network, profile
+storage, playback transport, and Discord IPC are host-brokered and checked
+against the approved capability. Observation receives a URL-free playback
+snapshot; media results are sanitized before joining addon and scraper results.
+
+Plugins are currently desktop-only. Android and TV receive an unavailable
+repository, so shared UI and content logic must tolerate the plugin surface
+being absent without presenting dead settings.
+
 ## Playback and media boundary
 
 Direct HTTP sources are probed and proxied only when headers or compatibility
 handling require it. Redirects are validated one hop at a time, and credentials
 are stripped when authority changes. Subtitle responses can be converted from
-SRT to WebVTT. Torrent requests are registered with the platform media host and
-served from jlibtorrent while progress remains observable. Each platform engine
-chooses the requested or largest playable video file and owns cleanup on
-runtime close.
+SRT to WebVTT. Desktop playback can also load a user-selected subtitle file or
+accept one through the window drop target; the shared player exposes the action
+only when the host implements it. Torrent requests are registered with the
+platform media host and served from jlibtorrent while progress remains
+observable. Each platform engine chooses the requested or largest playable
+video file and owns cleanup on runtime close.
+
+Playback segments use four semantic kinds: intro, recap, credits, and preview.
+Recognized embedded media chapters win for their matching kind; compatible
+external timestamps fill only the kinds the media did not supply. The shared
+session uses the same resolved segments for seek-bar marks, manual actions, and
+automatic skipping, preventing UI and playback policy from disagreeing.
 
 Desktop mpv stays in-process through JNA. The OpenGL path retains GPU rendering
 and hardware decoding; software rendering remains the controlled fallback.

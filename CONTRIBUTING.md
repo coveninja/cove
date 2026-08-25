@@ -21,13 +21,29 @@ reload session or focused work, run Gradle from `app/`, for example
 `./gradlew :desktop:hotRun --auto --args="--backend-mode kotlin"`,
 `./gradlew :backend:desktopTest`, or `./gradlew :desktop:run`.
 
-For Android work, install SDK platform/build-tools 36 and run `make mobile` or
+For Android work, install SDK platform/build-tools 37 and run `make mobile` or
 `./gradlew :mobile:installDebug`. One `app/mobile` APK serves phones, tablets,
 and televisions: `MainActivity` selects adaptive `CoveApp` or D-pad-oriented
 `CoveTvApp` from the device. Use `make run-tv`/`make hot-tv` for the desktop TV
 harness and `make tv-avd`/`make tv-install` for an Android TV device. Share the
 domain/backend graph, but keep D-pad/ten-foot behavior in the TV presentation
 rather than conditional branches throughout the touch UI.
+
+Use the Gradle wrapper under `app/`; no system Gradle installation is required.
+Desktop configuration is read from the environment, the nearest `.env`, then
+packaged properties. Android deployment values are compiled into `BuildConfig`.
+Never put a service-role key, signing key, or production auth token in `.env`.
+
+### Useful development modes
+
+| Mode | Command | External configuration |
+|---|---|---|
+| Desktop fixtures | `make run` | None |
+| Desktop fixtures with hot reload | `make hot` | None |
+| Live desktop graph | `cd app && ./gradlew :desktop:run --args="--backend-mode kotlin"` | `TMDB_API_KEY`; optional public integration credentials |
+| Desktop TV harness | `make run-tv` or `make hot-tv` | None for fixtures |
+| Android touch app | `make mobile` or `cd app && ./gradlew :mobile:installDebug` | Android SDK and a connected device/emulator |
+| Android TV | `make tv-avd` then `make tv-install` | SDK emulator tools and hardware acceleration |
 
 ## Code organization
 
@@ -52,6 +68,13 @@ rather than conditional branches throughout the touch UI.
 - Nuvio code must remain in its platform sandbox: a disposable GraalJS child
   JVM on desktop or an isolated QuickJS service on Android. Do not expose host
   classes, filesystem/process APIs, native access, or unbounded execution.
+- Desktop plugins stay behind `PluginRepository` and the brokered worker
+  protocol. New capabilities require an explicit manifest value, user-facing
+  approval text, host enforcement, protocol limits, and tests. Never pass raw
+  playback URLs to observation-only plugins.
+- The primary-profile addon-sharing switch applies only to provider addons and
+  catalog visibility. Do not accidentally share libraries, Nuvio activation,
+  plugin grants, progress, or ordinary profile settings with it.
 - Comments should explain constraints and decisions; use names and small
   functions to explain mechanics.
 
@@ -72,6 +95,22 @@ For backend changes, prefer a focused test while iterating and finish with
 behavior, migration tests for every schema or import change, and concurrency or
 cache-invalidation tests where work is asynchronous.
 
+Choose the focused suite that owns the behavior:
+
+| Change | Focused validation |
+|---|---|
+| Shared models or repositories | Owning `commonTest` class and shared tests |
+| Routes, sync, addons, plugins, or persistence | `:backend:desktopTest` with the owning test class |
+| Shared Compose UI or state | `:ui:allTests` or the relevant UI test class |
+| Desktop player or lifecycle | `:desktop:test` plus a GUI smoke for visual/native behavior |
+| Android host or packaging | `:mobile:testDebugUnitTest`, `:mobile:lintDebug`, and `:mobile:assembleDebug` |
+| Site documentation | `make test-site-docs` |
+| Workflows or release scripts | `make test-workflows` |
+
+Tests must use temporary directories, fixture graphs, mock HTTP engines, and
+ephemeral keys. They must not read a developer's real database, auth session,
+plugin store, or `.env`.
+
 CI builds and tests the Gradle project on Linux, verifies an Apple-silicon
 desktop image on macOS, lints the Android app, launches it on a phone emulator,
 reviews pull-request dependencies, and lints workflow files. Release jobs repeat
@@ -87,3 +126,7 @@ signed Android phone/tablet/TV artifacts.
   player, torrent, or sandbox implementations are portable unchanged.
 - Never commit `.env`, user databases, auth sessions, provider tokens, or
   generated release credentials.
+- Update the versioned site guide and relevant contributor reference in the
+  same change when user-visible behavior, an endpoint, a setting, packaging, or
+  a trust boundary changes. Keep user instructions task-oriented and verify
+  relative links with `make test-site-docs`.

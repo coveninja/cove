@@ -56,38 +56,92 @@
       "keywords": ["upgrade", "automatic update", "checksum", "signature"]
     },
     {
+      "slug": "library-discovery-and-progress",
+      "title": "Library, discovery, and watch progress",
+      "summary": "Browse Cove, organize My List, use the calendar, and understand saved progress.",
+      "section": "Use Cove",
+      "order": 70,
+      "source_path": "docs/site/guides/library-discovery-and-progress.md",
+      "keywords": ["home", "explore", "search", "my list", "calendar", "watch progress", "ratings"]
+    },
+    {
+      "slug": "profiles-and-insights",
+      "title": "Profiles and insights",
+      "summary": "Keep viewers separate, tune personalization, and understand activity insights.",
+      "section": "Use Cove",
+      "order": 80,
+      "source_path": "docs/site/guides/profiles-and-insights.md",
+      "keywords": ["profiles", "primary profile", "recommendations", "insights", "activity"]
+    },
+    {
       "slug": "accounts-and-sync",
       "title": "Accounts and sync",
       "summary": "Understand optional accounts, profiles, cloud data, and cross-device sync.",
       "section": "Use Cove",
-      "order": 70,
+      "order": 90,
       "source_path": "docs/site/guides/accounts-and-sync.md",
-      "keywords": ["supabase", "profile", "sign in", "cloud", "trakt"]
+      "keywords": ["supabase", "register", "profile", "sign in", "cloud", "sync now"]
+    },
+    {
+      "slug": "trakt",
+      "title": "Trakt integration",
+      "summary": "Connect Trakt, control scrobbling, and reconcile compatible library data.",
+      "section": "Use Cove",
+      "order": 100,
+      "source_path": "docs/site/guides/trakt.md",
+      "keywords": ["trakt", "scrobble", "device code", "watch history", "library sync"]
     },
     {
       "slug": "addons-and-sources",
       "title": "Addons and sources",
       "summary": "Configure compatible addons and understand Cove's source boundaries.",
       "section": "Use Cove",
-      "order": 80,
+      "order": 110,
       "source_path": "docs/site/guides/addons-and-sources.md",
-      "keywords": ["stremio", "nuvio", "streams", "subtitles", "catalogs"]
+      "keywords": ["stremio", "nuvio", "streams", "subtitles", "catalogs", "primary profile"]
+    },
+    {
+      "slug": "desktop-plugins",
+      "title": "Desktop plugins",
+      "summary": "Install signed integrations, review permissions, and diagnose plugin workers.",
+      "section": "Use Cove",
+      "order": 120,
+      "source_path": "docs/site/guides/desktop-plugins.md",
+      "keywords": ["plugins", "permissions", "signed catalog", "discord presence", "developer mode"]
     },
     {
       "slug": "playback-and-subtitles",
       "title": "Playback and subtitles",
       "summary": "Choose streams, control decoding, and troubleshoot subtitle playback.",
       "section": "Use Cove",
-      "order": 90,
+      "order": 130,
       "source_path": "docs/site/guides/playback-and-subtitles.md",
-      "keywords": ["mpv", "hardware decoding", "software decoding", "audio", "subtitles"]
+      "keywords": ["mpv", "hardware decoding", "audio", "subtitles", "keyboard", "chapters", "torrent"]
+    },
+    {
+      "slug": "tv-and-remote-controls",
+      "title": "TV and remote controls",
+      "summary": "Navigate the ten-foot interface and control playback with a D-pad remote.",
+      "section": "Use Cove",
+      "order": 140,
+      "source_path": "docs/site/guides/tv-and-remote-controls.md",
+      "keywords": ["android tv", "leanback", "remote", "d-pad", "focus", "back"]
+    },
+    {
+      "slug": "settings-reference",
+      "title": "Settings reference",
+      "summary": "Understand every settings category, its effect, and whether it follows the profile or device.",
+      "section": "Use Cove",
+      "order": 150,
+      "source_path": "docs/site/guides/settings-reference.md",
+      "keywords": ["settings", "playback", "sources", "subtitles", "storage", "network", "mpv"]
     },
     {
       "slug": "troubleshooting",
       "title": "Troubleshooting",
       "summary": "Resolve common installation, update, sync, and playback problems.",
       "section": "Get help",
-      "order": 100,
+      "order": 160,
       "source_path": "docs/site/guides/troubleshooting.md",
       "keywords": ["logs", "logcat", "bug report", "crash", "support"]
     },
@@ -96,7 +150,7 @@
       "title": "Data and privacy",
       "summary": "See what stays local, what optional integrations receive, and how deletion works.",
       "section": "Get help",
-      "order": 110,
+      "order": 170,
       "source_path": "docs/site/guides/data-and-privacy.md",
       "keywords": ["local data", "account deletion", "email", "cloud data"]
     },
@@ -105,7 +159,7 @@
       "title": "Frequently asked questions",
       "summary": "Quick answers about platforms, content sources, accounts, and updates.",
       "section": "Get help",
-      "order": 120,
+      "order": 180,
       "source_path": "docs/site/guides/faq.md",
       "keywords": ["questions", "support", "platforms"]
     }

@@ -42,6 +42,114 @@ All paths below are relative to `/api/v1`.
 events. `/play`, `/torrent`, `/subtitle-proxy`, `/img`, and `/speedtest` may
 stream response bodies instead of materializing them in memory.
 
+## Connection and authentication
+
+The desktop loopback listener is a trusted local-process boundary. Do not make
+it listen publicly. Optional remote access creates a separate LAN listener and
+requires the current pairing token on every request:
+
+```http
+X-Cove-Token: <pairing-token>
+```
+
+The `token` query parameter is retained for clients that cannot set headers,
+but headers avoid leaking the secret through copied URLs and access logs. This
+token authenticates the LAN connection; it is unrelated to a Cove account
+access token.
+
+`POST /auth/sync` additionally requires the Cove account session as
+`Authorization: Bearer <access-token>`. In-process application sync uses the
+stored session through `AuthService.syncNow()` instead of this HTTP route. Auth
+and Trakt routes return `503` when their integration was not configured. Route
+groups whose repository is entirely absent, such as a fixture without a media
+boundary, are not installed and therefore return `404`.
+
+Requests and responses use `application/json` unless the endpoint is documented
+as a stream or returns `204 No Content`. Data contracts are the serializable
+types under `app/shared`; route tests are the executable wire contract.
+
+## Common request contracts
+
+### Media keys
+
+Most catalog and source endpoints require a positive `id` and
+`type=movie|tv`. TV stream lookup requires positive `season` and `episode`
+values. Season-list and episode-list routes accept season zero where specials
+are meaningful, but normal stream addressing does not treat zero as an episode.
+
+```sh
+curl 'http://127.0.0.1:6969/api/v1/details?id=550&type=movie'
+curl 'http://127.0.0.1:6969/api/v1/streams?id=1399&type=tv&season=1&episode=1'
+```
+
+Search endpoints require a non-blank `q`. Pagination parameters are numeric;
+invalid required identifiers return `400` rather than silently selecting an
+unrelated title.
+
+### JSON mutations
+
+Auth requests use the matching shared request type: registration includes
+email, password, and profile name; confirmation adds the emailed token; login
+uses email and password; OTP verification uses email and token. Never expose
+these routes or bodies through an internet-facing proxy.
+
+`PUT /settings` is a complete replacement, not a patch. Send the full
+`AppSettings` returned by `GET /settings`; omitted fields otherwise take their
+decoded defaults. Profile, addon, Nuvio, and library mutations use their
+specific POST/PATCH bodies and reject invalid state with `400` or `409`.
+
+### Cache behavior and empty results
+
+`GET /client-session` sends `Cache-Control: no-store`. Empty discovery,
+catalog, stream, subtitle, activity, and calendar collections are successful
+results, not `404`. `GET /trakt/stats` returns `204` when the connected account
+has no reportable totals.
+
+## Endpoint behavior notes
+
+### Auth and sync
+
+Registration returns either a session or `confirmation_required: true`.
+`/auth/otp` sends a sign-in code and `/auth/verify-otp` exchanges it. `/auth/me`
+reports the current local account session, while `/auth/logout` clears it.
+`/auth/sync` responds with the resulting library generation and any non-fatal
+push error after reconciliation.
+
+### Trakt
+
+`/trakt/device-code` starts device authorization; `/trakt/poll` accepts the
+device code returned from that call. Scrobbles and library sync are queued and
+return `202 Accepted` when work was accepted. `/trakt/unlink` removes the local
+authorization and returns `204`.
+
+### Addons, catalogs, and Nuvio
+
+Addon configuration and individual catalog switches are distinct. `/catalogs`
+lists the effective catalog descriptors; `/catalog` reads one page using addon,
+type, catalog, skip, and bounded limit parameters. Under primary-profile addon
+sharing, mutations from a secondary profile can be rejected even though reads
+show the inherited providers.
+
+Nuvio repository routes manage repository metadata, while
+`PATCH /nuvio/scrapers` changes individual scraper activation. Adding a
+repository does not automatically run every scraper.
+
+### Media registration and streaming
+
+`GET /streams` merges addon, Nuvio, and available desktop-plugin results, then
+registers playable URLs and torrent hashes with the media boundary. A later
+`GET /play` can serve only a registered direct URL or hash. Registrations are
+bounded and expire; clients should not persist them as durable media URLs.
+
+`POST /streams/probe` validates a candidate batch. Torrent playback accepts
+optional `season`, `episode`, and `fileIdx` selectors. `/progress` is a snapshot;
+`/progress/stream` emits an SSE update approximately every two seconds.
+`/prefetch-download` returns `202` and a `started` flag rather than waiting for
+the download.
+
+The subtitle and image proxies validate upstream targets and cap responses.
+Clients must not treat them as general-purpose open proxies.
+
 `/browse` and `/discover` both return `Media` lists and are easy to confuse.
 `/browse` is the whole catalog — `type`, optional `genre`, `sort`
 (`popularity`|`rating`|`newest`|`oldest`|`title`, unknown values falling back to
