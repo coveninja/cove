@@ -59,6 +59,16 @@ data class PlaybackRequest(
 }
 
 /**
+ * A subtitle file the viewer supplied for what is playing now.
+ *
+ * Kept by the session rather than left to the player because mpv loses its external
+ * tracks on every `loadfile`: a reconnect after a dead stream, or a step to another
+ * source of the same episode, would otherwise silently take the viewer's file away at
+ * the moment they are least inclined to go looking for it again.
+ */
+data class UserSubtitle(val path: String, val title: String, val language: String)
+
+/**
  * How much of the window the video occupies.
  *
  * [Inline] is a real playback session drawn into a slot on the page it was started
@@ -164,6 +174,9 @@ class PlaybackSession(
     private var resolvedCandidates: List<StreamChoice> = emptyList()
     private var failedSources = mutableSetOf<String>()
 
+    /** Files the viewer supplied for the current request, in the order they arrived. */
+    private var userSubtitles: List<UserSubtitle> = emptyList()
+
     /**
      * @param forcePicker show the source list even when the settings would have
      *   picked one, and even when only one came back. This is the "choose a
@@ -200,6 +213,9 @@ class PlaybackSession(
         host.stop()
         resolvedCandidates = emptyList()
         failedSources = mutableSetOf()
+        // A file chosen for one episode is the wrong file for the next, and a wrong
+        // subtitle is worse than none.
+        userSubtitles = emptyList()
         resumedFrom = null
         timestamps = MediaTimestamps.None
         browsingSeason = null
@@ -340,6 +356,9 @@ class PlaybackSession(
         resetPlaybackRecovery()
         resolvedCandidates = emptyList()
         failedSources = mutableSetOf()
+        // A file chosen for one episode is the wrong file for the next, and a wrong
+        // subtitle is worse than none.
+        userSubtitles = emptyList()
         resumedFrom = null
         timestamps = MediaTimestamps.None
         browsingSeason = null
@@ -611,6 +630,19 @@ class PlaybackSession(
         startPlaybackMonitor(token)
         startProgressTicker(token)
 
+        // Ahead of both early returns below. loadfile dropped whatever was loaded, and
+        // a viewer who turned fetched subtitles off in settings still means it when they
+        // hand the player a file themselves — which is also why these are added with
+        // select even though applyPreferences may just have set sid=no.
+        userSubtitles.forEach { subtitle ->
+            player.addSubtitle(
+                url = subtitle.path,
+                title = subtitle.title,
+                language = subtitle.language,
+                select = true,
+            )
+        }
+
         if (current.extra != null || settings?.subtitlesEnabled == false) return
         val domainType = current.media.type.toDomainType() ?: return
         val external = runCatching {
@@ -640,6 +672,40 @@ class PlaybackSession(
                 language = subtitle.lang,
             )
         }
+    }
+
+    /**
+     * Loads a subtitle file the viewer supplied and switches to it.
+     *
+     * Returns false for anything that is not a subtitle file, so the caller can say so
+     * rather than leaving a drop that quietly did nothing. Accepted before playback
+     * starts too: the file is recorded either way, and [loadCurrentSource] applies it
+     * when the stream opens.
+     */
+    fun addUserSubtitle(path: String): Boolean {
+        if (!isSubtitleFile(path)) return false
+        val player = host ?: return false
+        val entry = UserSubtitle(
+            path = path,
+            title = subtitleFileName(path),
+            language = subtitleFileLanguage(path),
+        )
+        // Dropped twice — which is the natural response to a drop that appeared to do
+        // nothing — must not list the same file twice. mpv has it already; this only
+        // has to switch back to it.
+        val existing = player.status.value.subtitleTracks.firstOrNull { it.title == entry.title }
+        if (userSubtitles.any { it.path == entry.path } && existing != null) {
+            player.selectSubtitleTrack(existing.id)
+            return true
+        }
+        userSubtitles = userSubtitles + entry
+        player.addSubtitle(
+            url = entry.path,
+            title = entry.title,
+            language = entry.language,
+            select = true,
+        )
+        return true
     }
 
     /** User-requested retry of the current source; never spends another automatic retry. */

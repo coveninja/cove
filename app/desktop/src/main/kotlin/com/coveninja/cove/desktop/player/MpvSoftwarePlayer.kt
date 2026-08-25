@@ -186,10 +186,11 @@ class MpvSoftwarePlayer internal constructor(
     // setters cannot express.
     override fun setOption(name: String, value: String) = command("set", name, value)
 
-    // "auto" selects the track immediately if nothing else is selected, which is
-    // what a viewer adding a subtitle expects; flags and title are positional.
-    override fun addSubtitle(url: String, title: String, language: String) =
-        command("sub-add", url, "auto", title, language)
+    // Flags and title are positional. mpv's "auto" means don't select — the track is
+    // offered and the slang applied before the load decides — while "select" switches
+    // to it at once, which is only ever right for a file the viewer chose themselves.
+    override fun addSubtitle(url: String, title: String, language: String, select: Boolean) =
+        command("sub-add", url, if (select) "select" else "auto", title, language)
 
     override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
         command("set", "keepaspect", if (keepAspect) "yes" else "no")

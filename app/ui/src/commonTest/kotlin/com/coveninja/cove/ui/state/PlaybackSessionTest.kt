@@ -39,6 +39,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -207,6 +208,11 @@ private class FakeHost : VideoPlayerHost {
         )
     }
 
+    /** What the player would report once mpv has taken a sub-add. */
+    fun reportSubtitleTracks(vararg tracks: MediaTrack) {
+        _status.value = _status.value.copy(subtitleTracks = tracks.toList())
+    }
+
     fun reportError(message: String) {
         _status.value = _status.value.copy(
             hasMedia = false,
@@ -242,11 +248,12 @@ private class FakeHost : VideoPlayerHost {
     override fun applyPreferences(preferences: PlaybackPreferences) {
         appliedPreferences = preferences
     }
-    override fun addSubtitle(url: String, title: String, language: String) {
-        addedSubtitles += AddedSubtitle(url, title, language)
+    override fun addSubtitle(url: String, title: String, language: String, select: Boolean) {
+        addedSubtitles += AddedSubtitle(url, title, language, select)
     }
     override fun selectAudioTrack(id: Int) = Unit
-    override fun selectSubtitleTrack(id: Int?) = Unit
+    var selectedSubtitleId: Int? = null
+    override fun selectSubtitleTrack(id: Int?) { selectedSubtitleId = id }
     override fun stepChapter(delta: Int) = Unit
     override fun stepFrame(delta: Int) = Unit
     override fun setSubtitleDelay(seconds: Double) = Unit
@@ -272,7 +279,20 @@ private class FakeHost : VideoPlayerHost {
     override fun Surface(modifier: Modifier) = Unit
 }
 
-private data class AddedSubtitle(val url: String, val title: String, val language: String)
+private data class AddedSubtitle(
+    val url: String,
+    val title: String,
+    val language: String,
+    val select: Boolean,
+)
+
+private fun subtitleTrack(id: Int, title: String) = MediaTrack(
+    id = id,
+    kind = TrackKind.Subtitle,
+    title = title,
+    language = null,
+    selected = false,
+)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -498,6 +518,95 @@ class PlaybackSessionTest {
             listOf("Subtitle 1", "Signs & Songs", "Subtitle 2", "Subtitle 1"),
             h.host.addedSubtitles.map(AddedSubtitle::title),
         )
+    }
+
+    // The select flag is the whole difference between the two kinds of external
+    // subtitle, and it is also the only automated check that both player hosts are
+    // asked for the same thing — neither mpv binding is reachable from here.
+    // Mutation applied to verify: passed select = true for the fetched ones
+    // → test failed, an addon subtitle claimed the picture over the viewer's file.
+    @Test
+    fun `a supplied file is selected while fetched ones are only offered`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(
+            SubtitleSource(id = "1", url = "https://subs.test/en.srt", lang = "en"),
+        )
+        h.session.open(movie())
+        runCurrent()
+
+        assertTrue(h.session.addUserSubtitle("/home/a/Movie.2024.en.srt"))
+
+        assertEquals(
+            listOf("https://subs.test/en.srt" to false, "/home/a/Movie.2024.en.srt" to true),
+            h.host.addedSubtitles.map { it.url to it.select },
+        )
+        // The file names itself, so the menu has something to call it other than an id.
+        assertEquals("Movie.2024.en.srt", h.host.addedSubtitles.last().title)
+        assertEquals("en", h.host.addedSubtitles.last().language)
+    }
+
+    // Mutation applied to verify: dropped the userSubtitles loop from loadCurrentSource
+    // → test failed, the reconnect came back with the viewer's file gone.
+    @Test
+    fun `a supplied file is loaded again after a reconnect`() = playbackTest { h ->
+        h.session.open(movie())
+        runCurrent()
+        assertTrue(h.session.addUserSubtitle("/home/a/Movie.srt"))
+
+        h.host.reportPlayback(position = 400.0, duration = 1000.0)
+        runCurrent()
+        h.host.reportPlayback(position = 400.0, duration = 1000.0, interrupted = true)
+        runCurrent()
+
+        // Once on the drop, once on the reload that followed it.
+        assertEquals(
+            listOf("/home/a/Movie.srt", "/home/a/Movie.srt"),
+            h.host.addedSubtitles.map(AddedSubtitle::url),
+        )
+        assertTrue(h.host.addedSubtitles.all(AddedSubtitle::select))
+    }
+
+    // Mutation applied to verify: removed the userSubtitles reset from open()
+    // → test failed, the film's subtitle file was loaded over an episode of Breaking Bad.
+    @Test
+    fun `another title does not inherit the file`() = playbackTest { h ->
+        h.session.open(movie())
+        runCurrent()
+        assertTrue(h.session.addUserSubtitle("/home/a/Movie.srt"))
+
+        h.session.open(series(listOf(MediaSeason(1, "Season 1", episodeCount = 7))))
+        runCurrent()
+
+        assertEquals(1, h.host.addedSubtitles.size)
+    }
+
+    // Mutation applied to verify: made addUserSubtitle skip the isSubtitleFile check
+    // → test failed, the video file was handed to sub-add and reported as in use.
+    @Test
+    fun `a file that is not a subtitle is refused`() = playbackTest { h ->
+        h.session.open(movie())
+        runCurrent()
+
+        assertFalse(h.session.addUserSubtitle("/home/a/Movie.mkv"))
+        assertTrue(h.host.addedSubtitles.isEmpty())
+    }
+
+    // Dropping again is what someone does when the first drop looked like it did
+    // nothing; two identical entries in the menu is the wrong answer to that.
+    // Mutation applied to verify: dropped the already-added branch
+    // → test failed with the same file listed twice.
+    @Test
+    fun `the same file supplied twice is reselected rather than added again`() = playbackTest { h ->
+        h.session.open(movie())
+        runCurrent()
+        assertTrue(h.session.addUserSubtitle("/home/a/Movie.srt"))
+        h.host.reportSubtitleTracks(subtitleTrack(id = 3, title = "Movie.srt"))
+
+        assertTrue(h.session.addUserSubtitle("/home/a/Movie.srt"))
+
+        assertEquals(1, h.host.addedSubtitles.size)
+        assertEquals(3, h.host.selectedSubtitleId)
     }
 
     // AppSettings.defaultVolume is a 0..1 fraction and mpv's is 0..100; the ×100

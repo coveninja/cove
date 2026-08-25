@@ -103,6 +103,11 @@ fun PlayerControls(
     onSelectAudio: (Int) -> Unit,
     onSelectSubtitle: (Int?) -> Unit,
     onSetSubtitleDelay: (Double) -> Unit,
+    /**
+     * Loads a subtitle file the viewer picks. Null where the platform has no files to
+     * pick from, which is also what keeps the entry out of the menu there.
+     */
+    onLoadSubtitleFile: (() -> Unit)? = null,
     onSetAudioDelay: (Double) -> Unit,
     scaling: VideoScaling,
     onSelectScaling: (VideoScaling) -> Unit,
@@ -208,7 +213,11 @@ fun PlayerControls(
 
                 Box(modifier = Modifier.weight(1f))
 
-                if (status.subtitleTracks.isNotEmpty()) {
+                // Shown for a release with no subtitles of its own too, wherever a file
+                // can be loaded: that is precisely the case the entry below exists for,
+                // and a button that appears only once there is already something to
+                // choose would hide it exactly then.
+                if (status.subtitleTracks.isNotEmpty() || onLoadSubtitleFile != null) {
                     TrackMenuButton(
                         icon = "lucide:captions",
                         tracks = status.subtitleTracks,
@@ -219,6 +228,7 @@ fun PlayerControls(
                         onSelect = onSelectSubtitle,
                         delaySeconds = status.subtitleDelaySeconds,
                         onSetDelay = onSetSubtitleDelay,
+                        onLoadFile = onLoadSubtitleFile,
                     )
                 }
                 if (status.audioTracks.size > 1) {
@@ -806,6 +816,8 @@ private fun TrackMenuButton(
     /** Current offset against the picture, and where to send a new one. */
     delaySeconds: Double,
     onSetDelay: (Double) -> Unit,
+    /** Subtitles only, and only where the platform has files to offer. */
+    onLoadFile: (() -> Unit)? = null,
 ) {
     val groups = remember(tracks) { groupTracksByLanguage(tracks) }
 
@@ -851,6 +863,19 @@ private fun TrackMenuButton(
                         },
                     )
                 }
+            }
+            // Below the tracks and above the timing: this is the last resort when none
+            // of the above fits, and it is also the only entry here that is not a track.
+            onLoadFile?.let { loadFile ->
+                LanguageHeader("Your own")
+                CMenuItem(
+                    text = "Load subtitle file…",
+                    iconName = "lucide:upload",
+                    onClick = {
+                        onExpandedChange(false)
+                        loadFile()
+                    },
+                )
             }
             // Addon subtitles are matched to a release by name and frequently run
             // early or late against the one actually playing. Without this the only

@@ -99,6 +99,28 @@ private val LANGUAGE_ALIASES: Map<String, List<String>> = mapOf(
 )
 
 /**
+ * Every code the table above knows, in either form. Declared after it: top-level
+ * properties initialise in file order, and reading the map from above it would leave
+ * this empty.
+ */
+private val LANGUAGE_CODES: Set<String> = LANGUAGE_ALIASES.keys + LANGUAGE_ALIASES.values.flatten()
+
+/**
+ * [segment] unchanged when it names a language, null when it is just a word.
+ *
+ * Asked of the segment before a subtitle file's extension, which is a language tag in
+ * `Movie.2024.en.srt` and part of the release name in `Movie.2024.web.srt`. Nothing but
+ * this table separates the two: a "two or three letters" rule files the second one under
+ * a language called WEB. A region subtag is kept — `pt-BR` is worth showing — and only
+ * the part before it has to be a language.
+ */
+internal fun knownLanguageTag(segment: String): String? {
+    val trimmed = segment.trim()
+    val base = trimmed.substringBefore('-').lowercase()
+    return trimmed.takeIf { base in LANGUAGE_CODES }
+}
+
+/**
  * @param originalLanguage the title's own language, used to resolve Original.
  */
 fun AppSettings.playbackPreferences(originalLanguage: String?): PlaybackPreferences {

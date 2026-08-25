@@ -267,8 +267,14 @@ interface VideoPlayerHost {
     /** Applied before loading, so the player picks the right tracks first time. */
     fun applyPreferences(preferences: PlaybackPreferences)
 
-    /** Adds an external subtitle; it then appears in [PlaybackStatus.subtitleTracks]. */
-    fun addSubtitle(url: String, title: String, language: String)
+    /**
+     * Adds an external subtitle; it then appears in [PlaybackStatus.subtitleTracks].
+     *
+     * [select] switches to it at once. That is what a file the viewer supplied means,
+     * and what a fetched one must not do: mpv's own select/auto distinction, where
+     * auto leaves the choice to the language preferences applied before the load.
+     */
+    fun addSubtitle(url: String, title: String, language: String, select: Boolean = false)
 
     /** Null switches subtitles off. */
     fun selectSubtitleTrack(id: Int?)

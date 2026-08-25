@@ -253,8 +253,13 @@ class AndroidMpvVideoPlayerHost(
         if (initialized) applyPreferencesNow(preferences)
     }
 
-    override fun addSubtitle(url: String, title: String, language: String) = onMain {
-        if (initialized) command("sub-add", url, "select", title, language)
+    // The flag is honoured here exactly as it is on the desktop. This host used to
+    // hardcode "select", so every fetched addon subtitle switched the viewer onto it
+    // and the last one to arrive won on arrival order rather than on slang — a phone
+    // and a desktop showing the same title picked different subtitles, with nothing
+    // failing to say so.
+    override fun addSubtitle(url: String, title: String, language: String, select: Boolean) = onMain {
+        if (initialized) command("sub-add", url, if (select) "select" else "auto", title, language)
     }
 
     override fun selectSubtitleTrack(id: Int?) = setStringProperty("sid", id?.toString() ?: "no")

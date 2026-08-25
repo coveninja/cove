@@ -243,8 +243,8 @@ class MpvVideoPlayerHost(
         player?.applyPreferences(preferences)
     }
 
-    override fun addSubtitle(url: String, title: String, language: String) {
-        player?.addSubtitle(url, title, language)
+    override fun addSubtitle(url: String, title: String, language: String, select: Boolean) {
+        player?.addSubtitle(url, title, language, select)
     }
 
     override fun selectAudioTrack(id: Int) {

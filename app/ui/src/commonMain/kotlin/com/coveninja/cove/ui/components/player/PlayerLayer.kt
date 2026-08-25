@@ -77,7 +77,13 @@ import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.model.TorrentProgress
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.ui.platform.canLoadSubtitleFile
+import com.coveninja.cove.ui.platform.chooseSubtitleFile
 import com.coveninja.cove.ui.platform.hideCursorWhen
+import com.coveninja.cove.ui.platform.subtitleFileDropTarget
+import com.coveninja.cove.ui.state.SUBTITLE_FILE_EXTENSIONS
+import com.coveninja.cove.ui.state.subtitleFileName
+import com.coveninja.cove.ui.state.subtitleFilesAmong
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.MediaTrack
@@ -192,6 +198,38 @@ fun PlayerLayer(
     var transportPulse by remember { mutableStateOf(0) }
     var statsVisible by remember { mutableStateOf(false) }
     var shortcutsVisible by remember { mutableStateOf(false) }
+    // A subtitle file being dragged over the picture, and the reply once it lands.
+    // The pulse is what restarts the timer: dropping the same wrong file twice would
+    // otherwise leave the second attempt with no answer at all.
+    var subtitleDragActive by remember { mutableStateOf(false) }
+    var subtitleNotice by remember { mutableStateOf<String?>(null) }
+    var subtitleNoticePulse by remember { mutableStateOf(0) }
+
+    // One route for both the drop and the file chooser, so they cannot disagree about
+    // what happened. Nothing here is gated on playback having started: the file is
+    // recorded either way and applied when the stream opens.
+    val useSubtitleFiles: (List<String>) -> Unit = { paths ->
+        val file = subtitleFilesAmong(paths).firstOrNull()
+        subtitleNotice = when {
+            file != null && session.addUserSubtitle(file) -> "Using ${subtitleFileName(file)}"
+            file != null -> "That subtitle file could not be loaded."
+            // Nothing came through at all, which is not the same as the wrong kind of
+            // file arriving — and telling someone their subtitle is not a subtitle when
+            // the drop itself was unreadable sends them looking in the wrong place.
+            paths.isEmpty() -> "Cove could not read that drop — try Load subtitle file\u2026"
+            else -> "That is not a subtitle file Cove can read."
+        }
+        subtitleNoticePulse++
+        // The subtitle menu is where the file now lives, and it rides with the controls.
+        activityPulse++
+    }
+
+    LaunchedEffect(subtitleNoticePulse) {
+        if (subtitleNotice != null) {
+            delay(SUBTITLE_NOTICE_MILLIS.milliseconds)
+            subtitleNotice = null
+        }
+    }
 
     // Every command the player takes passes through here, and none of them is a
     // question a file that is still opening can answer: there is no position to seek,
@@ -281,6 +319,12 @@ fun PlayerLayer(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
+            // Only composed while a session is open, so there is no separate "is this
+            // worth accepting" condition to keep in step with anything.
+            .subtitleFileDropTarget(
+                onDragChange = { subtitleDragActive = it },
+                onFiles = useSubtitleFiles,
+            )
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
@@ -838,6 +882,11 @@ fun PlayerLayer(
                         onSelectAudio = { host?.selectAudioTrack(it) },
                         onSelectSubtitle = { host?.selectSubtitleTrack(it) },
                         onSetSubtitleDelay = { host?.setSubtitleDelay(it) },
+                        onLoadSubtitleFile = if (canLoadSubtitleFile) {
+                            { chooseSubtitleFile()?.let { useSubtitleFiles(listOf(it)) } }
+                        } else {
+                            null
+                        },
                         onSetAudioDelay = { host?.setAudioDelay(it) },
                         scaling = scaling,
                         onSelectScaling = {
@@ -856,7 +905,80 @@ fun PlayerLayer(
                         onInteractingChange = { controlsHeld = it },
                     )
                 }
+
+                // Last in the layer, so the invitation and the answer are never drawn
+                // under the chrome they are about.
+                AnimatedVisibility(
+                    visible = subtitleDragActive,
+                    modifier = Modifier.align(Alignment.Center),
+                    enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = 0.96f),
+                    exit = fadeOut(tween(140)) + scaleOut(tween(140), targetScale = 0.98f),
+                ) {
+                    SubtitleDropInvitation()
+                }
+
+                AnimatedVisibility(
+                    visible = subtitleNotice != null,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 118.dp),
+                    enter = fadeIn(tween(140)) + slideInVertically { it / 3 },
+                    exit = fadeOut(tween(180)),
+                ) {
+                    // Held so the sentence does not vanish a frame before the fade does.
+                    val message = remember(subtitleNoticePulse) { subtitleNotice }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
+                        shadowElevation = 10.dp,
+                    ) {
+                        Text(
+                            text = message.orEmpty(),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/**
+ * What a drag over the picture is offered.
+ *
+ * Drag and drop advertises itself nowhere else — there is no button to notice and no
+ * menu to find it in — so this panel is the whole of the discovery, and it says which
+ * files will be taken as well as that any will.
+ */
+@Composable
+private fun SubtitleDropInvitation() {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
+        shadowElevation = 16.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 34.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            IconifyIcon(
+                icon = "lucide:upload",
+                modifier = Modifier.size(30.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Drop a subtitle file to use it",
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = SUBTITLE_FILE_EXTENSIONS.joinToString(" ") { ".$it" },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
@@ -1182,6 +1304,8 @@ private const val AUTOPLAY_COUNTDOWN_SECONDS = 8
 private const val UP_NEXT_URGENT_SECONDS = 3
 private const val TORRENT_POLL_MILLIS = 1500L
 private const val RESUME_NOTICE_MILLIS = 7000L
+// Shorter than the resume notice, which offers an action: this one only reports.
+private const val SUBTITLE_NOTICE_MILLIS = 4000L
 // A remote mkv with many tracks routinely needs ten seconds of probing
 // before mpv reports anything, so patience here is normal, not a fault.
 private const val STALLED_SECONDS = 45

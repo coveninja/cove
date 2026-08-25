@@ -25,8 +25,11 @@ interface DesktopPlayer : AutoCloseable {
      */
     fun setOption(name: String, value: String)
 
-    /** Loads an external subtitle file or URL alongside the current media. */
-    fun addSubtitle(url: String, title: String, language: String)
+    /**
+     * Loads an external subtitle file or URL alongside the current media.
+     * [select] switches to it immediately; otherwise mpv's own track selection decides.
+     */
+    fun addSubtitle(url: String, title: String, language: String, select: Boolean)
 
     /**
      * mpv's keepaspect/panscan/video-zoom, which crop and scale properly rather
