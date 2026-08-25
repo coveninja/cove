@@ -263,6 +263,11 @@ class TmdbClient(
         val type = meta.mediaType() ?: return null
         meta.tmdbId()?.let { direct -> return runCatching { media(direct, type) }.getOrNull() }
         val imdbId = meta.imdbId() ?: return null
+        return findByImdbId(imdbId, type)
+    }
+
+    override suspend fun findByImdbId(imdbId: String, type: MediaType): Media? {
+        if (imdbId.isBlank()) return null
         val found = runCatching {
             request<TmdbFind>("/find/$imdbId", "en-US") {
                 parameter("external_source", "imdb_id")

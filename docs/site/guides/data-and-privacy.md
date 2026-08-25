@@ -27,7 +27,7 @@ Account access tokens are held by the client session. The public Supabase client
 ## Optional external services
 
 - TMDB supplies catalog metadata and images.
-- Trakt receives the account and viewing operations enabled in Trakt settings.
+- Trakt and Simkl each receive the account and viewing operations enabled for them in Tracking settings.
 - Addons and scraper repositories receive the requests needed for capabilities you enable.
 - GitHub serves releases, checksums, release notes, and the documentation shown on Cove's website.
 
@@ -53,7 +53,7 @@ The website account page can delete a non-primary synced profile or the complete
 
 Deleting cloud data does not remotely erase local databases on offline or previously connected devices. Remove the app or its local data separately on each device when that is also intended.
 
-Signing out is not deletion. It stops future sync on that installation while retaining the local profile. Disconnecting Trakt or uninstalling a plugin likewise stops future access but does not delete information already stored by the external service.
+Signing out is not deletion. It stops future sync on that installation while retaining the local profile. Disconnecting a tracker or uninstalling a plugin likewise stops future access but does not delete information already stored by the external service. Disconnecting Simkl does not revoke Cove’s token either — Simkl has no revoke endpoint, so remove Cove under *Connected Apps* on simkl.com.
 
 ## Backups and removal
 

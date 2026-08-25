@@ -5,6 +5,7 @@ import com.coveninja.cove.backend.db.DesktopDatabase
 import com.coveninja.cove.backend.store.ActiveProfileSession
 import com.coveninja.cove.backend.store.LocalLibraryRepository
 import com.coveninja.cove.backend.store.LocalSettingsRepository
+import com.coveninja.cove.backend.tracker.TrackerScrobbleRequest
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.AppSettings
@@ -72,7 +73,7 @@ class TraktServiceTest {
             assertEquals("cove-user", service.status().username)
 
             assertTrue(service.scrobbleNow(
-                TraktScrobbleRequest("start", 42, "movie", progress = 12.5),
+                TrackerScrobbleRequest("start", 42, "movie", progress = 12.5),
             ))
 
             val scrobble = requests.single { it.path == "/scrobble/start" }
@@ -106,8 +107,9 @@ class TraktServiceTest {
             }
         }
         backend(client, traktSyncEnabled = true).use { fixture ->
-            fixture.database.coveQueries.upsertTraktSession(
-                "p1", "access", "refresh", Instant.parse("2027-01-01T00:00:00Z").epochSecond, "user", "",
+            fixture.database.coveQueries.upsertTrackerSession(
+                "p1", "trakt", "access", "refresh",
+                Instant.parse("2027-01-01T00:00:00Z").epochSecond, "user", "",
             )
             fixture.library.add(11, MediaType.Tv, "Local show", "/local.jpg", 0.0)
 

@@ -82,7 +82,7 @@
 - Search, trending and upcoming titles, genres, curated collections, and people.
 - A profile-scoped library with favorites, progress, continue watching, and
   spoiler protection for unwatched episodes.
-- Multiple local profiles, with optional account sync and Trakt integration.
+- Multiple local profiles, with optional account sync and Trakt or Simkl tracking.
 
 ### Playback
 

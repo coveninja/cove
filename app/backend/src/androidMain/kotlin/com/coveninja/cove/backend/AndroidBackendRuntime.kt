@@ -47,9 +47,12 @@ import com.coveninja.cove.shared.data.TorrentCachePolicy
 import com.coveninja.cove.backend.prefetch.PrefetchService
 import com.coveninja.cove.backend.quality.QualityService
 import com.coveninja.cove.backend.torrent.AndroidJlibtorrentPlaybackEngine
-import com.coveninja.cove.backend.trakt.LocalTraktRepository
+import com.coveninja.cove.backend.simkl.SimklConfig
+import com.coveninja.cove.backend.simkl.SimklService
+import com.coveninja.cove.backend.tracker.LocalTrackerRepository
+import com.coveninja.cove.backend.tracker.TrackerScrobbleRequest
+import com.coveninja.cove.backend.tracker.TrackerService
 import com.coveninja.cove.backend.trakt.TraktConfig
-import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
 import com.coveninja.cove.backend.trakt.TraktService
 import com.coveninja.cove.backend.updater.SignedUpdateService
 import com.coveninja.cove.backend.updater.createAndroidUpdateRepository
@@ -62,7 +65,7 @@ import com.coveninja.cove.shared.data.InsightsRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.shared.data.UnavailableDeviceRepository
-import com.coveninja.cove.shared.data.TraktRepository
+import com.coveninja.cove.shared.data.TrackerRepository
 import com.coveninja.cove.shared.data.DeviceRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.UpdateRepository
@@ -101,7 +104,7 @@ class AndroidBackendRuntime private constructor(
     discovery: DiscoveryRepository,
     insights: InsightsRepository,
     account: AccountRepository,
-    trakt: TraktRepository,
+    trackers: List<TrackerRepository>,
     device: DeviceRepository,
     private val updateRepository: UpdateRepository,
     storage: StorageRepository,
@@ -127,7 +130,7 @@ class AndroidBackendRuntime private constructor(
         // and watch progress here are the ones the desktop already has.
         account = account,
         profiles = stores.repositories.profiles,
-        trakt = trakt,
+        trackers = trackers,
         device = device,
         updates = updateRepository,
         // Android keeps torrent downloads under filesDir, which the system never reclaims, so
@@ -194,6 +197,7 @@ class AndroidBackendRuntime private constructor(
             supabaseKey: String = "",
             traktClientId: String = "",
             traktClientSecret: String = "",
+            simklClientId: String = "",
             appVersion: String = "dev",
             updatePublicKeys: String = "",
             updateApiBase: String = SignedUpdateService.DEFAULT_API_BASE,
@@ -370,7 +374,18 @@ class AndroidBackendRuntime private constructor(
                         httpClient = client,
                         scope = scope,
                     )
-                    val trakt = LocalTraktRepository(traktService, scope)
+                    val simklService = SimklService(
+                        config = SimklConfig(simklClientId, appVersion),
+                        database = stores.databaseHandle,
+                        session = stores.repositories.profileSession,
+                        settings = stores.repositories.settings,
+                        library = stores.repositories.library,
+                        catalog = catalog,
+                        httpClient = client,
+                        scope = scope,
+                    )
+                    val trackerServices: List<TrackerService> = listOf(traktService, simklService)
+                    val trackers = trackerServices.map { LocalTrackerRepository(it, scope) }
                     val device = AndroidDeviceRepository(context, appVersion)
                     val updateRepository = createAndroidUpdateRepository(
                         context = context,
@@ -394,19 +409,18 @@ class AndroidBackendRuntime private constructor(
                     stores.progressEvents.subscribe { progress ->
                         activity.record(progress)
                         prefetch.notifyProgressChanged()
-                        traktService.enqueueScrobble(
-                            TraktScrobbleRequest(
-                                action = if (progress.completed) "stop" else "start",
-                                tmdbId = progress.tmdbId,
-                                mediaType = progress.mediaType.wireName,
-                                season = progress.season,
-                                episode = progress.episode,
-                                progress = if (progress.durationSeconds > 0.0) {
-                                    (progress.positionSeconds / progress.durationSeconds * 100.0)
-                                        .coerceIn(0.0, 100.0)
-                                } else 0.0,
-                            ),
+                        val scrobble = TrackerScrobbleRequest(
+                            action = if (progress.completed) "stop" else "start",
+                            tmdbId = progress.tmdbId,
+                            mediaType = progress.mediaType.wireName,
+                            season = progress.season,
+                            episode = progress.episode,
+                            progress = if (progress.durationSeconds > 0.0) {
+                                (progress.positionSeconds / progress.durationSeconds * 100.0)
+                                    .coerceIn(0.0, 100.0)
+                            } else 0.0,
                         )
+                        trackerServices.forEach { it.enqueueScrobble(scrobble) }
                     }
                     var routeAuth: AuthService? = null
                     val account = supabaseConfig(supabaseUrl, supabaseKey)?.let { config ->
@@ -452,7 +466,7 @@ class AndroidBackendRuntime private constructor(
                         clientSessions = ClientSessionStore(stores.databaseHandle, stores.now),
                         activity = activity,
                         calendar = calendarService,
-                        trakt = traktService,
+                        trackers = trackerServices,
                         deviceSettings = device,
                         discovery = discoveryService,
                         quality = quality,
@@ -472,9 +486,9 @@ class AndroidBackendRuntime private constructor(
                             discovery = discoveryService,
                             database = stores.databaseHandle,
                             session = stores.repositories.profileSession,
-                            trakt = traktService,
+                            trackerServices = trackerServices,
                         ),
-                        account, trakt, device,
+                        account, trackers, device,
                         updateRepository,
                         storage,
                     )

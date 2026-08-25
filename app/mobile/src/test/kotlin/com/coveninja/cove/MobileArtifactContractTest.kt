@@ -20,6 +20,7 @@ class MobileArtifactContractTest {
             BuildConfig.SUPABASE_PUBLISHABLE_KEY,
             BuildConfig.TRAKT_CLIENT_ID,
             BuildConfig.TRAKT_CLIENT_SECRET,
+            BuildConfig.SIMKL_CLIENT_ID,
             BuildConfig.UPDATE_PUBLIC_KEYS,
             BuildConfig.UPDATE_API_BASE,
         ).forEach { value -> assertFalse(value.contains('\n')) }

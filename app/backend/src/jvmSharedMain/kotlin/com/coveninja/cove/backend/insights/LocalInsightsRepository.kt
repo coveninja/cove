@@ -4,12 +4,12 @@ import com.coveninja.cove.backend.activity.ActivityService
 import com.coveninja.cove.backend.db.CoveDatabase
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.store.ActiveProfileSession
-import com.coveninja.cove.backend.trakt.TraktService
+import com.coveninja.cove.backend.tracker.TrackerService
 import com.coveninja.cove.shared.data.InsightsRepository
 import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.InsightsRange
-import com.coveninja.cove.shared.model.TraktStats
+import com.coveninja.cove.shared.model.TrackerStats
 import com.coveninja.cove.shared.network.CoveJson
 import java.time.Clock
 
@@ -19,16 +19,16 @@ import java.time.Clock
  * Lives in `jvmSharedMain` because [ActivityService] does — both hosts compile that source
  * set, so desktop and Android get the same insights rather than the page being desktop-only.
  *
- * Every service is nullable. A host may assemble a graph without a taste engine (no TMDB
- * key, say) while still having watch-time counters, and half a page of real numbers beats
- * refusing to draw any.
+ * Every service is optional. A host may assemble a graph without a taste engine (no TMDB
+ * key, say) or with no tracker linked while still having watch-time counters, and half a
+ * page of real numbers beats refusing to draw any.
  */
 class LocalInsightsRepository(
     private val activity: ActivityService?,
     private val discovery: DiscoveryService?,
     private val database: CoveDatabase? = null,
     private val session: ActiveProfileSession? = null,
-    private val trakt: TraktService? = null,
+    private val trackerServices: List<TrackerService> = emptyList(),
     private val clock: Clock = Clock.systemUTC(),
 ) : InsightsRepository {
 
@@ -61,7 +61,8 @@ class LocalInsightsRepository(
         return rebuilt
     }
 
-    override suspend fun trakt(): TraktStats? = trakt?.let { runCatching { it.stats() }.getOrNull() }
+    override suspend fun trackers(): List<TrackerStats> =
+        trackerServices.mapNotNull { runCatching { it.stats() }.getOrNull() }
 
     private fun readCache(): CachedInsights? {
         val queries = database?.coveQueries ?: return null

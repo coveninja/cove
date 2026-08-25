@@ -175,13 +175,35 @@ CREATE TABLE activity_state (
     legacy_imported INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE trakt_sessions (
-    profile_id TEXT NOT NULL PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+-- One linked third-party tracker account per profile. These are device-local secrets, so
+-- unlike almost every other profile-scoped table this one is deliberately absent from
+-- PROFILE_CHILD_TABLES and never reaches Supabase.
+CREATE TABLE tracker_sessions (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
     access_token TEXT NOT NULL,
+    -- Provider-defined. Trakt keeps its OAuth refresh token here; Simkl issues none and
+    -- keeps its numeric account id instead, which its stats endpoint needs by path.
     refresh_token TEXT NOT NULL DEFAULT '',
+    -- 0 means "never expires", which is every Simkl row.
     expires_at INTEGER NOT NULL DEFAULT 0,
     username TEXT NOT NULL DEFAULT '',
-    last_sync_at TEXT NOT NULL DEFAULT ''
+    last_sync_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (profile_id, provider)
+);
+
+-- IMDB ids resolved onto TMDB ones. Simkl answers /sync/all-items with imdb and tvdb ids
+-- and no tmdb id at all, while every screen downstream is keyed on TMDB, so a pull cannot
+-- land without this step. The answers never change and each one costs a TMDB request, so
+-- they outlive the process rather than sitting in a map: without that, a first sync of a
+-- large account re-asks for every title on every restart. Not profile-scoped — an id
+-- mapping is a fact about the world, not about the viewer.
+CREATE TABLE external_id_map (
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    tmdb_id INTEGER NOT NULL,
+    PRIMARY KEY (source, external_id, media_type)
 );
 
 -- One row per profile holding the whole release calendar as serialized JSON. It is a
@@ -300,8 +322,8 @@ UPDATE activity_positions SET profile_id = ? WHERE profile_id = ?;
 moveActivityStateToProfile:
 UPDATE activity_state SET profile_id = ? WHERE profile_id = ?;
 
-moveTraktSessionToProfile:
-UPDATE trakt_sessions SET profile_id = ? WHERE profile_id = ?;
+moveTrackerSessionsToProfile:
+UPDATE OR REPLACE tracker_sessions SET profile_id = ? WHERE profile_id = ?;
 
 setActiveProfile:
 INSERT OR REPLACE INTO active_profile(singleton, profile_id) VALUES (1, ?);
@@ -531,19 +553,27 @@ DELETE FROM activity_positions;
 deleteActivityStates:
 DELETE FROM activity_state;
 
-selectTraktSession:
-SELECT * FROM trakt_sessions WHERE profile_id = ?;
+selectTrackerSession:
+SELECT * FROM tracker_sessions WHERE profile_id = ? AND provider = ?;
 
-upsertTraktSession:
-INSERT OR REPLACE INTO trakt_sessions(
-    profile_id, access_token, refresh_token, expires_at, username, last_sync_at
-) VALUES (?, ?, ?, ?, ?, ?);
+upsertTrackerSession:
+INSERT OR REPLACE INTO tracker_sessions(
+    profile_id, provider, access_token, refresh_token, expires_at, username, last_sync_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 
-deleteTraktSession:
-DELETE FROM trakt_sessions WHERE profile_id = ?;
+deleteTrackerSession:
+DELETE FROM tracker_sessions WHERE profile_id = ? AND provider = ?;
 
-deleteTraktSessions:
-DELETE FROM trakt_sessions;
+deleteTrackerSessions:
+DELETE FROM tracker_sessions;
+
+selectExternalId:
+SELECT tmdb_id FROM external_id_map
+WHERE source = ? AND external_id = ? AND media_type = ?;
+
+upsertExternalId:
+INSERT OR REPLACE INTO external_id_map(source, external_id, media_type, tmdb_id)
+VALUES (?, ?, ?, ?);
 
 selectCalendarCache:
 SELECT * FROM calendar_cache WHERE profile_id = ?;

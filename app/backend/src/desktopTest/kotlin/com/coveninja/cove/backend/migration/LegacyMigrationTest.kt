@@ -159,8 +159,9 @@ class LegacyMigrationTest {
                 """{"repos":[],"updatedAt":"2026-08-08T12:00:00Z"}""",
                 "2026-08-08T12:00:00Z",
             )
-            queries.upsertTraktSession(
+            queries.upsertTrackerSession(
                 "primary",
+                "trakt",
                 "access",
                 "refresh",
                 Instant.parse("2026-08-09T12:00:00Z").epochSecond,

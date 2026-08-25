@@ -35,7 +35,7 @@ import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.InsightsRange
-import com.coveninja.cove.shared.model.TraktStats
+import com.coveninja.cove.shared.model.TrackerStats
 import com.coveninja.cove.shared.model.DiscoveryTaste
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.ui.CoveColors
@@ -92,7 +92,7 @@ internal class InsightsState {
     var range by mutableStateOf(InsightsRange.ThisYear)
     var activity by mutableStateOf<ActivityStats?>(null)
     var taste by mutableStateOf<DiscoveryInsights?>(null)
-    var trakt by mutableStateOf<TraktStats?>(null)
+    var trackers by mutableStateOf<List<TrackerStats>?>(null)
 
     /** Which range [activity] holds, so returning to the tab does not refetch the same one. */
     var loadedRange by mutableStateOf<InsightsRange?>(null)
@@ -142,8 +142,8 @@ internal fun InsightsTab(
             state.taste = runCatching { graph.insights.taste() }
                 .getOrDefault(DiscoveryInsights())
         }
-        if (state.trakt == null) {
-            state.trakt = runCatching { graph.insights.trakt() }.getOrNull()
+        if (state.trackers == null) {
+            state.trackers = runCatching { graph.insights.trackers() }.getOrDefault(emptyList())
         }
     }
 
@@ -223,7 +223,9 @@ internal fun InsightsTab(
                 if (stats.rewatched.isNotEmpty()) {
                     add { RewatchSection(titles = stats.rewatched, onOpenMedia = onOpenMedia) }
                 }
-                state.trakt?.let { trakt -> add { TraktSection(stats = trakt) } }
+                state.trackers.orEmpty().forEach { tracker ->
+                    add { TrackerSection(stats = tracker) }
+                }
             },
         )
 

@@ -98,6 +98,7 @@ android {
         )
         buildConfigField("String", "TRAKT_CLIENT_ID", quotedBuildConfig(deploymentValue("TRAKT_CLIENT_ID")))
         buildConfigField("String", "TRAKT_CLIENT_SECRET", quotedBuildConfig(deploymentValue("TRAKT_CLIENT_SECRET")))
+        buildConfigField("String", "SIMKL_CLIENT_ID", quotedBuildConfig(deploymentValue("SIMKL_CLIENT_ID")))
         buildConfigField("String", "UPDATE_PUBLIC_KEYS", quotedBuildConfig(deploymentValue("UPDATE_PUBLIC_KEYS")))
         buildConfigField(
             "String",

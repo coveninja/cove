@@ -454,7 +454,7 @@ class LocalLibraryRepository(
         }
     }
 
-    /** Additive Trakt pull: newer completions win and watchlist rows never overwrite local status. */
+    /** Additive tracker pull: newer completions win and watchlist rows never overwrite local status. */
     internal suspend fun applyExternal(
         history: List<ExternalHistoryItem>,
         watchlist: List<ExternalWatchlistItem>,

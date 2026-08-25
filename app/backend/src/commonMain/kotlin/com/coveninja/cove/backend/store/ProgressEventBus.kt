@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
  * Fan-out for side effects caused by a committed progress row.
  *
  * Library persistence is the source of truth on embedded desktop and Android,
- * so activity, Trakt and prefetch subscribe here instead of relying on an HTTP
+ * so activity, the trackers and prefetch subscribe here instead of relying on an HTTP
  * route that in-process Compose playback never calls.
  */
 class ProgressEventBus(private val scope: CoroutineScope) {

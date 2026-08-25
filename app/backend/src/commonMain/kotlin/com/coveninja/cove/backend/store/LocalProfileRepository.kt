@@ -142,7 +142,7 @@ class LocalProfileRepository(
             database.coveQueries.moveActivityTitlesToProfile(targetId, sourceId)
             database.coveQueries.moveActivityPositionsToProfile(targetId, sourceId)
             database.coveQueries.moveActivityStateToProfile(targetId, sourceId)
-            database.coveQueries.moveTraktSessionToProfile(targetId, sourceId)
+            database.coveQueries.moveTrackerSessionsToProfile(targetId, sourceId)
             database.coveQueries.setActiveProfile(targetId)
             database.coveQueries.deleteProfileById(sourceId)
         }

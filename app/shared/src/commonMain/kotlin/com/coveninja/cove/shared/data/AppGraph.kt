@@ -17,7 +17,15 @@ class AppGraph(
     // settings page rather than a compile error here.
     val account: AccountRepository = UnavailableAccountRepository,
     val profiles: ProfileRepository = UnavailableProfileRepository,
-    val trakt: TraktRepository = UnavailableTraktRepository,
+    /**
+     * Every third-party tracker this host can link, in a stable order.
+     *
+     * A list rather than a field per provider because nothing above the graph needs to
+     * name one: the settings screen draws a card per entry and the insights page a section
+     * per entry, so adding a tracker is a change to the hosts and nothing else. Empty is
+     * the honest answer for a host that owns none.
+     */
+    val trackers: List<TrackerRepository> = emptyList(),
     val device: DeviceRepository = UnavailableDeviceRepository,
     val updates: UpdateRepository = UnavailableUpdateRepository,
     val storage: StorageRepository = UnavailableStorageRepository,

@@ -3,7 +3,7 @@ package com.coveninja.cove.shared.data
 import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.InsightsRange
-import com.coveninja.cove.shared.model.TraktStats
+import com.coveninja.cove.shared.model.TrackerStats
 import com.coveninja.cove.shared.network.CoveApi
 
 /**
@@ -25,5 +25,6 @@ class LiveInsightsRepository(private val api: CoveApi) : InsightsRepository {
     override suspend fun taste(): DiscoveryInsights =
         runCatching { api.discoverInsights() }.getOrDefault(DiscoveryInsights())
 
-    override suspend fun trakt(): TraktStats? = runCatching { api.traktStats() }.getOrNull()
+    override suspend fun trackers(): List<TrackerStats> =
+        runCatching { api.trackerStats() }.getOrDefault(emptyList())
 }

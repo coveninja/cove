@@ -8,9 +8,9 @@ No. Cove is a player and organizer. A new installation contains no third-party s
 
 No. Profiles, libraries, playback, and settings work locally. An account is only needed for optional Cove cloud sync and website account management.
 
-## What is the difference between a Cove account and Trakt?
+## What is the difference between a Cove account and Trakt or Simkl?
 
-A Cove account synchronizes compatible profile data between Cove devices. [Trakt](trakt.md) is a separate external service for scrobbling and optional library/history reconciliation. You can use either, both, or neither.
+A Cove account synchronizes compatible profile data between Cove devices. [Trakt and Simkl](tracking.md) are separate external services for scrobbling and optional library/history reconciliation. You can use any combination of them, or none.
 
 ## Which platforms are supported?
 

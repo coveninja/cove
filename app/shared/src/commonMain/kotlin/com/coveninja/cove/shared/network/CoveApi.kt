@@ -133,14 +133,14 @@ class CoveApi(
         }.requireSuccess().body()
 
     /**
-     * All-time Trakt totals, or null when the host answers 204 — which is what it sends for
-     * an unlinked account or one Trakt had nothing to say about.
+     * All-time totals from every tracker the host has linked, or empty on 204 — which is
+     * what it sends when none is linked or none had anything to say.
      */
-    suspend fun traktStats(): TraktStats? {
-        val response = httpClient.get("${config.baseUrl}/api/trakt/stats") {
+    suspend fun trackerStats(): List<TrackerStats> {
+        val response = httpClient.get("${config.baseUrl}/api/trackers/stats") {
             applyAuthHeaders()
         }
-        if (response.status == HttpStatusCode.NoContent) return null
+        if (response.status == HttpStatusCode.NoContent) return emptyList()
         return response.requireSuccess().body()
     }
 

@@ -113,6 +113,7 @@ Android. Add each value once under **Settings → Secrets and variables → Acti
 | `SUPABASE_PUBLISHABLE_KEY` | Public/publishable Supabase client key |
 | `TRAKT_CLIENT_ID` | Trakt OAuth client id |
 | `TRAKT_CLIENT_SECRET` | Trakt OAuth client secret |
+| `SIMKL_CLIENT_ID` | Simkl client id; the PIN flow needs no secret |
 
 The Gradle build reads those values directly from its environment and writes the
 client configuration into each package. Do not configure a Supabase service-role

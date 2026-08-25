@@ -62,7 +62,7 @@ internal fun syncTone(status: SyncStatus): SyncTone = when {
  * parse. A clock skewed into the future reads as "just now" rather than
  * something impossible.
  */
-private fun relativeTime(then: Instant, now: Instant): String {
+internal fun relativeTime(then: Instant, now: Instant): String {
     val elapsed = now - then
     val minutes = elapsed.inWholeMinutes
     val hours = elapsed.inWholeHours

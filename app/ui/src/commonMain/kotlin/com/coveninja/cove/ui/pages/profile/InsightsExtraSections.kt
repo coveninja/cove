@@ -29,7 +29,8 @@ import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.TitlePlayCount
-import com.coveninja.cove.shared.model.TraktStats
+import com.coveninja.cove.shared.model.TrackerProvider
+import com.coveninja.cove.shared.model.TrackerStats
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.insights.MiniBars
 import com.coveninja.cove.ui.components.insights.RankedBars
@@ -431,24 +432,26 @@ private fun RewatchPoster(title: TitlePlayCount, onOpenMedia: (Media) -> Unit) {
     )
 }
 
-// ── Trakt ────────────────────────────────────────────────────────────────────
+// ── Trackers ─────────────────────────────────────────────────────────────────
 
 /**
- * Trakt's own totals, clearly attributed.
+ * One tracker's own totals, clearly attributed.
  *
- * Deliberately not folded into the numbers above. Trakt may carry years of history from
- * before Cove was installed, so these figures will usually disagree with the rest of the
- * page — presenting them as Trakt's answer rather than Cove's is the honest arrangement,
- * and the disagreement is itself the reason to show them.
+ * Deliberately not folded into the numbers above. A tracker may carry years of history
+ * from before Cove was installed, so these figures will usually disagree with the rest of
+ * the page — presenting them as that account's answer rather than Cove's is the honest
+ * arrangement, and the disagreement is itself the reason to show them. Two linked trackers
+ * get a card each for the same reason: they will disagree with each other too.
  */
 @Composable
-internal fun TraktSection(stats: TraktStats) {
+internal fun TrackerSection(stats: TrackerStats) {
     val totalHours = (stats.movieMinutes + stats.episodeMinutes) / 60
+    val label = TrackerProvider.fromKey(stats.provider)?.label ?: stats.provider
 
     SettingsCard(
-        title = "All time on Trakt",
+        title = "All time on $label",
         iconName = "lucide:cloud-check",
-        description = "Totals from your linked Trakt account, including anything " +
+        description = "Totals from your linked $label account, including anything " +
             "watched before Cove.",
     ) {
         Column(
@@ -456,7 +459,7 @@ internal fun TraktSection(stats: TraktStats) {
                 .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics {
-                    contentDescription = "Trakt reports ${stats.moviesWatched} movies and " +
+                    contentDescription = "$label reports ${stats.moviesWatched} movies and " +
                         "${stats.episodesWatched} episodes, ${totalHours} hours in total."
                 },
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -468,6 +471,8 @@ internal fun TraktSection(stats: TraktStats) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 CountFact("${totalHours}h", "watched")
+                // Simkl publishes no ratings total, so this reads 0 there rather than
+                // being hidden — an absent row would look like a layout bug beside Trakt's.
                 CountFact("${stats.ratings}", "ratings")
             }
         }

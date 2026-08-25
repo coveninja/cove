@@ -29,6 +29,17 @@ interface MediaCatalog {
     suspend fun imdbId(id: Int, type: MediaType): String
 
     /**
+     * The reverse of [imdbId]: one `tt…` id resolved onto this catalog's own [Media], or
+     * null when nothing matches.
+     *
+     * Needed because not every source speaks TMDB. Simkl answers its sync endpoints with
+     * IMDB and TVDB ids and no TMDB id at all, while every screen downstream is keyed on a
+     * numeric catalog id, so an entry that will not resolve has no card to become. The
+     * default returns null for the implementations that cannot look an external id up.
+     */
+    suspend fun findByImdbId(imdbId: String, type: MediaType): Media? = null
+
+    /**
      * One person plus their combined filmography, which is what the person sheet is
      * built from. On the interface rather than on [TmdbClient] alone because Android
      * runs no HTTP host: in-process is the only way it can reach this at all.

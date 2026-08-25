@@ -28,7 +28,7 @@ Open Cove on the device that has the newest changes and leave it online long eno
 
 Confirm that the same account and profile are selected. Do not delete a local profile as a first troubleshooting step.
 
-If automatic sync is disabled, choose **Sync now**. If it fails, preserve the message and retry once after confirming network access. Trakt errors are separate from Cove account sync; check [Trakt](trakt.md) when only external history or lists are affected.
+If automatic sync is disabled, choose **Sync now**. If it fails, preserve the message and retry once after confirming network access. Tracker errors are separate from Cove account sync; check [Trakt and Simkl tracking](tracking.md) when only external history or lists are affected.
 
 ## A title, catalog, or source is missing
 

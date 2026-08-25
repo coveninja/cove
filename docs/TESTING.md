@@ -34,7 +34,7 @@ developer's real account, `.env`, or SQLite database.
 | Shared models or settings | Owning shared/common test | Serialization/default compatibility |
 | SQLDelight schema or legacy import | Migration and repository tests | Upgrade from every supported prior schema |
 | HTTP route | `CoreRoutesTest` filter | Status, body, headers, size limits, and legacy-prefix parity |
-| Account sync or Trakt | Owning backend service tests | Conflict, offline, auth-expiry, and profile-scope cases |
+| Account sync or a tracker | Owning backend service tests | Conflict, offline, auth-expiry, and profile-scope cases |
 | Addons or Nuvio | Manager/runtime tests | URL policy, invalidation, timeout, and sandbox behavior |
 | Desktop plugin | Package, manager, process, and protocol tests | Permission denial, shutdown, staged update, and result sanitization |
 | Shared Compose state | Owning `:ui` test | Phone/tablet behavior and stable state restoration |

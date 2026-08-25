@@ -10,6 +10,7 @@ val generateCoveConfig by tasks.registering {
         "SUPABASE_PUBLISHABLE_KEY",
         "TRAKT_CLIENT_ID",
         "TRAKT_CLIENT_SECRET",
+        "SIMKL_CLIENT_ID",
         "UPDATE_PUBLIC_KEYS",
         "PLUGIN_PUBLIC_KEYS",
         "PLUGIN_CATALOG_API_BASE",

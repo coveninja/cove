@@ -23,10 +23,10 @@ import com.coveninja.cove.backend.store.LocalLibraryRepository
 import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.backend.store.LocalSettingsRepository
 import com.coveninja.cove.backend.store.BulkProgressRequest
-import com.coveninja.cove.backend.trakt.TraktException
-import com.coveninja.cove.backend.trakt.TraktPollRequest
-import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
-import com.coveninja.cove.backend.trakt.TraktService
+import com.coveninja.cove.backend.tracker.TrackerException
+import com.coveninja.cove.backend.tracker.TrackerPollRequest
+import com.coveninja.cove.backend.tracker.TrackerScrobbleRequest
+import com.coveninja.cove.backend.tracker.TrackerService
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.PluginMediaRequest
 import com.coveninja.cove.shared.data.PluginRepository
@@ -107,7 +107,7 @@ data class CoreRouteServices(
     val clientSessions: ClientSessionStore? = null,
     val activity: ActivityService? = null,
     val calendar: CalendarService? = null,
-    val trakt: TraktService? = null,
+    val trackers: List<TrackerService> = emptyList(),
     val deviceSettings: MpvConfigStore? = null,
     val discovery: DiscoveryService? = null,
     val quality: QualityLookup? = null,
@@ -179,8 +179,11 @@ fun Application.configureCoreRoutes(
             }
             call.respond(status, ErrorResponse(error.message ?: "Supabase request failed"))
         }
-        exception<TraktException> { call, error ->
-            call.respond(HttpStatusCode.BadGateway, ErrorResponse(error.message ?: "Trakt request failed"))
+        exception<TrackerException> { call, error ->
+            call.respond(
+                HttpStatusCode.BadGateway,
+                ErrorResponse(error.message ?: "Tracker request failed"),
+            )
         }
         exception<RequestTooLargeException> { call, error ->
             call.respond(HttpStatusCode.PayloadTooLarge, ErrorResponse(error.message ?: "request body too large"))
@@ -320,61 +323,26 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
         }
     }
 
-    route("/trakt") {
-        val trakt = services.trakt
-        suspend fun ApplicationCall.requireTrakt(): TraktService? {
-            if (trakt == null || !trakt.isConfigured) {
-                respond(
-                    HttpStatusCode.ServiceUnavailable,
-                    ErrorResponse("Trakt integration not configured (credentials missing)"),
-                )
-                return null
-            }
-            return trakt
-        }
-        post("/device-code") {
+    // One group per linked tracker, at its own provider key — `/trakt/*` stays exactly
+    // where it was and `/simkl/*` costs no new route code. Absent when a host owns none,
+    // rather than present and answering 503 to everything.
+    services.trackers.forEach { service ->
+        route("/${service.provider.key}") { trackerRoutes(service, legacy) }
+    }
+
+    // All-time totals from every linked tracker at once, so the insights page makes one
+    // call rather than one per provider it has to know the names of.
+    if (services.trackers.isNotEmpty()) {
+        get("/trackers/stats") {
             call.markLegacy(legacy)
-            call.requireTrakt()?.let { call.respond(it.startDeviceFlow()) }
-        }
-        post("/poll") {
-            call.markLegacy(legacy)
-            val service = call.requireTrakt() ?: return@post
-            call.respond(service.poll(call.receiveJson<TraktPollRequest>().deviceCode))
-        }
-        get("/status") {
-            call.markLegacy(legacy)
-            call.requireTrakt()?.let { call.respond(it.status()) }
-        }
-        // All-time totals for the linked account. 204 rather than an error when there is
-        // nothing to report: the insights page treats "no Trakt section" and "Trakt said
-        // nothing" identically, and neither is a failure worth an error body.
-        get("/stats") {
-            call.markLegacy(legacy)
-            val service = call.requireTrakt() ?: return@get
-            val stats = service.stats()
-            if (stats == null) {
+            val stats = services.trackers
+                .filter { it.isConfigured }
+                .mapNotNull { it.stats() }
+            if (stats.isEmpty()) {
                 call.respond(HttpStatusCode.NoContent)
             } else {
                 call.respond(stats)
             }
-        }
-        post("/unlink") {
-            call.markLegacy(legacy)
-            val service = call.requireTrakt() ?: return@post
-            service.unlink()
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/scrobble") {
-            call.markLegacy(legacy)
-            val service = call.requireTrakt() ?: return@post
-            val accepted = service.enqueueScrobble(call.receiveJson<TraktScrobbleRequest>())
-            call.respond(if (accepted) HttpStatusCode.Accepted else HttpStatusCode.NoContent)
-        }
-        post("/sync") {
-            call.markLegacy(legacy)
-            val service = call.requireTrakt() ?: return@post
-            service.enqueueSync()
-            call.respond(HttpStatusCode.Accepted)
         }
     }
 
@@ -1207,3 +1175,65 @@ private data class ToggleAddonRequest(val enabled: Boolean)
 
 @Serializable
 private data class AddNuvioRepoRequest(val url: String)
+
+
+private fun Route.trackerRoutes(service: TrackerService, legacy: Boolean) {
+    suspend fun ApplicationCall.requireLinked(): TrackerService? {
+        if (!service.isConfigured) {
+            respond(
+                HttpStatusCode.ServiceUnavailable,
+                ErrorResponse(
+                    "${service.provider.label} integration not configured (credentials missing)",
+                ),
+            )
+            return null
+        }
+        return service
+    }
+    post("/device-code") {
+        call.markLegacy(legacy)
+        call.requireLinked()?.let { call.respond(it.startDeviceFlow()) }
+    }
+    // The field is spelled device_code for both, but Simkl polls by the code the viewer
+    // can see; a client driving that flow sends the user_code here.
+    post("/poll") {
+        call.markLegacy(legacy)
+        val linked = call.requireLinked() ?: return@post
+        call.respond(linked.poll(call.receiveJson<TrackerPollRequest>().deviceCode))
+    }
+    get("/status") {
+        call.markLegacy(legacy)
+        call.requireLinked()?.let { call.respond(it.status()) }
+    }
+    // All-time totals for the linked account. 204 rather than an error when there is
+    // nothing to report: the insights page treats "no section" and "the tracker said
+    // nothing" identically, and neither is a failure worth an error body.
+    get("/stats") {
+        call.markLegacy(legacy)
+        val linked = call.requireLinked() ?: return@get
+        val stats = linked.stats()
+        if (stats == null) {
+            call.respond(HttpStatusCode.NoContent)
+        } else {
+            call.respond(stats)
+        }
+    }
+    post("/unlink") {
+        call.markLegacy(legacy)
+        val linked = call.requireLinked() ?: return@post
+        linked.unlink()
+        call.respond(HttpStatusCode.NoContent)
+    }
+    post("/scrobble") {
+        call.markLegacy(legacy)
+        val linked = call.requireLinked() ?: return@post
+        val accepted = linked.enqueueScrobble(call.receiveJson<TrackerScrobbleRequest>())
+        call.respond(if (accepted) HttpStatusCode.Accepted else HttpStatusCode.NoContent)
+    }
+    post("/sync") {
+        call.markLegacy(legacy)
+        val linked = call.requireLinked() ?: return@post
+        linked.enqueueSync()
+        call.respond(HttpStatusCode.Accepted)
+    }
+}

@@ -113,7 +113,7 @@ class LegacyMigration(
             queries.deleteActivityTitles()
             queries.deleteActivityPositions()
             queries.deleteActivityStates()
-            queries.deleteTraktSessions()
+            queries.deleteTrackerSessions()
             queries.deleteLegacyPayloads()
             queries.deleteProfiles()
             queries.deleteClientSession()
@@ -408,8 +408,10 @@ class LegacyExporter(
         atomicWrite(dataDirectory.resolve("nuvio-$profileId.json"), row.json)
     }
 
+    // Trakt only: the format this writes belongs to the retired Go backend, which never
+    // knew about any other tracker. A Simkl session simply has no legacy file to become.
     private fun exportTrakt(profileId: String) {
-        val row = database.coveQueries.selectTraktSession(profileId).executeAsOneOrNull()
+        val row = database.coveQueries.selectTrackerSession(profileId, "trakt").executeAsOneOrNull()
             ?: return exportLegacyPayload(profileId, "trakt")
         atomicWrite(
             dataDirectory.resolve("trakt-$profileId.json"),

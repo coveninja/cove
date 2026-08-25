@@ -46,7 +46,7 @@ stream-source preference permits them.
 | Module | Responsibility |
 |---|---|
 | `app/shared` | Domain models, repository interfaces, app graph, HTTP compatibility client |
-| `app/backend` common/JVM-shared | TMDB, addons, auth/sync, calendar, discovery, activity, Trakt, storage, Ktor routes, and shared service logic |
+| `app/backend` common/JVM-shared | TMDB, addons, auth/sync, calendar, discovery, activity, trackers, storage, Ktor routes, and shared service logic |
 | `app/backend` desktop | SQLite JDBC, CIO clients/servers, desktop jlibtorrent, GraalJS sandbox, updater, and runtime composition |
 | `app/backend` Android | Android SQLite, OkHttp, Android jlibtorrent, QuickJS sandbox, updater, playback media host, and runtime composition |
 | `app/ui` | Shared adaptive Compose presentation, separate TV root, and platform interaction seams |
@@ -68,7 +68,7 @@ Each host opens one SQLDelight SQLite database through its platform driver:
 SQLite JDBC on desktop and `AndroidSqliteDriver` in Android app storage. Schema
 migrations are append-only under `app/backend/src/commonMain/sqldelight`; they
 cover profiles, settings, library/progress/dismissals, sessions, addons, Nuvio
-state, activity, and Trakt state. Repositories publish `StateFlow` snapshots and keep
+state, activity, and tracker sessions. Repositories publish `StateFlow` snapshots and keep
 profile scoping explicit.
 
 Migration runs before repositories become visible. Desktop `LegacyMigration`
@@ -76,7 +76,7 @@ parses and backs up all known JSON inputs first, then replaces/imports their
 state in one database transaction. Android's migration uses the same package ID
 and app-private `filesDir` as the former app; it imports profiles, settings,
 library/progress/dismissal state and initially preserves session/addon/Nuvio/
-Trakt/activity JSON as opaque payloads. The current services import or merge
+tracker/activity JSON as opaque payloads. The current services import or merge
 those payloads when they initialize. Both migrations record versioned markers.
 Structured legacy export is currently a desktop-only `--export-legacy`
 recovery path.
@@ -85,7 +85,7 @@ recovery path.
 
 Desktop and Android expose the same application-level services: localized TMDB
 content, profile-scoped persistence, addons, Nuvio, discovery, calendar,
-insights, account sync, Trakt, prefetch, playback, updates, and cache policy.
+insights, account sync, trackers, prefetch, playback, updates, and cache policy.
 Their repository contracts and most service logic are shared; native and
 security-sensitive implementations remain platform-owned.
 
@@ -104,8 +104,9 @@ security-sensitive implementations remain platform-owned.
   removed items and age-inappropriate results are excluded before ranking. A
   custom HTTPS ranker is optional and uses the untrusted-network policy.
 - `AuthService` and `SupabaseSyncService` implement public account auth and
-  reconciliation. `TraktService` implements device OAuth, scrobbling, and
-  two-way synchronization.
+  reconciliation. `TrackerService` implements device linking, scrobbling and
+  two-way synchronization once; `TraktService` and `SimklService` supply the two
+  protocols. Their sessions are device-local and never reach Supabase.
 - `PrefetchService` observes progress changes and periodically warms bounded
   stream caches for current and next likely titles without starting torrents.
 

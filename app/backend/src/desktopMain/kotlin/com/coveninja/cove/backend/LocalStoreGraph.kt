@@ -14,7 +14,7 @@ import com.coveninja.cove.backend.auth.AuthService
 import com.coveninja.cove.backend.auth.ClientSessionStore
 import com.coveninja.cove.backend.activity.ActivityService
 import com.coveninja.cove.backend.calendar.CalendarService
-import com.coveninja.cove.backend.trakt.TraktService
+import com.coveninja.cove.backend.tracker.TrackerService
 import com.coveninja.cove.backend.platform.DeviceSettingsService
 import com.coveninja.cove.backend.discovery.DiscoveryService
 import com.coveninja.cove.backend.quality.QualityLookup
@@ -66,7 +66,7 @@ class LocalStoreGraph private constructor(
         clientSessions: ClientSessionStore? = null,
         activity: ActivityService? = null,
         calendar: CalendarService? = null,
-        trakt: TraktService? = null,
+        trackers: List<TrackerService> = emptyList(),
         deviceSettings: DeviceSettingsService? = null,
         discovery: DiscoveryService? = null,
         quality: QualityLookup? = null,
@@ -91,7 +91,7 @@ class LocalStoreGraph private constructor(
             clientSessions = clientSessions,
             activity = activity,
             calendar = calendar,
-            trakt = trakt,
+            trackers = trackers,
             deviceSettings = deviceSettings,
             discovery = discovery,
             quality = quality,

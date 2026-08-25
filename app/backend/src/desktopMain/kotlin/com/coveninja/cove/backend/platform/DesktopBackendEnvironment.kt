@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.platform
 
 import com.coveninja.cove.backend.auth.SupabaseConfig
+import com.coveninja.cove.backend.simkl.SimklConfig
 import com.coveninja.cove.backend.trakt.TraktConfig
 import java.nio.file.Files
 import java.nio.file.Path
@@ -60,6 +61,19 @@ object DesktopBackendEnvironment {
     ): TraktConfig = TraktConfig(
         clientId = value("TRAKT_CLIENT_ID", environment, searchStart).orEmpty(),
         clientSecret = value("TRAKT_CLIENT_SECRET", environment, searchStart).orEmpty(),
+    )
+
+    /**
+     * No secret to find: Cove links Simkl through the PIN flow, which is the one Simkl
+     * documents for clients that cannot keep one. The version is not optional though —
+     * Simkl requires app-name and app-version on every request.
+     */
+    fun simklConfig(
+        environment: Map<String, String> = System.getenv(),
+        searchStart: Path = Path.of("").toAbsolutePath(),
+    ): SimklConfig = SimklConfig(
+        clientId = value("SIMKL_CLIENT_ID", environment, searchStart).orEmpty(),
+        appVersion = appVersion(),
     )
 
     fun remoteBindAddress(

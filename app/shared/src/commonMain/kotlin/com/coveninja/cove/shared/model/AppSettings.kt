@@ -79,6 +79,8 @@ data class AppSettings(
     val addonsFollowPrimary: Boolean = false,
     val traktScrobbleEnabled: Boolean = true,
     val traktSyncEnabled: Boolean = false,
+    val simklScrobbleEnabled: Boolean = true,
+    val simklSyncEnabled: Boolean = false,
     // Off means Cove only syncs when asked. On, it also syncs at launch, on a
     // timer, and once local changes settle — background work the user must be
     // able to decline.

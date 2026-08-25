@@ -83,13 +83,13 @@
       "keywords": ["supabase", "register", "profile", "sign in", "cloud", "sync now"]
     },
     {
-      "slug": "trakt",
-      "title": "Trakt integration",
-      "summary": "Connect Trakt, control scrobbling, and reconcile compatible library data.",
+      "slug": "tracking",
+      "title": "Trakt and Simkl tracking",
+      "summary": "Connect Trakt or Simkl, control scrobbling, and reconcile compatible library data.",
       "section": "Use Cove",
       "order": 100,
-      "source_path": "docs/site/guides/trakt.md",
-      "keywords": ["trakt", "scrobble", "device code", "watch history", "library sync"]
+      "source_path": "docs/site/guides/tracking.md",
+      "keywords": ["trakt", "simkl", "scrobble", "device code", "pin", "watch history", "library sync"]
     },
     {
       "slug": "addons-and-sources",

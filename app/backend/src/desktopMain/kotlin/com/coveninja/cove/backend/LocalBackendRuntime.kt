@@ -21,6 +21,8 @@ import com.coveninja.cove.backend.content.resolveAppLocale
 import com.coveninja.cove.backend.calendar.CalendarService
 import com.coveninja.cove.backend.calendar.LocalCalendarRepository
 import com.coveninja.cove.shared.data.CalendarRepository
+import com.coveninja.cove.backend.simkl.SimklService
+import com.coveninja.cove.backend.tracker.TrackerService
 import com.coveninja.cove.backend.trakt.TraktService
 import com.coveninja.cove.backend.platform.DeviceSettingsService
 import com.coveninja.cove.backend.discovery.DiscoveryService
@@ -44,7 +46,7 @@ import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.AccountRepository
 import com.coveninja.cove.shared.data.AddonRepository
 import com.coveninja.cove.shared.data.DeviceRepository
-import com.coveninja.cove.shared.data.TraktRepository
+import com.coveninja.cove.shared.data.TrackerRepository
 import com.coveninja.cove.shared.data.UnavailableAccountRepository
 import com.coveninja.cove.backend.auth.LocalAccountRepository
 import com.coveninja.cove.backend.platform.LocalDeviceRepository
@@ -54,8 +56,8 @@ import com.coveninja.cove.backend.storage.LocalStorageRepository
 import com.coveninja.cove.backend.storage.TorrentCacheJournal
 import com.coveninja.cove.shared.data.StorageRepository
 import com.coveninja.cove.shared.data.TorrentCachePolicy
-import com.coveninja.cove.backend.trakt.LocalTraktRepository
-import com.coveninja.cove.backend.trakt.TraktScrobbleRequest
+import com.coveninja.cove.backend.tracker.LocalTrackerRepository
+import com.coveninja.cove.backend.tracker.TrackerScrobbleRequest
 import com.coveninja.cove.shared.data.LivePlaybackRepository
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.PluginRepository
@@ -98,7 +100,7 @@ class LocalBackendRuntime private constructor(
     discoveryRepository: DiscoveryRepository,
     insightsRepository: InsightsRepository,
     accountRepository: AccountRepository,
-    traktRepository: TraktRepository,
+    trackerRepositories: List<TrackerRepository>,
     deviceRepository: DeviceRepository,
     private val updateRepository: UpdateRepository,
     storageRepository: StorageRepository,
@@ -115,7 +117,7 @@ class LocalBackendRuntime private constructor(
         insights = insightsRepository,
         account = accountRepository,
         profiles = stores.profiles,
-        trakt = traktRepository,
+        trackers = trackerRepositories,
         device = deviceRepository,
         updates = updateRepository,
         storage = storageRepository,
@@ -301,22 +303,32 @@ class LocalBackendRuntime private constructor(
                     httpClient = client,
                     scope = scope,
                 )
+                val simkl = SimklService(
+                    config = DesktopBackendEnvironment.simklConfig(),
+                    database = stores.databaseHandle,
+                    session = stores.profileSession,
+                    settings = stores.settings,
+                    library = stores.library,
+                    catalog = catalog,
+                    httpClient = client,
+                    scope = scope,
+                )
+                val trackerServices: List<TrackerService> = listOf(trakt, simkl)
                 stores.progressEvents.subscribe { progress ->
                     activity.record(progress)
                     prefetch.notifyProgressChanged()
-                    trakt.enqueueScrobble(
-                        TraktScrobbleRequest(
-                            action = if (progress.completed) "stop" else "start",
-                            tmdbId = progress.tmdbId,
-                            mediaType = progress.mediaType.wireName,
-                            season = progress.season,
-                            episode = progress.episode,
-                            progress = if (progress.durationSeconds > 0.0) {
-                                (progress.positionSeconds / progress.durationSeconds * 100.0)
-                                    .coerceIn(0.0, 100.0)
-                            } else 0.0,
-                        ),
+                    val scrobble = TrackerScrobbleRequest(
+                        action = if (progress.completed) "stop" else "start",
+                        tmdbId = progress.tmdbId,
+                        mediaType = progress.mediaType.wireName,
+                        season = progress.season,
+                        episode = progress.episode,
+                        progress = if (progress.durationSeconds > 0.0) {
+                            (progress.positionSeconds / progress.durationSeconds * 100.0)
+                                .coerceIn(0.0, 100.0)
+                        } else 0.0,
                     )
+                    trackerServices.forEach { it.enqueueScrobble(scrobble) }
                 }
                 val clientSessions = ClientSessionStore(stores.databaseHandle, stores.now)
                 val auth = DesktopBackendEnvironment.supabaseConfig()?.let { config ->
@@ -353,7 +365,7 @@ class LocalBackendRuntime private constructor(
                     clientSessions,
                     activity,
                     calendar,
-                    trakt,
+                    trackerServices,
                     deviceSettings,
                     discovery,
                     quality,
@@ -417,10 +429,10 @@ class LocalBackendRuntime private constructor(
                         discovery = discovery,
                         database = stores.databaseHandle,
                         session = stores.profileSession,
-                        trakt = trakt,
+                        trackerServices = trackerServices,
                     ),
                     accountRepository,
-                    LocalTraktRepository(trakt, scope),
+                    trackerServices.map { LocalTrackerRepository(it, scope) },
                     LocalDeviceRepository(deviceSettings, DesktopBackendEnvironment.appVersion()),
                     updateRepository,
                     storageRepository,

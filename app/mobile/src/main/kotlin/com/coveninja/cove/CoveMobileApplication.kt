@@ -118,6 +118,7 @@ class CoveMobileApplication : Application(), SingletonImageLoader.Factory {
                             supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
                             traktClientId = BuildConfig.TRAKT_CLIENT_ID,
                             traktClientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
+                            simklClientId = BuildConfig.SIMKL_CLIENT_ID,
                             appVersion = BuildConfig.VERSION_NAME,
                             updatePublicKeys = BuildConfig.UPDATE_PUBLIC_KEYS,
                             updateApiBase = BuildConfig.UPDATE_API_BASE,

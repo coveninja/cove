@@ -106,7 +106,7 @@ class AndroidLegacyMigration(
             queries.deleteActivityTitles()
             queries.deleteActivityPositions()
             queries.deleteActivityStates()
-            queries.deleteTraktSessions()
+            queries.deleteTrackerSessions()
             queries.deleteLegacyPayloads()
             queries.deleteProfiles()
             queries.deleteClientSession()

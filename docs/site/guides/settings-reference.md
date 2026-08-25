@@ -16,7 +16,7 @@ Open **Profile** and select a category to change Cove's behavior. Most changes a
 | Content | Profile | Changes discovery and presentation |
 | Network | Mixed | Upload preference follows the profile; remote access and its token stay on the device |
 | Storage | Device | Downloads and caches never sync |
-| Trakt | Profile integration | Separate from Cove account sync |
+| Tracking | Profile integration | Trakt and Simkl; separate from Cove account sync |
 | Advanced | Device | Includes mpv, performance, updates, and version information |
 
 ## Playback

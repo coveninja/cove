@@ -52,6 +52,6 @@ Signing out stops future account sync on that installation but leaves its local 
 
 Cloud deletion does not erase offline databases remotely. Remove local app data separately on every device when that is also intended. Read [Data and privacy](data-and-privacy.md) before deleting an account.
 
-## Trakt is separate
+## Trackers are separate
 
-[Trakt](trakt.md) uses its own device authorization, scrobbling, and optional two-way library sync. Connecting or disconnecting Trakt does not connect or disconnect the Cove account.
+[Trakt and Simkl](tracking.md) each use their own device authorization, scrobbling, and optional two-way library sync. Connecting or disconnecting one does not connect or disconnect the Cove account, or the other tracker.

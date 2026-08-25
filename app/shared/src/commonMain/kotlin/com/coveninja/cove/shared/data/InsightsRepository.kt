@@ -3,7 +3,7 @@ package com.coveninja.cove.shared.data
 import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.InsightsRange
-import com.coveninja.cove.shared.model.TraktStats
+import com.coveninja.cove.shared.model.TrackerStats
 
 /**
  * What the viewer's own history says about them, for the insights page.
@@ -34,14 +34,14 @@ interface InsightsRepository {
     suspend fun taste(): DiscoveryInsights
 
     /**
-     * All-time totals from a linked Trakt account, or null when there is no account, no
-     * network, or nothing recorded against it.
+     * All-time totals from every linked tracker account, in the hosts' own order.
      *
-     * Null rather than an empty value because the difference matters to the caller: an
-     * empty [ActivityStats] is still worth a page, whereas no Trakt is a section that
-     * should not appear at all.
+     * Entries are only present for a tracker that is linked, reachable and has something
+     * recorded against it. Omission rather than an empty value because the difference
+     * matters to the caller: an empty [ActivityStats] is still worth a page, whereas an
+     * unlinked tracker is a section that should not appear at all.
      */
-    suspend fun trakt(): TraktStats? = null
+    suspend fun trackers(): List<TrackerStats> = emptyList()
 }
 
 /**
@@ -55,5 +55,5 @@ interface InsightsRepository {
 object UnavailableInsightsRepository : InsightsRepository {
     override suspend fun activity(range: InsightsRange): ActivityStats = ActivityStats()
     override suspend fun taste(): DiscoveryInsights = DiscoveryInsights()
-    override suspend fun trakt(): TraktStats? = null
+    override suspend fun trackers(): List<TrackerStats> = emptyList()
 }

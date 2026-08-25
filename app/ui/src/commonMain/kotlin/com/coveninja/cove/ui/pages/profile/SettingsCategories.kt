@@ -81,11 +81,11 @@ enum class SettingsCategory(
         headline = "Storage",
         blurb = "What Cove keeps on this device, and when it lets go of it.",
     ),
-    Trakt(
-        label = "Trakt",
+    Tracking(
+        label = "Tracking",
         icon = "iconamoon:history",
-        headline = "Trakt",
-        blurb = "Scrobbling and library sync.",
+        headline = "Tracking",
+        blurb = "Scrobbling and library sync with Trakt and Simkl.",
     ),
     Advanced(
         label = "Advanced",
@@ -526,36 +526,7 @@ fun SettingsCategoryContent(
                 }
             }
 
-            SettingsCategory.Trakt -> {
-                TraktConnectCard()
-
-                SettingsCard(
-                    title = "What Cove sends",
-                    iconName = "lucide:upload",
-                    // Said plainly because both switches look live whether or not
-                    // an account is connected, and neither does anything until one is.
-                    description = "Both apply once a Trakt account is connected above.",
-                ) {
-                    SettingRows(
-                        {
-                            SettingToggle(
-                                title = "Scrobble to Trakt",
-                                description = "Report what you are watching as you watch it.",
-                                checked = settings.traktScrobbleEnabled,
-                                onCheckedChange = { editor.edit { copy(traktScrobbleEnabled = it) } },
-                            )
-                        },
-                        {
-                            SettingToggle(
-                                title = "Sync your Trakt library",
-                                description = "Keep your list and watch history in step with Trakt.",
-                                checked = settings.traktSyncEnabled,
-                                onCheckedChange = { editor.edit { copy(traktSyncEnabled = it) } },
-                            )
-                        },
-                    )
-                }
-            }
+            SettingsCategory.Tracking -> TrackingSettings(settings, editor)
         }
     }
 }

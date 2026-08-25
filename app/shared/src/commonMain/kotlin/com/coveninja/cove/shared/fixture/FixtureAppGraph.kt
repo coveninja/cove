@@ -3,6 +3,12 @@ package com.coveninja.cove.shared.fixture
 import com.coveninja.cove.shared.data.*
 import com.coveninja.cove.shared.model.*
 import com.coveninja.cove.shared.network.WatchProgressRequest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.datetime.DateTimeUnit
@@ -13,6 +19,8 @@ import kotlinx.datetime.plus
 import kotlinx.datetime.todayIn
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 // The catalog the app renders before any network code is wired up. Values are plausible
 // but obviously fake.
@@ -508,15 +516,27 @@ private class FixtureInsightsRepository : InsightsRepository {
     override suspend fun activity(range: InsightsRange): ActivityStats =
         fixtureActivityFor(range)
     override suspend fun taste(): DiscoveryInsights = fixtureTaste
-    // Plausible rather than derived: Trakt totals come from an account this fixture has no
-    // model of, and the point of showing them is that they disagree with the local figures.
-    override suspend fun trakt(): TraktStats = TraktStats(
-        moviesWatched = 412,
-        movieMinutes = 48_960,
-        showsWatched = 96,
-        episodesWatched = 4_201,
-        episodeMinutes = 151_236,
-        ratings = 318,
+    // Plausible rather than derived: tracker totals come from accounts this fixture has no
+    // model of, and the point of showing them is that they disagree with the local figures
+    // and with each other.
+    override suspend fun trackers(): List<TrackerStats> = listOf(
+        TrackerStats(
+            provider = TrackerProvider.Trakt.key,
+            moviesWatched = 412,
+            movieMinutes = 48_960,
+            showsWatched = 96,
+            episodesWatched = 4_201,
+            episodeMinutes = 151_236,
+            ratings = 318,
+        ),
+        TrackerStats(
+            provider = TrackerProvider.Simkl.key,
+            moviesWatched = 287,
+            movieMinutes = 33_420,
+            showsWatched = 71,
+            episodesWatched = 2_968,
+            episodeMinutes = 106_812,
+        ),
     )
 }
 
@@ -1255,27 +1275,60 @@ private class FixtureProfileRepository : ProfileRepository {
     }
 }
 
-/** Walks the device flow without Trakt: connecting shows a code, then links. */
-private class FixtureTraktRepository : TraktRepository {
-    private val _state = MutableStateFlow<TraktState>(TraktState.Unlinked())
-    override val state: StateFlow<TraktState> = _state
+/**
+ * Walks the whole link flow without a tracker: a code, then an approval, then an account
+ * that syncs.
+ *
+ * It approves itself after a few seconds rather than staying pending forever, because the
+ * states worth looking at on this screen are the ones a real account only reaches with
+ * credentials — the code panel counting down, the switches arriving, a sync running and
+ * landing. A fixture that stopped at the code would leave all of that unreachable.
+ */
+private class FixtureTrackerRepository(
+    override val provider: TrackerProvider,
+    private val verificationUrl: String,
+    private val userCode: String,
+) : TrackerRepository {
+    private val _state = MutableStateFlow<TrackerState>(TrackerState.Unlinked())
+    override val state: StateFlow<TrackerState> = _state
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var approval: Job? = null
 
     override suspend fun startLink() {
-        _state.value = TraktState.Pending(
-            userCode = "COVE-1234",
-            verificationUrl = "https://trakt.tv/activate",
+        _state.value = TrackerState.Pending(
+            userCode = userCode,
+            verificationUrl = verificationUrl,
+            expiresAt = Clock.System.now() + 15.minutes,
         )
+        approval?.cancel()
+        approval = scope.launch {
+            delay(6.seconds)
+            if (_state.value is TrackerState.Pending) {
+                _state.value = TrackerState.Linked(
+                    username = "cove-viewer",
+                    lastSyncAt = Clock.System.now() - 4.minutes,
+                )
+            }
+        }
     }
 
     override suspend fun cancelLink() {
-        _state.value = TraktState.Unlinked()
+        approval?.cancel()
+        _state.value = TrackerState.Unlinked()
     }
 
     override suspend fun unlink() {
-        _state.value = TraktState.Unlinked()
+        approval?.cancel()
+        _state.value = TrackerState.Unlinked()
     }
 
-    override suspend fun syncNow() = Unit
+    override suspend fun syncNow() {
+        val linked = _state.value as? TrackerState.Linked ?: return
+        _state.value = linked.copy(syncing = true, syncError = null)
+        delay(1_400)
+        _state.value = linked.copy(syncing = false, lastSyncAt = Clock.System.now())
+    }
 }
 
 private class FixtureDeviceRepository : DeviceRepository {
@@ -1365,7 +1418,10 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     insights  = FixtureInsightsRepository(),
     account   = FixtureAccountRepository(),
     profiles  = FixtureProfileRepository(),
-    trakt     = FixtureTraktRepository(),
+    trackers  = listOf(
+        FixtureTrackerRepository(TrackerProvider.Trakt, "trakt.tv/activate", "COVE-1234"),
+        FixtureTrackerRepository(TrackerProvider.Simkl, "simkl.com/pin", "H4TQ9"),
+    ),
     device    = FixtureDeviceRepository(),
     storage   = FixtureStorageRepository(),
     fixtures  = true,

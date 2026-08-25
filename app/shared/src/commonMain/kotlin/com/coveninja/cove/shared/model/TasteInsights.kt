@@ -82,15 +82,18 @@ data class DiscoveryInsights(
 )
 
 /**
- * Trakt's own all-time totals for the linked account.
+ * One tracker's own all-time totals for the linked account.
  *
  * Worth showing precisely because it disagrees with the rest of the page: Cove only knows
- * what it watched itself, while Trakt may carry years of history from before this app was
- * installed. Presenting it as a separate, clearly-attributed figure is honest; folding it
- * into the local totals would not be.
+ * what it watched itself, while a tracker may carry years of history from before this app
+ * was installed. Presenting it as a separate, clearly-attributed figure is honest; folding
+ * it into the local totals would not be — which is also why [provider] is on the value
+ * rather than implied by where it was fetched from.
  */
 @Serializable
-data class TraktStats(
+data class TrackerStats(
+    /** A [TrackerProvider] key. Defaulted so a payload from an older host still decodes. */
+    val provider: String = "trakt",
     @SerialName("movies_watched") val moviesWatched: Int = 0,
     @SerialName("movie_minutes") val movieMinutes: Long = 0,
     @SerialName("shows_watched") val showsWatched: Int = 0,

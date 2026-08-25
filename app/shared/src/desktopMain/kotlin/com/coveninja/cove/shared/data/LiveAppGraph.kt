@@ -39,10 +39,10 @@ fun createLiveAppGraph(
         insights = LiveInsightsRepository(api),
         account  = LiveAccountRepository(api, scope),
         profiles = LiveProfileRepository(api, scope),
-        // Trakt linking, the mpv config file and the disk the caches sit on all belong to the
-        // machine running the backend, not to whoever is pointed at it over the network. A
-        // storage screen here would be offering to delete somebody else's files.
-        trakt    = UnavailableTraktRepository,
+        // Tracker linking, the mpv config file and the disk the caches sit on all belong to
+        // the machine running the backend, not to whoever is pointed at it over the network.
+        // A storage screen here would be offering to delete somebody else's files.
+        trackers = emptyList(),
         device   = UnavailableDeviceRepository,
         storage  = UnavailableStorageRepository,
         onClose  = {

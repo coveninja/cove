@@ -27,7 +27,7 @@ All paths below are relative to `/api/v1`.
 |---|---|
 | Health/session | `GET /ping`; `GET`, `POST`, `DELETE /client-session` |
 | Auth/sync | `POST /auth/register`, `/register/confirm`, `/login`, `/otp`, `/verify-otp`, `/refresh`, `/logout`, `/sync`; `GET /auth/me` |
-| Trakt | `POST /trakt/device-code`, `/poll`, `/unlink`, `/scrobble`, `/sync`; `GET /trakt/status`, `/stats` |
+| Trackers | `POST /{tracker}/device-code`, `/poll`, `/unlink`, `/scrobble`, `/sync`; `GET /{tracker}/status`, `/stats`; `GET /trackers/stats`. `{tracker}` is `trakt` or `simkl` |
 | TMDB/content | `GET /discover`, `/browse`, `/search/multi`, `/search`, `/keywords`, `/media`, `/details`, `/images`, `/logos`, `/videos`, `/similar`, `/imdb`, `/person`, `/provider`, `/genres`, `/tv/seasons`, `/tv/episodes` |
 | Personalized discovery | `GET /discover/genres`, `/keywords`, `/people`, `/genre`, `/keyword`, `/person`, `/similar-to`, `/favorites`, `/insights`; `POST /discover/algorithm/test` |
 | Sources | `GET /streams`, `/subtitles`, `/watch-options`, `/timestamps`, `/quality/batch` |
@@ -102,8 +102,8 @@ specific POST/PATCH bodies and reject invalid state with `400` or `409`.
 
 `GET /client-session` sends `Cache-Control: no-store`. Empty discovery,
 catalog, stream, subtitle, activity, and calendar collections are successful
-results, not `404`. `GET /trakt/stats` returns `204` when the connected account
-has no reportable totals.
+results, not `404`. `GET /{tracker}/stats` and `GET /trackers/stats` return `204`
+when the connected accounts have no reportable totals.
 
 ## Endpoint behavior notes
 
@@ -115,12 +115,26 @@ reports the current local account session, while `/auth/logout` clears it.
 `/auth/sync` responds with the resulting library generation and any non-fatal
 push error after reconciliation.
 
-### Trakt
+### Trackers
 
-`/trakt/device-code` starts device authorization; `/trakt/poll` accepts the
-device code returned from that call. Scrobbles and library sync are queued and
-return `202 Accepted` when work was accepted. `/trakt/unlink` removes the local
-authorization and returns `204`.
+The same seven routes exist once per linked tracker, under its own path segment:
+`/trakt/…` and `/simkl/…`. A host that owns neither serves neither group at all,
+rather than answering `503` to every path in it.
+
+`/{tracker}/device-code` starts device authorization; `/{tracker}/poll` accepts
+the code from that call. **The field is spelled `device_code` for both, but the
+value differs**: Trakt polls with the `device_code` it returned, while Simkl
+polls with the `user_code` — the one the viewer can see. Scrobbles and library
+sync are queued and return `202 Accepted` when work was accepted;
+`/{tracker}/unlink` removes the local authorization and returns `204`. Note that
+unlinking Simkl cannot revoke the token remotely — Simkl publishes no revoke
+endpoint, so access ends only when the user removes Cove from Connected Apps.
+
+`/{tracker}/stats` reports all-time totals for one account and answers `204` when
+there is nothing to say. `GET /trackers/stats` returns the same values for every
+linked tracker as an array, each entry tagged with its `provider`, and likewise
+`204` when none has anything — which is the call the insights page makes, so it
+does not have to know which trackers a host offers.
 
 ### Addons, catalogs, and Nuvio
 

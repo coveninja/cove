@@ -76,6 +76,8 @@ private val settingsJson = """
   "addonsFollowPrimary": true,
   "traktScrobbleEnabled": false,
   "traktSyncEnabled": true,
+  "simklScrobbleEnabled": false,
+  "simklSyncEnabled": true,
   "autoSyncEnabled": false,
   "updatedAt": "2026-08-05T01:02:03Z"
 }
@@ -163,6 +165,10 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,  sent.addonsFollowPrimary,   "addonsFollowPrimary")
         assertEquals(false, sent.traktScrobbleEnabled,  "traktScrobbleEnabled")
         assertEquals(true,  sent.traktSyncEnabled,      "traktSyncEnabled")
+        // Both non-default: the pair is what proves a stored Simkl preference survives
+        // the whole-object replace rather than being re-derived from the Kotlin defaults.
+        assertEquals(false, sent.simklScrobbleEnabled,  "simklScrobbleEnabled")
+        assertEquals(true,  sent.simklSyncEnabled,      "simklSyncEnabled")
         // Non-default on purpose: autoSyncEnabled defaults to true, so a value of
         // false is what proves the stored preference survived the round trip
         // rather than being re-derived from the Kotlin default.
