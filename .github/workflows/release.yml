@@ -126,9 +126,7 @@ jobs:
         run: |
           mkdir -p _pkg/bin _pkg/lib/cove _pkg/share/applications \
                    _pkg/share/icons/hicolor/scalable/apps compose-app
-          # libjsig is preloaded so libtorrent's signal handlers chain to the JVM's
-          # instead of replacing them — see flatpak/cove.sh for the full reasoning.
-          # Without it, the first null dereference after a torrent starts is fatal.
+          # Preload libjsig so libtorrent and HotSpot signal handlers remain chained.
           # The single quotes are deliberate: $JSIG, $LD_PRELOAD and "$@" must reach
           # the generated launcher literally rather than expanding here at build time.
           # shellcheck disable=SC2016
@@ -226,13 +224,8 @@ jobs:
           Copy-Item -Recurse staging\* staging-portable\
           Set-Content staging-portable\.cove-portable -Value "${{ github.ref_name }}" -Encoding ascii
           $portableFiles = Get-ChildItem staging-portable -Force
-          # Do NOT rename this back to cove-windows-amd64.zip. The pre-1.0.0 Go updater
-          # looked for exactly that name plus a .sha256 sibling, and would happily unpack
-          # this archive over a Qt/Go install — replacing cove.exe with the Compose
-          # launcher while leaving cove_shell.exe and its restart handshake in place,
-          # which yields an install that no longer starts. The new updater never reads
-          # this asset (it resolves windows-installer/windows-portable from the signed
-          # manifest), so the distinct name is what makes the old updater fail closed.
+          # Keep this distinct from cove-windows-amd64.zip: legacy Go updaters consume that
+          # name and would overlay Compose files onto an incompatible Qt/Go installation.
           Compress-Archive -Path $portableFiles.FullName -DestinationPath cove-windows-amd64-portable.zip
           foreach ($f in @(
             "cove-windows-amd64-setup.exe",
@@ -304,14 +297,8 @@ jobs:
               | grep -E '^(/opt/homebrew|/usr/local)' || true)
             test -z "$external" || { echo "::error::$library still references $external"; exit 1; }
           done
-          # Ad-hoc signatures, NOT Developer ID. arm64 macOS refuses to execute a
-          # Mach-O carrying no signature at all, so this is the minimum that runs;
-          # it is not a Gatekeeper credential and does not avoid the quarantine
-          # prompt. Hardened runtime and entitlements are deliberately omitted:
-          # they exist to satisfy notarization, and with no real identity they add
-          # only library-validation failure modes. Restoring Developer ID means
-          # putting back --options runtime, the entitlements and notarytool
-          # together — see docs/UPDATES.md.
+          # Ad-hoc signatures let arm64 Mach-O files run but do not satisfy Gatekeeper.
+          # Restore hardened runtime, entitlements, and notarization together with Developer ID.
           find "$FRAMEWORKS" -type f -name '*.dylib' -print0 \
             | xargs -0 -n1 codesign --force --timestamp=none --sign -
           python3 -c 'import ctypes,sys; ctypes.CDLL(sys.argv[1])' "$FRAMEWORKS/libmpv.2.dylib"
@@ -478,11 +465,7 @@ jobs:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
           install -d -m 700 -o builder -g builder /home/builder/.ssh
-          # printf '%s' wrote the key with no trailing newline, and OpenSSH rejects a private
-          # key whose final -----END----- line is unterminated with exactly the message the
-          # v1.0.0 release died on: 'Load key ".../aur": invalid format'. The GitHub secrets
-          # UI strips the trailing newline on save, so the stored value never carries one.
-          # A doubled newline is harmless, so this is safe whichever way the secret was saved.
+          # OpenSSH requires the private key's final line to end with a newline.
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
           chmod 600 /home/builder/.ssh/aur
           chown builder:builder /home/builder/.ssh/aur

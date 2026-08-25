@@ -2,12 +2,7 @@ name: CI checks
 
 on:
   push:
-    # Deliberately not tags. `make patch` commits the version bump to master and tags the
-    # same commit, so a tag build here re-runs, on an identical tree, work that has already
-    # run twice: once for the master push and once as release.yml's `kotlin` job, which
-    # executes this job's exact task list. The three ran concurrently and hit Maven Central
-    # hard enough that it answered 429 and cost the v1.0.2 Android asset — see
-    # scripts/gradle-retry.sh. A tag is still fully built and tested by release.yml.
+    # Tags are fully built by release.yml; avoid duplicating the same work here.
     branches: [master]
   pull_request:
   workflow_dispatch:
@@ -30,10 +25,7 @@ jobs:
         run: make test-site-docs
       - name: Test release-note filtering
         run: make test-release-notes
-      # release.yml only runs on a tag, so its key derivation, packaging and manifest steps
-      # are otherwise unexercised until the moment they matter. This rehearses them against a
-      # throwaway signing key and checks the results still satisfy the PKGBUILD, the Flatpak
-      # manifest, the NSIS script and the Kotlin updater's verifier.
+      # Rehearse tag-only packaging and signing contracts with a throwaway key.
       - name: Rehearse the release workflow
         run: make test-release
       - name: Install actionlint
@@ -53,10 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install libmpv
-        # The desktop app links libmpv in-process through JNA, so the shared
-        # library must be present for the JVM to load it at test time.
-        # scripts/apt-install.sh, not apt-get directly — see its header for why a
-        # bare `apt-get update -qq` here cost the v1.1.0 release twelve silent minutes.
+        # Desktop tests load libmpv through JNA; the wrapper bounds transient apt stalls.
         timeout-minutes: 10
         run: scripts/apt-install.sh libmpv-dev
       - uses: actions/setup-java@v5

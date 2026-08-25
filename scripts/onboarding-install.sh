@@ -1,19 +1,8 @@
 #!/usr/bin/env bash
 #
-# Build, install and open Cove's first-run flow on an attached Android device.
-#
-# Shared by `make onboarding-mobile` and `make onboarding-tv-install`, which differ only in
-# which kind of device they want. Three things make this worth a script rather than an inline
-# recipe:
-#
-#   * One APK serves phones and televisions — MainActivity picks the shell at runtime from the
-#     leanback feature — so the only thing that decides which onboarding you see is which device
-#     adb talks to. With both emulators running, an unqualified `adb` command fails outright.
-#   * The debug APK carries four ABIs and is 181 MB. Building only the one the target device can
-#     run halves it, which is the difference between installing and INSTALL_FAILED_INSUFFICIENT_
-#     STORAGE on an emulator with a few hundred MB free.
-#   * The failure that actually happens in practice is storage, and the fix is one command the
-#     error message does not mention.
+# Build, install, and open Cove's first-run flow on a selected Android device.
+# The script distinguishes TV via the same leanback feature as the app and can build only
+# the target ABI to keep emulator installs small.
 #
 # Usage: onboarding-install.sh --kind tv|phone|any [--fixtures true|false] [--abi ABI|all]
 #                              [--device SERIAL]
@@ -39,18 +28,8 @@ command -v adb >/dev/null 2>&1 || {
     exit 1
 }
 
-# Whether a device runs the television shell, asked the same way the app asks it. MainActivity
-# keys off PackageManager.FEATURE_LEANBACK, so anything reporting that feature gets the TV UI —
-# which makes this the one test that cannot disagree with what ends up on screen.
-#
-# Two plausible alternatives are both wrong here. `ro.build.characteristics` reads "emulator" on
-# the Android TV image, exactly as it does on the phone one. And `pm has-system-feature`, which
-# would be the tidy way to ask, is simply not a command on every API level — it answers
-# "Unknown command" and exits 255, which a naive check reads as "not a television" and silently
-# routes every install to the wrong target.
-#
-# Listing the features and matching a whole line works everywhere. The trailing carriage returns
-# are adb's, not the device's, and have to go before anything can match end-of-line.
+# Match MainActivity's leanback check. Listing features works on API levels that lack
+# `pm has-system-feature`; strip adb's carriage returns before matching a full line.
 is_television() {
     adb -s "$1" shell pm list features 2>/dev/null \
         | tr -d '\r' \

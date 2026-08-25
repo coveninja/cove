@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
 #
-# Rehearse the release-only steps of .github/workflows/release.yml locally.
-#
-# ci.yml and release.yml share exactly one job (`kotlin`). Everything else in the release
-# workflow — key derivation, tarball assembly, PKGBUILD substitution, NSIS staging, update
-# manifest generation and signing — runs for the first time when a tag is pushed, which is
-# the worst possible moment to discover that a path drifted. This script runs those steps
-# against a throwaway signing key and checks that their outputs still satisfy the things
-# that consume them: the PKGBUILD, the Flatpak manifest, the NSIS installer, and the Kotlin
-# updater's SignedManifestVerifier.
-#
-# Fast by default (seconds, no build). If app/desktop/build/compose/binaries/main/app/Cove
-# exists — `make test-build` produces it — the Linux packaging checks use the real app image
-# instead of a stub, which is the only way to catch a jpackage layout change.
+# Rehearse release-only packaging, signing, and manifest steps with a throwaway key.
+# The checks cover PKGBUILD, Flatpak, NSIS, and SignedManifestVerifier contracts. When a
+# desktop distributable exists, use it instead of a stub to catch jpackage layout changes.
 #
 #   bash scripts/release-dry-run.sh                # rehearse the tag in VERSION
 #   bash scripts/release-dry-run.sh --tag v1.2.3   # rehearse a specific tag
