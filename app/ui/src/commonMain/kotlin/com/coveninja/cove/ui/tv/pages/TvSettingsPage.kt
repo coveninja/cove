@@ -47,6 +47,8 @@ import com.coveninja.cove.ui.state.languageName
 import com.coveninja.cove.ui.state.orderedAudioLanguages
 import com.coveninja.cove.ui.state.orderedSubtitleLanguages
 import com.coveninja.cove.ui.state.resolveBorderStyle
+import com.coveninja.cove.ui.state.subtitleBorderStyleLabel
+import com.coveninja.cove.ui.state.subtitleColorLabel
 import com.coveninja.cove.ui.state.withAudioLanguages
 import com.coveninja.cove.ui.state.withCurrent
 import com.coveninja.cove.ui.state.withSubtitleLanguages

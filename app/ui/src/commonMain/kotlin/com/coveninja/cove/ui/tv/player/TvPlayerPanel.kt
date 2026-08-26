@@ -49,6 +49,15 @@ import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackRequest
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.DEFAULT_SUBTITLE_POSITION
+import com.coveninja.cove.ui.state.DEFAULT_SUBTITLE_SIZE
+import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
+import com.coveninja.cove.ui.state.SUBTITLE_POSITION_STEP
+import com.coveninja.cove.ui.state.SUBTITLE_SIZE_STEP
+import com.coveninja.cove.ui.state.SUBTITLE_TEXT_COLORS
+import com.coveninja.cove.ui.state.SubtitleAppearance
+import com.coveninja.cove.ui.state.subtitleBorderStyleLabel
+import com.coveninja.cove.ui.state.subtitleColorLabel
 import com.coveninja.cove.ui.state.SLEEP_TIMER_MINUTES
 import com.coveninja.cove.ui.state.SleepTimer
 import com.coveninja.cove.ui.state.SleepTimerChoice
@@ -61,6 +70,7 @@ import com.coveninja.cove.ui.tv.focus.TvFocusDefaults
 import com.coveninja.cove.ui.tv.focus.tvFocusGroup
 import com.coveninja.cove.ui.tv.focus.tvFocusTarget
 import com.coveninja.cove.ui.tv.pages.cycleOption
+import kotlin.math.roundToLong
 
 /**
  * Which list the panel is showing.
@@ -107,6 +117,13 @@ internal fun TvPlayerPanel(
     onSelectSubtitle: (Int?) -> Unit,
     onSelectAudio: (Int) -> Unit,
     onSetSubtitleDelay: (Double) -> Unit,
+    /**
+     * How subtitles are drawn, and where to send a change. Null until settings have loaded —
+     * the write is a whole-object replace, so a control offered before anything had been read
+     * would replace the profile's settings with whatever it was holding.
+     */
+    subtitleAppearance: SubtitleAppearance? = null,
+    onSubtitleAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
     onSetAudioDelay: (Double) -> Unit,
     onSelectSpeed: (Double) -> Unit,
     onSetScaling: (VideoScaling) -> Unit,
@@ -192,6 +209,8 @@ internal fun TvPlayerPanel(
                         firstRowFocus = firstRowFocus,
                         onSelect = onSelectSubtitle,
                         onSetDelay = onSetSubtitleDelay,
+                        appearance = subtitleAppearance,
+                        onAppearanceChange = onSubtitleAppearanceChange,
                     )
 
                     TvPanelPage.Audio -> trackRows(
@@ -444,6 +463,9 @@ private fun LazyListScope.trackRows(
     firstRowFocus: FocusRequester,
     onSelect: (Int?) -> Unit,
     onSetDelay: (Double) -> Unit,
+    /** Subtitles only; the audio page passes neither. */
+    appearance: SubtitleAppearance? = null,
+    onAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
 ) {
     item(key = "delay") {
         TvPanelStepper(
@@ -453,6 +475,90 @@ private fun LazyListScope.trackRows(
             onIncrease = { onSetDelay(delaySeconds + DELAY_STEP_SECONDS) },
             onReset = if (delaySeconds != 0.0) ({ onSetDelay(0.0) }) else null,
         )
+    }
+
+    // Above the tracks rather than below them, unlike the pointer menu. A remote walks the
+    // list top to bottom and a release can carry twenty subtitle tracks; putting these last
+    // would mean twenty presses to reach the control for text that is too small to read.
+    if (appearance != null && onAppearanceChange != null) {
+        item(key = "size") {
+            TvPanelStepper(
+                label = "Text size",
+                value = "${appearance.sizePercent.roundToLong()}%",
+                onDecrease = {
+                    onAppearanceChange(
+                        appearance.copy(sizePercent = appearance.sizePercent - SUBTITLE_SIZE_STEP),
+                    )
+                },
+                onIncrease = {
+                    onAppearanceChange(
+                        appearance.copy(sizePercent = appearance.sizePercent + SUBTITLE_SIZE_STEP),
+                    )
+                },
+                onReset = if (appearance.sizePercent != DEFAULT_SUBTITLE_SIZE) {
+                    { onAppearanceChange(appearance.copy(sizePercent = DEFAULT_SUBTITLE_SIZE)) }
+                } else {
+                    null
+                },
+            )
+        }
+        item(key = "position") {
+            TvPanelStepper(
+                // A television overscans: on plenty of sets the bottom of the picture is
+                // behind the bezel, and this is the control that gets the text out of it.
+                label = "Height from the bottom",
+                value = "${appearance.position.roundToLong()}%",
+                onDecrease = {
+                    onAppearanceChange(
+                        appearance.copy(position = appearance.position - SUBTITLE_POSITION_STEP),
+                    )
+                },
+                onIncrease = {
+                    onAppearanceChange(
+                        appearance.copy(position = appearance.position + SUBTITLE_POSITION_STEP),
+                    )
+                },
+                onReset = if (appearance.position != DEFAULT_SUBTITLE_POSITION) {
+                    { onAppearanceChange(appearance.copy(position = DEFAULT_SUBTITLE_POSITION)) }
+                } else {
+                    null
+                },
+            )
+        }
+        item(key = "backdrop") {
+            TvSettingRow(
+                label = "Behind the text",
+                detail = "A panel, a box per line, or nothing but an outline.",
+                value = subtitleBorderStyleLabel(appearance.borderStyle),
+                onActivate = {
+                    onAppearanceChange(
+                        appearance.copy(
+                            borderStyle = cycleOption(
+                                SUBTITLE_BORDER_STYLES.map { it.value },
+                                appearance.borderStyle,
+                            ),
+                        ),
+                    )
+                },
+            )
+        }
+        item(key = "colour") {
+            TvSettingRow(
+                label = "Text colour",
+                detail = "White unless the picture keeps swallowing it.",
+                value = subtitleColorLabel(appearance.textColor),
+                onActivate = {
+                    onAppearanceChange(
+                        appearance.copy(
+                            textColor = cycleOption(
+                                SUBTITLE_TEXT_COLORS.map { it.value },
+                                appearance.textColor,
+                            ),
+                        ),
+                    )
+                },
+            )
+        }
     }
 
     if (offEntry) {

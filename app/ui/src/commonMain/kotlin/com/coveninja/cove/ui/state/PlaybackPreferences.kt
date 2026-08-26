@@ -245,6 +245,66 @@ fun AppSettings.withSubtitleLanguages(languages: List<String>): AppSettings {
     )
 }
 
+/**
+ * The handful of appearance values worth changing with the picture in front of you.
+ *
+ * A subset of [SubtitleStyle] and a different thing from it. [SubtitleStyle] is everything a
+ * player needs, already converted into mpv's units and vocabulary; this is what a *control*
+ * edits, in the units the settings store — so the player's steppers and the settings sliders
+ * are moving the same numbers rather than two representations of them.
+ *
+ * The four are the ones a viewer reaches for because of what is on screen: text too small, text
+ * behind a subtitle burnt into the picture, text lost against a bright scene. Font, blur,
+ * shadow and the rest are set once and left, and stay in settings.
+ */
+data class SubtitleAppearance(
+    /** Percent, where 100 is normal — the same scale [AppSettings.subtitleSize] stores. */
+    val sizePercent: Double,
+    /** Percent up from the bottom of the frame. Inverted for mpv by [subtitleStyle]. */
+    val position: Double,
+    /** Always one of [SUBTITLE_BORDER_STYLES]; never empty, unlike the stored field. */
+    val borderStyle: String,
+    val textColor: String,
+)
+
+/** What the controls should currently show. */
+fun AppSettings.subtitleAppearance(): SubtitleAppearance = SubtitleAppearance(
+    sizePercent = subtitleSize.coerceIn(SUBTITLE_SIZE_MIN, SUBTITLE_SIZE_MAX),
+    position = subtitlePosition.coerceIn(SUBTITLE_POSITION_MIN, SUBTITLE_POSITION_MAX),
+    // Resolved here so a control never has to deal with the empty case, and so the player and
+    // the settings screen agree about what an unset border style means.
+    borderStyle = resolveBorderStyle(subtitleBorderStyle, subtitleBackground),
+    textColor = resolveSubtitleColor(subtitleTextColor, "#FFFFFFFF"),
+)
+
+/**
+ * Writes one back.
+ *
+ * Two things live here rather than at each control, because there are now three of them — the
+ * settings screen, the player's menu and the television's panel — and a rule enforced in three
+ * places is a rule that holds in two of them.
+ *
+ * **Clamping** to the range the settings sliders already offer. A stepper can be pressed
+ * indefinitely, and without this it would walk the value somewhere the settings screen could
+ * not represent and could not bring back.
+ *
+ * **`subtitleBackground` kept in step with `borderStyle`.** That boolean is the whole of what
+ * older builds and older profiles understand about the backdrop, and it syncs. A writer that
+ * set only the three-way would leave this device drawing a panel and the phone in the next room
+ * drawing none, with nothing anywhere to say why.
+ */
+fun AppSettings.withSubtitleAppearance(appearance: SubtitleAppearance): AppSettings {
+    val borderStyle = resolveBorderStyle(appearance.borderStyle, subtitleBackground)
+    return copy(
+        subtitleSize = appearance.sizePercent.coerceIn(SUBTITLE_SIZE_MIN, SUBTITLE_SIZE_MAX),
+        subtitlePosition = appearance.position
+            .coerceIn(SUBTITLE_POSITION_MIN, SUBTITLE_POSITION_MAX),
+        subtitleBorderStyle = borderStyle,
+        subtitleBackground = borderStyle != "outline-and-shadow",
+        subtitleTextColor = resolveSubtitleColor(appearance.textColor, subtitleTextColor),
+    )
+}
+
 /** The appearance half on its own, for re-applying a settings change to a playing file. */
 fun AppSettings.subtitleStyle(): SubtitleStyle = SubtitleStyle(
     // The setting is a percentage where 100 means "normal"; players take a multiplier.

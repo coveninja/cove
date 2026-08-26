@@ -40,6 +40,15 @@ import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.shared.model.LabelledSegment
 import com.coveninja.cove.shared.model.SegmentKind
 import com.coveninja.cove.ui.components.menu.CMenuItem
+import com.coveninja.cove.ui.components.common.ColorSwatchRow
+import com.coveninja.cove.ui.pages.common.ChoicePill
+import com.coveninja.cove.ui.state.DEFAULT_SUBTITLE_POSITION
+import com.coveninja.cove.ui.state.DEFAULT_SUBTITLE_SIZE
+import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
+import com.coveninja.cove.ui.state.SUBTITLE_POSITION_STEP
+import com.coveninja.cove.ui.state.SUBTITLE_SIZE_STEP
+import com.coveninja.cove.ui.state.SUBTITLE_TEXT_COLORS
+import com.coveninja.cove.ui.state.SubtitleAppearance
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaChapter
@@ -145,6 +154,12 @@ fun PlayerControls(
      * pick from, which is also what keeps the entry out of the menu there.
      */
     onLoadSubtitleFile: (() -> Unit)? = null,
+    /**
+     * How subtitles are drawn, for the appearance controls in their menu. Null until settings
+     * have loaded, which is also what keeps those controls out of the menu until then.
+     */
+    subtitleAppearance: SubtitleAppearance? = null,
+    onSubtitleAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
     onSetAudioDelay: (Double) -> Unit,
     scaling: VideoScaling,
     onSelectScaling: (VideoScaling) -> Unit,
@@ -273,6 +288,8 @@ fun PlayerControls(
                         delaySeconds = status.subtitleDelaySeconds,
                         onSetDelay = onSetSubtitleDelay,
                         onLoadFile = onLoadSubtitleFile,
+                        appearance = subtitleAppearance,
+                        onAppearanceChange = onSubtitleAppearanceChange,
                     )
                 }
                 if (status.audioTracks.size > 1) {
@@ -993,6 +1010,13 @@ private fun TrackMenuButton(
     onSetDelay: (Double) -> Unit,
     /** Subtitles only, and only where the platform has files to offer. */
     onLoadFile: (() -> Unit)? = null,
+    /**
+     * How subtitles are drawn, and where to send a change. Null for the audio menu, and until
+     * settings have loaded — a control that wrote to a settings object nobody had read yet
+     * would replace it wholesale, and this is a whole-object replace.
+     */
+    appearance: SubtitleAppearance? = null,
+    onAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
 ) {
     val groups = remember(tracks) { groupTracksByLanguage(tracks) }
 
@@ -1056,6 +1080,14 @@ private fun TrackMenuButton(
                 delaySeconds = delaySeconds,
                 onSetDelay = onSetDelay,
             )
+            // Last, and only for subtitles: the tracks are what the menu is opened for, and
+            // these are what you reach for once one is on screen and not quite readable.
+            if (appearance != null && onAppearanceChange != null) {
+                SubtitleAppearanceControls(
+                    appearance = appearance,
+                    onChange = onAppearanceChange,
+                )
+            }
         }
     }
 }
@@ -1073,36 +1105,141 @@ private fun DelayStepper(
     onSetDelay: (Double) -> Unit,
 ) {
     MenuSectionHeader("Timing")
+    MenuStepper(
+        label = null,
+        value = formatDelay(delaySeconds),
+        decreaseLabel = "Earlier",
+        increaseLabel = "Later",
+        onDecrease = { onSetDelay(delaySeconds - DELAY_STEP_SECONDS) },
+        onIncrease = { onSetDelay(delaySeconds + DELAY_STEP_SECONDS) },
+        onReset = { onSetDelay(0.0) },
+        resetLabel = "Back in sync",
+    )
+}
+
+/**
+ * One value, two arrows and a way back to the default.
+ *
+ * The shape the timing control already had, generalised the day a second and third thing
+ * wanted it. Everything about it is built for adjusting by eye with the film still playing:
+ * the menu stays open across presses, and [StepperButton] beneath it is a 44dp target on touch
+ * against 26dp under a pointer, because these get pressed repeatedly rather than once.
+ *
+ * [label] is null where a section header already says what the value is.
+ */
+@Composable
+private fun MenuStepper(
+    label: String?,
+    value: String,
+    decreaseLabel: String,
+    increaseLabel: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit,
+    onReset: (() -> Unit)? = null,
+    resetLabel: String = "Back to default",
+) {
     Row(
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        StepperButton(
-            icon = "lucide:minus",
-            label = "Earlier",
-            onClick = { onSetDelay(delaySeconds - DELAY_STEP_SECONDS) },
-        )
+        label?.let {
+            Text(
+                text = it,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.width(58.dp),
+            )
+        }
+        StepperButton(icon = "lucide:minus", label = decreaseLabel, onClick = onDecrease)
         Box(
             modifier = Modifier.width(62.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = formatDelay(delaySeconds),
+                text = value,
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
             )
         }
-        StepperButton(
-            icon = "lucide:plus",
-            label = "Later",
-            onClick = { onSetDelay(delaySeconds + DELAY_STEP_SECONDS) },
-        )
-        StepperButton(
-            icon = "lucide:rotate-ccw",
-            label = "Back in sync",
-            onClick = { onSetDelay(0.0) },
+        StepperButton(icon = "lucide:plus", label = increaseLabel, onClick = onIncrease)
+        onReset?.let {
+            StepperButton(icon = "lucide:rotate-ccw", label = resetLabel, onClick = it)
+        }
+    }
+}
+
+/**
+ * Size, position, backdrop and colour, beside the tracks they apply to.
+ *
+ * These are in the player and not only in settings because they are the ones decided by
+ * looking: the text turns out to be too small for the room, or it lands on a burnt-in subtitle,
+ * or a snow scene swallows it. Reaching them used to mean leaving the film, opening settings,
+ * moving a slider and coming back to find out whether it was enough.
+ *
+ * They write the same profile settings the settings screen does, so a correction made here is
+ * still made next time — [AppSettings.withSubtitleAppearance] owns the clamping and keeps the
+ * legacy background flag in step. What puts the change on screen at once is the style-only
+ * re-apply path, which already existed for the settings screen.
+ */
+@Composable
+private fun SubtitleAppearanceControls(
+    appearance: SubtitleAppearance,
+    onChange: (SubtitleAppearance) -> Unit,
+) {
+    MenuSectionHeader("Appearance")
+    MenuStepper(
+        label = "Size",
+        value = "${appearance.sizePercent.roundToLong()}%",
+        decreaseLabel = "Smaller",
+        increaseLabel = "Bigger",
+        onDecrease = {
+            onChange(appearance.copy(sizePercent = appearance.sizePercent - SUBTITLE_SIZE_STEP))
+        },
+        onIncrease = {
+            onChange(appearance.copy(sizePercent = appearance.sizePercent + SUBTITLE_SIZE_STEP))
+        },
+        onReset = { onChange(appearance.copy(sizePercent = DEFAULT_SUBTITLE_SIZE)) },
+    )
+    MenuStepper(
+        label = "Position",
+        value = appearance.position.roundToLong().toString(),
+        decreaseLabel = "Lower",
+        increaseLabel = "Higher",
+        onDecrease = {
+            onChange(appearance.copy(position = appearance.position - SUBTITLE_POSITION_STEP))
+        },
+        onIncrease = {
+            onChange(appearance.copy(position = appearance.position + SUBTITLE_POSITION_STEP))
+        },
+        onReset = { onChange(appearance.copy(position = DEFAULT_SUBTITLE_POSITION)) },
+    )
+
+    Column(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // The pills themselves are the shared ones, but not ChoicePillRow: that fills the
+        // width and scrolls horizontally, which is right on a settings page and wrong in a
+        // menu whose width is decided by its widest track name. It would stretch the whole
+        // dropdown to the width of the window.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SUBTITLE_BORDER_STYLES.forEach { style ->
+                ChoicePill(
+                    label = style.label,
+                    selected = appearance.borderStyle == style.value,
+                    onClick = { onChange(appearance.copy(borderStyle = style.value)) },
+                )
+            }
+        }
+        ColorSwatchRow(
+            colors = SUBTITLE_TEXT_COLORS.map { it.value },
+            selected = appearance.textColor,
+            onSelect = { onChange(appearance.copy(textColor = it)) },
+            // Denser than the settings card's, which has a whole row to itself.
+            swatchSize = 24.dp,
+            spacing = 7.dp,
         )
     }
 }

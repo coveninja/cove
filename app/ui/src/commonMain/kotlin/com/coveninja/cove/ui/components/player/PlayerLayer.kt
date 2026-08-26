@@ -88,6 +88,9 @@ import com.coveninja.cove.ui.state.SUBTITLE_FILE_EXTENSIONS
 import com.coveninja.cove.ui.state.subtitleFileName
 import com.coveninja.cove.ui.state.subtitleFilesAmong
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.rememberSettingsEditor
+import com.coveninja.cove.ui.state.subtitleAppearance
+import com.coveninja.cove.ui.state.withSubtitleAppearance
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaTrack
@@ -175,7 +178,18 @@ fun PlayerLayer(
         request.episode,
     )
 
-    val settings = (LocalAppGraph.current.settings.settings.value as? SettingsState.Ready)?.settings
+    // Collected, not read off .value. A StateFlow's value is not a Compose state read, so this
+    // used to be a snapshot taken once and never revised: changing the seek step while the
+    // player was open did nothing until the next launch. It became load-bearing the moment the
+    // subtitle menu grew controls that write settings — SettingsEditor applies its transform to
+    // the value it was built with, so every press of a stepper would recompute from the same
+    // stale copy and the second press would appear to do nothing at all.
+    val settingsState by LocalAppGraph.current.settings.settings.collectAsState()
+    val settings = (settingsState as? SettingsState.Ready)?.settings
+    // Rebuilt whenever settings change, which is the point: the editor applies its transform to
+    // the settings it was constructed with, so a stale one would make every press of a stepper
+    // recompute from the same starting value.
+    val settingsEditor = settings?.let { rememberSettingsEditor(it) }
     val segments = remember(session.timestamps, status.chapters, status.durationSeconds) {
         playbackSegments(session.timestamps, status.chapters, status.durationSeconds)
     }
@@ -1053,6 +1067,13 @@ fun PlayerLayer(
                             { chooseSubtitleFile()?.let { useSubtitleFiles(listOf(it)) } }
                         } else {
                             null
+                        },
+                        // Both null until settings load. The write is a whole-object replace,
+                        // so a control offered before anything had been read would replace the
+                        // profile's settings with whatever it happened to be holding.
+                        subtitleAppearance = settings?.subtitleAppearance(),
+                        onSubtitleAppearanceChange = settingsEditor?.let { editor ->
+                            { appearance -> editor.edit { withSubtitleAppearance(appearance) } }
                         },
                         onSetAudioDelay = { host?.setAudioDelay(it) },
                         scaling = scaling,

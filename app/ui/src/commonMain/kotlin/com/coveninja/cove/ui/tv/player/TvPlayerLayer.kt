@@ -46,6 +46,9 @@ import com.coveninja.cove.ui.components.player.SeekFeedback
 import com.coveninja.cove.ui.components.player.accumulateSeekFeedback
 import com.coveninja.cove.ui.components.player.SEEK_FEEDBACK_WINDOW_MILLIS
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.rememberSettingsEditor
+import com.coveninja.cove.ui.state.subtitleAppearance
+import com.coveninja.cove.ui.state.withSubtitleAppearance
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackPhase
@@ -115,7 +118,14 @@ internal fun TvPlayerLayer(
     // Resolve a flow first so collectAsState remains unconditional if the host changes.
     val statusFlow = remember(host) { host?.status ?: MutableStateFlow(PlaybackStatus()) }
     val status by statusFlow.collectAsState()
-    val settings = (LocalAppGraph.current.settings.settings.value as? SettingsState.Ready)?.settings
+    // Collected rather than read off .value, for the reason spelled out in PlayerLayer: a
+    // StateFlow's value is not a Compose state read, and the panel's appearance rows write
+    // settings and have to see their own writes.
+    val settingsState by LocalAppGraph.current.settings.settings.collectAsState()
+    val settings = (settingsState as? SettingsState.Ready)?.settings
+    // Rebuilt whenever settings change: the editor transforms the settings it was built with,
+    // so a stale one would make repeated presses of a stepper all start from the same value.
+    val settingsEditor = settings?.let { rememberSettingsEditor(it) }
     val seekStep = settings?.seekStepSeconds?.takeIf { it > 0.0 } ?: TV_SEEK_STEP_SECONDS
 
     val rootFocus = remember { FocusRequester() }
@@ -563,6 +573,10 @@ internal fun TvPlayerLayer(
                     session.rememberAudioLanguage(
                         status.audioTracks.firstOrNull { it.id == id }?.language,
                     )
+                },
+                subtitleAppearance = settings?.subtitleAppearance(),
+                onSubtitleAppearanceChange = settingsEditor?.let { editor ->
+                    { appearance -> editor.edit { withSubtitleAppearance(appearance) } }
                 },
                 onSetSubtitleDelay = { host?.setSubtitleDelay(it) },
                 onSetAudioDelay = { host?.setAudioDelay(it) },

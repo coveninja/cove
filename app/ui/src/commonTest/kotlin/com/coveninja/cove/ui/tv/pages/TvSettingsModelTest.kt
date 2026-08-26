@@ -2,6 +2,7 @@ package com.coveninja.cove.ui.tv.pages
 
 import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
 import com.coveninja.cove.ui.state.languageName
+import com.coveninja.cove.ui.state.subtitleBorderStyleLabel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -103,9 +104,12 @@ class TvSettingsModelTest {
     // A row whose value came back blank would read as broken rather than as unset.
     @Test
     fun `every added cycling row names its own value`() {
-        assertEquals("Panel behind", subtitleBorderStyleLabel("opaque-box"))
-        assertEquals("Outline only", subtitleBorderStyleLabel(""))
-        assertEquals("White", subtitleColorLabel("#FFFFFFFF"))
+        // The backdrop and colour names come from the shared options table now, and are
+        // covered by SubtitleStyleOptionsTest. This shell used to spell the same stored value
+        // "Panel behind" while the phone called it "Panel"; they are one name now, and the
+        // wording here is the phone's rather than this file's.
+        assertEquals("Panel", subtitleBorderStyleLabel("opaque-box"))
+        assertEquals("Outline", subtitleBorderStyleLabel(""))
         assertEquals("Standard", subtitleOutlineSizeLabel(1.65))
         assertEquals("Centre", subtitleAlignLabel("center"))
         assertEquals("Night mode", audioNormalizationLabel("night"))
@@ -118,7 +122,6 @@ class TvSettingsModelTest {
     // of as a control that lost its value — the rule the rest of this file already follows.
     @Test
     fun `a value from a newer build is shown rather than swallowed`() {
-        assertEquals("shadow-box", subtitleBorderStyleLabel("shadow-box"))
         assertEquals("loudnorm", audioNormalizationLabel("loudnorm"))
         assertEquals("5.1", audioDownmixLabel("5.1"))
     }

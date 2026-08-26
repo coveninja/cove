@@ -1,6 +1,8 @@
 package com.coveninja.cove.ui.tv.pages
 
 import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
+import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
+import com.coveninja.cove.ui.state.SUBTITLE_TEXT_COLORS
 
 /**
  * Steps a setting on to its next value, wrapping at the end.
@@ -93,31 +95,13 @@ internal val LanguageChoices = listOf(
     "ru",
 )
 
-/**
- * How the text is drawn against the picture. The three mpv offers, in the order they add
- * weight: nothing behind it, a box per line, a box behind the block.
- */
-internal val SubtitleBorderStyleChoices =
-    listOf("outline-and-shadow", "background-box", "opaque-box")
+// The border styles and colour presets, and the words for them, come from
+// `ui/state/SubtitleStyleOptions.kt`. They used to be declared here as well as on the settings
+// screen, which is how this shell ended up calling `opaque-box` "Panel behind" while the phone
+// called it "Panel" — the same stored value under two names, with nothing to say so.
+internal val SubtitleBorderStyleChoices = SUBTITLE_BORDER_STYLES.map { it.value }
 
-internal fun subtitleBorderStyleLabel(style: String): String = when (style) {
-    "opaque-box" -> "Panel behind"
-    "background-box" -> "Box per line"
-    "outline-and-shadow" -> "Outline only"
-    else -> style.ifBlank { "Outline only" }
-}
-
-/** The classic subtitle colours, which is the whole useful range of them. */
-internal val SubtitleColorChoices =
-    listOf("#FFFFFFFF", "#FFFFF200", "#FF00FFFF", "#FFC8C8C8")
-
-internal fun subtitleColorLabel(color: String): String = when (color.uppercase()) {
-    "#FFFFFFFF" -> "White"
-    "#FFFFF200" -> "Yellow"
-    "#FF00FFFF" -> "Cyan"
-    "#FFC8C8C8" -> "Soft grey"
-    else -> color.ifBlank { "White" }
-}
+internal val SubtitleColorChoices = SUBTITLE_TEXT_COLORS.map { it.value }
 
 /** mpv's own default is 1.65; a television at three metres wants more of it. */
 internal val SubtitleOutlineSizeChoices = listOf(0.0, 1.65, 3.0, 4.5)

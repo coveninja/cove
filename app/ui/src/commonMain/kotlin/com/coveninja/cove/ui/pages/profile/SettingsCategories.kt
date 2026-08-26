@@ -8,6 +8,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
+import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
+import com.coveninja.cove.ui.state.SUBTITLE_OUTLINE_COLORS
+import com.coveninja.cove.ui.state.SUBTITLE_PANEL_COLORS
+import com.coveninja.cove.ui.state.SUBTITLE_TEXT_COLORS
 import com.coveninja.cove.ui.state.SettingsEditor
 import com.coveninja.cove.ui.state.orderedAudioLanguages
 import com.coveninja.cove.ui.state.orderedSubtitleLanguages
@@ -117,38 +121,9 @@ private val SUBTITLE_ALIGNMENTS = listOf(
     "right" to "Right",
 )
 
-/**
- * The colours worth offering for subtitle text — white, the two broadcast-caption colours,
- * and a softer grey for anyone who finds pure white too hot on an OLED at night.
- */
-private val SUBTITLE_TEXT_COLORS = listOf(
-    "#FFFFFFFF",
-    "#FFFFF200",
-    "#FF00FFFF",
-    "#FFC8C8C8",
-)
-
-/** For the panel and the shadow, which mpv draws from one value. */
-private val SUBTITLE_PANEL_COLORS = listOf(
-    "#AF000000",
-    "#AF1A1A1A",
-    "#AF2B1B4A",
-    "#AFFFFFFF",
-)
-
-private val SUBTITLE_OUTLINE_COLORS = listOf(
-    "#FF000000",
-    "#FF404040",
-    "#FF1A0A2E",
-    "#FFFFFFFF",
-)
-
-/** mpv's sub-border-style, in the order they add weight. */
-private val SUBTITLE_BORDER_STYLES = listOf(
-    "outline-and-shadow" to "Outline",
-    "background-box" to "Box per line",
-    "opaque-box" to "Panel",
-)
+// The colour presets and border styles moved to `ui/state/SubtitleStyleOptions.kt`. They were
+// duplicated here and on the television with different labels for the same stored value, and
+// the player's subtitle menu needs them too — a third copy was the alternative to one table.
 
 /** mpv's sub-ass-override, named by what it does rather than by its value. */
 private val SUBTITLE_ASS_OVERRIDES = listOf(
@@ -452,7 +427,7 @@ fun SettingsCategoryContent(
                             SettingColor(
                                 title = "Text colour",
                                 value = settings.subtitleTextColor,
-                                presets = SUBTITLE_TEXT_COLORS,
+                                presets = SUBTITLE_TEXT_COLORS.map { it.value },
                                 onSelect = { editor.edit { copy(subtitleTextColor = it) } },
                             )
                         },
@@ -485,7 +460,7 @@ fun SettingsCategoryContent(
                                 title = "Behind the text",
                                 description = "A panel across the block, a box per line, " +
                                     "or nothing but the outline.",
-                                options = SUBTITLE_BORDER_STYLES,
+                                options = SUBTITLE_BORDER_STYLES.map { it.value to it.label },
                                 selected = resolveBorderStyle(
                                     settings.subtitleBorderStyle,
                                     settings.subtitleBackground,
@@ -508,7 +483,7 @@ fun SettingsCategoryContent(
                                 description = "Also the colour of the drop shadow — mpv draws " +
                                     "both from one value.",
                                 value = settings.subtitleBackColor,
-                                presets = SUBTITLE_PANEL_COLORS,
+                                presets = SUBTITLE_PANEL_COLORS.map { it.value },
                                 showOpacity = true,
                                 onSelect = { editor.edit { copy(subtitleBackColor = it) } },
                             )
@@ -517,7 +492,7 @@ fun SettingsCategoryContent(
                             SettingColor(
                                 title = "Outline colour",
                                 value = settings.subtitleOutlineColor,
-                                presets = SUBTITLE_OUTLINE_COLORS,
+                                presets = SUBTITLE_OUTLINE_COLORS.map { it.value },
                                 onSelect = { editor.edit { copy(subtitleOutlineColor = it) } },
                             )
                         },
