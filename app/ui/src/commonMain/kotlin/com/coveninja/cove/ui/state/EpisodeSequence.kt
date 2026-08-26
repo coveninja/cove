@@ -23,3 +23,24 @@ fun nextEpisodeAfter(
     val nextSeason = seasons.map { it.number }.filter { it > season }.minOrNull()
     return nextSeason?.let { it to 1 }
 }
+
+/**
+ * What precedes an episode, or null when nothing does.
+ *
+ * The mirror of [nextEpisodeAfter], for the remote's skip-back button. Stepping back off the
+ * front of a season lands on the *last* episode of the previous one, which is the only answer
+ * that makes holding the button a way of walking backwards through a series; that needs the
+ * previous season's `episodeCount`, so a title whose details never loaded stops at the season
+ * boundary rather than guessing an episode number that may not exist.
+ */
+fun previousEpisodeBefore(
+    seasons: List<MediaSeason>,
+    season: Int,
+    episode: Int,
+): Pair<Int, Int>? {
+    if (episode > 1) return season to episode - 1
+
+    val previousSeason = seasons.map { it.number }.filter { it < season }.maxOrNull() ?: return null
+    val count = seasons.firstOrNull { it.number == previousSeason }?.episodeCount ?: 0
+    return if (count > 0) previousSeason to count else null
+}

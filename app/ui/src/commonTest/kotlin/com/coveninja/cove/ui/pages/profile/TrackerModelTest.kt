@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -166,5 +167,17 @@ class TrackerModelTest {
 
         assertFalse(settings.scrobbleEnabled(TrackerProvider.Simkl))
         assertTrue(settings.syncEnabled(TrackerProvider.Simkl))
+    }
+
+    // Simkl publishes no revoke endpoint, so disconnecting only forgets the token here and the
+    // authorization stays live on the account. Trakt revokes remotely and needs no such note.
+    //
+    // Mutation check: return the note for both providers and Trakt's card gains a warning about
+    // a limitation it does not have; return null for both and a Simkl viewer is left believing
+    // they signed out of an account that is still connected.
+    @Test
+    fun `only the tracker that cannot revoke remotely explains itself`() {
+        assertNull(unlinkNote(TrackerProvider.Trakt))
+        assertNotNull(unlinkNote(TrackerProvider.Simkl))
     }
 }

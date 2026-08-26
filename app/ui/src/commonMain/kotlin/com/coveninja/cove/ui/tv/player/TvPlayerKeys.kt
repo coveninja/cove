@@ -31,7 +31,14 @@ internal fun tvPlayerArrowOutcome(
     direction: TvDirection,
     controlsVisible: Boolean,
     barHasFocus: Boolean,
+    panelOpen: Boolean,
 ): TvPlayerArrowOutcome {
+    // The panel is a list to be walked, and it is the only thing on screen that can be. It
+    // takes the arrows outright rather than waiting to hold focus the way the control bar
+    // does: the bar shares the screen with a running film that Left and Right still steer,
+    // whereas a Left that seeked out from under an open panel would move the picture the
+    // viewer is using to judge the very setting they are changing.
+    if (panelOpen) return TvPlayerArrowOutcome.Navigate
     if (controlsVisible && barHasFocus) return TvPlayerArrowOutcome.Navigate
     return when (direction) {
         TvDirection.Left, TvDirection.Right -> TvPlayerArrowOutcome.Seek
@@ -55,6 +62,13 @@ internal const val TV_CONTROLS_HIDE_DELAY_MILLIS = 4_500L
  *
  * Not while the controls are already up: there the centre button belongs to whatever is focused,
  * and stealing it would make the transport row unpressable during an intro.
+ *
+ * Nor while the panel is open, for the same reason and more strongly — every row in it is
+ * activated with centre, and an intro starting underneath would otherwise turn the next press
+ * into a skip instead of the track the viewer was selecting.
  */
-internal fun tvSelectSkipsSegment(controlsVisible: Boolean, skipAvailable: Boolean): Boolean =
-    skipAvailable && !controlsVisible
+internal fun tvSelectSkipsSegment(
+    controlsVisible: Boolean,
+    skipAvailable: Boolean,
+    panelOpen: Boolean,
+): Boolean = skipAvailable && !controlsVisible && !panelOpen

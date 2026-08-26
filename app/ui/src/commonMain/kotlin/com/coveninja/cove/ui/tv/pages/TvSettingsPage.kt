@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.shared.data.AppUpdateState
 import com.coveninja.cove.shared.data.AddonsState
 import com.coveninja.cove.shared.data.CacheKind
 import com.coveninja.cove.shared.data.StorageUsageState
@@ -106,13 +107,25 @@ internal fun TvSettingsPage(
     val nuvioRepos = (addonsState as? AddonsState.Ready)?.nuvioRepos.orEmpty()
     // The scrapers block is dropped rather than shown empty on a host with no Nuvio sandbox:
     // an always-empty section is a focus stop that never has anything in it.
-    val sections = remember(nuvioRepos, graph.addons.supportsNuvio, graph.storage.available) {
+    val sections = remember(
+        nuvioRepos,
+        graph.addons.supportsNuvio,
+        graph.storage.available,
+        graph.trackers,
+        graph.device.available,
+        graph.updates.available,
+    ) {
         TvSettingsSection.entries.filter { section ->
             when (section) {
                 TvSettingsSection.Scrapers -> graph.addons.supportsNuvio
+                // A host with no trackers wired would contribute a heading and nothing else.
+                TvSettingsSection.Trackers -> graph.trackers.isNotEmpty()
                 // Same reasoning: a host with no caches of its own would contribute a heading,
                 // a focus stop and nothing to do once you reached it.
                 TvSettingsSection.Storage -> graph.storage.available
+                // Nothing in Advanced exists on a host with neither device settings nor an
+                // updater, and a heading over an empty block is a focus stop that never pays.
+                TvSettingsSection.Advanced -> graph.device.available || graph.updates.available
                 else -> true
             }
         }
@@ -163,8 +176,12 @@ internal fun TvSettingsPage(
                         TvSettingsSection.Skipping -> SkippingRows(settings, editor)
                         TvSettingsSection.Subtitles -> SubtitleRows(settings, editor)
                         TvSettingsSection.Providers -> ProviderRows(addons)
+                        TvSettingsSection.Trackers ->
+                            TvTrackerRows(graph.trackers, settings, editor)
                         TvSettingsSection.Scrapers -> ScraperRows(nuvioRepos)
+                        TvSettingsSection.Sources -> SourceRows(settings, editor)
                         TvSettingsSection.Storage -> StorageRows()
+                        TvSettingsSection.Advanced -> AdvancedRows()
                     }
                 }
             }
@@ -287,6 +304,170 @@ private fun SubtitleRows(settings: AppSettings, editor: SettingsEditor) {
         highlighted = settings.subtitleBackground,
         onActivate = { editor.edit { copy(subtitleBackground = !subtitleBackground) } },
     )
+    TvSettingRow(
+        label = "Subtitle position",
+        detail = "How far up from the bottom edge. Televisions overscan; this is the fix.",
+        value = subtitlePositionLabel(settings.subtitlePosition),
+        onActivate = {
+            editor.edit {
+                copy(
+                    subtitlePosition = cycleOption(
+                        SubtitlePositionChoices,
+                        settings.subtitlePosition,
+                    ),
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Preferred subtitle language",
+        detail = "Chosen automatically when a release carries it.",
+        value = languageLabel(settings.defaultSubtitleLang),
+        onActivate = {
+            editor.edit {
+                copy(
+                    defaultSubtitleLang = cycleOption(
+                        LanguageChoices,
+                        settings.defaultSubtitleLang,
+                    ),
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Preferred audio language",
+        detail = "The track picked first where a release has several.",
+        value = languageLabel(settings.defaultAudioLang),
+        onActivate = {
+            editor.edit {
+                copy(defaultAudioLang = cycleOption(LanguageChoices, settings.defaultAudioLang))
+            }
+        },
+    )
+}
+
+/**
+ * What Cove does before a press of Play, and how hard it works at it.
+ *
+ * All booleans, which is why they survive the trip: each is one press on a row that already
+ * says what it currently is.
+ */
+@Composable
+private fun SourceRows(settings: AppSettings, editor: SettingsEditor) {
+    TvSettingRow(
+        label = "Check sources are alive",
+        detail = "Drops dead links before offering them. Slower, and fewer failed starts.",
+        value = onOff(settings.probeStreams),
+        highlighted = settings.probeStreams,
+        onActivate = { editor.edit { copy(probeStreams = !probeStreams) } },
+    )
+    TvSettingRow(
+        label = "Prefetch sources",
+        detail = "Resolve streams while you are still browsing.",
+        value = onOff(settings.prefetchStreams),
+        highlighted = settings.prefetchStreams,
+        onActivate = { editor.edit { copy(prefetchStreams = !prefetchStreams) } },
+    )
+    TvSettingRow(
+        label = "Prefetch the next episode",
+        detail = "Have the next one ready before this one ends.",
+        value = onOff(settings.prefetchNextEpisode),
+        highlighted = settings.prefetchNextEpisode,
+        onActivate = { editor.edit { copy(prefetchNextEpisode = !prefetchNextEpisode) } },
+    )
+    TvSettingRow(
+        label = "Show source details",
+        detail = "Size, seeders and codec on each stream in the list.",
+        value = onOff(settings.showStreamDetails),
+        highlighted = settings.showStreamDetails,
+        onActivate = { editor.edit { copy(showStreamDetails = !showStreamDetails) } },
+    )
+}
+
+/**
+ * The device, and the build.
+ *
+ * Low-performance mode matters more here than anywhere: Cove runs on television sticks with a
+ * fraction of a desktop's budget, and this is the switch that turns off the animation those
+ * devices cannot afford. It was reachable on every shell except the one most likely to need it.
+ *
+ * The update rows are the other half. `AppUpdateOverlay` is already mounted on this shell, so a
+ * television could be *told* about an update but had no way to ask for one, or to see which
+ * build it was running when reporting a fault.
+ */
+@Composable
+private fun AdvancedRows() {
+    val graph = LocalAppGraph.current
+    val scope = rememberCoroutineScope()
+    val performance by graph.device.performance.collectAsState()
+    val automaticUpdates by graph.updates.automaticUpdatesEnabled.collectAsState()
+    val updateState by graph.updates.state.collectAsState()
+
+    if (graph.device.available) {
+        TvSettingRow(
+            label = "Low-performance mode",
+            detail = "Drops animation and blur. Worth having on a television stick.",
+            value = onOff(performance.lowPerformanceMode),
+            highlighted = performance.lowPerformanceMode,
+            onActivate = {
+                scope.launch {
+                    graph.device.setLowPerformanceMode(!performance.lowPerformanceMode)
+                }
+            },
+        )
+    }
+
+    if (graph.updates.available) {
+        TvSettingRow(
+            label = "Automatic updates",
+            detail = "Download new versions in the background.",
+            value = onOff(automaticUpdates),
+            highlighted = automaticUpdates,
+            onActivate = {
+                scope.launch { graph.updates.setAutomaticUpdatesEnabled(!automaticUpdates) }
+            },
+        )
+        TvSettingRow(
+            label = "Check for updates",
+            detail = tvUpdateStatusDetail(updateState),
+            value = if (updateState is AppUpdateState.Checking) "Checking…" else "Check now",
+            enabled = updateState !is AppUpdateState.Checking,
+            onActivate = { scope.launch { graph.updates.checkNow() } },
+        )
+    }
+
+    val version = graph.updates.currentVersion.ifBlank { graph.device.appVersion }
+    if (version.isNotBlank()) {
+        TvSettingRow(
+            label = "Version",
+            // Not focusable-looking for the sake of it: this is the line a bug report needs,
+            // and on a television it is the only place the build number appears at all.
+            detail = "The build this television is running.",
+            value = version,
+            enabled = false,
+            onActivate = {},
+        )
+    }
+}
+
+/**
+ * Where an update got to, in the row that starts one.
+ *
+ * The overlay says all this too, but only while it is up; somebody who dismissed it and came
+ * looking deserves an answer from the control they came to press.
+ */
+private fun tvUpdateStatusDetail(state: AppUpdateState): String = when (state) {
+    is AppUpdateState.ManagedExternally -> state.message
+    is AppUpdateState.Checking -> "Asking for the latest release."
+    is AppUpdateState.UpToDate -> "You are on the latest release."
+    is AppUpdateState.MeteredApprovalRequired ->
+        "${state.release.version} is waiting for approval to download."
+    is AppUpdateState.Downloading -> "Downloading ${state.release.version}."
+    is AppUpdateState.Ready -> "${state.release.version} is ready to install."
+    is AppUpdateState.PermissionRequired -> "${state.release.version} needs permission to install."
+    is AppUpdateState.Installing -> "Installing ${state.release.version}."
+    is AppUpdateState.Failed -> state.message
+    AppUpdateState.Idle -> "Ask Cove to look for a new version."
 }
 
 /**
@@ -600,7 +781,10 @@ private enum class TvSettingsSection(
     Playback("Playback", "How a title starts and how it is steered.", "lucide:play-circle"),
     Skipping("Skipping", "What Cove jumps past on its own.", "lucide:skip-forward"),
     Subtitles("Subtitles", null, "lucide:captions"),
+    Sources("Sources", "How much Cove does before you press play.", "lucide:list-video"),
     Providers("Providers", "Where streams are found. Managed on a desktop.", "lucide:blocks"),
+    Trackers("Tracking", "Scrobbling and list sync with Trakt and Simkl.", "iconamoon:history"),
     Scrapers("Community scrapers", "Third-party code, off unless you turn it on.", "lucide:blocks"),
     Storage("Storage", "What streaming has left on this device.", "lucide:hard-drive"),
+    Advanced("Advanced", "How this device behaves, and which build it is running.", "lucide:settings"),
 }

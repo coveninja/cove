@@ -34,6 +34,15 @@ sealed interface TvKeyAction {
     data object Rewind : TvKeyAction
     data object Next : TvKeyAction
     data object Previous : TvKeyAction
+
+    /**
+     * The remote's own menu button, where it has one.
+     *
+     * A shortcut to the player's panel and never the only way there — plenty of remotes,
+     * including several shipped with televisions Cove runs on, have no such button at all, so
+     * the panel keeps a control on screen and this merely saves a trip to it.
+     */
+    data object Menu : TvKeyAction
 }
 
 /**
@@ -62,6 +71,7 @@ fun tvKeyAction(key: Key): TvKeyAction? = when (key) {
     Key.MediaRewind -> TvKeyAction.Rewind
     Key.MediaNext -> TvKeyAction.Next
     Key.MediaPrevious -> TvKeyAction.Previous
+    Key.Menu -> TvKeyAction.Menu
 
     else -> null
 }

@@ -38,6 +38,22 @@ suspend fun LazyListState.tvKeepInView(index: Int, marginPx: Int) {
 }
 
 /**
+ * Keeps the focused card of a horizontal row clear of the row's own ends.
+ *
+ * The same arithmetic as [TvSectionScroll] — [tvKeepInView] never knew which axis it was on —
+ * and separate only because a row owns a different piece of state: the card that has focus,
+ * rather than the section that contains it.
+ */
+@Composable
+fun TvRowScroll(state: LazyListState, focusedIndex: Int?, margin: Dp) {
+    val marginPx = with(LocalDensity.current) { margin.roundToPx() }
+    LaunchedEffect(focusedIndex, marginPx) {
+        val index = focusedIndex ?: return@LaunchedEffect
+        state.tvKeepInView(index, marginPx)
+    }
+}
+
+/**
  * Keeps the focused section of a vertical page clear of the screen edges.
  *
  * The page owns [focusedIndex] — each section reports focus as it gains it — rather than this

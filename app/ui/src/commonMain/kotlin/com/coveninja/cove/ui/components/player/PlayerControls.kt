@@ -1214,7 +1214,8 @@ private fun SpeedMenuButton(
 private fun formatSpeed(value: Double): String =
     if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
 
-private val SPEED_STEPS = listOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
+/** Shared with the television's own panel, so the two shells offer the same steps. */
+internal val SPEED_STEPS = listOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
 
 /** How the picture fills the window. Fit is the default and shows everything. */
 @Composable

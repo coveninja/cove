@@ -43,6 +43,21 @@ class TvDimensTest {
         assertEquals(3, tvDimensFor(width = 320.dp, height = 240.dp).posterColumns)
     }
 
+    // The margin has to clear the row's own content padding, or the "keep it in view" scroll
+    // resolves to the same place Compose's bring-into-view already put the card and the focused
+    // poster still parks flush against the panel edge with nothing after it.
+    @Test
+    fun `the horizontal focus margin clears the overscan inset`() {
+        listOf(320.dp, 960.dp, 3840.dp).forEach { width ->
+            val dimens = tvDimensFor(width = width, height = width * 9f / 16f)
+            assertTrue(
+                dimens.focusScrollMarginHorizontal > dimens.overscanHorizontal,
+                "margin ${dimens.focusScrollMarginHorizontal} does not clear " +
+                    "${dimens.overscanHorizontal} at $width",
+            )
+        }
+    }
+
     // Overscan is a fraction of the panel, but a fraction of a very large one runs away with
     // the screen and a fraction of a small one stops protecting anything.
     @Test

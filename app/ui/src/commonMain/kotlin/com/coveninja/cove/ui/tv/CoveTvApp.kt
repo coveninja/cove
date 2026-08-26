@@ -53,7 +53,6 @@ import com.coveninja.cove.ui.state.LocalFullscreenController
 import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.MotionPolicy
-import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.rememberLibraryIndex
 import com.coveninja.cove.ui.state.rememberLocalizedLibraryMedia
@@ -73,14 +72,14 @@ import com.coveninja.cove.ui.tv.focus.TvDirection
 import com.coveninja.cove.ui.tv.focus.TvKeyAction
 import com.coveninja.cove.ui.tv.focus.toFocusDirection
 import com.coveninja.cove.ui.tv.focus.tvKeyAction
-import com.coveninja.cove.ui.tv.pages.TvSettingsPage
+import com.coveninja.cove.ui.tv.pages.TvProfilePage
 import com.coveninja.cove.ui.pages.explore.rememberExploreController
 import com.coveninja.cove.ui.state.rememberSearchSession
 import com.coveninja.cove.ui.tv.pages.TvExplorePage
 import com.coveninja.cove.ui.tv.pages.TvSearchPage
 import com.coveninja.cove.ui.tv.pages.rememberTvExplorePageState
 import com.coveninja.cove.ui.tv.pages.rememberTvSearchPageState
-import com.coveninja.cove.ui.tv.pages.rememberTvSettingsPageState
+import com.coveninja.cove.ui.tv.pages.rememberTvProfilePageState
 import com.coveninja.cove.ui.tv.pages.TvHomePage
 import com.coveninja.cove.ui.tv.pages.TvMyListPage
 import com.coveninja.cove.ui.tv.pages.rememberTvHomePageState
@@ -209,7 +208,7 @@ private fun TvAppContent(
     val explorePageState = rememberTvExplorePageState()
     val search = rememberSearchSession()
     val searchPageState = rememberTvSearchPageState()
-    val settingsPageState = rememberTvSettingsPageState()
+    val profilePageState = rememberTvProfilePageState()
     val videoPlayerHost = LocalVideoPlayerHost.current
     val playerStatus = videoPlayerHost?.status?.collectAsState()?.value
 
@@ -218,8 +217,9 @@ private fun TvAppContent(
     val railFocusRequester = remember { FocusRequester() }
     val pageFocusRequester = remember { FocusRequester() }
 
-    val fullscreenPlaybackVisible = playback.active &&
-        playback.presentation == PlaybackPresentation.Fullscreen
+    // Active is fullscreen on a television: there is nowhere else for a video to go, and
+    // `TvPlayerLayer` draws on the same rule, so the focus gate and the player agree.
+    val fullscreenPlaybackVisible = playback.active
     val currentPlaybackVisibilityCallback =
         rememberUpdatedState(onFullscreenPlaybackVisibilityChanged)
     LaunchedEffect(fullscreenPlaybackVisible) {
@@ -319,9 +319,13 @@ private fun TvAppContent(
                         search.submitted?.let(search::rememberQuery)
                         detailsState.open(media)
                     },
+                    onOpenPerson = { person ->
+                        search.submitted?.let(search::rememberQuery)
+                        personState.open(person)
+                    },
                 )
 
-                NavDestination.Account -> TvSettingsPage(pageState = settingsPageState)
+                NavDestination.Account -> TvProfilePage(pageState = profilePageState)
             }
         }
 
@@ -336,6 +340,7 @@ private fun TvAppContent(
                 onChooseSource = { playback.open(overlay, forcePicker = true) },
                 onSetListCategory = { category -> actions.setListCategory(overlay, category) },
                 onRemoveFromList = { actions.removeFromList(overlay) },
+                onToggleWatched = { actions.toggleWatched(overlay) },
                 onSetRating = { value -> actions.setRating(overlay, value) },
                 onPlayEpisode = { season, episode ->
                     playback.open(
@@ -345,6 +350,13 @@ private fun TvAppContent(
                         episodeTitle = episode.title,
                     )
                 },
+                onSetEpisodeWatched = { season, episode, watched ->
+                    actions.setEpisodeWatched(overlay, season, episode, watched)
+                },
+                // Through the same session as everything else, so a trailer uses the player
+                // this shell already has rather than needing a second one.
+                //
+                onPlayVideo = { video -> playback.openExtra(overlay, video) },
                 onLoadEpisodes = { season -> actions.episodesFor(overlay, season) },
                 onOpenRecommendation = { recommendation ->
                     detailsState.open(recommendation.toMedia())

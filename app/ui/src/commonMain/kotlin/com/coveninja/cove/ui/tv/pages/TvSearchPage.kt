@@ -29,7 +29,10 @@ import com.coveninja.cove.ui.pages.search.topResult
 import com.coveninja.cove.ui.state.SearchSession
 import com.coveninja.cove.ui.tv.TvTheme
 import com.coveninja.cove.ui.tv.components.TvButton
+import com.coveninja.cove.ui.model.Person
+import com.coveninja.cove.ui.model.toUiPerson
 import com.coveninja.cove.ui.tv.components.TvMediaCard
+import com.coveninja.cove.ui.tv.components.TvPosterCard
 import com.coveninja.cove.ui.tv.components.TvMediaRow
 import com.coveninja.cove.ui.tv.components.TvTextField
 import com.coveninja.cove.ui.tv.components.TvWideCard
@@ -67,6 +70,7 @@ internal fun TvSearchPage(
     session: SearchSession,
     pageState: TvSearchPageState,
     onOpenMedia: (Media) -> Unit,
+    onOpenPerson: (Person) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val dimens = TvTheme.dimens
@@ -74,6 +78,11 @@ internal fun TvSearchPage(
 
     val results = remember(searchState) {
         (searchState as? SearchState.Ready)?.results.orEmpty().map { it.toUiMedia() }
+    }
+    // Already populated by the same search that fills `results`, and previously discarded here
+    // — so a television could reach a person from a title's cast but never search for one.
+    val people = remember(searchState) {
+        (searchState as? SearchState.Ready)?.people.orEmpty().map { it.toUiPerson() }
     }
     val submitted = session.submitted.orEmpty()
     val top = remember(results, submitted) { topResult(results, submitted) }
@@ -87,7 +96,8 @@ internal fun TvSearchPage(
     // above whenever one of them was missing.
     val headerCount = 1 + if (session.recents.isNotEmpty()) 1 else 0
     val topIndex = headerCount
-    val gridOffset = headerCount + if (top != null) 1 else 0
+    val peopleIndex = headerCount + if (top != null) 1 else 0
+    val gridOffset = peopleIndex + if (people.isNotEmpty()) 1 else 0
 
     TvSectionScroll(
         state = pageState.listState,
@@ -175,6 +185,25 @@ internal fun TvSearchPage(
                         ).joinToString("  ·  "),
                         wideArt = !item.backdropUrl.isNullOrBlank(),
                         onClick = { onOpenMedia(item) },
+                    )
+                }
+            }
+        }
+
+        if (people.isNotEmpty()) {
+            item(key = "people") {
+                TvMediaRow(
+                    title = "People",
+                    icon = "lucide:users",
+                    items = people,
+                    key = Person::id,
+                    onFocusChanged = { if (it) focusedSection = peopleIndex },
+                    modifier = Modifier.padding(top = dimens.sectionSpacing),
+                ) { person ->
+                    TvPosterCard(
+                        posterUrl = person.profileUrl,
+                        label = person.name,
+                        onClick = { onOpenPerson(person) },
                     )
                 }
             }

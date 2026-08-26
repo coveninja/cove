@@ -1421,8 +1421,6 @@ private fun segmentRemaining(segment: LabelledSegment, positionSeconds: Double):
     return ((segment.endSeconds - positionSeconds) / length).coerceIn(0.0, 1.0).toFloat()
 }
 
-private val SPEED_STEPS = listOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
-
 /**
  * Shown when the player runs out of data after playback has begun.
  *

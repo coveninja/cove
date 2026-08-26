@@ -108,6 +108,23 @@ internal fun codeExpiringSoon(expiresAt: Instant?, now: Instant): Boolean {
 }
 
 /**
+ * What Disconnect actually does, where the two trackers differ.
+ *
+ * Trakt revokes the token at its end. Simkl publishes no revoke endpoint at all, so the most
+ * Cove can do is forget the token locally — the authorization stays live on the Simkl account
+ * until it is removed there. Saying so is the difference between somebody who knows to finish
+ * the job on simkl.com and somebody who believes they have signed out and has not.
+ *
+ * Null where there is nothing to add, rather than a reassuring sentence: a note under every
+ * button is a note nobody reads by the time it matters.
+ */
+internal fun unlinkNote(provider: TrackerProvider): String? = when (provider) {
+    TrackerProvider.Trakt -> null
+    TrackerProvider.Simkl -> "Disconnecting forgets Simkl on this device. Simkl offers no way " +
+        "to revoke it remotely, so remove Cove in your Simkl account settings to finish."
+}
+
+/**
  * Which settings field each tracker's switches read and write.
  *
  * Spelled out per provider rather than derived, because the fields are typed: [AppSettings]

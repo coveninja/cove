@@ -51,18 +51,69 @@ class TvPlayerKeysTest {
     // would be worse than not offering the skip — so centre has to carry it while it is up.
     @Test
     fun `centre skips a segment only while the controls are away`() {
-        assertEquals(true, tvSelectSkipsSegment(controlsVisible = false, skipAvailable = true))
-        assertEquals(false, tvSelectSkipsSegment(controlsVisible = true, skipAvailable = true))
+        assertEquals(true, skips(controlsVisible = false, skipAvailable = true))
+        assertEquals(false, skips(controlsVisible = true, skipAvailable = true))
     }
 
     @Test
     fun `with nothing to skip centre is left alone`() {
-        assertEquals(false, tvSelectSkipsSegment(controlsVisible = false, skipAvailable = false))
+        assertEquals(false, skips(controlsVisible = false, skipAvailable = false))
     }
+
+    // The panel is a list of rows to walk, and it is the only thing on screen that can be
+    // walked. Left seeking out from under it would move the picture the viewer is using to
+    // judge the very setting they are changing — subtitle delay is unreadable otherwise.
+    @Test
+    fun `an open panel takes every arrow even with the bar gone`() {
+        TvDirection.entries.forEach { direction ->
+            assertEquals(
+                TvPlayerArrowOutcome.Navigate,
+                outcome(direction, panelOpen = true),
+                "$direction should navigate the panel",
+            )
+        }
+    }
+
+    // The bar earns the arrows only once it holds focus; the panel does not have to wait,
+    // because opening it is what hides the bar and there is nothing else the arrows could mean.
+    @Test
+    fun `the panel does not wait to hold focus the way the bar does`() {
+        assertEquals(
+            TvPlayerArrowOutcome.Seek,
+            outcome(TvDirection.Right, controlsVisible = true, barHasFocus = false),
+        )
+        assertEquals(
+            TvPlayerArrowOutcome.Navigate,
+            outcome(
+                TvDirection.Right,
+                controlsVisible = true,
+                barHasFocus = false,
+                panelOpen = true,
+            ),
+        )
+    }
+
+    // Every row in the panel is activated with centre. An intro starting underneath must not
+    // turn the next press into a skip instead of the track being selected.
+    @Test
+    fun `centre never skips a segment while the panel is open`() {
+        assertEquals(
+            false,
+            skips(controlsVisible = false, skipAvailable = true, panelOpen = true),
+        )
+    }
+
+    private fun skips(
+        controlsVisible: Boolean,
+        skipAvailable: Boolean,
+        panelOpen: Boolean = false,
+    ): Boolean = tvSelectSkipsSegment(controlsVisible, skipAvailable, panelOpen)
 
     private fun outcome(
         direction: TvDirection,
         controlsVisible: Boolean = false,
         barHasFocus: Boolean = false,
-    ): TvPlayerArrowOutcome = tvPlayerArrowOutcome(direction, controlsVisible, barHasFocus)
+        panelOpen: Boolean = false,
+    ): TvPlayerArrowOutcome =
+        tvPlayerArrowOutcome(direction, controlsVisible, barHasFocus, panelOpen)
 }

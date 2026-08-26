@@ -85,6 +85,7 @@ internal fun AnimatedVisibilityScope.TvPlayerChrome(
     onCycleSubtitles: () -> Unit,
     onCycleAudio: () -> Unit,
     onClose: () -> Unit,
+    onOpenPanel: () -> Unit,
     onFocusChanged: (Boolean) -> Unit,
 ) {
     val dimens = TvTheme.dimens
@@ -143,6 +144,7 @@ internal fun AnimatedVisibilityScope.TvPlayerChrome(
             onCycleSubtitles = onCycleSubtitles,
             onCycleAudio = onCycleAudio,
             onClose = onClose,
+            onOpenPanel = onOpenPanel,
             modifier = Modifier
                 .padding(top = 20.dp)
                 .animateEnterExit(
@@ -349,6 +351,7 @@ private fun TvTransportRow(
     onCycleSubtitles: () -> Unit,
     onCycleAudio: () -> Unit,
     onClose: () -> Unit,
+    onOpenPanel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -397,6 +400,11 @@ private fun TvTransportRow(
                 onClick = onCycleAudio,
             )
         }
+        TvTransportButton(
+            icon = "lucide:sliders-horizontal",
+            label = "More",
+            onClick = onOpenPanel,
+        )
         TvTransportButton(icon = "lucide:x", label = "Stop", onClick = onClose)
     }
 }

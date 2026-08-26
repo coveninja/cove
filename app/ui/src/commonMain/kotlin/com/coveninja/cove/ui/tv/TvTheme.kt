@@ -56,6 +56,19 @@ data class TvDimens(
     val contentStart: Dp get() = railCollapsedWidth + overscanHorizontal
 
     /**
+     * Room kept beside the focused card, the horizontal twin of [focusScrollMargin].
+     *
+     * The vertical axis has had an explicit margin since the shell was written and the
+     * horizontal one had none, so rows fell back to Compose's own bring-into-view: walking to
+     * the end of a rail parked the focused poster flush against the panel edge with its focus
+     * ring half off-screen, and nothing after it to suggest the row continued.
+     *
+     * One card gap past the overscan inset, so the next card always peeks. That peek is the
+     * only thing on screen that says a row has more in it.
+     */
+    val focusScrollMarginHorizontal: Dp get() = overscanHorizontal + cardSpacing
+
+    /**
      * How many posters fit across the content area.
      *
      * A results page has no rows to organise itself into, so it borrows the row layout and

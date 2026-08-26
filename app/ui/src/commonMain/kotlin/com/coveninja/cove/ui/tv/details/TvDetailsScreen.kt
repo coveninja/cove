@@ -41,6 +41,9 @@ import com.coveninja.cove.ui.model.MediaCastMember
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaRecommendation
 import com.coveninja.cove.ui.model.MediaSeason
+import com.coveninja.cove.ui.model.MediaVideo
+import com.coveninja.cove.ui.model.VideoCategory
+import com.coveninja.cove.ui.model.sortedForDisplay
 import com.coveninja.cove.ui.tv.TvTheme
 import com.coveninja.cove.ui.tv.components.TvButton
 import com.coveninja.cove.ui.tv.components.TvMediaRow
@@ -72,8 +75,11 @@ internal fun TvDetailsScreen(
     onChooseSource: () -> Unit,
     onSetListCategory: (MyListCategory) -> Unit,
     onRemoveFromList: () -> Unit,
+    onToggleWatched: () -> Unit,
     onSetRating: (Int) -> Unit,
     onPlayEpisode: (MediaSeason, MediaEpisode) -> Unit,
+    onSetEpisodeWatched: (MediaSeason, MediaEpisode, Boolean) -> Unit,
+    onPlayVideo: (MediaVideo) -> Unit,
     onLoadEpisodes: suspend (MediaSeason) -> List<MediaEpisode>,
     onOpenRecommendation: (MediaRecommendation) -> Unit,
     onOpenPerson: (MediaCastMember) -> Unit,
@@ -87,10 +93,21 @@ internal fun TvDetailsScreen(
     val playFocusRequester = remember { FocusRequester() }
     var focusedSection by remember { mutableStateOf<Int?>(null) }
 
-    val sections = remember(media) {
+    // Trailers and teasers only. The pointer shells offer every category behind a filter row,
+    // which on a remote would be a row of focus stops in front of the one video anybody came
+    // for — and a television is where a trailer is actually worth watching.
+    val trailers = remember(media) {
+        media.videos
+            .filter { it.category == VideoCategory.Trailer || it.category == VideoCategory.Teaser }
+            .sortedForDisplay()
+            .take(TRAILER_LIMIT)
+    }
+
+    val sections = remember(media, trailers) {
         buildList {
             add(TvDetailsSection.Header)
             if (media.seasons.isNotEmpty()) add(TvDetailsSection.Episodes)
+            if (trailers.isNotEmpty()) add(TvDetailsSection.Trailers)
             if (media.cast.isNotEmpty()) add(TvDetailsSection.Cast)
             if (media.moreLikeThis.isNotEmpty()) add(TvDetailsSection.MoreLikeThis)
         }
@@ -167,6 +184,7 @@ internal fun TvDetailsScreen(
                         onChooseSource = onChooseSource,
                         onSetListCategory = onSetListCategory,
                         onRemoveFromList = onRemoveFromList,
+                        onToggleWatched = onToggleWatched,
                         onSetRating = onSetRating,
                         onFocusChanged = report,
                     )
@@ -174,10 +192,31 @@ internal fun TvDetailsScreen(
                     TvDetailsSection.Episodes -> TvSeasonBrowser(
                         media = media,
                         onPlayEpisode = onPlayEpisode,
+                        onSetEpisodeWatched = onSetEpisodeWatched,
                         onLoadEpisodes = onLoadEpisodes,
                         onFocusChanged = report,
                         modifier = Modifier.padding(top = dimens.sectionSpacing),
                     )
+
+                    TvDetailsSection.Trailers -> TvMediaRow(
+                        title = "Trailers",
+                        icon = "lucide:clapperboard",
+                        items = trailers,
+                        key = MediaVideo::id,
+                        onFocusChanged = report,
+                        modifier = Modifier.padding(top = dimens.sectionSpacing),
+                    ) { video ->
+                        TvWideCard(
+                            imageUrl = video.thumbnailUrl,
+                            title = video.title,
+                            caption = listOfNotNull(
+                                video.category.label,
+                                video.duration?.takeIf { it.isNotBlank() },
+                            ).joinToString("  ·  "),
+                            wideArt = true,
+                            onClick = { onPlayVideo(video) },
+                        )
+                    }
 
                     TvDetailsSection.Cast -> TvMediaRow(
                         title = "Cast",
@@ -213,7 +252,7 @@ internal fun TvDetailsScreen(
     }
 }
 
-private enum class TvDetailsSection { Header, Episodes, Cast, MoreLikeThis }
+private enum class TvDetailsSection { Header, Episodes, Trailers, Cast, MoreLikeThis }
 
 @Composable
 private fun TvDetailsHeader(
@@ -226,12 +265,15 @@ private fun TvDetailsHeader(
     onChooseSource: () -> Unit,
     onSetListCategory: (MyListCategory) -> Unit,
     onRemoveFromList: () -> Unit,
+    onToggleWatched: () -> Unit,
     onSetRating: (Int) -> Unit,
     onFocusChanged: (Boolean) -> Unit,
 ) {
     val dimens = TvTheme.dimens
     val title = media.title ?: media.name.orEmpty()
     var rating0to10Open by remember { mutableStateOf(false) }
+    var categoryOpen by remember { mutableStateOf(false) }
+    val watched = listCategory == MyListCategory.Finished
 
     Column(
         modifier = Modifier
@@ -270,6 +312,20 @@ private fun TvDetailsHeader(
             )
         }
 
+        // Its own line rather than more entries on the fact line, which is already at the
+        // length a viewer will read from a sofa. Three at most for the same reason.
+        val supporting = remember(media) { supportingFacts(media) }
+        if (supporting.isNotBlank()) {
+            Text(
+                text = supporting,
+                style = MaterialTheme.typography.bodyMedium,
+                color = CoveColors.Neutral.MutedDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+
         media.overview?.takeIf { it.isNotBlank() }?.let { overview ->
             Text(
                 text = overview,
@@ -299,25 +355,48 @@ private fun TvDetailsHeader(
                 onClick = onChooseSource,
                 icon = "lucide:list-video",
             )
-            if (listCategory == null) {
-                TvButton(
-                    label = "Add to list",
-                    onClick = { onSetListCategory(MyListCategory.WatchLater) },
-                    icon = "lucide:bookmark-plus",
-                )
-            } else {
-                TvButton(
-                    label = listCategory.label,
-                    onClick = onRemoveFromList,
-                    icon = "lucide:bookmark-check",
-                    selected = true,
-                )
-            }
+            // Opens the pile picker rather than hard-coding one. Adding always landed in
+            // Watch Later and the button then only ever removed, so a title could not be
+            // moved between piles from a television at all — and moving one is most of what
+            // the list is for.
+            TvButton(
+                label = listCategory?.label ?: "Add to list",
+                onClick = {
+                    categoryOpen = !categoryOpen
+                    rating0to10Open = false
+                },
+                icon = if (listCategory == null) "lucide:bookmark-plus" else "lucide:bookmark-check",
+                selected = listCategory != null,
+            )
+            TvButton(
+                label = if (watched) "Watched" else "Mark watched",
+                onClick = onToggleWatched,
+                icon = if (watched) "lucide:eye" else "lucide:eye-off",
+                selected = watched,
+            )
             TvButton(
                 label = rating?.let { "Rated $it" } ?: "Rate",
-                onClick = { rating0to10Open = !rating0to10Open },
+                onClick = {
+                    rating0to10Open = !rating0to10Open
+                    categoryOpen = false
+                },
                 icon = "lucide:star",
                 selected = rating != null,
+            )
+        }
+
+        if (categoryOpen) {
+            TvCategoryStrip(
+                current = listCategory,
+                onSelect = { category ->
+                    onSetListCategory(category)
+                    categoryOpen = false
+                },
+                onRemove = {
+                    onRemoveFromList()
+                    categoryOpen = false
+                },
+                modifier = Modifier.padding(top = 14.dp),
             )
         }
 
@@ -332,6 +411,45 @@ private fun TvDetailsHeader(
                 },
                 modifier = Modifier.padding(top = 14.dp),
             )
+        }
+    }
+}
+
+/**
+ * The piles, as a strip, with Remove at the end where it cannot be hit by accident.
+ *
+ * Same rule as the rating strip: five permanent focus stops in front of Play, for something
+ * pressed once or twice in a title's life, is a worse trade than one press to reveal them.
+ */
+@Composable
+private fun TvCategoryStrip(
+    current: MyListCategory?,
+    onSelect: (MyListCategory) -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val focusRequester = remember { FocusRequester() }
+    FocusOnAppear(focusRequester)
+    Row(
+        modifier = modifier.tvFocusGroup(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        MyListCategory.entries.forEach { category ->
+            TvButton(
+                label = category.label,
+                onClick = { onSelect(category) },
+                icon = category.icon,
+                selected = category == current,
+                // Opens on the pile the title is already in, so moving it is one press.
+                modifier = if (category == (current ?: MyListCategory.WatchLater)) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                },
+            )
+        }
+        if (current != null) {
+            TvButton(label = "Remove", onClick = onRemove, icon = "lucide:x")
         }
     }
 }
@@ -363,6 +481,24 @@ private fun TvRatingStrip(
         }
     }
 }
+
+/**
+ * Genres, and who made it.
+ *
+ * The director is the one credit worth a line of its own on a television — it is how people
+ * choose a film across a room — and the rest of the crew the pointer shells list is detail
+ * nobody reads from there.
+ */
+private fun supportingFacts(media: Media): String = buildList {
+    media.genres.take(MAX_GENRES).takeIf { it.isNotEmpty() }?.let { add(it.joinToString(", ")) }
+    media.directors.firstOrNull()?.name?.takeIf { it.isNotBlank() }?.let { add("Directed by $it") }
+}.joinToString("  ·  ")
+
+/** More than this and the line wraps or truncates, and a truncated genre reads as a typo. */
+private const val MAX_GENRES = 3
+
+/** How many trailers are worth a row; past this it is a catalogue rather than a choice. */
+private const val TRAILER_LIMIT = 6
 
 /** The one-line summary under the title: year, kind, runtime, score, certificate. */
 private fun detailFacts(media: Media): String = buildList {
@@ -397,6 +533,7 @@ private fun TvRecommendationCard(
 private fun TvSeasonBrowser(
     media: Media,
     onPlayEpisode: (MediaSeason, MediaEpisode) -> Unit,
+    onSetEpisodeWatched: (MediaSeason, MediaEpisode, Boolean) -> Unit,
     onLoadEpisodes: suspend (MediaSeason) -> List<MediaEpisode>,
     onFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -407,6 +544,12 @@ private fun TvSeasonBrowser(
     }
     var episodes by remember(media.id) { mutableStateOf<List<MediaEpisode>>(emptyList()) }
     var loading by remember(media.id) { mutableStateOf(false) }
+    // Sticky rather than live: the button naming this episode is itself a focus stop, so the
+    // moment it is reached the row has lost focus and a live value would name nothing. Keeping
+    // the last episode focused is what lets one control serve a whole row of them.
+    var markTarget by remember(media.id, selectedSeason) {
+        mutableStateOf<MediaEpisode?>(null)
+    }
 
     val season = media.seasons.firstOrNull { it.number == selectedSeason }
     LaunchedEffect(media.id, selectedSeason) {
@@ -428,6 +571,33 @@ private fun TvSeasonBrowser(
                     label = entry.title,
                     onClick = { selectedSeason = entry.number },
                     selected = entry.number == selectedSeason,
+                )
+            }
+
+            // Marking an episode watched is a context-menu item on the pointer shells, which
+            // is precisely the affordance a remote does not have. One button naming the
+            // episode last focused gives the same correction for one focus stop, rather than
+            // a toggle per card that would double the presses needed to walk a season.
+            markTarget?.let { episode ->
+                val season = media.seasons.firstOrNull { it.number == selectedSeason }
+                TvButton(
+                    label = if (episode.watched) {
+                        "Unmark ${episode.number}"
+                    } else {
+                        "Mark ${episode.number} watched"
+                    },
+                    onClick = {
+                        season?.let { onSetEpisodeWatched(it, episode, !episode.watched) }
+                        // Reflected locally at once: the library write is a round trip, and a
+                        // button that kept saying "Mark watched" until it landed reads as a
+                        // press that did nothing.
+                        episodes = episodes.map {
+                            if (it.id == episode.id) it.copy(watched = !episode.watched) else it
+                        }
+                        markTarget = episode.copy(watched = !episode.watched)
+                    },
+                    icon = if (episode.watched) "lucide:eye-off" else "lucide:eye",
+                    selected = episode.watched,
                 )
             }
         }
@@ -467,6 +637,7 @@ private fun TvSeasonBrowser(
                     caption = episodeCaption(episode),
                     badge = if (episode.watched) "Watched" else null,
                     onClick = { season?.let { onPlayEpisode(it, episode) } },
+                    onFocusChanged = { focused -> if (focused) markTarget = episode },
                 )
             }
         }

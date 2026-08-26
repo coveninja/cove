@@ -113,6 +113,18 @@ private fun TrackerCard(
             ) {
                 Column {
                     SettingDivider()
+                    unlinkNote(provider)?.let { note ->
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 12.dp,
+                            ),
+                        )
+                    }
                     SettingRows(
                         {
                             SettingToggle(

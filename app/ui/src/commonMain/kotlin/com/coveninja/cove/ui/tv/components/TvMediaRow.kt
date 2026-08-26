@@ -1,19 +1,25 @@
 package com.coveninja.cove.ui.tv.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.tv.TvTheme
+import com.coveninja.cove.ui.tv.focus.TvRowScroll
 import com.coveninja.cove.ui.tv.focus.tvFocusGroup
 
 /**
@@ -41,6 +47,19 @@ internal fun <T> TvMediaRow(
     itemContent: @Composable (T) -> Unit,
 ) {
     val dimens = TvTheme.dimens
+    // Which card in this row holds focus, so the row can keep it clear of its own ends. Owned
+    // here rather than by the cards, which are supplied by the caller and differ per row.
+    //
+    // Deliberately not keyed on [items]. Several callers build their list inline, so a key would
+    // hand back null on any recomposition that rebuilt it — and nothing re-reports focus that
+    // has not moved, so the row would silently stop keeping the focused card in view. A stale
+    // index costs nothing: it is only ever read when it changes.
+    var focusedItem by remember { mutableStateOf<Int?>(null) }
+    TvRowScroll(
+        state = state,
+        focusedIndex = focusedItem,
+        margin = dimens.focusScrollMarginHorizontal,
+    )
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -70,7 +89,18 @@ internal fun <T> TvMediaRow(
             ),
             horizontalArrangement = Arrangement.spacedBy(dimens.cardSpacing),
         ) {
-            items(items = items, key = key) { item -> itemContent(item) }
+            itemsIndexed(items = items, key = { _, item -> key(item) }) { index, item ->
+                // A wrapper rather than a requirement on the item: every card in the shell
+                // already reports focus one way or another, but they are passed in as opaque
+                // content and this row cannot reach inside them to ask.
+                Box(
+                    modifier = Modifier.onFocusChanged { focus ->
+                        if (focus.hasFocus) focusedItem = index
+                    },
+                ) {
+                    itemContent(item)
+                }
+            }
         }
     }
 }
