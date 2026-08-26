@@ -79,6 +79,11 @@ private val settingsJson = """
   "simklScrobbleEnabled": false,
   "simklSyncEnabled": true,
   "autoSyncEnabled": false,
+  "homeSectionOrder": ["trending", "hero", "continue"],
+  "homeSectionsHidden": ["greeting"],
+  "homeCatalogRows": 6,
+  "homeContinueRows": 20,
+  "homeUpcomingDays": 30,
   "updatedAt": "2026-08-05T01:02:03Z"
 }
 """.trimIndent()
@@ -173,6 +178,20 @@ class LiveSettingsRepositoryTest {
         // false is what proves the stored preference survived the round trip
         // rather than being re-derived from the Kotlin default.
         assertEquals(false, sent.autoSyncEnabled,       "autoSyncEnabled")
+
+        // Home's layout, and the first list-typed fields in the contract. Worth asserting
+        // element by element rather than trusting the key-set check below: a list that
+        // round-tripped as empty would still carry its key, so the general invariant cannot
+        // see the difference between an order that survived and one that was thrown away.
+        assertEquals(
+            listOf("trending", "hero", "continue"), sent.homeSectionOrder, "homeSectionOrder",
+        )
+        assertEquals(listOf("greeting"), sent.homeSectionsHidden, "homeSectionsHidden")
+        // All three non-default, so each proves a stored count survived rather than being
+        // re-derived from the Kotlin default.
+        assertEquals(6,  sent.homeCatalogRows,   "homeCatalogRows")
+        assertEquals(20, sent.homeContinueRows,  "homeContinueRows")
+        assertEquals(30, sent.homeUpcomingDays,  "homeUpcomingDays")
 
         // The general invariant behind all the assertions above: whatever keys
         // the server sent us must come back. Any field the model does not know

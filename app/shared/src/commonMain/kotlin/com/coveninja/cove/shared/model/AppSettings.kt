@@ -85,6 +85,23 @@ data class AppSettings(
     // timer, and once local changes settle — background work the user must be
     // able to decline.
     val autoSyncEnabled: Boolean = true,
+    /**
+     * The order Home draws its sections in, as stable section keys. Empty means
+     * the built-in order, which is why it is a list rather than a map: the
+     * default is "whatever this build ships", not a set of positions frozen the
+     * first time the screen was opened.
+     *
+     * Keys absent from a saved order are not lost — a section added by a later
+     * release, or a catalog from an addon installed since, is anchored back to
+     * its default neighbour when the order is resolved. See `orderHomeSections`.
+     */
+    val homeSectionOrder: List<String> = emptyList(),
+    /** Sections the viewer has taken off Home. Not the same as disabling a catalog. */
+    val homeSectionsHidden: List<String> = emptyList(),
+    /** How many addon catalog rails Home draws. Each one costs a metadata fan-out. */
+    val homeCatalogRows: Int = 3,
+    val homeContinueRows: Int = 12,
+    val homeUpcomingDays: Int = 7,
     // Server-stamped on every write; the backend ignores whatever a client
     // sends. Carried as an opaque string purely so a round-trip is lossless.
     val updatedAt: String? = null,

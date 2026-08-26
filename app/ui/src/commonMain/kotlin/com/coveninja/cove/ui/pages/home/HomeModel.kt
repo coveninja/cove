@@ -430,6 +430,31 @@ data class HomeRail(
      * whose "see all" is a filter on the ordinary grid instead.
      */
     val catalog: AddonCatalogDescriptor? = null,
+    /**
+     * What the viewer's saved ordering knows this rail as — see [HomeSectionKind].
+     *
+     * Separate from [id] because [id] moves: a personal rail is identified by the title or
+     * genre it was built from, so `because-603` becomes `because-1399` the moment a different
+     * favourite wins, and an order stored against it would forget itself. Defaults to [id]
+     * for the rails where the two genuinely coincide, such as Trending.
+     */
+    val section: String = id,
+)
+
+/**
+ * The one rail Home builds for itself, rather than taking from the controller.
+ *
+ * Shared by both shells because they used to spell it out separately and now agree on a
+ * [HomeRail.section] the viewer's saved order is keyed by — two copies of that string is two
+ * chances for an order set on a phone to quietly not apply on the television.
+ */
+fun trendingRail(media: List<Media>): HomeRail = HomeRail(
+    id = HomeSectionKind.Trending.key,
+    title = "Trending now",
+    subtitle = "What everyone is watching",
+    icon = HomeSectionKind.Trending.icon,
+    media = media,
+    ordered = true,
 )
 
 /**
@@ -457,7 +482,13 @@ fun buildHomeRails(
     return kept
 }
 
-/** More than a screenful of cards is scrolling for its own sake; the rest is Explore's job. */
+/**
+ * More than a screenful of cards is scrolling for its own sake; the rest is Explore's job.
+ *
+ * Only the fallback for a caller that does not care — both shells pass
+ * `AppSettings.homeContinueRows` instead, and that field's default is the copy that decides
+ * what a viewer actually sees.
+ */
 const val CONTINUE_ROW_LIMIT = 12
 
 /** Below this a rail has too few posters to be worth a heading and a row of its own. */

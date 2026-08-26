@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.CalendarState
 import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.CalendarItem
 import com.coveninja.cove.ui.components.media.MyListCategory
 import com.coveninja.cove.ui.components.navigation.NavBarClearance
@@ -106,7 +107,17 @@ fun HomePage(
 ) {
     val graph = LocalAppGraph.current
     val calendarState by graph.calendar.calendar.collectAsState()
+    val settingsState by graph.settings.settings.collectAsState()
     val actions = rememberMediaActions(index)
+
+    // Reconciled against the catalogs that actually became rails: those are the only catalog
+    // sections there is anything to arrange. A catalog the viewer owns but that did not make
+    // the cut is the controller's business, and it reconciles the full list for itself.
+    val layout = remember(settingsState, controller.catalogRails) {
+        (settingsState as? SettingsState.Ready)?.settings
+            ?.homeLayout(controller.catalogRails.map(HomeRail::section))
+            ?: HomeLayout.Default
+    }
 
     val initialContentReady = homeState !is HomeState.Loading
 
@@ -119,13 +130,13 @@ fun HomePage(
             graph.calendar.refresh(force = false)
         }
     }
-    LaunchedEffect(initialContentReady) {
+    LaunchedEffect(initialContentReady, layout) {
         if (initialContentReady) {
             withFrameNanos { }
             withFrameNanos { }
             withFrameNanos { }
-            controller.loadPersonal()
-            controller.loadCatalogs()
+            controller.loadPersonal(layout)
+            controller.loadCatalogs(layout)
         }
     }
 
@@ -143,11 +154,12 @@ fun HomePage(
         (calendarState as? CalendarState.Ready)?.items.orEmpty()
     }
 
-    val continuing = remember(index, watchProgress, catalog) {
+    val continuing = remember(index, watchProgress, catalog, layout.continueRows) {
         continueWatchingRows(
             entries = index.entries,
             progressFor = watchProgress::progressFor,
             enrich = catalog::enrich,
+            limit = layout.continueRows,
         )
     }
     // Resolved against the library up front: a card is only drawn for something whose
@@ -155,12 +167,15 @@ fun HomePage(
     val backlog = remember(calendarItems, index, catalog) {
         backlogRows(availableNow(calendarItems)) { item -> index.mediaFor(item, catalog) }
     }
-    val upcoming = remember(calendarItems, today) { comingUp(calendarItems, today) }
+    val upcoming = remember(calendarItems, today, layout.upcomingDays) {
+        comingUp(calendarItems, today, horizonDays = layout.upcomingDays)
+    }
     val stats = remember(index, calendarItems) { libraryStats(index.entries, calendarItems) }
     val hero = remember(continuing, backlog, trending) { heroPick(continuing, backlog, trending) }
 
-    LaunchedEffect(initialContentReady, hero?.media?.id) {
-        if (initialContentReady) {
+    LaunchedEffect(initialContentReady, hero?.media?.id, layout) {
+        // One artwork request, skipped entirely when the spotlight is not on the page.
+        if (initialContentReady && !layout.isHidden(HomeSectionKind.Hero)) {
             hero?.let { controller.enrichHero(it.media) }
         }
     }
@@ -172,22 +187,23 @@ fun HomePage(
         }
     }
 
-    val rails = remember(controller.personalRails, controller.catalogRails, trending) {
+    val rails = remember(controller.personalRails, controller.catalogRails, trending, layout) {
+        // Hidden rails are dropped *before* assembly, not after. `buildHomeRails` drops a
+        // membership rail whose titles have mostly appeared already, and a rail nobody can
+        // see would otherwise still spend that budget — quietly taking a visible rail down
+        // with it.
         buildHomeRails(
-            controller.personalRails + controller.catalogRails + listOf(
-                HomeRail(
-                    id = "trending",
-                    title = "Trending now",
-                    subtitle = "What everyone is watching",
-                    icon = "lucide:flame",
-                    media = trending,
-                    ordered = true,
-                ),
-            ),
+            (controller.personalRails + controller.catalogRails + trendingRail(trending))
+                .filterNot { layout.isHidden(it.section) },
         )
     }
 
-    val nothingYet = hero == null && continuing.isEmpty() && backlog.isEmpty() && rails.isEmpty()
+    // Hiding-blind on purpose: computed from what the page *has*, never from what it draws.
+    // Measure this after the arrangement and a viewer who hides enough sections is left
+    // looking at the loading skeleton for good.
+    val nothingYet = hero == null && continuing.isEmpty() && backlog.isEmpty() &&
+        trending.isEmpty() && controller.personalRails.isEmpty() &&
+        controller.catalogRails.isEmpty()
 
     when {
         nothingYet && homeState is HomeState.Failed ->
@@ -196,6 +212,7 @@ fun HomePage(
         nothingYet -> HomeSkeleton(modifier = modifier)
 
         else -> HomeReady(
+            layout = layout,
             hero = hero,
             heroArt = hero?.let { controller.heroArt(it.media) },
             greeting = greeting,
@@ -230,8 +247,44 @@ fun HomePage(
     }
 }
 
+/**
+ * One block of Home, as something that can be moved.
+ *
+ * Home used to emit these as a fixed run of `item {}` calls, which is why none of them had a
+ * name. Reordering needs each to be a value with a stable [key] — the same shape the
+ * television's `TvHomeSection` has had all along.
+ */
+private sealed interface HomeSection {
+    val key: String
+
+    data class Hero(val hero: HomeHero, val art: Media) : HomeSection {
+        override val key: String get() = HomeSectionKind.Hero.key
+    }
+
+    data class Greeting(val greeting: String, val stats: HomeStats) : HomeSection {
+        override val key: String get() = HomeSectionKind.Greeting.key
+    }
+
+    data class Continue(val rows: List<ContinueRow>) : HomeSection {
+        override val key: String get() = HomeSectionKind.ContinueWatching.key
+    }
+
+    data class Backlog(val rows: List<BacklogRow>) : HomeSection {
+        override val key: String get() = HomeSectionKind.Backlog.key
+    }
+
+    data class Upcoming(val items: List<CalendarItem>) : HomeSection {
+        override val key: String get() = HomeSectionKind.Upcoming.key
+    }
+
+    data class Rail(val rail: HomeRail) : HomeSection {
+        override val key: String get() = rail.section
+    }
+}
+
 @Composable
 private fun HomeReady(
+    layout: HomeLayout,
     hero: HomeHero?,
     heroArt: Media?,
     greeting: String,
@@ -261,6 +314,31 @@ private fun HomeReady(
     val scope = rememberCoroutineScope()
     val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
 
+    val sections = remember(hero, heroArt, greeting, stats, continuing, backlog, upcoming, rails, layout) {
+        arrangeHomeSections(
+            items = buildList {
+                if (hero != null && heroArt != null) add(HomeSection.Hero(hero, heroArt))
+                add(HomeSection.Greeting(greeting, stats))
+                if (continuing.isNotEmpty()) add(HomeSection.Continue(continuing))
+                if (backlog.isNotEmpty()) add(HomeSection.Backlog(backlog))
+                if (upcoming.isNotEmpty()) add(HomeSection.Upcoming(upcoming))
+                rails.forEach { add(HomeSection.Rail(it)) }
+            },
+            key = HomeSection::key,
+            order = layout.order,
+            hidden = layout.hidden,
+        )
+    }
+
+    // Where the hero ends up in the list, which is no longer always the top: the empty-list
+    // prompt is pinned above it, and the viewer can move it anywhere. The parallax reads the
+    // scroll offset of whichever item is first on screen, so it needs to know which index is
+    // its own or it would drift with an unrelated section's scrolling.
+    val heroIndex = remember(sections, libraryEmpty) {
+        val at = sections.indexOfFirst { it is HomeSection.Hero }
+        if (at < 0) -1 else at + if (libraryEmpty) 1 else 0
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -280,112 +358,10 @@ private fun HomeReady(
                 bottom = 48.dp + PageLayoutDefaults.BottomClearance,
             ),
         ) {
-            if (hero != null && heroArt != null) {
-                item(key = "hero") {
-                    HomeHeroBlock(
-                        hero = hero,
-                        art = heroArt,
-                        inList = inList(hero.media),
-                        onPlay = { onPlayMedia(hero.media) },
-                        onOpen = { onOpenMedia(hero.media) },
-                        onToggleList = { onToggleList(hero.media) },
-                        scrollOffset = {
-                            // Only meaningful while the hero is the first visible item; past
-                            // that it has left the screen and the value is unused.
-                            if (listState.firstVisibleItemIndex == 0) {
-                                listState.firstVisibleItemScrollOffset.toFloat()
-                            } else {
-                                0f
-                            }
-                        },
-                    )
-                }
-            }
-
-            item(key = "greeting") {
-                HomeGreeting(
-                    greeting = greeting,
-                    stats = stats,
-                    modifier = Modifier.padding(
-                        horizontal = PageLayoutDefaults.HorizontalPadding,
-                    ),
-                )
-            }
-
-            if (continuing.isNotEmpty()) {
-                item(key = "continue") {
-                    MediaRail(
-                        title = "Carry on watching",
-                        subtitle = "Where you left off",
-                        icon = "iconamoon:history",
-                        items = continuing,
-                        key = ContinueRow::id,
-                        itemWidth = RailDefaults.WideCardWidth,
-                        itemHeight = RailDefaults.WideCardHeight,
-                        state = pageState.railStates.stateFor("continue"),
-                        onSeeAll = onOpenMyList,
-                    ) { row, cardModifier ->
-                        ContinueCard(
-                            row = row,
-                            onOpen = { onOpenMedia(row.media) },
-                            onPlay = { onPlayMedia(row.media) },
-                            modifier = cardModifier,
-                            stillUrl = stillFor(row),
-                        )
-                    }
-                }
-            }
-
-            if (backlog.isNotEmpty()) {
-                item(key = "backlog") {
-                    MediaRail(
-                        title = "Waiting for you",
-                        subtitle = "Episodes that aired while you were away",
-                        icon = "lucide:tv",
-                        items = backlog,
-                        key = BacklogRow::id,
-                        itemWidth = RailDefaults.WideCardWidth,
-                        itemHeight = RailDefaults.WideCardHeight,
-                        state = pageState.railStates.stateFor("backlog"),
-                        onSeeAll = onOpenMyList,
-                    ) { row, cardModifier ->
-                        BacklogCard(
-                            row = row,
-                            onOpen = { onOpenMedia(row.media) },
-                            // Deliberately the title rather than the dated episode: this is a
-                            // backlog, and the playback session resolves the next *unwatched*
-                            // episode, where the calendar item names the last one to air.
-                            onPlay = { onPlayMedia(row.media) },
-                            modifier = cardModifier,
-                        )
-                    }
-                }
-            }
-
-            if (upcoming.isNotEmpty()) {
-                item(key = "upcoming") {
-                    MediaRail(
-                        title = "Coming this week",
-                        subtitle = "Dated releases from your list",
-                        icon = "lucide:calendar-clock",
-                        items = upcoming,
-                        key = { it.id },
-                        itemWidth = UpcomingTileDefaults.Width,
-                        itemHeight = UpcomingTileDefaults.Height,
-                        state = pageState.railStates.stateFor("upcoming"),
-                        onSeeAll = onOpenMyList,
-                    ) { item, tileModifier ->
-                        UpcomingTile(
-                            item = item,
-                            today = today,
-                            onOpen = { resolveCalendarMedia(item)?.let(onOpenMedia) },
-                            modifier = tileModifier,
-                        )
-                    }
-                }
-            }
-
             if (libraryEmpty) {
+                // Pinned rather than ordered with the rest: with nothing saved most of the
+                // sections below are absent anyway, and this is then the only thing on the
+                // page worth acting on. There is also nothing to order it against.
                 item(key = "start") {
                     PageEmptyState(
                         iconName = "lucide:compass",
@@ -399,23 +375,129 @@ private fun HomeReady(
                 }
             }
 
-            items(rails, key = { it.id }) { rail ->
-                MediaRail(
-                    title = rail.title,
-                    subtitle = rail.subtitle,
-                    icon = rail.icon,
-                    items = rail.media,
-                    key = Media::id,
-                    state = pageState.railStates.stateFor(rail.id),
-                    // Only the impersonal rail has an equivalent anywhere else. A "see all"
-                    // on a personal rail would have to show something other than the rail.
-                    // A catalog rail is the exception that does have one of its own: the
-                    // rest of that same catalog, which Explore can page through.
-                    onSeeAll = rail.catalog
-                        ?.let { catalog -> { onExploreCatalog(catalog) } }
-                        ?: onExplore.takeIf { rail.ordered },
-                    itemContent = mediaCard,
-                )
+            if (sections.isEmpty() && !libraryEmpty) {
+                // Reachable only by hiding everything, and worth saying out loud: a blank
+                // page is indistinguishable from one that failed to load, and the setting
+                // that caused it is two screens away.
+                item(key = "all-hidden") {
+                    PageEmptyState(
+                        iconName = "lucide:eye-off",
+                        title = "Every section is hidden",
+                        message = "Home has nothing left to draw. Turn a section back on " +
+                            "under Settings, in Interface.",
+                        modifier = Modifier.height(300.dp),
+                    )
+                }
+            }
+
+            items(sections, key = HomeSection::key) { section ->
+                when (section) {
+                    is HomeSection.Hero -> HomeHeroBlock(
+                        hero = section.hero,
+                        art = section.art,
+                        inList = inList(section.hero.media),
+                        onPlay = { onPlayMedia(section.hero.media) },
+                        onOpen = { onOpenMedia(section.hero.media) },
+                        onToggleList = { onToggleList(section.hero.media) },
+                        scrollOffset = {
+                            // Only meaningful while the hero is the item being scrolled; past
+                            // that it has left the screen and the value is unused. Compared
+                            // against its own index rather than zero, because the hero is no
+                            // longer necessarily the first thing on the page.
+                            if (listState.firstVisibleItemIndex == heroIndex) {
+                                listState.firstVisibleItemScrollOffset.toFloat()
+                            } else {
+                                0f
+                            }
+                        },
+                    )
+
+                    is HomeSection.Greeting -> HomeGreeting(
+                        greeting = section.greeting,
+                        stats = section.stats,
+                        modifier = Modifier.padding(
+                            horizontal = PageLayoutDefaults.HorizontalPadding,
+                        ),
+                    )
+
+                    is HomeSection.Continue -> MediaRail(
+                        title = HomeSectionKind.ContinueWatching.label,
+                        subtitle = "Where you left off",
+                        icon = HomeSectionKind.ContinueWatching.icon,
+                        items = section.rows,
+                        key = ContinueRow::id,
+                        itemWidth = RailDefaults.WideCardWidth,
+                        itemHeight = RailDefaults.WideCardHeight,
+                        state = pageState.railStates.stateFor(section.key),
+                        onSeeAll = onOpenMyList,
+                    ) { row, cardModifier ->
+                        ContinueCard(
+                            row = row,
+                            onOpen = { onOpenMedia(row.media) },
+                            onPlay = { onPlayMedia(row.media) },
+                            modifier = cardModifier,
+                            stillUrl = stillFor(row),
+                        )
+                    }
+
+                    is HomeSection.Backlog -> MediaRail(
+                        title = HomeSectionKind.Backlog.label,
+                        subtitle = "Episodes that aired while you were away",
+                        icon = HomeSectionKind.Backlog.icon,
+                        items = section.rows,
+                        key = BacklogRow::id,
+                        itemWidth = RailDefaults.WideCardWidth,
+                        itemHeight = RailDefaults.WideCardHeight,
+                        state = pageState.railStates.stateFor(section.key),
+                        onSeeAll = onOpenMyList,
+                    ) { row, cardModifier ->
+                        BacklogCard(
+                            row = row,
+                            onOpen = { onOpenMedia(row.media) },
+                            // Deliberately the title rather than the dated episode: this is a
+                            // backlog, and the playback session resolves the next *unwatched*
+                            // episode, where the calendar item names the last one to air.
+                            onPlay = { onPlayMedia(row.media) },
+                            modifier = cardModifier,
+                        )
+                    }
+
+                    is HomeSection.Upcoming -> MediaRail(
+                        title = HomeSectionKind.Upcoming.label,
+                        subtitle = "Dated releases from your list",
+                        icon = HomeSectionKind.Upcoming.icon,
+                        items = section.items,
+                        key = { it.id },
+                        itemWidth = UpcomingTileDefaults.Width,
+                        itemHeight = UpcomingTileDefaults.Height,
+                        state = pageState.railStates.stateFor(section.key),
+                        onSeeAll = onOpenMyList,
+                    ) { item, tileModifier ->
+                        UpcomingTile(
+                            item = item,
+                            today = today,
+                            onOpen = { resolveCalendarMedia(item)?.let(onOpenMedia) },
+                            modifier = tileModifier,
+                        )
+                    }
+
+                    is HomeSection.Rail -> MediaRail(
+                        title = section.rail.title,
+                        subtitle = section.rail.subtitle,
+                        icon = section.rail.icon,
+                        items = section.rail.media,
+                        key = Media::id,
+                        state = pageState.railStates.stateFor(section.rail.id),
+                        // Only the impersonal rail has an equivalent anywhere else. A "see all"
+                        // on a personal rail would have to show something other than the rail.
+                        // A catalog rail is the exception that does have one of its own: the
+                        // rest of that same catalog, which Explore can page through.
+                        onSeeAll = section.rail.catalog
+                            ?.let { catalog -> { onExploreCatalog(catalog) } }
+                            ?: onExplore.takeIf { section.rail.ordered },
+                        itemContent = mediaCard,
+                    )
+                }
             }
 
             if (personalizing) {

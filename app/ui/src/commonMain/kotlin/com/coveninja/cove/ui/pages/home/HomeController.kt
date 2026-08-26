@@ -73,10 +73,14 @@ class HomeController(
     private var heroId: String? = null
 
     private var personalJob: Job? = null
-    private var personalStarted = false
+
+    /** Which personal rails the current [personalRails] were resolved for. */
+    private var personalSelectionUsed: Set<HomeSectionKind>? = null
 
     private var catalogJob: Job? = null
-    private var catalogStarted = false
+
+    /** The catalog selection the current [catalogRails] were resolved for. */
+    private var catalogSelectionUsed: String? = null
 
     /** Seasons already fetched or already failed, so neither is asked for twice. */
     private val attemptedSeasons = mutableSetOf<String>()
@@ -176,17 +180,29 @@ class HomeController(
     // ── Personal rails ──────────────────────────────────────────────────────
 
     /**
-     * Loads the rails that only mean anything for this viewer. Runs once per session; the
-     * taste profile does not change fast enough to be worth refetching on every visit.
+     * Loads the rails that only mean anything for this viewer.
+     *
+     * Effectively once per session — the taste profile does not change fast enough to be
+     * worth refetching on every visit — but keyed on *which* of the two rails is wanted
+     * rather than on having run at all. A viewer who un-hides one would otherwise not see it
+     * until they restarted, having watched the other appear immediately.
+     *
+     * Skipped outright when both are hidden. That is the expensive one to get wrong: behind
+     * `favorites`/`topGenres` sits a metadata request per saved title, and spending a cold
+     * cache's worth of them on two rows nobody asked to see is the whole reason the layout
+     * reaches this far down.
      */
-    fun loadPersonal() {
-        if (personalStarted) return
-        personalStarted = true
+    fun loadPersonal(layout: HomeLayout = HomeLayout.Default) {
+        val wanted = personalSelection(layout)
+        if (wanted.isEmpty()) return
+        if (personalSelectionUsed == wanted) return
+        personalSelectionUsed = wanted
+        personalJob?.cancel()
         personalizing = true
 
         personalJob = scope.launch {
             try {
-                personalRails = resolvePersonal()
+                personalRails = resolvePersonal(layout)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -197,7 +213,16 @@ class HomeController(
         }
     }
 
-    private suspend fun resolvePersonal(): List<HomeRail> = coroutineScope {
+    /** The personal rails this layout actually wants drawn. */
+    private fun personalSelection(layout: HomeLayout): Set<HomeSectionKind> =
+        setOf(HomeSectionKind.BecauseYouWatched, HomeSectionKind.PickedForYou)
+            .filterNot(layout::isHidden)
+            .toSet()
+
+    private suspend fun resolvePersonal(layout: HomeLayout): List<HomeRail> = coroutineScope {
+        val wantsBecause = !layout.isHidden(HomeSectionKind.BecauseYouWatched)
+        val wantsForYou = !layout.isHidden(HomeSectionKind.PickedForYou)
+
         val favorite = runCatching { discovery.favorites(FAVORITE_CANDIDATES) }
             .getOrDefault(emptyList())
             .firstOrNull { it.title.isNotBlank() }
@@ -207,7 +232,7 @@ class HomeController(
         // follow and films are the larger catalog.
         val type = favorite?.type ?: DomainMediaType.Movie
 
-        val because = favorite?.let { signal ->
+        val because = favorite?.takeIf { wantsBecause }?.let { signal ->
             async {
                 runCatching { discovery.similarTo(signal.type, signal.tmdbId, RAIL_SIZE) }
                     .getOrDefault(emptyList())
@@ -217,50 +242,64 @@ class HomeController(
                         title = "Because you watched ${signal.title}",
                         subtitle = "Picked from what you finished and rated",
                         icon = "lucide:heart",
+                        section = HomeSectionKind.BecauseYouWatched.key,
                     )
             }
         }
 
-        val forYou = async {
-            val topGenre = runCatching { discovery.topGenres(type, 1) }
-                .getOrDefault(emptyList())
-                .firstOrNull()
-            runCatching { discovery.recommended(type, RAIL_SIZE) }
-                .getOrDefault(emptyList())
-                .map { it.toUiMedia() }
-                .toRail(
-                    id = "for-you-${topGenre?.id ?: "all"}",
-                    title = "Picked for you",
-                    subtitle = topGenre
-                        ?.let { "You keep coming back to ${it.name.lowercase()}" }
-                        ?: "From the titles you have saved",
-                    icon = "lucide:sparkles",
-                )
+        val forYou = if (!wantsForYou) {
+            null
+        } else {
+            async {
+                val topGenre = runCatching { discovery.topGenres(type, 1) }
+                    .getOrDefault(emptyList())
+                    .firstOrNull()
+                runCatching { discovery.recommended(type, RAIL_SIZE) }
+                    .getOrDefault(emptyList())
+                    .map { it.toUiMedia() }
+                    .toRail(
+                        id = "for-you-${topGenre?.id ?: "all"}",
+                        title = "Picked for you",
+                        subtitle = topGenre
+                            ?.let { "You keep coming back to ${it.name.lowercase()}" }
+                            ?: "From the titles you have saved",
+                        icon = "lucide:sparkles",
+                        section = HomeSectionKind.PickedForYou.key,
+                    )
+            }
         }
 
-        listOfNotNull(because?.await(), forYou.await())
+        listOfNotNull(because?.await(), forYou?.await())
     }
 
     // ── Addon catalog rails ─────────────────────────────────────────────────
 
     /**
-     * Draws the first few catalogs the profile's addons offer.
+     * Draws the catalogs the profile's addons offer, in the viewer's order.
      *
-     * Capped at [HOME_CATALOG_LIMIT] deliberately. A viewer with several catalog addons can
-     * easily have a dozen enabled catalogs, each one a fan-out of metadata requests to
+     * Capped at [HomeLayout.catalogRows] deliberately. A viewer with several catalog addons
+     * can easily have a dozen enabled catalogs, each one a fan-out of metadata requests to
      * resolve, and a home screen is not the place to spend that — the rest are reachable on
-     * Explore, which loads them for the format being browsed rather than all at once.
+     * Explore, which loads them for the format being browsed rather than all at once. The
+     * cap is applied *after* the ordering, so which catalogs make the page is the viewer's
+     * choice rather than the order their addons happened to be installed in.
      *
      * Not filtered by type: Home is not a typed page, so a film catalog and a series
      * catalog are equally at home here.
+     *
+     * Re-resolves when the selection changes, rather than running once a session like the
+     * personal rails do. Reordering catalogs and then finding Home unchanged until the next
+     * launch would read as the setting not working at all.
      */
-    fun loadCatalogs() {
-        if (catalogStarted) return
-        catalogStarted = true
+    fun loadCatalogs(layout: HomeLayout = HomeLayout.Default) {
+        val selection = catalogSelection(layout)
+        if (catalogSelectionUsed == selection) return
+        catalogSelectionUsed = selection
+        catalogJob?.cancel()
 
         catalogJob = scope.launch {
             try {
-                catalogRails = resolveCatalogs()
+                catalogRails = resolveCatalogs(layout)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -269,9 +308,28 @@ class HomeController(
         }
     }
 
-    private suspend fun resolveCatalogs(): List<HomeRail> = coroutineScope {
+    /**
+     * The part of the layout that changes which catalogs are fetched.
+     *
+     * Deliberately not the whole [HomeLayout]: moving *another* section, or widening the
+     * upcoming horizon, would otherwise throw away resolved catalog rails and refetch every
+     * one of them for nothing.
+     *
+     * Read off [HomeLayout.savedOrder] rather than the reconciled [HomeLayout.order], and
+     * that part is load-bearing. The page builds its layout from the catalog rails this
+     * controller produced, so the reconciled order gains those keys the moment the first
+     * fetch lands — keying on it means the arrival of the answer invalidates the question,
+     * and every catalog page is fetched twice on every cold start. The stored order does not
+     * move underneath us that way.
+     */
+    private fun catalogSelection(layout: HomeLayout): String =
+        layout.savedOrder.filter { it.startsWith(CATALOG_KEY_PREFIX) }
+            .joinToString(",") + "|" + layout.hidden.filter { it.startsWith(CATALOG_KEY_PREFIX) }
+            .sorted().joinToString(",") + "|" + layout.catalogRows
+
+    private suspend fun resolveCatalogs(layout: HomeLayout): List<HomeRail> = coroutineScope {
         val catalogs = runCatching { addons.catalogs() }.getOrDefault(emptyList())
-        catalogs.take(HOME_CATALOG_LIMIT).map { descriptor ->
+        layout.catalogsToDraw(catalogs).map { descriptor ->
             async {
                 runCatching {
                     addons.catalogPage(
@@ -293,6 +351,7 @@ class HomeController(
                         // titles have already appeared above.
                         ordered = true,
                         catalog = descriptor,
+                        section = catalogSectionKey(descriptor),
                     )
             }
         }.mapNotNull { it.await() }
@@ -305,6 +364,7 @@ class HomeController(
         icon: String,
         ordered: Boolean = false,
         catalog: AddonCatalogDescriptor? = null,
+        section: String = id,
     ): HomeRail? = takeIf { it.isNotEmpty() }?.let { media ->
         HomeRail(
             id = id,
@@ -314,15 +374,15 @@ class HomeController(
             media = media,
             ordered = ordered,
             catalog = catalog,
+            section = section,
         )
     }
 
     private companion object {
         const val RAIL_SIZE = 20
 
-        // Three rows is already most of a screen of scrolling past the personal rails,
-        // and each one costs a metadata request per title to resolve.
-        const val HOME_CATALOG_LIMIT = 3
+        /** How every catalog section key starts — see `catalogSectionKey`. */
+        const val CATALOG_KEY_PREFIX = "catalog:"
 
         // Roughly what fits on screen before the viewer scrolls. Each one costs a season
         // fetch, so the rest of the rail keeps its backdrop rather than paying for art

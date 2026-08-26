@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.data.AccountState
 import com.coveninja.cove.shared.data.CalendarState
 import com.coveninja.cove.shared.data.HomeState
+import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
 import com.coveninja.cove.ui.pages.common.MediaRailStateStore
@@ -30,11 +31,16 @@ import com.coveninja.cove.ui.pages.home.BacklogRow
 import com.coveninja.cove.ui.pages.home.ContinueRow
 import com.coveninja.cove.ui.pages.home.HomeController
 import com.coveninja.cove.ui.pages.home.HomeHero
+import com.coveninja.cove.ui.pages.home.HomeLayout
 import com.coveninja.cove.ui.pages.home.HomeRail
+import com.coveninja.cove.ui.pages.home.HomeSectionKind
+import com.coveninja.cove.ui.pages.home.arrangeHomeSections
 import com.coveninja.cove.ui.pages.home.backlogRows
 import com.coveninja.cove.ui.pages.home.buildHomeRails
 import com.coveninja.cove.ui.pages.home.continueWatchingRows
 import com.coveninja.cove.ui.pages.home.heroPick
+import com.coveninja.cove.ui.pages.home.homeLayout
+import com.coveninja.cove.ui.pages.home.trendingRail
 import com.coveninja.cove.ui.pages.mylist.calendar.availableNow
 import com.coveninja.cove.ui.state.LibraryIndex
 import com.coveninja.cove.ui.state.LocalAppGraph
@@ -92,6 +98,17 @@ internal fun TvHomePage(
     val graph = LocalAppGraph.current
     val dimens = TvTheme.dimens
     val calendarState by graph.calendar.calendar.collectAsState()
+    val settingsState by graph.settings.settings.collectAsState()
+
+    // The television has no editor for this — it is set on a phone or a desktop and synced —
+    // but it honours the result, or a household that customises Home would find the change
+    // stopped at the living room door.
+    val layout = remember(settingsState, controller.catalogRails) {
+        (settingsState as? SettingsState.Ready)?.settings
+            ?.homeLayout(controller.catalogRails.map(HomeRail::section))
+            ?: HomeLayout.Default
+    }
+
     val initialContentReady = homeState !is HomeState.Loading
 
     // Same staging as the phone: let the first useful frame win the main thread, since none of
@@ -102,13 +119,13 @@ internal fun TvHomePage(
             graph.calendar.refresh(force = false)
         }
     }
-    LaunchedEffect(initialContentReady) {
+    LaunchedEffect(initialContentReady, layout) {
         if (initialContentReady) {
             withFrameNanos { }
             withFrameNanos { }
             withFrameNanos { }
-            controller.loadPersonal()
-            controller.loadCatalogs()
+            controller.loadPersonal(layout)
+            controller.loadCatalogs(layout)
         }
     }
 
@@ -118,11 +135,12 @@ internal fun TvHomePage(
     val calendarItems = remember(calendarState) {
         (calendarState as? CalendarState.Ready)?.items.orEmpty()
     }
-    val continuing = remember(index, watchProgress, catalog) {
+    val continuing = remember(index, watchProgress, catalog, layout.continueRows) {
         continueWatchingRows(
             entries = index.entries,
             progressFor = watchProgress::progressFor,
             enrich = catalog::enrich,
+            limit = layout.continueRows,
         )
     }
     val backlog = remember(calendarItems, index, catalog) {
@@ -130,35 +148,40 @@ internal fun TvHomePage(
     }
     val hero = remember(continuing, backlog, trending) { heroPick(continuing, backlog, trending) }
 
-    LaunchedEffect(initialContentReady, hero?.media?.id) {
-        if (initialContentReady) hero?.let { controller.enrichHero(it.media) }
+    LaunchedEffect(initialContentReady, hero?.media?.id, layout) {
+        if (initialContentReady && !layout.isHidden(HomeSectionKind.Hero)) {
+            hero?.let { controller.enrichHero(it.media) }
+        }
     }
     LaunchedEffect(initialContentReady, continuing) {
         if (initialContentReady) controller.loadEpisodeStills(continuing)
     }
 
-    val rails = remember(controller.personalRails, controller.catalogRails, trending) {
+    val rails = remember(controller.personalRails, controller.catalogRails, trending, layout) {
+        // Hidden rails leave before assembly, not after: `buildHomeRails` drops a membership
+        // rail whose titles have mostly appeared already, and one nobody can see would
+        // otherwise spend that budget and take a visible rail down with it.
         buildHomeRails(
-            controller.personalRails + controller.catalogRails + listOf(
-                HomeRail(
-                    id = "trending",
-                    title = "Trending now",
-                    subtitle = "What everyone is watching",
-                    icon = "lucide:flame",
-                    media = trending,
-                    ordered = true,
-                ),
-            ),
+            (controller.personalRails + controller.catalogRails + trendingRail(trending))
+                .filterNot { layout.isHidden(it.section) },
         )
     }
 
-    val sections = remember(hero, continuing, backlog, rails) {
-        buildList {
-            hero?.let { add(TvHomeSection.Hero(it)) }
-            if (continuing.isNotEmpty()) add(TvHomeSection.Continue(continuing))
-            if (backlog.isNotEmpty()) add(TvHomeSection.Backlog(backlog))
-            rails.forEach { rail -> add(TvHomeSection.Rail(rail)) }
-        }
+    val sections = remember(hero, continuing, backlog, rails, layout) {
+        // The same arrangement the pointer shell runs, over this shell's own section type.
+        // Greeting and Upcoming are never built here, so their keys simply go unmatched —
+        // a television that renders fewer sections needs no special case.
+        arrangeHomeSections(
+            items = buildList {
+                hero?.let { add(TvHomeSection.Hero(it)) }
+                if (continuing.isNotEmpty()) add(TvHomeSection.Continue(continuing))
+                if (backlog.isNotEmpty()) add(TvHomeSection.Backlog(backlog))
+                rails.forEach { rail -> add(TvHomeSection.Rail(rail)) }
+            },
+            key = TvHomeSection::key,
+            order = layout.order,
+            hidden = layout.hidden,
+        )
     }
 
     var focusedSection by remember { mutableStateOf<Int?>(null) }
@@ -171,13 +194,26 @@ internal fun TvHomePage(
     // The hero's primary button is where a viewer's first press should land. Deferred by a
     // frame inside the helper, which is also what stops the press that opened this page from
     // activating whatever it focuses.
-    FocusOnAppear(heroFocusRequester, enabled = hero != null)
+    //
+    // Only when the hero actually leads the page, which it no longer always does. Hidden, its
+    // requester is never attached and the request is swallowed unnoticed; merely *moved*, it
+    // is worse than that — grabbing focus for a section halfway down would scroll straight
+    // past everything the viewer put above it.
+    FocusOnAppear(
+        heroFocusRequester,
+        enabled = sections.firstOrNull() is TvHomeSection.Hero,
+    )
 
     if (sections.isEmpty()) {
         val account by graph.account.account.collectAsState()
         TvHomeEmpty(
             loading = homeState is HomeState.Loading,
             signedOut = account is AccountState.SignedOut,
+            // An empty page has two very different causes now, and offering the wrong one is
+            // worse than saying nothing: telling somebody to sign in when the real answer is
+            // that they hid every section sends them to fix an account that is already fine.
+            allHidden = hero != null || continuing.isNotEmpty() ||
+                backlog.isNotEmpty() || rails.isNotEmpty(),
             modifier = modifier,
         )
         return
@@ -274,19 +310,21 @@ private sealed interface TvHomeSection {
     val key: String
 
     data class Hero(val hero: HomeHero) : TvHomeSection {
-        override val key: String get() = "hero"
+        override val key: String get() = HomeSectionKind.Hero.key
     }
 
     data class Continue(val rows: List<ContinueRow>) : TvHomeSection {
-        override val key: String get() = "continue"
+        override val key: String get() = HomeSectionKind.ContinueWatching.key
     }
 
     data class Backlog(val rows: List<BacklogRow>) : TvHomeSection {
-        override val key: String get() = "backlog"
+        override val key: String get() = HomeSectionKind.Backlog.key
     }
 
+    // The rail's stable section, not its id: this key is what the viewer's saved order is
+    // written against, and an order set on a phone has to mean the same thing here.
     data class Rail(val rail: HomeRail) : TvHomeSection {
-        override val key: String get() = "rail:${rail.id}"
+        override val key: String get() = rail.section
     }
 }
 
@@ -302,22 +340,29 @@ private sealed interface TvHomeSection {
 private fun TvHomeEmpty(
     loading: Boolean,
     signedOut: Boolean,
+    allHidden: Boolean,
     modifier: Modifier = Modifier,
 ) {
     TvComingSoonPage(
         title = when {
             loading -> "Loading your evening"
+            allHidden -> "Every section is hidden"
             signedOut -> "Sign in to get started"
             else -> "Nothing here yet"
         },
         detail = when {
             loading -> "Fetching your library and what is trending."
+            // Names where the control is, because it is deliberately not on this shell: the
+            // layout is edited on a phone or a desktop and reaches the television by sync.
+            allHidden -> "There is content to show, but no section is switched on. Turn one " +
+                "back on under Settings, in Interface, on your phone or computer."
             signedOut -> "Open Profile in the menu on the left. Signing in brings your list " +
                 "and the providers you set up elsewhere onto this television."
             else -> "Save something to your list and it will show up here."
         },
         icon = when {
             loading -> "lucide:loader-circle"
+            allHidden -> "lucide:eye-off"
             signedOut -> "iconamoon:profile-circle"
             else -> "iconamoon:home"
         },

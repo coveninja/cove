@@ -39,6 +39,12 @@ enum class SettingsCategory(
         headline = "Desktop plugins",
         blurb = "Optional integrations that run outside Cove's main process.",
     ),
+    Interface(
+        label = "Interface",
+        icon = "lucide:layout-dashboard",
+        headline = "Interface",
+        blurb = "How Cove looks, what it shows you, and in which language.",
+    ),
     Playback(
         label = "Playback",
         icon = "lucide:play-circle",
@@ -67,7 +73,7 @@ enum class SettingsCategory(
         label = "Content",
         icon = "lucide:shield-check",
         headline = "Content",
-        blurb = "What is shown, in which language, and how it is recommended.",
+        blurb = "How Cove decides what to put in front of you.",
     ),
     Network(
         label = "Network",
@@ -94,16 +100,6 @@ enum class SettingsCategory(
         blurb = "The player's own configuration, and which build this is.",
     ),
 }
-
-private val INTERFACE_LANGUAGES = listOf(
-    "en" to "English",
-    "es" to "Español",
-    "it" to "Italiano",
-    "de" to "Deutsch",
-    "pt" to "Português (Brasil)",
-    "tr" to "Türkçe",
-    "ja" to "日本語",
-)
 
 /**
  * Original means "whatever the title was made in", resolved per title from its
@@ -157,6 +153,8 @@ fun SettingsCategoryContent(
             SettingsCategory.Advanced -> AdvancedSettings()
 
             SettingsCategory.Storage -> StorageSettings()
+
+            SettingsCategory.Interface -> InterfaceSettings(settings, editor)
 
             SettingsCategory.Playback -> {
                 SettingsCard {
@@ -437,24 +435,6 @@ fun SettingsCategoryContent(
             SettingsCategory.Content -> {
                 SettingsCard {
                     SettingRows(
-                        {
-                            SettingToggle(
-                                title = "Hide spoilers",
-                                description = "Keep episode titles and descriptions discreet " +
-                                    "until watched.",
-                                checked = settings.hideSpoilers,
-                                onCheckedChange = { editor.edit { copy(hideSpoilers = it) } },
-                            )
-                        },
-                        {
-                            SettingChoice(
-                                title = "Interface language",
-                                description = "System follows this device's language.",
-                                options = listOf("" to "System") + INTERFACE_LANGUAGES,
-                                selected = settings.uiLanguage,
-                                onSelect = { editor.edit { copy(uiLanguage = it) } },
-                            )
-                        },
                         {
                             SettingChoice(
                                 title = "Recommendations",
