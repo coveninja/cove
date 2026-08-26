@@ -193,6 +193,7 @@ class MainActivity : ComponentActivity() {
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         updateSystemBars()
+        updateOrientation(isInPictureInPictureMode)
     }
 
     private fun setDetailsOverlayVisible(visible: Boolean) {
@@ -211,6 +212,7 @@ class MainActivity : ComponentActivity() {
         // Home into a floating window rather than leaving the app.
         if (!isTelevision) setPictureInPictureParams(pictureInPictureParams())
         updateSystemBars()
+        updateOrientation()
     }
 
     private fun pictureInPictureParams(): PictureInPictureParams = PictureInPictureParams.Builder()
@@ -222,6 +224,22 @@ class MainActivity : ComponentActivity() {
             }
         }
         .build()
+
+    /**
+     * The picture-in-picture state is a parameter rather than a read of the activity's own
+     * property because the one caller that changes it is handed the new value directly, and
+     * taking it from the activity there would make this depend on the framework having already
+     * written it. If that read were ever stale on the way *out* of a floating window, the
+     * player would return to fullscreen and stay portrait, with nothing to say why.
+     */
+    private fun updateOrientation(inPictureInPicture: Boolean = isInPictureInPictureMode) {
+        requestedOrientation = playerOrientation(
+            fullscreenPlayback = fullscreenPlaybackVisible,
+            inPictureInPicture = inPictureInPicture,
+            isTelevision = isTelevision,
+            smallestScreenWidthDp = resources.configuration.smallestScreenWidthDp,
+        )
+    }
 
     private fun updateSystemBars() {
         val controller = WindowCompat.getInsetsController(window, window.decorView)
