@@ -19,16 +19,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.coveninja.cove.shared.network.CoveJson
 import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaChapter
-import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
-import com.coveninja.cove.ui.state.TrackKind
+import com.coveninja.cove.ui.state.SubtitleStyle
 import com.coveninja.cove.ui.state.VideoCodecCapabilities
 import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.classifyPlaybackTermination
+import com.coveninja.cove.ui.state.parseMpvTrackList
+import com.coveninja.cove.ui.state.withTracks
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import dev.jdtech.mpv.MPVLib
@@ -260,6 +261,18 @@ class AndroidMpvVideoPlayerHost(
     override fun applyPreferences(preferences: PlaybackPreferences) = onMain {
         pendingPreferences = preferences
         if (initialized) applyPreferencesNow(preferences)
+    }
+
+    // supportsAudioFilters is deliberately left at the interface default of false: the
+    // bundled libmpv links a libavfilter whose whole registry is abuffer, abuffersink,
+    // aresample, buffer, buffersink and format. Setting "af" here would not degrade to
+    // unfiltered audio — mpv fails the filter graph and ends the file.
+
+    override fun applySubtitleStyle(style: SubtitleStyle) = onMain {
+        // Folded into the pending preferences too, so a style set before mpv is up, or
+        // while the surface is being rebuilt, still lands when it comes back.
+        pendingPreferences = pendingPreferences?.copy(subtitleStyle = style)
+        if (initialized) applySubtitleStyleNow(style)
     }
 
     // The flag is honoured here exactly as it is on the desktop. This host used to
@@ -649,7 +662,7 @@ class AndroidMpvVideoPlayerHost(
         _status.value = when (property) {
             "track-list" -> {
                 trackListJson = value
-                current.withTracks(parseMpvTracks(value))
+                current.withTracks(parseMpvTrackList(value))
             }
             "chapter-list" -> {
                 chapterListJson = value
@@ -681,7 +694,7 @@ class AndroidMpvVideoPlayerHost(
                 stoppedByUser = false
                 fileLoaded = true
                 _status.value = _status.value
-                    .withTracks(parseMpvTracks(trackListJson))
+                    .withTracks(parseMpvTrackList(trackListJson))
                     .copy(
                         hasMedia = true,
                         fileLoaded = true,
@@ -737,13 +750,45 @@ class AndroidMpvVideoPlayerHost(
         }
         requireMpv().setPropertyString("sid", if (preferences.subtitlesEnabled) "auto" else "no")
         requireMpv().setPropertyBoolean("mute", preferences.startMuted)
-        requireMpv().setPropertyDouble("sub-scale", preferences.subtitleScale)
-        requireMpv().setPropertyInt("sub-pos", preferences.subtitlePosition)
-        requireMpv().setPropertyString(
-            "sub-border-style",
-            if (preferences.subtitleBackground) "opaque-box" else "outline-and-shadow",
-        )
+        applySubtitleStyleNow(preferences.subtitleStyle)
         requireMpv().setPropertyString("hwdec", if (preferences.hardwareDecoding) "mediacodec" else "no")
+
+        // Downmixing is core mpv rather than a filter, so it works here as it does on the
+        // desktop. Deliberately no "af": this build's libavfilter carries no audio filters
+        // at all, and mpv answers one it cannot build by ending the file — which is why
+        // supportsAudioFilters is left false and the setting never reaches this host.
+        requireMpv().setPropertyString(
+            "audio-channels",
+            preferences.audioDownmix.ifBlank { "auto-safe" },
+        )
+        requireMpv().setPropertyBoolean(
+            "audio-normalize-downmix",
+            preferences.audioNormalizeDownmix,
+        )
+    }
+
+    /**
+     * The appearance options alone, so a settings change reaches a file already playing
+     * without re-selecting its tracks. See VideoPlayerHost.applySubtitleStyle.
+     */
+    private fun applySubtitleStyleNow(style: SubtitleStyle) {
+        requireMpv().setPropertyDouble("sub-scale", style.scale)
+        requireMpv().setPropertyInt("sub-pos", style.position)
+        // Spelled out rather than skipped when empty: this handle outlives one file, and
+        // an option left alone keeps whatever the last style set on it.
+        requireMpv().setPropertyString("sub-font", style.font.ifBlank { "sans-serif" })
+        requireMpv().setPropertyString("sub-color", style.textColor)
+        requireMpv().setPropertyString("sub-outline-color", style.outlineColor)
+        requireMpv().setPropertyDouble("sub-outline-size", style.outlineSize)
+        requireMpv().setPropertyDouble("sub-shadow-offset", style.shadowOffset)
+        // Also the shadow's colour: mpv aliases sub-shadow-color onto this one option.
+        requireMpv().setPropertyString("sub-back-color", style.backColor)
+        requireMpv().setPropertyBoolean("sub-bold", style.bold)
+        requireMpv().setPropertyBoolean("sub-italic", style.italic)
+        requireMpv().setPropertyDouble("sub-blur", style.blur)
+        requireMpv().setPropertyString("sub-ass-override", style.assOverride)
+        requireMpv().setPropertyString("sub-align-x", style.align)
+        requireMpv().setPropertyString("sub-border-style", style.borderStyle)
     }
 
     private fun applyScaling(scaling: VideoScaling) {
@@ -977,27 +1022,6 @@ private class AndroidMpvSurfaceView(
     }
 }
 
-internal fun parseMpvTracks(json: String): List<MediaTrack> {
-    if (json.isBlank()) return emptyList()
-    return runCatching {
-        CoveJson.parseToJsonElement(json).jsonArray.mapNotNull { element ->
-            val track = element.jsonObject
-            val kind = when (track["type"]?.jsonPrimitive?.contentOrNull) {
-                "audio" -> TrackKind.Audio
-                "sub" -> TrackKind.Subtitle
-                else -> return@mapNotNull null
-            }
-            MediaTrack(
-                id = track["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
-                kind = kind,
-                title = track["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                language = track["lang"]?.jsonPrimitive?.contentOrNull,
-                selected = track["selected"]?.jsonPrimitive?.booleanOrNull == true,
-            )
-        }
-    }.getOrDefault(emptyList())
-}
-
 internal fun parseMpvChapters(json: String): List<MediaChapter> {
     if (json.isBlank()) return emptyList()
     return runCatching {
@@ -1012,17 +1036,6 @@ internal fun parseMpvChapters(json: String): List<MediaChapter> {
             )
         }
     }.getOrDefault(emptyList())
-}
-
-private fun PlaybackStatus.withTracks(tracks: List<MediaTrack>): PlaybackStatus {
-    val audio = tracks.filter { it.kind == TrackKind.Audio }
-    val subtitles = tracks.filter { it.kind == TrackKind.Subtitle }
-    return copy(
-        audioTracks = audio,
-        subtitleTracks = subtitles,
-        selectedAudioId = audio.firstOrNull { it.selected }?.id,
-        selectedSubtitleId = subtitles.firstOrNull { it.selected }?.id,
-    )
 }
 
 /**

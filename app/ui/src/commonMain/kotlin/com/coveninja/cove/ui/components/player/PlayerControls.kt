@@ -1032,6 +1032,7 @@ private fun TrackMenuButton(
                             "lucide:circle-dot"
                         },
                         accent = track.id == selectedId,
+                        badges = track.badges(),
                         onClick = {
                             onSelect(track.id)
                             onExpandedChange(false)

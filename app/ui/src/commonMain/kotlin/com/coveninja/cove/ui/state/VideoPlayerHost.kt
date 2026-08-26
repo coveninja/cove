@@ -26,13 +26,43 @@ enum class VideoScaling(val label: String, val description: String) {
     Stretch("Stretch", "Fills the window, distorts the picture"),
 }
 
-/** One selectable audio or subtitle track reported by the player. */
+/**
+ * One selectable audio or subtitle track reported by the player.
+ *
+ * Everything past [selected] is what the track *is*, as opposed to how to ask for it, and all
+ * of it is defaulted: a host that cannot describe its tracks that well still constructs one,
+ * and the UI shows nothing rather than something wrong. The names follow mpv's `track-list`,
+ * which is where they all come from.
+ */
 data class MediaTrack(
     val id: Int,
     val kind: TrackKind,
     val title: String,
     val language: String?,
     val selected: Boolean,
+    /** A readable codec name — mpv's `codec-desc`, falling back to the bare `codec`. */
+    val codec: String = "",
+    /** The channel layout as a person names it: "stereo", "5.1". Audio only. */
+    val channels: String = "",
+    val sampleRateHz: Int = 0,
+    /** The track the container marks as its default. */
+    val isDefault: Boolean = false,
+    /** Meant to be shown regardless: signs, songs, and foreign dialogue in a dubbed cut. */
+    val forced: Boolean = false,
+    /** SDH — dialogue plus sound effects and speaker labels. */
+    val hearingImpaired: Boolean = false,
+    /** Audio description: a narrator describing what is on screen. */
+    val visualImpaired: Boolean = false,
+    /** Not in the file — fetched from an addon, or a file the viewer supplied. */
+    val external: Boolean = false,
+    /**
+     * A picture rather than text: PGS, VobSub, DVD subtitles.
+     *
+     * Worth knowing because none of the appearance settings reach one. mpv can move and
+     * scale a bitmap subtitle but cannot restyle it, so a viewer who changes the font and
+     * sees nothing happen is looking at one of these.
+     */
+    val bitmap: Boolean = false,
 ) {
     val label: String
         get() = listOfNotNull(
@@ -329,6 +359,34 @@ interface VideoPlayerHost {
 
     /** Applied before loading, so the player picks the right tracks first time. */
     fun applyPreferences(preferences: PlaybackPreferences)
+
+    /**
+     * Whether this player can run audio filters, which is what volume normalisation is
+     * built from.
+     *
+     * False by default, and the default is the load-bearing one. Android's bundled libmpv
+     * links a libavfilter with no audio filters in it at all, and mpv answers a filter it
+     * cannot build by *ending the file* — "Audio filter initialized failed", and playback
+     * stops — rather than by carrying on unfiltered. So a host that has not said it can do
+     * this must never be handed a filter, and the control that would set one is absent
+     * where this is false rather than present and inert, as [playsWebVideos] and
+     * `canLoadSubtitleFile` already are.
+     */
+    val supportsAudioFilters: Boolean get() = false
+
+    /**
+     * Restyles the subtitles without disturbing anything else.
+     *
+     * Safe to call while a file is playing, which is the whole point of it: appearance is
+     * adjusted by eye, and a viewer moving the outline slider needs to see the outline move.
+     * [applyPreferences] would also apply the style, but it re-selects tracks and re-applies
+     * mute along the way, which would throw away whatever the viewer picked in the player's
+     * own menus.
+     *
+     * Defaulted to a no-op so a host that draws no subtitles of its own — a test double, a
+     * future target — does not have to implement it.
+     */
+    fun applySubtitleStyle(style: SubtitleStyle) = Unit
 
     /**
      * Adds an external subtitle; it then appears in [PlaybackStatus.subtitleTracks].

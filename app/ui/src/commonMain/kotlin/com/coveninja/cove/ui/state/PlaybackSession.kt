@@ -35,6 +35,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** What is being played: a movie, one episode of a series, or an extra. */
@@ -126,6 +128,23 @@ class PlaybackSession(
     private val scope: CoroutineScope,
     private val host: VideoPlayerHost?,
 ) {
+    init {
+        // Subtitle appearance is judged by eye, so a change to it has to reach the picture
+        // that is already on screen rather than waiting for the next file. Only the style —
+        // re-sending the whole preference set would put `sid` and `aid` back to what the
+        // settings say and throw away whatever the viewer picked in the player's own menus.
+        //
+        // distinctUntilChanged is load-bearing rather than tidy: this flow republishes on
+        // every settings write, and remembering the volume writes one every time playback
+        // stops. Without it each of those would resend fourteen mpv properties.
+        scope.launch {
+            graph.settings.settings
+                .map { (it as? SettingsState.Ready)?.settings?.subtitleStyle() }
+                .distinctUntilChanged()
+                .collect { style -> style?.let { host?.applySubtitleStyle(it) } }
+        }
+    }
+
     private var currentRequest by mutableStateOf<PlaybackRequest?>(null)
 
     /**
@@ -297,7 +316,10 @@ class PlaybackSession(
 
                 val ranked = rankSources(
                     sources = playable,
-                    preferredAudioLanguage = settings?.defaultAudioLang,
+                    // The most-wanted language only. Ranking is a hint drawn from a release
+                    // name, and a name that mentions the third choice says nothing useful
+                    // about whether the first is in there.
+                    preferredAudioLanguage = settings?.orderedAudioLanguages()?.firstOrNull(),
                     originalLanguage = resolved.media.originalLanguage,
                     mode = StreamSelectionMode.from(settings?.streamSelectionMode),
                 )
@@ -910,8 +932,10 @@ class PlaybackSession(
     ): String? {
         val known = current.media.originalLanguage?.takeIf { it.isNotBlank() }
         if (known != null) return known
-        val wantsOriginal = settings.defaultAudioLang == AUDIO_LANGUAGE_ORIGINAL ||
-            settings.defaultSubtitleLang == AUDIO_LANGUAGE_ORIGINAL
+        // Anywhere in either order, not just at the head: Original two entries down still
+        // has to resolve, or the fallback silently stops working past the first choice.
+        val wantsOriginal = AUDIO_LANGUAGE_ORIGINAL in settings.orderedAudioLanguages() ||
+            AUDIO_LANGUAGE_ORIGINAL in settings.orderedSubtitleLanguages()
         if (!wantsOriginal) return null
 
         return runCatching { graph.content.details(current.media.toDomainMedia()) }

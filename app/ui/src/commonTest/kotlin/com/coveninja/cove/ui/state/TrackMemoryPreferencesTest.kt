@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.state
 
 import com.coveninja.cove.shared.data.TrackMemory
+import com.coveninja.cove.shared.model.AppSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -20,10 +21,11 @@ class TrackMemoryPreferencesTest {
         subtitleLanguages = listOf("en", "eng"),
         subtitlesEnabled = false,
         startMuted = false,
-        subtitleScale = 1.0,
-        subtitlePosition = 92,
-        subtitleBackground = true,
+        subtitleStyle = AppSettings().subtitleStyle(),
         hardwareDecoding = true,
+        audioNormalization = AudioNormalization.Off,
+        audioDownmix = "",
+        audioNormalizeDownmix = false,
     )
 
     @Test
@@ -80,17 +82,24 @@ class TrackMemoryPreferencesTest {
         assertFalse(resolved.subtitlesEnabled)
     }
 
-    /** Everything else about the preferences is the settings' business and stays untouched. */
+    /**
+     * Everything else about the preferences is the settings' business and stays untouched.
+     *
+     * The whole style object is compared rather than a field or three of it, so a value added
+     * to SubtitleStyle later is covered here the day it is added instead of the day someone
+     * remembers to extend this list.
+     */
     @Test
-    fun `the memory has no opinion on scale, position or decoding`() {
+    fun `the memory has no opinion on appearance, audio or decoding`() {
         val resolved = defaults.withMemory(
             TrackMemory(audioLanguage = "ja", subtitleLanguage = "en", speed = 1.5),
         )
-        assertEquals(defaults.subtitleScale, resolved.subtitleScale)
-        assertEquals(defaults.subtitlePosition, resolved.subtitlePosition)
-        assertEquals(defaults.subtitleBackground, resolved.subtitleBackground)
+        assertEquals(defaults.subtitleStyle, resolved.subtitleStyle)
         assertEquals(defaults.hardwareDecoding, resolved.hardwareDecoding)
         assertEquals(defaults.startMuted, resolved.startMuted)
+        assertEquals(defaults.audioNormalization, resolved.audioNormalization)
+        assertEquals(defaults.audioDownmix, resolved.audioDownmix)
+        assertEquals(defaults.audioNormalizeDownmix, resolved.audioNormalizeDownmix)
     }
 }
 

@@ -6,7 +6,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -42,6 +45,14 @@ fun CMenuItem(
     } else {
         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)
     },
+    /**
+     * Short words qualifying the entry, drawn as pills after it — "Forced", "SDH".
+     *
+     * Beside the label rather than folded into it because they answer a different question:
+     * the label says which track this is, and these say what it is for. Run together as one
+     * string they read as part of the name.
+     */
+    badges: List<String> = emptyList(),
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -82,11 +93,27 @@ fun CMenuItem(
 
     DropdownMenuItem(
         text = {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                badges.forEach { badge ->
+                    Text(
+                        text = badge,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = contentColor.copy(alpha = 0.75f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(contentColor.copy(alpha = 0.12f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
+            }
         },
         leadingIcon = {
             IconifyIcon(

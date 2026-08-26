@@ -7,8 +7,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.AppSettings
-import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
+import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.SettingsEditor
+import com.coveninja.cove.ui.state.orderedAudioLanguages
+import com.coveninja.cove.ui.state.orderedSubtitleLanguages
+import com.coveninja.cove.ui.state.resolveBorderStyle
+import com.coveninja.cove.ui.state.withAudioLanguages
+import com.coveninja.cove.ui.state.withSubtitleLanguages
 
 /**
  * The settings are grouped rather than stacked: a single scroll of thirty
@@ -101,21 +106,70 @@ enum class SettingsCategory(
     ),
 }
 
+// The nine-language list that used to live here is gone: languages now come from the one
+// table in `ui/state/Languages.kt`, which the track menu and the television read too, and
+// SettingLanguageOrder offers all of them rather than the handful that fit in a pill row.
+
+/** mpv's sub-align-x. */
+private val SUBTITLE_ALIGNMENTS = listOf(
+    "center" to "Centre",
+    "left" to "Left",
+    "right" to "Right",
+)
+
 /**
- * Original means "whatever the title was made in", resolved per title from its
- * TMDB original language rather than pinned to one code. It leads the list
- * because it is the option most people actually want.
+ * The colours worth offering for subtitle text — white, the two broadcast-caption colours,
+ * and a softer grey for anyone who finds pure white too hot on an OLED at night.
  */
-private val SPOKEN_LANGUAGES = listOf(
-    AUDIO_LANGUAGE_ORIGINAL to "Original",
-    "en" to "English",
-    "es" to "Español",
-    "fr" to "Français",
-    "it" to "Italiano",
-    "de" to "Deutsch",
-    "pt" to "Português (Brasil)",
-    "tr" to "Türkçe",
-    "ja" to "日本語",
+private val SUBTITLE_TEXT_COLORS = listOf(
+    "#FFFFFFFF",
+    "#FFFFF200",
+    "#FF00FFFF",
+    "#FFC8C8C8",
+)
+
+/** For the panel and the shadow, which mpv draws from one value. */
+private val SUBTITLE_PANEL_COLORS = listOf(
+    "#AF000000",
+    "#AF1A1A1A",
+    "#AF2B1B4A",
+    "#AFFFFFFF",
+)
+
+private val SUBTITLE_OUTLINE_COLORS = listOf(
+    "#FF000000",
+    "#FF404040",
+    "#FF1A0A2E",
+    "#FFFFFFFF",
+)
+
+/** mpv's sub-border-style, in the order they add weight. */
+private val SUBTITLE_BORDER_STYLES = listOf(
+    "outline-and-shadow" to "Outline",
+    "background-box" to "Box per line",
+    "opaque-box" to "Panel",
+)
+
+/** mpv's sub-ass-override, named by what it does rather than by its value. */
+private val SUBTITLE_ASS_OVERRIDES = listOf(
+    "scale" to "Keep, scaled",
+    "no" to "Keep all",
+    "yes" to "Prefer mine",
+    "force" to "Force mine",
+    "strip" to "Strip",
+)
+
+/** mpv's audio-channels. Empty is auto-safe: whatever the track already is. */
+private val AUDIO_DOWNMIXES = listOf(
+    "" to "As recorded",
+    "stereo" to "Stereo",
+    "mono" to "Mono",
+)
+
+private val AUDIO_NORMALIZATIONS = listOf(
+    "off" to "Off",
+    "normalize" to "Even out",
+    "night" to "Night mode",
 )
 
 /**
@@ -327,7 +381,11 @@ fun SettingsCategoryContent(
             }
 
             SettingsCategory.Subtitles -> {
-                SettingsCard(title = "Languages", iconName = "lucide:languages") {
+                SettingsCard(
+                    title = "Languages",
+                    iconName = "lucide:languages",
+                    description = "Tried in order. The first one a release carries is the one used.",
+                ) {
                     SettingRows(
                         {
                             SettingToggle(
@@ -338,19 +396,23 @@ fun SettingsCategoryContent(
                             )
                         },
                         {
-                            SettingChoice(
-                                title = "Subtitle language",
-                                options = SPOKEN_LANGUAGES,
-                                selected = settings.defaultSubtitleLang,
-                                onSelect = { editor.edit { copy(defaultSubtitleLang = it) } },
+                            SettingLanguageOrder(
+                                title = "Subtitle languages",
+                                description = null,
+                                languages = settings.orderedSubtitleLanguages(),
+                                // "Original" would mean the language the film is already in,
+                                // which is the one case subtitles are not wanted for.
+                                allowOriginal = false,
+                                onChange = { editor.edit { withSubtitleLanguages(it) } },
                             )
                         },
                         {
-                            SettingChoice(
-                                title = "Audio language",
-                                options = SPOKEN_LANGUAGES,
-                                selected = settings.defaultAudioLang,
-                                onSelect = { editor.edit { copy(defaultAudioLang = it) } },
+                            SettingLanguageOrder(
+                                title = "Audio languages",
+                                description = null,
+                                languages = settings.orderedAudioLanguages(),
+                                allowOriginal = true,
+                                onChange = { editor.edit { withAudioLanguages(it) } },
                             )
                         },
                     )
@@ -378,13 +440,183 @@ fun SettingsCategoryContent(
                             )
                         },
                         {
-                            SettingToggle(
-                                title = "Subtitle background",
-                                description = "Draw a shaded box behind subtitles for readability.",
-                                checked = settings.subtitleBackground,
-                                onCheckedChange = { editor.edit { copy(subtitleBackground = it) } },
+                            SettingChoice(
+                                title = "Alignment",
+                                description = "Where a line sits when it does not fill the width.",
+                                options = SUBTITLE_ALIGNMENTS,
+                                selected = settings.subtitleAlign,
+                                onSelect = { editor.edit { copy(subtitleAlign = it) } },
                             )
                         },
+                        {
+                            SettingColor(
+                                title = "Text colour",
+                                value = settings.subtitleTextColor,
+                                presets = SUBTITLE_TEXT_COLORS,
+                                onSelect = { editor.edit { copy(subtitleTextColor = it) } },
+                            )
+                        },
+                        {
+                            SettingToggle(
+                                title = "Bold",
+                                description = "Thicker strokes. Carries further across a room.",
+                                checked = settings.subtitleBold,
+                                onCheckedChange = { editor.edit { copy(subtitleBold = it) } },
+                            )
+                        },
+                        {
+                            SettingToggle(
+                                title = "Italic",
+                                checked = settings.subtitleItalic,
+                                onCheckedChange = { editor.edit { copy(subtitleItalic = it) } },
+                            )
+                        },
+                    )
+                }
+
+                SettingsCard(
+                    title = "Legibility",
+                    iconName = "lucide:captions",
+                    description = "What keeps the text readable over a bright or busy picture.",
+                ) {
+                    SettingRows(
+                        {
+                            SettingChoice(
+                                title = "Behind the text",
+                                description = "A panel across the block, a box per line, " +
+                                    "or nothing but the outline.",
+                                options = SUBTITLE_BORDER_STYLES,
+                                selected = resolveBorderStyle(
+                                    settings.subtitleBorderStyle,
+                                    settings.subtitleBackground,
+                                ),
+                                onSelect = { style ->
+                                    editor.edit {
+                                        // The older boolean is kept in step, so a device that
+                                        // predates the three-way still draws what was chosen here.
+                                        copy(
+                                            subtitleBorderStyle = style,
+                                            subtitleBackground = style != "outline-and-shadow",
+                                        )
+                                    }
+                                },
+                            )
+                        },
+                        {
+                            SettingColor(
+                                title = "Panel colour",
+                                description = "Also the colour of the drop shadow — mpv draws " +
+                                    "both from one value.",
+                                value = settings.subtitleBackColor,
+                                presets = SUBTITLE_PANEL_COLORS,
+                                showOpacity = true,
+                                onSelect = { editor.edit { copy(subtitleBackColor = it) } },
+                            )
+                        },
+                        {
+                            SettingColor(
+                                title = "Outline colour",
+                                value = settings.subtitleOutlineColor,
+                                presets = SUBTITLE_OUTLINE_COLORS,
+                                onSelect = { editor.edit { copy(subtitleOutlineColor = it) } },
+                            )
+                        },
+                        {
+                            SettingSlider(
+                                title = "Outline weight",
+                                value = settings.subtitleOutlineSize.toFloat(),
+                                range = 0f..8f,
+                                format = { "${(it * 10).toInt() / 10.0}" },
+                                onCommit = {
+                                    editor.edit { copy(subtitleOutlineSize = it.toDouble()) }
+                                },
+                            )
+                        },
+                        {
+                            SettingSlider(
+                                title = "Shadow",
+                                description = "Offset behind the text. Zero draws none.",
+                                value = settings.subtitleShadowOffset.toFloat(),
+                                range = 0f..6f,
+                                format = { "${(it * 10).toInt() / 10.0}" },
+                                onCommit = {
+                                    editor.edit { copy(subtitleShadowOffset = it.toDouble()) }
+                                },
+                            )
+                        },
+                        {
+                            SettingSlider(
+                                title = "Blur",
+                                description = "Softens the edges. A little helps on a sharp panel.",
+                                value = settings.subtitleBlur.toFloat(),
+                                range = 0f..8f,
+                                format = { "${(it * 10).toInt() / 10.0}" },
+                                onCommit = { editor.edit { copy(subtitleBlur = it.toDouble()) } },
+                            )
+                        },
+                        {
+                            SettingChoice(
+                                title = "Styled subtitles",
+                                description = "ASS and SSA tracks carry their own fonts and " +
+                                    "positioning — the signs and karaoke of a fansub. This is " +
+                                    "how much of that to keep.",
+                                options = SUBTITLE_ASS_OVERRIDES,
+                                selected = settings.subtitleAssOverride,
+                                onSelect = { editor.edit { copy(subtitleAssOverride = it) } },
+                            )
+                        },
+                    )
+                }
+
+                SettingsCard(title = "Audio", iconName = "lucide:audio-lines") {
+                    // Absent rather than present and inert where the player cannot run audio
+                    // filters, which is every Android build: its libmpv links a libavfilter
+                    // with no audio filters in it, and mpv answers one it cannot build by
+                    // ending the file rather than playing on without it.
+                    //
+                    // Decided out here rather than inside the last row, because SettingRows
+                    // draws a divider before every row past the first: a row that renders
+                    // nothing still gets its divider, and the card would end on a rule with
+                    // nothing under it.
+                    val canFilterAudio = LocalVideoPlayerHost.current?.supportsAudioFilters == true
+                    SettingRows(
+                        *buildList<@Composable () -> Unit> {
+                            add {
+                                SettingChoice(
+                                    title = "Channels",
+                                    description = "Fold a surround track down so dialogue is " +
+                                        "not left on a centre speaker you do not have.",
+                                    options = AUDIO_DOWNMIXES,
+                                    selected = settings.audioDownmix,
+                                    onSelect = { editor.edit { copy(audioDownmix = it) } },
+                                )
+                            }
+                            add {
+                                SettingToggle(
+                                    title = "Rescale the downmix",
+                                    description = "Stops a folded-down track clipping. " +
+                                        "Only applies while downmixing.",
+                                    checked = settings.audioNormalizeDownmix,
+                                    onCheckedChange = {
+                                        editor.edit { copy(audioNormalizeDownmix = it) }
+                                    },
+                                )
+                            }
+                            if (canFilterAudio) {
+                                add {
+                                    SettingChoice(
+                                        title = "Even out the volume",
+                                        description = "Brings quiet dialogue up. Night mode " +
+                                            "also pulls loud scenes down.",
+                                        options = AUDIO_NORMALIZATIONS,
+                                        selected = settings.audioNormalization,
+                                        onSelect = {
+                                            editor.edit { copy(audioNormalization = it) }
+                                        },
+                                    )
+                                }
+                            }
+                        }.toTypedArray(),
                     )
                 }
             }

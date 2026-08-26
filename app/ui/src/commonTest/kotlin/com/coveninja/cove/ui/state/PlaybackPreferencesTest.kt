@@ -88,24 +88,126 @@ class PlaybackPreferencesTest {
         assertTrue(settings.playbackPreferences(originalLanguage = "").audioLanguages.isEmpty())
     }
 
+    private fun style(settings: AppSettings) = settings.playbackPreferences(null).subtitleStyle
+
     @Test
     fun `subtitle size becomes a multiplier`() {
-        assertEquals(1.0, AppSettings(subtitleSize = 100.0).playbackPreferences(null).subtitleScale)
-        assertEquals(1.5, AppSettings(subtitleSize = 150.0).playbackPreferences(null).subtitleScale)
+        assertEquals(1.0, style(AppSettings(subtitleSize = 100.0)).scale)
+        assertEquals(1.5, style(AppSettings(subtitleSize = 150.0)).scale)
     }
 
     @Test
     fun `an extreme stored size is clamped to something usable`() {
-        assertEquals(0.25, AppSettings(subtitleSize = 0.0).playbackPreferences(null).subtitleScale)
-        assertEquals(4.0, AppSettings(subtitleSize = 5000.0).playbackPreferences(null).subtitleScale)
+        assertEquals(0.25, style(AppSettings(subtitleSize = 0.0)).scale)
+        assertEquals(4.0, style(AppSettings(subtitleSize = 5000.0)).scale)
     }
 
     // The setting measures up from the bottom; mpv's sub-pos measures down from
     // the top. Getting this backwards puts subtitles at the top of the picture.
     @Test
     fun `subtitle position is inverted for the player`() {
-        assertEquals(92, AppSettings(subtitlePosition = 8.0).playbackPreferences(null).subtitlePosition)
-        assertEquals(100, AppSettings(subtitlePosition = 0.0).playbackPreferences(null).subtitlePosition)
+        assertEquals(92, style(AppSettings(subtitlePosition = 8.0)).position)
+        assertEquals(100, style(AppSettings(subtitlePosition = 0.0)).position)
+    }
+
+    // The ordered list is what the viewer arranged; the single-language field is what every
+    // build before it wrote. Reading the list where there is one is the whole feature.
+    @Test
+    fun `an ordered preference is used in order, each with its aliases behind it`() {
+        val settings = AppSettings(
+            defaultAudioLang = "en",
+            audioLanguages = listOf("ja", "en"),
+        )
+
+        val languages = settings.playbackPreferences(originalLanguage = null).audioLanguages
+
+        assertEquals("ja", languages.first())
+        // Japanese and its three-letter forms all rank ahead of English, or "en" would be
+        // matched by a file tagged "eng" before the Japanese track was ever considered.
+        assertTrue(languages.indexOf("jpn") < languages.indexOf("en"), "was: $languages")
+        assertTrue("eng" in languages, "was: $languages")
+    }
+
+    // Every profile written before the list existed has an empty one, and must keep working
+    // without a migration step. This is what makes that true.
+    @Test
+    fun `an empty order falls back to the single-language setting`() {
+        val settings = AppSettings(defaultAudioLang = "de", audioLanguages = emptyList())
+
+        assertEquals(listOf("de"), settings.orderedAudioLanguages())
+        assertTrue("deu" in settings.playbackPreferences(null).audioLanguages)
+    }
+
+    // The accessor is tested directly, not only through playbackPreferences. A mutation that
+    // made it ignore the list entirely went unnoticed while the two of them each implemented
+    // the fallback: the resolution read the raw field and agreed by coincidence. They share
+    // one implementation now, and this is what holds the accessor itself to it.
+    @Test
+    fun `the accessor reads the order rather than the single-language field`() {
+        val settings = AppSettings(
+            defaultAudioLang = "de",
+            audioLanguages = listOf("ja", "en"),
+            defaultSubtitleLang = "de",
+            subtitleLanguages = listOf("es"),
+        )
+
+        assertEquals(listOf("ja", "en"), settings.orderedAudioLanguages())
+        assertEquals(listOf("es"), settings.orderedSubtitleLanguages())
+    }
+
+    // Blank entries can arrive from a hand-edited file or an older build. A blank reaching
+    // mpv's alang would ask for a language called "", and reaching the settings row would
+    // draw a nameless entry the viewer cannot identify or remove with confidence.
+    @Test
+    fun `blank entries are dropped from an order as it is read`() {
+        val settings = AppSettings(audioLanguages = listOf("", "  ", "ja"))
+
+        assertEquals(listOf("ja"), settings.orderedAudioLanguages())
+    }
+
+    // Both blank is a real state and means what it says: no preference, so the file decides.
+    // Callers have to cope with an empty list rather than assuming a first element.
+    @Test
+    fun `no preference at all resolves to an empty order`() {
+        val settings = AppSettings(defaultAudioLang = "", audioLanguages = emptyList())
+
+        assertTrue(settings.orderedAudioLanguages().isEmpty())
+        assertTrue(settings.playbackPreferences(null).audioLanguages.isEmpty())
+    }
+
+    // The invariant the sync contract rests on: a build that has never heard of the list reads
+    // the scalar, so the scalar must always name the language the list leads with. Left to
+    // drift, that build would show — and push back — a different language entirely.
+    @Test
+    fun `writing an order keeps the single-language field on its head`() {
+        val settings = AppSettings().withAudioLanguages(listOf("ja", "en"))
+
+        assertEquals("ja", settings.defaultAudioLang)
+        assertEquals(listOf("ja", "en"), settings.audioLanguages)
+
+        // And the subtitle setter writes its own field rather than sharing one.
+        val both = settings.withSubtitleLanguages(listOf("es"))
+        assertEquals("es", both.defaultSubtitleLang)
+        assertEquals("ja", both.defaultAudioLang)
+    }
+
+    // Clearing the order is "I have expressed no order", not "I have no language". Blanking
+    // the scalar too would leave the profile with nothing at all to fall back on.
+    @Test
+    fun `clearing an order leaves the single-language field alone`() {
+        val settings = AppSettings(defaultAudioLang = "de").withAudioLanguages(emptyList())
+
+        assertTrue(settings.audioLanguages.isEmpty())
+        assertEquals("de", settings.defaultAudioLang)
+    }
+
+    // Blank and duplicate entries can arrive from a hand-edited file or a sync from a build
+    // that allowed them. A duplicate would ask mpv for the same language twice.
+    @Test
+    fun `an order is cleaned as it is written`() {
+        val settings = AppSettings().withAudioLanguages(listOf("ja", "", "  ", "ja", "en"))
+
+        assertEquals(listOf("ja", "en"), settings.audioLanguages)
     }
 
     @Test

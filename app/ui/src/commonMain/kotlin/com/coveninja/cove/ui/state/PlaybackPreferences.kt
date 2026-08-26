@@ -4,12 +4,83 @@ import com.coveninja.cove.shared.data.TrackMemory
 import com.coveninja.cove.shared.model.AppSettings
 
 /**
+ * How subtitles are drawn, in the terms a player takes.
+ *
+ * Split out of [PlaybackPreferences] because it is the half that is safe to re-apply while
+ * something is playing. The rest of the preferences decide which tracks to select and whether
+ * to open muted, and sending those again mid-file would reset `sid`/`aid` and undo whatever
+ * the viewer just picked in the player's own menu. Appearance has no such side effect, so a
+ * settings change can reach the picture immediately.
+ *
+ * Every value here is already in mpv's units and vocabulary; the conversions happen once, in
+ * [playbackPreferences], where they can be tested.
+ */
+data class SubtitleStyle(
+    /** 1.0 is the player's own default size. */
+    val scale: Double,
+    /** mpv's sub-pos: 0 is the top of the frame, 100 the bottom. */
+    val position: Int,
+    /** Empty leaves mpv's own sans-serif alone. */
+    val font: String,
+    /** `#AARRGGBB`, alpha FF being opaque. */
+    val textColor: String,
+    val outlineColor: String,
+    val outlineSize: Double,
+    val shadowOffset: Double,
+    /** The opaque box behind the text, and the shadow's colour — mpv makes them one option. */
+    val backColor: String,
+    val bold: Boolean,
+    val italic: Boolean,
+    val blur: Double,
+    /** no|yes|scale|force|strip. */
+    val assOverride: String,
+    /** left|center|right. */
+    val align: String,
+    /** outline-and-shadow|opaque-box|background-box. Always resolved; never empty. */
+    val borderStyle: String,
+)
+
+/**
+ * What to do about a soundtrack that whispers and then shouts.
+ *
+ * The filter strings are mpv's, and they live here for the same reason the subtitle unit
+ * conversions do: one place, testable, rather than spelled out in each host. Only a host that
+ * reports [VideoPlayerHost.supportsAudioFilters] may be handed one — the Android libmpv ships
+ * a libavfilter with no audio filters in it, and mpv answers a filter it cannot build by
+ * ending the file rather than by playing on without it.
+ */
+enum class AudioNormalization(val setting: String, val filter: String) {
+    Off("off", ""),
+
+    /** Evens the level out. Quiet dialogue comes up without the loud parts being squashed. */
+    Normalize("normalize", "lavfi=[dynaudnorm=f=250:g=15:p=0.9]"),
+
+    /**
+     * The same, then a compressor over it: loud peaks are pulled down hard as well as quiet
+     * parts brought up. For listening late without a hand on the volume.
+     */
+    Night(
+        "night",
+        "lavfi=[dynaudnorm=f=200:g=11:p=0.7," +
+            "acompressor=ratio=4:threshold=0.08:attack=20:release=250]",
+    ),
+
+    ;
+
+    companion object {
+        /** Anything unrecognised — a mode from a newer build — is [Off], which is always safe. */
+        fun from(value: String?): AudioNormalization =
+            entries.firstOrNull { it.setting == value?.trim()?.lowercase() } ?: Off
+    }
+}
+
+/**
  * The viewer's playback preferences, resolved for one title.
  *
- * Built here rather than read from AppSettings at the point of use so the
- * awkward parts — Original resolving against the title's own language, and the
- * unit differences between what the settings store and what a player wants — are
- * decided once and can be tested.
+ * Built here rather than read from AppSettings at the point of use so the awkward parts —
+ * Original resolving against the title's own language, an ordered preference falling back to
+ * the single-language setting behind it, and the unit differences between what the settings
+ * store and what a player wants — are decided once and can be tested.
  */
 data class PlaybackPreferences(
     /** Language codes in preference order; empty means let the file decide. */
@@ -17,109 +88,77 @@ data class PlaybackPreferences(
     val subtitleLanguages: List<String>,
     val subtitlesEnabled: Boolean,
     val startMuted: Boolean,
-    /** 1.0 is the player's own default size. */
-    val subtitleScale: Double,
-    /** 0 is the bottom of the frame, 100 the top — mpv's convention. */
-    val subtitlePosition: Int,
-    val subtitleBackground: Boolean,
+    val subtitleStyle: SubtitleStyle,
     /**
-     * Whether to decode on the GPU. Carried with the per-title preferences rather
-     * than fixed when the player is built, so turning it off takes effect on the
-     * next thing played instead of on the next launch.
+     * Whether to decode on the GPU. Carried with the per-title preferences rather than fixed
+     * when the player is built, so turning it off takes effect on the next thing played
+     * instead of on the next launch.
      */
     val hardwareDecoding: Boolean,
+    val audioNormalization: AudioNormalization,
+    /** mpv's audio-channels. Empty is auto-safe; "stereo" or "mono" force a downmix. */
+    val audioDownmix: String,
+    val audioNormalizeDownmix: Boolean,
 )
 
 /**
- * Every code a track might carry for one language, most specific first.
+ * The border style to use, given both settings.
  *
- * TMDB reports a language as ISO 639-1 — "ja", "de" — and media files tag their
- * tracks with ISO 639-2, which has *two* codes per language: a terminological one
- * ("deu") and a bibliographic one ("ger"), and releases use both. Handing a player
- * only the two-letter code silently fails wherever it is not a prefix of the tag
- * actually in the file: "jpn" does not start with "ja", so asking for Japanese
- * original audio picked the English dub instead — which is exactly the case people
- * turn the setting on for.
- *
- * Unlisted codes pass through unchanged, which covers a code that is already 639-2
- * and every language not in the table.
+ * [borderStyle] is the newer, three-valued field and wins when it says something this build
+ * understands. Empty means no build has ever set it for this profile, and a value from a
+ * newer one means this build does not know it — both fall back to [background], which every
+ * version of Cove has written and understood.
  */
-internal fun languageAliases(code: String): List<String> {
-    val normalised = code.trim().lowercase()
-    if (normalised.isEmpty()) return emptyList()
-    return (listOf(normalised) + LANGUAGE_ALIASES[normalised].orEmpty()).distinct()
+internal fun resolveBorderStyle(borderStyle: String, background: Boolean): String =
+    when (val normalised = borderStyle.trim().lowercase()) {
+        "outline-and-shadow", "opaque-box", "background-box" -> normalised
+        else -> if (background) "opaque-box" else "outline-and-shadow"
+    }
+
+/**
+ * [value] if mpv will read it as a colour, [fallback] otherwise.
+ *
+ * mpv takes `#RRGGBB` or `#AARRGGBB` and answers anything else by ignoring the whole
+ * property — no error, no complaint, just subtitles that stay the colour they were. A stored
+ * value can be malformed by a hand-edited settings file or a newer build's format, and
+ * falling back to a colour that works beats a control that appears to do nothing.
+ */
+internal fun resolveSubtitleColor(value: String, fallback: String): String {
+    val trimmed = value.trim()
+    val digits = trimmed.removePrefix("#")
+    val wellFormed = trimmed.startsWith("#") &&
+        (digits.length == 6 || digits.length == 8) &&
+        digits.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
+    return if (wellFormed) "#${digits.uppercase()}" else fallback
 }
 
 /**
- * ISO 639-1 to its 639-2/T and 639-2/B forms, for the languages that actually turn
- * up in releases. Only entries where the three-letter code is not simply the
- * two-letter one extended are load-bearing, but the rest are listed too so the
- * table reads as a fact about the languages rather than a list of exceptions.
- */
-private val LANGUAGE_ALIASES: Map<String, List<String>> = mapOf(
-    "en" to listOf("eng"),
-    "ja" to listOf("jpn", "jp"),
-    "zh" to listOf("zho", "chi", "cmn", "yue"),
-    "de" to listOf("deu", "ger"),
-    "fr" to listOf("fra", "fre"),
-    "es" to listOf("spa"),
-    "it" to listOf("ita"),
-    "ko" to listOf("kor"),
-    "pt" to listOf("por"),
-    "ru" to listOf("rus"),
-    "ar" to listOf("ara"),
-    "hi" to listOf("hin"),
-    "nl" to listOf("nld", "dut"),
-    "sv" to listOf("swe"),
-    "no" to listOf("nor", "nob"),
-    "da" to listOf("dan"),
-    "fi" to listOf("fin"),
-    "pl" to listOf("pol"),
-    "tr" to listOf("tur"),
-    "th" to listOf("tha"),
-    "vi" to listOf("vie"),
-    "id" to listOf("ind"),
-    "he" to listOf("heb", "iw"),
-    "cs" to listOf("ces", "cze"),
-    "el" to listOf("ell", "gre"),
-    "hu" to listOf("hun"),
-    "ro" to listOf("ron", "rum"),
-    "uk" to listOf("ukr"),
-    "fa" to listOf("fas", "per"),
-    "ms" to listOf("msa", "may"),
-    "tl" to listOf("tgl", "fil"),
-    "bn" to listOf("ben"),
-    "ta" to listOf("tam"),
-    "te" to listOf("tel"),
-    "is" to listOf("isl", "ice"),
-    "sk" to listOf("slk", "slo"),
-    "hr" to listOf("hrv"),
-    "sr" to listOf("srp"),
-    "bg" to listOf("bul"),
-    "ca" to listOf("cat"),
-)
-
-/**
- * Every code the table above knows, in either form. Declared after it: top-level
- * properties initialise in file order, and reading the map from above it would leave
- * this empty.
- */
-private val LANGUAGE_CODES: Set<String> = LANGUAGE_ALIASES.keys + LANGUAGE_ALIASES.values.flatten()
-
-/**
- * [segment] unchanged when it names a language, null when it is just a word.
+ * The opacity of an mpv colour, 0 transparent to 255 opaque.
  *
- * Asked of the segment before a subtitle file's extension, which is a language tag in
- * `Movie.2024.en.srt` and part of the release name in `Movie.2024.web.srt`. Nothing but
- * this table separates the two: a "two or three letters" rule files the second one under
- * a language called WEB. A region subtag is kept — `pt-BR` is worth showing — and only
- * the part before it has to be a language.
+ * A six-digit colour carries no alpha and is fully opaque, which is what mpv does with one.
  */
-internal fun knownLanguageTag(segment: String): String? {
-    val trimmed = segment.trim()
-    val base = trimmed.substringBefore('-').lowercase()
-    return trimmed.takeIf { base in LANGUAGE_CODES }
+fun subtitleColorAlpha(value: String): Int {
+    val digits = resolveSubtitleColor(value, "#FFFFFFFF").removePrefix("#")
+    if (digits.length != 8) return 255
+    return digits.take(2).toIntOrNull(16) ?: 255
 }
+
+/** [value] with its opacity replaced, keeping the colour. */
+fun withSubtitleColorAlpha(value: String, alpha: Int): String {
+    val digits = resolveSubtitleColor(value, "#FFFFFFFF").removePrefix("#")
+    val rgb = if (digits.length == 8) digits.drop(2) else digits
+    val clamped = alpha.coerceIn(0, 255)
+    val hex = clamped.toString(16).uppercase().padStart(2, '0')
+    return "#$hex$rgb"
+}
+
+/** mpv's sub-ass-override values. Anything else falls back to its default. */
+private val ASS_OVERRIDES = setOf("no", "yes", "scale", "force", "strip")
+
+private val SUB_ALIGNMENTS = setOf("left", "center", "right")
+
+/** mpv's audio-channels values Cove offers. Empty means auto-safe: leave the layout alone. */
+private val DOWNMIX_CHOICES = setOf("", "stereo", "mono")
 
 /**
  * @param originalLanguage the title's own language, used to resolve Original.
@@ -133,21 +172,100 @@ fun AppSettings.playbackPreferences(originalLanguage: String?): PlaybackPreferen
         else -> languageAliases(preference)
     }
 
+    // Each entry brings its own three-letter forms, so the flattened result is what mpv's
+    // alang/slang want: most specific preference first, aliases trailing each one.
+    //
+    // Which entries those are is orderedAudioLanguages'/orderedSubtitleLanguages' business
+    // and not repeated here. It was, briefly, and that is precisely the shape of bug this
+    // change exists to remove: two implementations of one fallback rule, agreeing until one
+    // of them is edited.
+    fun expand(ordered: List<String>): List<String> = ordered.flatMap(::resolve).distinct()
+
     return PlaybackPreferences(
-        audioLanguages = resolve(defaultAudioLang),
-        subtitleLanguages = resolve(defaultSubtitleLang),
+        audioLanguages = expand(orderedAudioLanguages()),
+        subtitleLanguages = expand(orderedSubtitleLanguages()),
         subtitlesEnabled = subtitlesEnabled,
         startMuted = openOnMute,
-        // The setting is a percentage where 100 means "normal"; players take a
-        // multiplier. Clamped so a stored extreme cannot make subtitles unusable.
-        subtitleScale = (subtitleSize / 100.0).coerceIn(0.25, 4.0),
-        // The setting measures distance up from the bottom of the frame; mpv's
-        // sub-pos measures down from the top, so the two are inverses.
-        subtitlePosition = (100 - subtitlePosition.toInt()).coerceIn(0, 100),
-        subtitleBackground = subtitleBackground,
+        subtitleStyle = subtitleStyle(),
         hardwareDecoding = hardwareDecoding,
+        // Gated again at the host: a host that cannot run filters must never be handed one,
+        // and resolving it here only decides which filter a host that can would use.
+        audioNormalization = AudioNormalization.from(audioNormalization),
+        audioDownmix = audioDownmix.trim().lowercase().takeIf { it in DOWNMIX_CHOICES }.orEmpty(),
+        audioNormalizeDownmix = audioNormalizeDownmix,
     )
 }
+
+/**
+ * The ordered audio preference as anything reading it should see it.
+ *
+ * A profile that has never opened the reorder editor still has the single-language setting,
+ * and that is its order — of one. Everything asking "what does this viewer want" goes through
+ * here rather than reading either field, so the fallback is decided once instead of per call
+ * site.
+ *
+ * Empty only when both are blank, which is a real state and means what it says: no preference
+ * at all, so the file's own choice stands. Callers must handle it rather than assume a first
+ * element.
+ */
+fun AppSettings.orderedAudioLanguages(): List<String> {
+    val ordered = audioLanguages.map { it.trim() }.filter { it.isNotEmpty() }
+    if (ordered.isNotEmpty()) return ordered
+    return listOfNotNull(defaultAudioLang.trim().takeIf { it.isNotEmpty() })
+}
+
+fun AppSettings.orderedSubtitleLanguages(): List<String> {
+    val ordered = subtitleLanguages.map { it.trim() }.filter { it.isNotEmpty() }
+    if (ordered.isNotEmpty()) return ordered
+    return listOfNotNull(defaultSubtitleLang.trim().takeIf { it.isNotEmpty() })
+}
+
+/**
+ * Writes the ordered audio preference, keeping [AppSettings.defaultAudioLang] in step.
+ *
+ * The one place that invariant is maintained, and it has to be maintained: the scalar is what
+ * a build without the list reads, and what the television's cycling row shows. Left to drift,
+ * a phone would sync an order whose first entry disagreed with the language every other device
+ * displayed. Clearing the list on purpose leaves the scalar alone rather than blanking it —
+ * "no order expressed" is exactly the state the scalar exists to answer.
+ */
+fun AppSettings.withAudioLanguages(languages: List<String>): AppSettings {
+    val cleaned = languages.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    return copy(
+        audioLanguages = cleaned,
+        defaultAudioLang = cleaned.firstOrNull() ?: defaultAudioLang,
+    )
+}
+
+fun AppSettings.withSubtitleLanguages(languages: List<String>): AppSettings {
+    val cleaned = languages.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    return copy(
+        subtitleLanguages = cleaned,
+        defaultSubtitleLang = cleaned.firstOrNull() ?: defaultSubtitleLang,
+    )
+}
+
+/** The appearance half on its own, for re-applying a settings change to a playing file. */
+fun AppSettings.subtitleStyle(): SubtitleStyle = SubtitleStyle(
+    // The setting is a percentage where 100 means "normal"; players take a multiplier.
+    // Clamped so a stored extreme cannot make subtitles unusable.
+    scale = (subtitleSize / 100.0).coerceIn(0.25, 4.0),
+    // The setting measures distance up from the bottom of the frame; mpv's sub-pos measures
+    // down from the top, so the two are inverses.
+    position = (100 - subtitlePosition.toInt()).coerceIn(0, 100),
+    font = subtitleFont.trim(),
+    textColor = resolveSubtitleColor(subtitleTextColor, "#FFFFFFFF"),
+    outlineColor = resolveSubtitleColor(subtitleOutlineColor, "#FF000000"),
+    outlineSize = subtitleOutlineSize.coerceIn(0.0, 10.0),
+    shadowOffset = subtitleShadowOffset.coerceIn(0.0, 10.0),
+    backColor = resolveSubtitleColor(subtitleBackColor, "#AF000000"),
+    bold = subtitleBold,
+    italic = subtitleItalic,
+    blur = subtitleBlur.coerceIn(0.0, 20.0),
+    assOverride = subtitleAssOverride.trim().lowercase().takeIf { it in ASS_OVERRIDES } ?: "scale",
+    align = subtitleAlign.trim().lowercase().takeIf { it in SUB_ALIGNMENTS } ?: "center",
+    borderStyle = resolveBorderStyle(subtitleBorderStyle, subtitleBackground),
+)
 
 /**
  * The viewer's remembered choice for this title, laid over the settings defaults.

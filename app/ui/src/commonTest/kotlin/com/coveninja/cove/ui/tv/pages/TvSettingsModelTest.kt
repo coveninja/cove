@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.tv.pages
 
 import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
+import com.coveninja.cove.ui.state.languageName
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -68,13 +69,13 @@ class TvSettingsModelTest {
         assertEquals("11% up", subtitlePositionLabel(11.0))
     }
 
+    // Names are no longer this file's business — they come from the one table in
+    // `Languages.kt`, covered by LanguagesTest. What is still this file's business is that
+    // the short cycling list wraps where it should.
     @Test
-    fun `languages cycle and unknown codes keep their own name`() {
+    fun `languages cycle through the short list and wrap`() {
         assertEquals("es", cycleOption(LanguageChoices, "en"))
         assertEquals(AUDIO_LANGUAGE_ORIGINAL, cycleOption(LanguageChoices, "ru"))
-        assertEquals("English", languageLabel("en"))
-        assertEquals("Japanese", languageLabel("ja"))
-        assertEquals("SV", languageLabel("sv"))
     }
 
     // Original means "whatever the title was made in" and is the option most people want — a
@@ -87,7 +88,7 @@ class TvSettingsModelTest {
     @Test
     fun `original is offered and is not destroyed by cycling onto it`() {
         assertTrue(AUDIO_LANGUAGE_ORIGINAL in LanguageChoices)
-        assertEquals("Original", languageLabel(AUDIO_LANGUAGE_ORIGINAL))
+        assertEquals("Original", languageName(AUDIO_LANGUAGE_ORIGINAL))
         assertEquals("en", cycleOption(LanguageChoices, AUDIO_LANGUAGE_ORIGINAL))
     }
 
@@ -98,10 +99,27 @@ class TvSettingsModelTest {
         assertEquals(AUDIO_LANGUAGE_ORIGINAL, LanguageChoices.first())
     }
 
-    // An unset language is the field's own default of English rather than an empty right-hand
-    // side, matching how an unset selection mode reads as Balanced.
+    // Every cycling row has to name its current value, including the ones this change added.
+    // A row whose value came back blank would read as broken rather than as unset.
     @Test
-    fun `an unset language reads as the default rather than as nothing`() {
-        assertEquals("English", languageLabel(""))
+    fun `every added cycling row names its own value`() {
+        assertEquals("Panel behind", subtitleBorderStyleLabel("opaque-box"))
+        assertEquals("Outline only", subtitleBorderStyleLabel(""))
+        assertEquals("White", subtitleColorLabel("#FFFFFFFF"))
+        assertEquals("Standard", subtitleOutlineSizeLabel(1.65))
+        assertEquals("Centre", subtitleAlignLabel("center"))
+        assertEquals("Night mode", audioNormalizationLabel("night"))
+        assertEquals("As recorded", audioDownmixLabel(""))
+        assertEquals("Stereo", audioDownmixLabel("stereo"))
+    }
+
+    // A value from a newer build reaches this shell through sync. Each label shows it as
+    // itself rather than as a guess, so the row reads as understood-but-unfamiliar instead
+    // of as a control that lost its value — the rule the rest of this file already follows.
+    @Test
+    fun `a value from a newer build is shown rather than swallowed`() {
+        assertEquals("shadow-box", subtitleBorderStyleLabel("shadow-box"))
+        assertEquals("loudnorm", audioNormalizationLabel("loudnorm"))
+        assertEquals("5.1", audioDownmixLabel("5.1"))
     }
 }

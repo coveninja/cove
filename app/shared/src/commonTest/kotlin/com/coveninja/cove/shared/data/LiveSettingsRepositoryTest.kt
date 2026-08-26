@@ -52,6 +52,23 @@ private val settingsJson = """
   "subtitleSize": 120.0,
   "subtitlePosition": 5.0,
   "subtitleBackground": false,
+  "audioLanguages": ["ja", "en"],
+  "subtitleLanguages": ["en", "es"],
+  "subtitleFont": "Atkinson Hyperlegible",
+  "subtitleTextColor": "#FFFFF200",
+  "subtitleOutlineColor": "#FF404040",
+  "subtitleOutlineSize": 3.0,
+  "subtitleShadowOffset": 1.5,
+  "subtitleBackColor": "#AF1A1A1A",
+  "subtitleBold": true,
+  "subtitleItalic": true,
+  "subtitleBlur": 2.5,
+  "subtitleAssOverride": "force",
+  "subtitleAlign": "left",
+  "subtitleBorderStyle": "background-box",
+  "audioNormalization": "night",
+  "audioDownmix": "stereo",
+  "audioNormalizeDownmix": true,
   "uiLanguage": "es",
   "showStreamDetails": false,
   "hideSpoilers": true,
@@ -170,6 +187,31 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,  sent.addonsFollowPrimary,   "addonsFollowPrimary")
         assertEquals(false, sent.traktScrobbleEnabled,  "traktScrobbleEnabled")
         assertEquals(true,  sent.traktSyncEnabled,      "traktSyncEnabled")
+
+        // The ordered language preference and the whole subtitle appearance set. Every one
+        // of these is stored non-default, because a field the model has dropped comes back
+        // as its Kotlin default and a default-valued assertion would pass either way.
+        //
+        // The two lists are the destructive pair: they carry an order the viewer arranged by
+        // hand, and a model that omitted them would replace it with an empty list on the next
+        // write from any screen at all.
+        assertEquals(listOf("ja", "en"), sent.audioLanguages,    "audioLanguages")
+        assertEquals(listOf("en", "es"), sent.subtitleLanguages, "subtitleLanguages")
+        assertEquals("Atkinson Hyperlegible", sent.subtitleFont, "subtitleFont")
+        assertEquals("#FFFFF200", sent.subtitleTextColor,        "subtitleTextColor")
+        assertEquals("#FF404040", sent.subtitleOutlineColor,     "subtitleOutlineColor")
+        assertEquals(3.0,   sent.subtitleOutlineSize,            "subtitleOutlineSize")
+        assertEquals(1.5,   sent.subtitleShadowOffset,           "subtitleShadowOffset")
+        assertEquals("#AF1A1A1A", sent.subtitleBackColor,        "subtitleBackColor")
+        assertEquals(true,  sent.subtitleBold,                   "subtitleBold")
+        assertEquals(true,  sent.subtitleItalic,                 "subtitleItalic")
+        assertEquals(2.5,   sent.subtitleBlur,                   "subtitleBlur")
+        assertEquals("force", sent.subtitleAssOverride,          "subtitleAssOverride")
+        assertEquals("left",  sent.subtitleAlign,                "subtitleAlign")
+        assertEquals("background-box", sent.subtitleBorderStyle, "subtitleBorderStyle")
+        assertEquals("night",  sent.audioNormalization,          "audioNormalization")
+        assertEquals("stereo", sent.audioDownmix,                "audioDownmix")
+        assertEquals(true,  sent.audioNormalizeDownmix,          "audioNormalizeDownmix")
         // Both non-default: the pair is what proves a stored Simkl preference survives
         // the whole-object replace rather than being re-derived from the Kotlin defaults.
         assertEquals(false, sent.simklScrobbleEnabled,  "simklScrobbleEnabled")

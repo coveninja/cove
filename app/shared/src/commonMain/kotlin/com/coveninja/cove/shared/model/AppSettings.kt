@@ -38,11 +38,65 @@ data class AppSettings(
     val measuredBandwidthMbps: Double = 0.0,
     val sourcePreference: String = "",
     val subtitlesEnabled: Boolean = false,
+    /**
+     * The single-language preference, kept as the head of [subtitleLanguages].
+     *
+     * Not replaced by the list, deliberately. These two fields sync, and a build that
+     * predates the list would read one, drop the other, and push back a scalar with a
+     * newer timestamp — flattening a considered order to its first entry on every
+     * other device. Writers set both; readers prefer the list and fall back to here.
+     */
     val defaultSubtitleLang: String = "en",
     val defaultAudioLang: String = "en",
+    /**
+     * Language codes in preference order, most wanted first. Empty means nothing has
+     * chosen an order yet, and the scalar above still decides — which is how every
+     * profile written before this field arrives keeps working with no migration.
+     */
+    val audioLanguages: List<String> = emptyList(),
+    val subtitleLanguages: List<String> = emptyList(),
     val subtitleSize: Double = 100.0,
     val subtitlePosition: Double = 8.0,
     val subtitleBackground: Boolean = true,
+    // Subtitle appearance. Every default below is mpv's own, so a profile that never
+    // opens these controls renders exactly as it did before they existed.
+    /** Empty means mpv's own sans-serif rather than a font this build picked. */
+    val subtitleFont: String = "",
+    val subtitleTextColor: String = "#FFFFFFFF",
+    val subtitleOutlineColor: String = "#FF000000",
+    val subtitleOutlineSize: Double = 1.65,
+    val subtitleShadowOffset: Double = 0.0,
+    /**
+     * The opaque box behind the text — and the drop shadow's colour too. mpv aliases
+     * `sub-shadow-color` onto `sub-back-color`, so they are one value however many
+     * controls are drawn for them; two would silently overwrite each other.
+     */
+    val subtitleBackColor: String = "#AF000000",
+    val subtitleBold: Boolean = false,
+    val subtitleItalic: Boolean = false,
+    val subtitleBlur: Double = 0.0,
+    /** mpv's sub-ass-override: no|yes|scale|force|strip. How much of a styled subtitle to keep. */
+    val subtitleAssOverride: String = "scale",
+    /** mpv's sub-align-x: left|center|right. */
+    val subtitleAlign: String = "center",
+    /**
+     * outline-and-shadow|opaque-box|background-box. Empty defers to [subtitleBackground],
+     * which is the only thing older profiles and older builds have said about this.
+     */
+    val subtitleBorderStyle: String = "",
+    /**
+     * off|normalize|night. Evens out quiet dialogue against loud action.
+     *
+     * Desktop only, and not for want of a control: the Android libmpv ships a minimal
+     * libavfilter with no audio filters in it at all, and mpv answers a filter it cannot
+     * build by ending the file rather than by carrying on without it. Hosts declare
+     * whether they can take this; see VideoPlayerHost.supportsAudioFilters.
+     */
+    val audioNormalization: String = "off",
+    /** Empty is mpv's auto-safe; "stereo" forces a downmix for headphones and laptop speakers. */
+    val audioDownmix: String = "",
+    /** Rescales a downmix that would otherwise clip. Only bites while downmixing. */
+    val audioNormalizeDownmix: Boolean = false,
     val uiLanguage: String = "",
     val showStreamDetails: Boolean = true,
     val hideSpoilers: Boolean = false,

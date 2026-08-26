@@ -18,7 +18,9 @@ import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.SubtitleStyle
 import com.coveninja.cove.ui.state.TrackKind
+import com.coveninja.cove.ui.state.parseMpvTrackList
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.classifyPlaybackTermination
@@ -38,7 +40,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -252,6 +253,17 @@ class MpvVideoPlayerHost(
     override fun applyPreferences(preferences: PlaybackPreferences) {
         pendingPreferences = preferences
         player?.applyPreferences(preferences)
+    }
+
+    /** Desktop mpv links the full libavfilter, so the normalisation filters are available. */
+    override val supportsAudioFilters: Boolean get() = true
+
+    override fun applySubtitleStyle(style: SubtitleStyle) {
+        // Folded into the pending preferences as well as sent: the handle is released and
+        // rebuilt around a window change, and a style applied only to the old one would be
+        // silently lost on the next file.
+        pendingPreferences = pendingPreferences?.copy(subtitleStyle = style)
+        player?.applySubtitleStyle(style)
     }
 
     override fun addSubtitle(url: String, title: String, language: String, select: Boolean) {
@@ -502,33 +514,6 @@ class MpvVideoPlayerHost(
 }
 
 /**
- * mpv publishes its tracks as a JSON string on the track-list property, so this
- * is where that string becomes typed data. Parsed defensively: an unreadable
- * track list must cost the track menus, not playback.
- */
-private fun parseTracks(json: String): List<MediaTrack> {
-    if (json.isBlank()) return emptyList()
-    return runCatching {
-        CoveJson.parseToJsonElement(json).jsonArray.mapNotNull { element ->
-            val track = element.jsonObject
-            val kind = when (track["type"]?.jsonPrimitive?.contentOrNull) {
-                "audio" -> TrackKind.Audio
-                "sub" -> TrackKind.Subtitle
-                else -> return@mapNotNull null
-            }
-            val id = track["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-            MediaTrack(
-                id = id,
-                kind = kind,
-                title = track["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                language = track["lang"]?.jsonPrimitive?.contentOrNull,
-                selected = track["selected"]?.jsonPrimitive?.booleanOrNull == true,
-            )
-        }
-    }.getOrDefault(emptyList())
-}
-
-/**
  * The one place preferences become mpv options.
  *
  * alang/slang take an ordered list and mpv falls back to its own choice when
@@ -544,18 +529,62 @@ private fun DesktopPlayer.applyPreferences(preferences: PlaybackPreferences) {
     }
     setOption("sid", if (preferences.subtitlesEnabled) "auto" else "no")
     setOption("mute", if (preferences.startMuted) "yes" else "no")
-    setOption("sub-scale", preferences.subtitleScale.toString())
-    setOption("sub-pos", preferences.subtitlePosition.toString())
-    // opaque-box draws the shaded panel behind the text; the default outline
-    // style has no background at all.
-    setOption(
-        "sub-border-style",
-        if (preferences.subtitleBackground) "opaque-box" else "outline-and-shadow",
-    )
+    applySubtitleStyle(preferences.subtitleStyle)
     // auto-copy, not auto: this path reads finished frames back into system memory
     // for Compose to draw, and a decoder that keeps its output on the GPU has nothing
     // to hand over. mpv falls back to software on its own where copy-back is missing.
     setOption("hwdec", if (preferences.hardwareDecoding) "auto-copy" else "no")
+
+    // Empty is mpv's own auto-safe, and it has to be spelled out rather than skipped:
+    // this is a long-lived handle, so leaving the option alone would keep whatever the
+    // last file was played with.
+    setOption("audio-channels", preferences.audioDownmix.ifBlank { "auto-safe" })
+    setOption("audio-normalize-downmix", if (preferences.audioNormalizeDownmix) "yes" else "no")
+    // Only ever a string this build wrote — see AudioNormalization, which resolves anything
+    // it does not recognise to Off rather than passing a filter name through.
+    //
+    // That matters more than it looks. This runs on an idle handle just before loadfile, and
+    // a filter libavfilter cannot supply does not degrade to unfiltered audio there: mpv
+    // fails the graph and returns straight to idle, so the file never opens and the viewer
+    // gets "nothing to play". Checked against mpv 0.41 over its IPC socket, in exactly this
+    // order. It is why supportsAudioFilters exists and why Android leaves it false.
+    //
+    // "" is the other important branch: it clears the chain, so turning normalisation off
+    // actually stops it instead of leaving the previous filter on the handle.
+    setOption("af", preferences.audioNormalization.filter)
+}
+
+/**
+ * The appearance options, and only those.
+ *
+ * Separate from [applyPreferences] so a settings change can reach a file that is already
+ * playing. Nothing here selects a track or touches mute, which is what makes it safe to send
+ * again mid-playback — re-sending the rest would reset `sid` and `aid` and throw away
+ * whatever the viewer had chosen in the player's own menus.
+ *
+ * [applyPreferences] calls straight through to this rather than repeating it, so the two
+ * paths cannot drift into applying different subsets.
+ */
+private fun DesktopPlayer.applySubtitleStyle(style: SubtitleStyle) {
+    setOption("sub-scale", style.scale.toString())
+    setOption("sub-pos", style.position.toString())
+    // Empty means "whatever mpv would use"; sans-serif is that default spelled out, since
+    // there is no way to un-set an option on a handle that already has one.
+    setOption("sub-font", style.font.ifBlank { "sans-serif" })
+    setOption("sub-color", style.textColor)
+    setOption("sub-outline-color", style.outlineColor)
+    setOption("sub-outline-size", style.outlineSize.toString())
+    setOption("sub-shadow-offset", style.shadowOffset.toString())
+    // Also the shadow's colour: mpv aliases sub-shadow-color onto this one option.
+    setOption("sub-back-color", style.backColor)
+    setOption("sub-bold", if (style.bold) "yes" else "no")
+    setOption("sub-italic", if (style.italic) "yes" else "no")
+    setOption("sub-blur", style.blur.toString())
+    setOption("sub-ass-override", style.assOverride)
+    setOption("sub-align-x", style.align)
+    // opaque-box draws the shaded panel behind the text; the default outline style has no
+    // background at all, and background-box fits the box to each line rather than the block.
+    setOption("sub-border-style", style.borderStyle)
 }
 
 /** The one place the display modes become mpv's three knobs. */
@@ -636,7 +665,7 @@ private val STREAM_EXTRACTORS = listOf(
 )
 
 private fun PlayerSnapshot.toPlaybackStatus(): PlaybackStatus {
-    val tracks = parseTracks(trackListJson)
+    val tracks = parseMpvTrackList(trackListJson)
     val audio = tracks.filter { it.kind == TrackKind.Audio }
     val subtitles = tracks.filter { it.kind == TrackKind.Subtitle }
     return playbackStatus(audio, subtitles)

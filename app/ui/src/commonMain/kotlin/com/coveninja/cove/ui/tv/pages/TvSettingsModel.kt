@@ -73,8 +73,11 @@ internal fun subtitlePositionLabel(position: Double): String = when (position) {
  * recognise to the first entry, so a profile that had chosen Original on a phone showed
  * "ORIGINAL" on the television and was silently converted to English by one press of the row.
  *
- * The rest is deliberately short: the full list is a hundred-odd entries and cycling one press
- * at a time through it is not a control. These are the ones addon releases actually carry.
+ * Deliberately a short list rather than every language Cove knows, which is now some seventy
+ * of them in `Languages.kt`: cycling one press at a time through seventy entries is not a
+ * control. These are the ones addon releases actually carry. Names come from that same table,
+ * so a code chosen on the phone is never shown here under a different name — or, as it was,
+ * under no name at all.
  */
 internal val LanguageChoices = listOf(
     AUDIO_LANGUAGE_ORIGINAL,
@@ -90,21 +93,87 @@ internal val LanguageChoices = listOf(
     "ru",
 )
 
-internal fun languageLabel(code: String): String = when (code.lowercase()) {
-    AUDIO_LANGUAGE_ORIGINAL -> "Original"
-    "en" -> "English"
-    "es" -> "Spanish"
-    "fr" -> "French"
-    "de" -> "German"
-    "it" -> "Italian"
-    "pt" -> "Portuguese"
-    "ja" -> "Japanese"
-    "ko" -> "Korean"
-    "zh" -> "Chinese"
-    "ru" -> "Russian"
-    // Shown as itself rather than hidden, so a code synced from another device reads as
-    // understood-but-unlisted instead of as a control that lost its value.
-    else -> code.uppercase().ifBlank { "English" }
+/**
+ * How the text is drawn against the picture. The three mpv offers, in the order they add
+ * weight: nothing behind it, a box per line, a box behind the block.
+ */
+internal val SubtitleBorderStyleChoices =
+    listOf("outline-and-shadow", "background-box", "opaque-box")
+
+internal fun subtitleBorderStyleLabel(style: String): String = when (style) {
+    "opaque-box" -> "Panel behind"
+    "background-box" -> "Box per line"
+    "outline-and-shadow" -> "Outline only"
+    else -> style.ifBlank { "Outline only" }
+}
+
+/** The classic subtitle colours, which is the whole useful range of them. */
+internal val SubtitleColorChoices =
+    listOf("#FFFFFFFF", "#FFFFF200", "#FF00FFFF", "#FFC8C8C8")
+
+internal fun subtitleColorLabel(color: String): String = when (color.uppercase()) {
+    "#FFFFFFFF" -> "White"
+    "#FFFFF200" -> "Yellow"
+    "#FF00FFFF" -> "Cyan"
+    "#FFC8C8C8" -> "Soft grey"
+    else -> color.ifBlank { "White" }
+}
+
+/** mpv's own default is 1.65; a television at three metres wants more of it. */
+internal val SubtitleOutlineSizeChoices = listOf(0.0, 1.65, 3.0, 4.5)
+
+internal fun subtitleOutlineSizeLabel(size: Double): String = when (size) {
+    0.0 -> "None"
+    1.65 -> "Standard"
+    3.0 -> "Heavy"
+    4.5 -> "Heaviest"
+    else -> size.toString()
+}
+
+internal val SubtitleAlignChoices = listOf("center", "left", "right")
+
+internal fun subtitleAlignLabel(align: String): String = when (align) {
+    "left" -> "Left"
+    "right" -> "Right"
+    "center" -> "Centre"
+    else -> align.ifBlank { "Centre" }
+}
+
+/**
+ * How much of a styled subtitle's own formatting to keep.
+ *
+ * Only meaningful for ASS/SSA subtitles, which carry fonts, positions and colours of their
+ * own — the signs and karaoke of a fansubbed release. The appearance settings reach a track
+ * like that only as far as this allows.
+ */
+internal val SubtitleAssOverrideChoices = listOf("scale", "no", "yes", "force", "strip")
+
+internal fun subtitleAssOverrideLabel(value: String): String = when (value) {
+    "no" -> "Keep the release's styling"
+    "yes" -> "Apply mine where it can"
+    "scale" -> "Keep styling, scale it"
+    "force" -> "Force mine"
+    "strip" -> "Strip styling entirely"
+    else -> value.ifBlank { "Keep styling, scale it" }
+}
+
+internal val AudioNormalizationChoices = listOf("off", "normalize", "night")
+
+internal fun audioNormalizationLabel(value: String): String = when (value) {
+    "normalize" -> "Even out"
+    "night" -> "Night mode"
+    "off" -> "Off"
+    else -> value.ifBlank { "Off" }
+}
+
+/** Empty is mpv's auto-safe: leave whatever the track has alone. */
+internal val AudioDownmixChoices = listOf("", "stereo", "mono")
+
+internal fun audioDownmixLabel(value: String): String = when (value) {
+    "stereo" -> "Stereo"
+    "mono" -> "Mono"
+    "" -> "As recorded"
+    else -> value
 }
 
 /** On a television every one of these reads better as a word than as a switch graphic. */

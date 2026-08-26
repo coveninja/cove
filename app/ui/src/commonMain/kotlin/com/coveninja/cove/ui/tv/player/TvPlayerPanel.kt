@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.player.SPEED_STEPS
+import com.coveninja.cove.ui.components.player.badges
 import com.coveninja.cove.ui.components.player.detailLabel
 import com.coveninja.cove.ui.components.player.groupTracksByLanguage
 import com.coveninja.cove.ui.icons.IconifyIcon
@@ -480,7 +481,9 @@ private fun LazyListScope.trackRows(
             val selected = track.id == selectedId
             TvSettingRow(
                 label = track.detailLabel(),
-                detail = null,
+                // The television already has a second line per row, so the badges go there
+                // rather than needing the pill treatment the pointer menu uses.
+                detail = track.badges().takeIf { it.isNotEmpty() }?.joinToString(" · "),
                 value = if (selected) "Selected" else "",
                 highlighted = selected,
                 onActivate = { onSelect(track.id) },

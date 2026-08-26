@@ -1,7 +1,6 @@
 package com.coveninja.cove.player
 
 import com.coveninja.cove.ui.state.PlaybackStatus
-import com.coveninja.cove.ui.state.TrackKind
 import dev.jdtech.mpv.MPVLib
 import java.time.LocalDate
 import kotlin.test.assertEquals
@@ -23,22 +22,9 @@ class MpvMetadataParsingTest {
         )
     }
 
-    @Test
-    fun `track metadata preserves selection language and type`() {
-        val tracks = parseMpvTracks(
-            """[
-              {"id":1,"type":"video","selected":true},
-              {"id":2,"type":"audio","title":"Original","lang":"jpn","selected":true},
-              {"id":3,"type":"sub","title":"English","lang":"eng","selected":false}
-            ]""",
-        )
-        assertEquals(2, tracks.size)
-        assertEquals(TrackKind.Audio, tracks[0].kind)
-        assertEquals("jpn", tracks[0].language)
-        assertTrue(tracks[0].selected)
-        assertEquals(TrackKind.Subtitle, tracks[1].kind)
-        assertFalse(tracks[1].selected)
-    }
+    // Track parsing moved to :ui commonMain, where both hosts now share one parser and
+    // MpvTrackListTest covers it against a real mpv track-list. Testing it again from here
+    // would only pin that this module can still call it.
 
     @Test
     fun `chapter metadata drops invalid entries without breaking playback`() {

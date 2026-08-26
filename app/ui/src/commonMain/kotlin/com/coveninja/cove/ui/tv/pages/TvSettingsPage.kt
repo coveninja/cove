@@ -39,10 +39,17 @@ import com.coveninja.cove.ui.state.CacheAgeChoices
 import com.coveninja.cove.ui.state.CacheLimitChoices
 import com.coveninja.cove.ui.state.DownloadAheadChoices
 import com.coveninja.cove.ui.state.LocalAppGraph
+import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.cacheAgeLabel
 import com.coveninja.cove.ui.state.cacheLimitLabel
 import com.coveninja.cove.ui.state.downloadAheadLabel
+import com.coveninja.cove.ui.state.languageName
+import com.coveninja.cove.ui.state.orderedAudioLanguages
+import com.coveninja.cove.ui.state.orderedSubtitleLanguages
+import com.coveninja.cove.ui.state.resolveBorderStyle
+import com.coveninja.cove.ui.state.withAudioLanguages
 import com.coveninja.cove.ui.state.withCurrent
+import com.coveninja.cove.ui.state.withSubtitleLanguages
 import com.coveninja.cove.ui.state.SettingsEditor
 import com.coveninja.cove.ui.state.rememberSettingsEditor
 import com.coveninja.cove.ui.tv.TvTheme
@@ -298,13 +305,6 @@ private fun SubtitleRows(settings: AppSettings, editor: SettingsEditor) {
         },
     )
     TvSettingRow(
-        label = "Subtitle background",
-        detail = "A panel behind the text, for bright scenes.",
-        value = onOff(settings.subtitleBackground),
-        highlighted = settings.subtitleBackground,
-        onActivate = { editor.edit { copy(subtitleBackground = !subtitleBackground) } },
-    )
-    TvSettingRow(
         label = "Subtitle position",
         detail = "How far up from the bottom edge. Televisions overscan; this is the fix.",
         value = subtitlePositionLabel(settings.subtitlePosition),
@@ -320,30 +320,153 @@ private fun SubtitleRows(settings: AppSettings, editor: SettingsEditor) {
         },
     )
     TvSettingRow(
-        label = "Preferred subtitle language",
-        detail = "Chosen automatically when a release carries it.",
-        value = languageLabel(settings.defaultSubtitleLang),
+        label = "Behind the text",
+        detail = "A panel, a box per line, or nothing but an outline.",
+        value = subtitleBorderStyleLabel(
+            resolveBorderStyle(settings.subtitleBorderStyle, settings.subtitleBackground),
+        ),
+        onActivate = {
+            editor.edit {
+                val next = cycleOption(
+                    SubtitleBorderStyleChoices,
+                    resolveBorderStyle(subtitleBorderStyle, subtitleBackground),
+                )
+                // The older boolean is kept in step so a device that predates the
+                // three-way still draws the box this row just asked for.
+                copy(
+                    subtitleBorderStyle = next,
+                    subtitleBackground = next != "outline-and-shadow",
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Text colour",
+        detail = "White unless the picture keeps swallowing it.",
+        value = subtitleColorLabel(settings.subtitleTextColor),
         onActivate = {
             editor.edit {
                 copy(
-                    defaultSubtitleLang = cycleOption(
-                        LanguageChoices,
-                        settings.defaultSubtitleLang,
+                    subtitleTextColor = cycleOption(SubtitleColorChoices, subtitleTextColor),
+                )
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Outline weight",
+        detail = "What keeps the text legible over a bright scene.",
+        value = subtitleOutlineSizeLabel(settings.subtitleOutlineSize),
+        onActivate = {
+            editor.edit {
+                copy(
+                    subtitleOutlineSize = cycleOption(
+                        SubtitleOutlineSizeChoices,
+                        subtitleOutlineSize,
                     ),
                 )
             }
         },
     )
     TvSettingRow(
-        label = "Preferred audio language",
-        detail = "The track picked first where a release has several.",
-        value = languageLabel(settings.defaultAudioLang),
+        label = "Bold",
+        detail = "Thicker strokes, which carry further across a room.",
+        value = onOff(settings.subtitleBold),
+        highlighted = settings.subtitleBold,
+        onActivate = { editor.edit { copy(subtitleBold = !subtitleBold) } },
+    )
+    TvSettingRow(
+        label = "Alignment",
+        detail = "Where a line sits when it does not fill the width.",
+        value = subtitleAlignLabel(settings.subtitleAlign),
+        onActivate = {
+            editor.edit { copy(subtitleAlign = cycleOption(SubtitleAlignChoices, subtitleAlign)) }
+        },
+    )
+    TvSettingRow(
+        label = "Styled subtitles",
+        detail = "How much of a release's own fonts and positioning to keep.",
+        value = subtitleAssOverrideLabel(settings.subtitleAssOverride),
         onActivate = {
             editor.edit {
-                copy(defaultAudioLang = cycleOption(LanguageChoices, settings.defaultAudioLang))
+                copy(
+                    subtitleAssOverride = cycleOption(
+                        SubtitleAssOverrideChoices,
+                        subtitleAssOverride,
+                    ),
+                )
             }
         },
     )
+    TvSettingRow(
+        label = "Preferred subtitle language",
+        detail = "Chosen automatically when a release carries it.",
+        value = settings.orderedSubtitleLanguages().firstOrNull()
+            ?.let(::languageName) ?: "No preference",
+        onActivate = {
+            editor.edit {
+                // Only the most-wanted language is cycled; anything further down an order set
+                // on another device is kept behind it. A full reorder editor is a pointer
+                // control, and rebuilding the list from this row would silently discard it.
+                val current = orderedSubtitleLanguages()
+                // An empty order matches nothing in the list, and cycleOption answers that
+                // with the first entry — which is exactly where a viewer with no preference
+                // should land.
+                val next = cycleOption(LanguageChoices, current.firstOrNull().orEmpty())
+                withSubtitleLanguages(listOf(next) + current.drop(1))
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Preferred audio language",
+        detail = "The track picked first where a release has several.",
+        value = settings.orderedAudioLanguages().firstOrNull()
+            ?.let(::languageName) ?: "No preference",
+        onActivate = {
+            editor.edit {
+                val current = orderedAudioLanguages()
+                val next = cycleOption(LanguageChoices, current.firstOrNull().orEmpty())
+                withAudioLanguages(listOf(next) + current.drop(1))
+            }
+        },
+    )
+    TvSettingRow(
+        label = "Downmix",
+        detail = "Fold a surround track down so the dialogue is not left on a centre speaker.",
+        value = audioDownmixLabel(settings.audioDownmix),
+        onActivate = {
+            editor.edit { copy(audioDownmix = cycleOption(AudioDownmixChoices, audioDownmix)) }
+        },
+    )
+    if (settings.audioDownmix.isNotBlank()) {
+        TvSettingRow(
+            label = "Rescale the downmix",
+            detail = "Stops a folded-down track clipping. Only applies while downmixing.",
+            value = onOff(settings.audioNormalizeDownmix),
+            highlighted = settings.audioNormalizeDownmix,
+            onActivate = {
+                editor.edit { copy(audioNormalizeDownmix = !audioNormalizeDownmix) }
+            },
+        )
+    }
+    // Absent rather than inert where the player cannot run audio filters — which is every
+    // Android build, television included. See VideoPlayerHost.supportsAudioFilters.
+    if (LocalVideoPlayerHost.current?.supportsAudioFilters == true) {
+        TvSettingRow(
+            label = "Even out the volume",
+            detail = "Brings quiet dialogue up. Night mode also pulls loud scenes down.",
+            value = audioNormalizationLabel(settings.audioNormalization),
+            onActivate = {
+                editor.edit {
+                    copy(
+                        audioNormalization = cycleOption(
+                            AudioNormalizationChoices,
+                            audioNormalization,
+                        ),
+                    )
+                }
+            },
+        )
+    }
 }
 
 /**
