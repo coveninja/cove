@@ -27,7 +27,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.CoveColors
@@ -35,9 +41,14 @@ import com.coveninja.cove.shared.model.LabelledSegment
 import com.coveninja.cove.shared.model.SegmentKind
 import com.coveninja.cove.ui.components.menu.CMenuItem
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaChapter
+import com.coveninja.cove.ui.state.NORMAL_VOLUME
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.SLEEP_TIMER_MINUTES
+import com.coveninja.cove.ui.state.SleepTimer
+import com.coveninja.cove.ui.state.SleepTimerChoice
 import com.coveninja.cove.ui.platform.hasHardwareKeyboard
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.VideoScaling
@@ -58,7 +69,29 @@ private val SEGMENT_GAP = 1.5.dp
 private val SEGMENT_RADIUS = 3.dp
 
 /** Below this the transport, the clock and five menus stop fitting on one line. */
-private val COMPACT_CONTROLS_WIDTH = 720.dp
+internal val COMPACT_CONTROLS_WIDTH = 720.dp
+
+/**
+ * What the control bar has to work with: how much room, and what is pointing at it.
+ *
+ * The two are genuinely independent and the bar had only ever consulted the first, which
+ * quietly meant it never adapted to a phone at all. A handset is *forced landscape* in the
+ * player (see PlayerOrientation on Android), so it arrives here 780–900dp wide — comfortably
+ * past any width threshold — and took the pointer layout every time: a volume slider sized
+ * for a mouse, whose readout only appears on hover and therefore never appeared, sitting
+ * where a skip button should be.
+ */
+internal data class ControlsLayout(
+    /** Too little width for one row of everything; the extras fold into the overflow menu. */
+    val narrow: Boolean,
+    /** A finger rather than a pointer: bigger targets, no hover-only affordances. */
+    val touch: Boolean,
+)
+
+internal fun controlsLayout(width: Dp, pointerHover: Boolean): ControlsLayout = ControlsLayout(
+    narrow = width < COMPACT_CONTROLS_WIDTH,
+    touch = !pointerHover,
+)
 
 /** Chapter divisions: a hairline, because there can be dozens on a feature film. */
 private val CHAPTER_MARK_WIDTH = 2.dp
@@ -96,6 +129,10 @@ fun PlayerControls(
     segments: List<LabelledSegment>,
     onTogglePause: () -> Unit,
     onSeek: (Double) -> Unit,
+    /** How far the skip buttons jump, from settings. */
+    seekStepSeconds: Double,
+    /** A jump relative to where the viewer last asked to be — see VideoPlayerHost.seekRelative. */
+    onSkip: (Double) -> Unit,
     /** Opens the keyboard map. Nothing else advertises that it exists. */
     onShowShortcuts: () -> Unit,
     onSetVolume: (Double) -> Unit,
@@ -114,6 +151,11 @@ fun PlayerControls(
     onSelectSpeed: (Double) -> Unit,
     canChangeSource: Boolean,
     onChangeSource: () -> Unit,
+    onTakeScreenshot: () -> Unit,
+    /** Null where there is nothing to lock — a pointer can simply stop touching the screen. */
+    onLockControls: (() -> Unit)? = null,
+    sleepTimer: SleepTimer,
+    onSetSleepTimer: (SleepTimerChoice) -> Unit,
     /** Null for a film, which has no episodes to pick between. */
     episodeBrowser: EpisodeBrowser?,
     /**
@@ -159,18 +201,30 @@ fun PlayerControls(
             onSeek = onSeek,
         )
 
-        // Drop the redundant volume strip first on narrow layouts.
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val compact = maxWidth < COMPACT_CONTROLS_WIDTH
+            val layout = controlsLayout(maxWidth, hasPointerHover)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (layout.narrow) 6.dp else 12.dp),
             ) {
+                // Skip buttons flank the transport on every shell now. The television has had
+                // them all along; touch and pointer had the jump on a key and an undocumented
+                // double-tap at the edge of the picture, which is no affordance at all.
+                SkipButton(
+                    forward = false,
+                    seconds = seekStepSeconds,
+                    onClick = { onSkip(-seekStepSeconds) },
+                )
                 PlayPauseButton(
                     paused = status.paused,
                     ended = status.endReached,
                     onClick = onTogglePause,
+                )
+                SkipButton(
+                    forward = true,
+                    seconds = seekStepSeconds,
+                    onClick = { onSkip(seekStepSeconds) },
                 )
 
                 Text(
@@ -181,7 +235,10 @@ fun PlayerControls(
                     maxLines = 1,
                 )
 
-                if (!compact) {
+                // The strip is a mouse control twice over: it is dragged, and its readout
+                // only appears on hover. A phone has hardware keys for this and the swipe
+                // gesture over the picture, both of which show the overlay instead.
+                if (!layout.narrow && !layout.touch) {
                     VolumeControl(
                         volume = status.volume,
                         muted = status.muted,
@@ -195,6 +252,7 @@ fun PlayerControls(
                         } else {
                             "lucide:volume-2"
                         },
+                        label = if (status.muted) "Unmute" else "Mute",
                         onClick = { onSetMuted(!status.muted) },
                     )
                 }
@@ -205,6 +263,7 @@ fun PlayerControls(
                 if (status.subtitleTracks.isNotEmpty() || onLoadSubtitleFile != null) {
                     TrackMenuButton(
                         icon = "lucide:captions",
+                        label = "Subtitles",
                         tracks = status.subtitleTracks,
                         selectedId = status.selectedSubtitleId,
                         allowOff = true,
@@ -219,6 +278,7 @@ fun PlayerControls(
                 if (status.audioTracks.size > 1) {
                     TrackMenuButton(
                         icon = "lucide:audio-lines",
+                        label = "Audio track",
                         tracks = status.audioTracks,
                         selectedId = status.selectedAudioId,
                         allowOff = false,
@@ -229,11 +289,15 @@ fun PlayerControls(
                         onSetDelay = onSetAudioDelay,
                     )
                 }
-                if (!compact && hasHardwareKeyboard) {
-                    ControlButton(icon = "lucide:keyboard", onClick = onShowShortcuts)
+                if (!layout.narrow && hasHardwareKeyboard) {
+                    ControlButton(
+                        icon = "lucide:keyboard",
+                        label = "Keyboard shortcuts",
+                        onClick = onShowShortcuts,
+                    )
                 }
 
-                if (!compact) {
+                if (!layout.narrow) {
                     SpeedMenuButton(
                         speed = status.speed,
                         expanded = openMenu == PlayerMenu.Speed,
@@ -247,16 +311,29 @@ fun PlayerControls(
                         onExpandedChange = { openMenu = if (it) PlayerMenu.Scaling else null },
                         onSelect = onSelectScaling,
                     )
-                } else {
-                    OverflowMenuButton(
-                        expanded = openMenu == PlayerMenu.Overflow,
-                        onExpandedChange = { openMenu = if (it) PlayerMenu.Overflow else null },
-                        speed = status.speed,
-                        onSelectSpeed = onSelectSpeed,
-                        scaling = scaling,
-                        onSelectScaling = onSelectScaling,
-                    )
                 }
+
+                // Always present, unlike before: it is the only home the chapter list, the
+                // screenshot, the sleep timer and the lock have, and folding speed and framing
+                // back into it when there is no room for their own buttons is the smaller half
+                // of what it does now.
+                OverflowMenuButton(
+                    expanded = openMenu == PlayerMenu.Overflow,
+                    onExpandedChange = { openMenu = if (it) PlayerMenu.Overflow else null },
+                    showSpeedAndFraming = layout.narrow,
+                    touch = layout.touch,
+                    speed = status.speed,
+                    onSelectSpeed = onSelectSpeed,
+                    scaling = scaling,
+                    onSelectScaling = onSelectScaling,
+                    chapters = status.chapters,
+                    positionSeconds = status.positionSeconds,
+                    onSeek = onSeek,
+                    onTakeScreenshot = onTakeScreenshot,
+                    onLockControls = onLockControls,
+                    sleepTimer = sleepTimer,
+                    onSetSleepTimer = onSetSleepTimer,
+                )
 
                 if (episodeBrowser != null) {
                     EpisodeMenuButton(
@@ -265,7 +342,11 @@ fun PlayerControls(
                         onExpandedChange = { openMenu = if (it) PlayerMenu.Episodes else null },
                     )
                 } else if (canChangeSource) {
-                    ControlButton(icon = "lucide:list-video", onClick = onChangeSource)
+                    ControlButton(
+                        icon = "lucide:list-video",
+                        label = "Change source",
+                        onClick = onChangeSource,
+                    )
                 }
             }
         }
@@ -273,24 +354,39 @@ fun PlayerControls(
 }
 
 /**
- * Speed and framing behind one button, for windows too narrow to show both.
+ * Everything that does not earn a button of its own.
  *
- * A flat list rather than nested menus: there are ten entries between the two, and a
- * submenu inside a dropdown over a video is a lot of pointer travel to change the
- * aspect ratio.
+ * A flat list rather than nested menus: a submenu inside a dropdown over a video is a lot of
+ * pointer travel to change the aspect ratio, and on a phone it is a target inside a target.
+ * Sections are separated by headers instead, which is also how the track menus read.
+ *
+ * @param showSpeedAndFraming fold those two back in, for a window too narrow to give them
+ *   their own buttons. Elsewhere they are on the bar and repeating them here would be two
+ *   ways to change one setting, sitting next to each other.
  */
 @Composable
 private fun OverflowMenuButton(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    showSpeedAndFraming: Boolean,
+    touch: Boolean,
     speed: Double,
     onSelectSpeed: (Double) -> Unit,
     scaling: VideoScaling,
     onSelectScaling: (VideoScaling) -> Unit,
+    chapters: List<MediaChapter>,
+    positionSeconds: Double,
+    onSeek: (Double) -> Unit,
+    onTakeScreenshot: () -> Unit,
+    onLockControls: (() -> Unit)?,
+    sleepTimer: SleepTimer,
+    onSetSleepTimer: (SleepTimerChoice) -> Unit,
 ) {
     Box {
         ControlButton(
             icon = "lucide:ellipsis",
+            label = "More",
+            active = sleepTimer.armed,
             onClick = { onExpandedChange(true) },
         )
         DropdownMenu(
@@ -300,33 +396,123 @@ private fun OverflowMenuButton(
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.heightIn(max = 420.dp),
         ) {
-            LanguageHeader("Speed")
-            SPEED_STEPS.forEach { option ->
+            if (showSpeedAndFraming) {
+                MenuSectionHeader("Speed")
+                SPEED_STEPS.forEach { option ->
+                    CMenuItem(
+                        text = formatSpeed(option),
+                        iconName = if (option == speed) "lucide:check" else "lucide:gauge",
+                        accent = option == speed,
+                        onClick = {
+                            onSelectSpeed(option)
+                            onExpandedChange(false)
+                        },
+                    )
+                }
+                MenuSectionHeader("Framing")
+                VideoScaling.entries.forEach { option ->
+                    CMenuItem(
+                        text = option.label,
+                        iconName = if (option == scaling) "lucide:check" else "lucide:proportions",
+                        accent = option == scaling,
+                        onClick = {
+                            onSelectScaling(option)
+                            onExpandedChange(false)
+                        },
+                    )
+                }
+            }
+
+            // Chapters have always been on the seek bar as ticks and on Page Up/Down as
+            // navigation, and listed nowhere — so a viewer without a keyboard could neither
+            // reach them nor learn the file had any.
+            if (chapters.isNotEmpty()) {
+                MenuSectionHeader("Chapters")
+                val current = chapterIndexAt(positionSeconds, chapters)
+                chapters.forEach { chapter ->
+                    val playing = chapter.index == current
+                    CMenuItem(
+                        text = "${chapter.label}  ·  ${formatDuration(chapter.startSeconds)}",
+                        iconName = if (playing) "lucide:play" else "lucide:bookmark",
+                        accent = playing,
+                        onClick = {
+                            onSeek(chapter.startSeconds)
+                            onExpandedChange(false)
+                        },
+                    )
+                }
+            }
+
+            MenuSectionHeader("Sleep timer")
+            CMenuItem(
+                text = "Off",
+                iconName = if (!sleepTimer.armed) "lucide:check" else "lucide:x",
+                accent = !sleepTimer.armed,
+                onClick = {
+                    onSetSleepTimer(SleepTimerChoice.Off)
+                    onExpandedChange(false)
+                },
+            )
+            CMenuItem(
+                text = "After this episode",
+                iconName = if (sleepTimer.choice == SleepTimerChoice.AfterThisEpisode) {
+                    "lucide:check"
+                } else {
+                    "lucide:list-end"
+                },
+                accent = sleepTimer.choice == SleepTimerChoice.AfterThisEpisode,
+                onClick = {
+                    onSetSleepTimer(SleepTimerChoice.AfterThisEpisode)
+                    onExpandedChange(false)
+                },
+            )
+            SLEEP_TIMER_MINUTES.forEach { minutes ->
+                val selected = (sleepTimer.choice as? SleepTimerChoice.After)?.minutes == minutes
                 CMenuItem(
-                    text = formatSpeed(option),
-                    iconName = if (option == speed) "lucide:check" else "lucide:gauge",
-                    accent = option == speed,
+                    text = "In $minutes minutes",
+                    iconName = if (selected) "lucide:check" else "lucide:moon",
+                    accent = selected,
                     onClick = {
-                        onSelectSpeed(option)
+                        onSetSleepTimer(SleepTimerChoice.After(minutes))
                         onExpandedChange(false)
                     },
                 )
             }
-            LanguageHeader("Framing")
-            VideoScaling.entries.forEach { option ->
-                CMenuItem(
-                    text = option.label,
-                    iconName = if (option == scaling) "lucide:check" else "lucide:proportions",
-                    accent = option == scaling,
-                    onClick = {
-                        onSelectScaling(option)
-                        onExpandedChange(false)
-                    },
-                )
+
+            MenuSectionHeader("This screen")
+            CMenuItem(
+                text = "Take a screenshot",
+                iconName = "lucide:camera",
+                onClick = {
+                    onExpandedChange(false)
+                    onTakeScreenshot()
+                },
+            )
+            // Only where a stray touch is possible at all.
+            if (touch) {
+                onLockControls?.let { lock ->
+                    CMenuItem(
+                        text = "Lock the screen",
+                        iconName = "lucide:lock",
+                        onClick = {
+                            onExpandedChange(false)
+                            lock()
+                        },
+                    )
+                }
             }
         }
     }
 }
+
+/**
+ * Which chapter [positionSeconds] is inside, or null before the first one starts.
+ *
+ * Chapters are ordered and contiguous, so the answer is the last one that has begun — a
+ * containment test would need each chapter's end, which mpv does not report.
+ */
+internal fun chapterIndexAt(positionSeconds: Double, chapters: List<MediaChapter>): Int? =
+    chapters.lastOrNull { it.startSeconds <= positionSeconds }?.index
 
 // ── Seek bar ─────────────────────────────────────────────────────────────────
 
@@ -362,7 +548,11 @@ private fun SegmentedSeekBar(
         0f
     }
     val shown = dragFraction ?: played
-    val active = hovered || dragFraction != null
+    // A finger cannot hover, so on touch the bar was a 4dp line with no grab handle until a
+    // drag was already under way — the most-used control on a phone and the hardest to hit.
+    // Touch therefore holds the state a pointer only gets by hovering.
+    val touch = !hasPointerHover
+    val active = hovered || dragFraction != null || touch
 
     val barHeight by animateDpAsState(
         targetValue = if (active) 7.dp else 4.dp,
@@ -382,8 +572,24 @@ private fun SegmentedSeekBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(30.dp)
+            // 30dp is under every touch-target minimum there is; a pointer needs no such room.
+            .height(if (touch) 48.dp else 30.dp)
             .hoverable(interactionSource)
+            .semantics {
+                contentDescription = "Seek bar"
+                if (durationSeconds > 0.0) {
+                    progressBarRangeInfo = ProgressBarRangeInfo(
+                        current = positionSeconds.toFloat(),
+                        range = 0f..durationSeconds.toFloat(),
+                    )
+                    // Without this the bar can be read but not operated, which for the one
+                    // control that moves the film is the difference between described and usable.
+                    setProgress { target ->
+                        onSeek(target.toDouble().coerceIn(0.0, durationSeconds))
+                        true
+                    }
+                }
+            }
             .onSizeChanged { trackWidth = it.width }
             .pointerInput(durationSeconds) {
                 detectTapGestures { offset ->
@@ -549,7 +755,10 @@ private fun SegmentedSeekBar(
                         } else {
                             centred
                         }
-                        IntOffset(bounded, with(density) { (-26).dp.roundToPx() })
+                        // Far enough above the bar that a fingertip is not covering the one
+                        // number the drag exists to show.
+                        val lift = if (touch) (-56).dp else (-26).dp
+                        IntOffset(bounded, with(density) { lift.roundToPx() })
                     }
                     .background(Color.Black.copy(alpha = 0.82f), RoundedCornerShape(7.dp))
                     .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -681,11 +890,13 @@ private fun VolumeControl(
     ) {
         ControlButton(
             icon = if (silent) "lucide:volume-x" else "lucide:volume-2",
+            label = if (silent) "Unmute" else "Mute",
             onClick = {
                 if (silent) {
                     onSetMuted(false)
-                    // Restore a zero-volume player to full when unmuting.
-                    if (volume <= 0.0) onSetVolume(100.0)
+                    // Restore a zero-volume player to normal — not to the boosted ceiling,
+                    // which is not what "unmute" asks for.
+                    if (volume <= 0.0) onSetVolume(NORMAL_VOLUME)
                 } else {
                     onSetMuted(true)
                 }
@@ -701,14 +912,16 @@ private fun VolumeControl(
                 .pointerInput(Unit) {
                     detectTapGestures { offset ->
                         if (trackWidth > 0) {
-                            onSetVolume((offset.x / trackWidth).coerceIn(0f, 1f) * 100.0)
+                            onSetVolume((offset.x / trackWidth).coerceIn(0f, 1f) * MAX_VOLUME)
                         }
                     }
                 }
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures { change, _ ->
                         if (trackWidth > 0) {
-                            onSetVolume((change.position.x / trackWidth).coerceIn(0f, 1f) * 100.0)
+                            onSetVolume(
+                                (change.position.x / trackWidth).coerceIn(0f, 1f) * MAX_VOLUME,
+                            )
                         }
                     }
                 },
@@ -721,12 +934,27 @@ private fun VolumeControl(
                     .clip(RoundedCornerShape(3.dp))
                     .background(Color.White.copy(alpha = 0.22f)),
             )
+            // The stretch past 100 is drawn apart from the rest, because everything above it
+            // is amplification rather than attenuation: it can distort, and a viewer who
+            // dragged into it deserves to see that they did.
             Box(
                 modifier = Modifier
-                    .fillMaxWidth((volume / 100.0).coerceIn(0.0, 1.0).toFloat())
+                    .fillMaxWidth((NORMAL_VOLUME / MAX_VOLUME).toFloat())
+                    .height(barHeight)
+                    .background(Color.White.copy(alpha = 0.12f)),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth((volume / MAX_VOLUME).coerceIn(0.0, 1.0).toFloat())
                     .height(barHeight)
                     .clip(RoundedCornerShape(3.dp))
-                    .background(Color.White.copy(alpha = if (silent) 0.3f else 0.9f)),
+                    .background(
+                        when {
+                            silent -> Color.White.copy(alpha = 0.3f)
+                            volume > NORMAL_VOLUME -> MaterialTheme.colorScheme.tertiary
+                            else -> Color.White.copy(alpha = 0.9f)
+                        },
+                    ),
             )
         }
 
@@ -753,6 +981,7 @@ private fun VolumeControl(
 @Composable
 private fun TrackMenuButton(
     icon: String,
+    label: String,
     tracks: List<MediaTrack>,
     selectedId: Int?,
     allowOff: Boolean,
@@ -770,6 +999,7 @@ private fun TrackMenuButton(
     Box {
         ControlButton(
             icon = icon,
+            label = label,
             active = selectedId != null,
             onClick = { onExpandedChange(true) },
         )
@@ -792,7 +1022,7 @@ private fun TrackMenuButton(
                 )
             }
             groups.forEach { group ->
-                LanguageHeader(group.languageLabel)
+                MenuSectionHeader(group.languageLabel)
                 group.tracks.forEach { track ->
                     CMenuItem(
                         text = track.detailLabel(),
@@ -810,7 +1040,7 @@ private fun TrackMenuButton(
                 }
             }
             onLoadFile?.let { loadFile ->
-                LanguageHeader("Your own")
+                MenuSectionHeader("Your own")
                 CMenuItem(
                     text = "Load subtitle file…",
                     iconName = "lucide:upload",
@@ -841,7 +1071,7 @@ private fun DelayStepper(
     delaySeconds: Double,
     onSetDelay: (Double) -> Unit,
 ) {
-    LanguageHeader("Timing")
+    MenuSectionHeader("Timing")
     Row(
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -849,6 +1079,7 @@ private fun DelayStepper(
     ) {
         StepperButton(
             icon = "lucide:minus",
+            label = "Earlier",
             onClick = { onSetDelay(delaySeconds - DELAY_STEP_SECONDS) },
         )
         Box(
@@ -864,17 +1095,19 @@ private fun DelayStepper(
         }
         StepperButton(
             icon = "lucide:plus",
+            label = "Later",
             onClick = { onSetDelay(delaySeconds + DELAY_STEP_SECONDS) },
         )
         StepperButton(
             icon = "lucide:rotate-ccw",
+            label = "Back in sync",
             onClick = { onSetDelay(0.0) },
         )
     }
 }
 
 @Composable
-private fun StepperButton(icon: String, onClick: () -> Unit) {
+private fun StepperButton(icon: String, label: String, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -885,7 +1118,9 @@ private fun StepperButton(icon: String, onClick: () -> Unit) {
 
     Box(
         modifier = Modifier
-            .size(26.dp)
+            // Nudging a subtitle into sync takes several presses in a row, so on touch this
+            // has to be a real target rather than the 26dp dot a pointer can manage.
+            .size(if (hasPointerHover) 26.dp else 44.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -895,13 +1130,15 @@ private fun StepperButton(icon: String, onClick: () -> Unit) {
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                onClickLabel = label,
                 onClick = onClick,
-            ),
+            )
+            .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
         IconifyIcon(
             icon = icon,
-            modifier = Modifier.size(13.dp),
+            modifier = Modifier.size(if (hasPointerHover) 13.dp else 18.dp),
             tint = MaterialTheme.colorScheme.onSurface,
         )
     }
@@ -918,8 +1155,10 @@ private fun formatDelay(seconds: Double): String {
 
 private const val DELAY_STEP_SECONDS = 0.1
 
+
+/** Titles a run of menu entries. Named for what it does now: the overflow menu has five. */
 @Composable
-private fun LanguageHeader(label: String) {
+private fun MenuSectionHeader(label: String) {
     Text(
         text = label.uppercase(),
         modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 4.dp),
@@ -945,6 +1184,7 @@ private fun SpeedMenuButton(
     Box {
         ControlButton(
             icon = "lucide:gauge",
+            label = if (normal) "Playback speed" else "Speed ${formatSpeed(speed)}×",
             active = !normal,
             onClick = { onExpandedChange(true) },
         )
@@ -987,6 +1227,7 @@ private fun ScalingMenuButton(
     Box {
         ControlButton(
             icon = "lucide:scaling",
+            label = "Framing: ${selected.label}",
             active = selected != VideoScaling.Fit,
             onClick = { onExpandedChange(true) },
         )
@@ -1011,9 +1252,16 @@ private fun ScalingMenuButton(
     }
 }
 
+/**
+ * @param label what this button does, in words. Required rather than optional because it is
+ *   the only thing a screen reader has to go on — the player was, until this, two dozen
+ *   unlabelled glyphs — and because a pointer has no equivalent of the television shell's
+ *   focus label. It is read out as the content description and shown on hover.
+ */
 @Composable
 internal fun ControlButton(
     icon: String,
+    label: String,
     onClick: () -> Unit,
     active: Boolean = false,
 ) {
@@ -1050,8 +1298,10 @@ internal fun ControlButton(
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                onClickLabel = label,
                 onClick = onClick,
-            ),
+            )
+            .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
         IconifyIcon(
@@ -1059,7 +1309,57 @@ internal fun ControlButton(
             modifier = Modifier.size(18.dp),
             tint = if (active) MaterialTheme.colorScheme.tertiary else Color.White,
         )
+        HoverLabel(label = label, visible = hovered)
     }
+}
+
+/**
+ * Names the control the pointer is resting on, above it.
+ *
+ * The television shell already does this for whichever button holds focus, and for the same
+ * reason: a row of glyphs is unreadable until one of them is about to be pressed. A pointer
+ * has hover where a remote has focus, so the pointer UI can finally say the same things.
+ * Drawn in a zero-size overlay so appearing never moves the row it sits in.
+ */
+@Composable
+private fun BoxScope.HoverLabel(label: String, visible: Boolean) {
+    if (!hasPointerHover) return
+    AnimatedVisibility(
+        visible = visible,
+        modifier = Modifier.align(Alignment.TopCenter),
+        enter = fadeIn(tween(90)),
+        exit = fadeOut(tween(120)),
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(y = (-30).dp)
+                .background(Color.Black.copy(alpha = 0.86f), RoundedCornerShape(7.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+            Text(
+                text = label,
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * Jumps the configured step, in the direction it points.
+ *
+ * The number rides inside the arrow rather than beside it: the step is a setting, so a bare
+ * pair of arrows would be the one control on the bar whose behaviour the viewer cannot see.
+ */
+@Composable
+private fun SkipButton(forward: Boolean, seconds: Double, onClick: () -> Unit) {
+    val whole = seconds.roundToLong()
+    ControlButton(
+        icon = if (forward) "lucide:rotate-cw" else "lucide:rotate-ccw",
+        label = if (forward) "Forward ${whole}s" else "Back ${whole}s",
+        onClick = onClick,
+    )
 }
 
 /**

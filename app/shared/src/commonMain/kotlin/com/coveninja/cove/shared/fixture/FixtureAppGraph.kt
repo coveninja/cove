@@ -1453,5 +1453,23 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     ),
     device    = FixtureDeviceRepository(),
     storage   = FixtureStorageRepository(),
+    trackMemory = FixtureTrackMemoryRepository(),
     fixtures  = true,
 )
+
+/**
+ * Remembers choices for as long as the run lasts, and no longer.
+ *
+ * In-memory rather than canned: an empty memory is what a fresh profile genuinely has, and
+ * seeding one would make a fixtures run open the player with a track nobody picked.
+ */
+class FixtureTrackMemoryRepository : TrackMemoryRepository {
+    private val remembered = mutableMapOf<Int, TrackMemory>()
+
+    override suspend fun read(tmdbId: Int): TrackMemory =
+        remembered[tmdbId] ?: TrackMemory.None
+
+    override suspend fun write(tmdbId: Int, memory: TrackMemory) {
+        if (memory.isEmpty) remembered.remove(tmdbId) else remembered[tmdbId] = memory
+    }
+}

@@ -11,14 +11,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import com.coveninja.cove.shared.network.CoveJson
+import com.coveninja.cove.backend.platform.DesktopConfigPaths
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaChapter
 import com.coveninja.cove.ui.state.MediaTrack
+import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.classifyPlaybackTermination
+import java.nio.file.Files
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
@@ -66,6 +70,13 @@ class MpvVideoPlayerHost(
 
     private val _status = MutableStateFlow(PlaybackStatus())
     override val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
+
+    private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
+    override val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
+
+    override fun setNowPlaying(value: NowPlaying?) {
+        _nowPlaying.value = value
+    }
 
     /**
      * True when a page URL can be opened at all — either yt-dlp is already here or
@@ -202,7 +213,7 @@ class MpvVideoPlayerHost(
     }
 
     override fun setVolume(volume: Double) {
-        val clamped = volume.coerceIn(0.0, 100.0)
+        val clamped = volume.coerceIn(0.0, MAX_VOLUME)
         val active = player
         if (active == null) {
             pendingVolume = clamped
@@ -406,6 +417,7 @@ class MpvVideoPlayerHost(
         ytdlSearchPath = ytDlp?.let { ytdlSearchPath(it.managedPath, System.getProperty("os.name").orEmpty()) },
         ytdlFormat = ytDlp?.let { YTDL_FORMAT },
         ytdlRawOptions = ytDlp?.let { ytdlRawOptions(firstOnPath(JS_RUNTIMES)) },
+        screenshotDirectory = screenshotDirectory(),
         frameConsumer = { frame -> frames.value = frame },
     ).also {
         it.start()
@@ -581,6 +593,18 @@ private fun parseChapters(json: String): List<MediaChapter> {
  * Whether one of the programs mpv's ytdl hook looks for is on the PATH. The names
  * are the hook's own defaults, in its order of preference.
  */
+/**
+ * Beside the database and the mpv config, never inside the installation.
+ *
+ * Failure returns null, which leaves mpv on its own default rather than stopping playback:
+ * a read-only or missing data directory must cost the screenshot, not the film.
+ */
+private fun screenshotDirectory(): String? = runCatching {
+    val directory = DesktopConfigPaths.dataDirectory().resolve("screenshots")
+    Files.createDirectories(directory)
+    directory.toAbsolutePath().toString()
+}.getOrNull()
+
 private fun streamExtractorInstalled(): Boolean = firstOnPath(STREAM_EXTRACTORS) != null
 
 /**

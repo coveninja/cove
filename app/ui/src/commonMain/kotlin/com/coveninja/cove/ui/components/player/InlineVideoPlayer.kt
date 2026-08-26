@@ -185,7 +185,7 @@ fun InlineVideoPlayer(
                         modifier = Modifier.padding(10.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        ControlButton(icon = "lucide:x", onClick = session::close)
+                        ControlButton(icon = "lucide:x", label = "Close", onClick = session::close)
                     }
                 }
 
@@ -334,6 +334,7 @@ private fun InlineControlBar(
                 } else {
                     "iconamoon:player-pause"
                 },
+                label = if (status.paused) "Play" else "Pause",
                 onClick = onTogglePause,
             )
             Text(
@@ -345,9 +346,10 @@ private fun InlineControlBar(
             )
             ControlButton(
                 icon = if (status.muted) "lucide:volume-x" else "lucide:volume-2",
+                label = if (status.muted) "Unmute" else "Mute",
                 onClick = onToggleMuted,
             )
-            ControlButton(icon = "lucide:maximize", onClick = onFullscreen)
+            ControlButton(icon = "lucide:maximize", label = "Fullscreen", onClick = onFullscreen)
         }
     }
 }

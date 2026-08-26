@@ -21,6 +21,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -79,13 +80,16 @@ import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.ui.platform.canLoadSubtitleFile
 import com.coveninja.cove.ui.platform.chooseSubtitleFile
+import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.platform.hideCursorWhen
+import com.coveninja.cove.ui.platform.rememberScreenBrightness
 import com.coveninja.cove.ui.platform.subtitleFileDropTarget
 import com.coveninja.cove.ui.state.SUBTITLE_FILE_EXTENSIONS
 import com.coveninja.cove.ui.state.subtitleFileName
 import com.coveninja.cove.ui.state.subtitleFilesAmong
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.identity
 import com.coveninja.cove.ui.state.nextEpisodeAfter
@@ -101,6 +105,12 @@ import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.PlaybackRequest
 import com.coveninja.cove.ui.state.PlaybackSession
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.SleepTimer
+import com.coveninja.cove.ui.state.SleepTimerChoice
+import com.coveninja.cove.ui.state.armSleepTimer
+import com.coveninja.cove.ui.state.autoAdvanceAllowed
+import com.coveninja.cove.ui.state.sleepTimerElapsed
+import com.coveninja.cove.ui.state.tickSleepTimer
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.platform.PlaybackBackHandler
 import kotlinx.coroutines.delay
@@ -179,28 +189,61 @@ fun PlayerLayer(
     var transportPulse by remember { mutableStateOf(0) }
     var statsVisible by remember { mutableStateOf(false) }
     var shortcutsVisible by remember { mutableStateOf(false) }
+    var sleepTimer by remember { mutableStateOf(SleepTimer.Off) }
+    // Not remembered across requests: a lock is about the hands holding the phone right now,
+    // and arriving at the next episode unable to touch anything would be a bug report.
+    var controlsLocked by remember(request.media.id, request.season, request.episode) {
+        mutableStateOf(false)
+    }
+    val brightness = rememberScreenBrightness()
+    var brightnessPulse by remember { mutableStateOf(0) }
+    var lockNoticePulse by remember { mutableStateOf(0) }
+    /** The rate to go back to when a press-and-hold ends; null when none is in progress. */
+    var boostedFrom by remember { mutableStateOf<Double?>(null) }
+    /** Where a drag-to-scrub would land, while one is under way. */
+    var scrubTarget by remember { mutableStateOf<Double?>(null) }
+
+    // The chrome goes away entirely while the screen is locked rather than staying up and
+    // swallowing presses: a control that looks pressable and is not reads as a freeze. The
+    // end-of-episode card is the deliberate exception — it is the one thing a viewer who
+    // locked the screen to keep watching still needs to be able to stop.
+    val chromeVisible = controlsVisible && !controlsLocked
+
+    // Swipes belong to a finger. A mouse has the wheel for volume, a seek bar for position and
+    // no business with the screen brightness, so offering it the same gestures would mean a
+    // drag over the picture doing something surprising on every desktop.
+    val gesturesEnabled = !hasPointerHover
     var subtitleDragActive by remember { mutableStateOf(false) }
-    var subtitleNotice by remember { mutableStateOf<String?>(null) }
-    var subtitleNoticePulse by remember { mutableStateOf(0) }
+    // One transient line for anything the player has to say in passing. It began as the
+    // subtitle-drop result and is now also how a screenshot reports itself, which it never
+    // did — the key was advertised in the shortcut sheet and the file went somewhere the
+    // viewer was never told about.
+    var playerNotice by remember { mutableStateOf<String?>(null) }
+    var playerNoticePulse by remember { mutableStateOf(0) }
+    val notify: (String) -> Unit = { message ->
+        playerNotice = message
+        playerNoticePulse++
+        activityPulse++
+    }
 
     // Use the same validation for drops and the file chooser, even before playback starts.
     val useSubtitleFiles: (List<String>) -> Unit = { paths ->
         val file = subtitleFilesAmong(paths).firstOrNull()
-        subtitleNotice = when {
-            file != null && session.addUserSubtitle(file) -> "Using ${subtitleFileName(file)}"
-            file != null -> "That subtitle file could not be loaded."
-            // An unreadable drop is distinct from a readable, unsupported file.
-            paths.isEmpty() -> "Cove could not read that drop — try Load subtitle file\u2026"
-            else -> "That is not a subtitle file Cove can read."
-        }
-        subtitleNoticePulse++
-        activityPulse++
+        notify(
+            when {
+                file != null && session.addUserSubtitle(file) -> "Using ${subtitleFileName(file)}"
+                file != null -> "That subtitle file could not be loaded."
+                // An unreadable drop is distinct from a readable, unsupported file.
+                paths.isEmpty() -> "Cove could not read that drop — try Load subtitle file\u2026"
+                else -> "That is not a subtitle file Cove can read."
+            },
+        )
     }
 
-    LaunchedEffect(subtitleNoticePulse) {
-        if (subtitleNotice != null) {
+    LaunchedEffect(playerNoticePulse) {
+        if (playerNotice != null) {
             delay(SUBTITLE_NOTICE_MILLIS.milliseconds)
-            subtitleNotice = null
+            playerNotice = null
         }
     }
 
@@ -227,7 +270,7 @@ fun PlayerLayer(
 
     val changeVolume: (Double) -> Unit = { delta ->
         onPlayer {
-            host?.setVolume((status.volume + delta).coerceIn(0.0, 100.0))
+            host?.setVolume((status.volume + delta).coerceIn(0.0, MAX_VOLUME))
             volumePulse++
         }
     }
@@ -267,6 +310,26 @@ fun PlayerLayer(
         skipTarget(segment, status.positionSeconds, status.durationSeconds)
             ?.let { host?.seek(it) }
     }
+    // The countdown only runs while something is actually playing: a timer that expired
+    // during a twenty-minute buffering stall would stop a film the viewer never saw.
+    LaunchedEffect(sleepTimer.choice, status.paused, phase) {
+        if (sleepTimer.choice !is SleepTimerChoice.After) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            if (status.paused) continue
+            sleepTimer = tickSleepTimer(sleepTimer, elapsedSeconds = 1)
+            if (sleepTimerElapsed(sleepTimer)) {
+                host?.setPaused(true)
+                sleepTimer = SleepTimer.Off
+                notify("Sleep timer — playback paused.")
+                // Paused rather than closed: waking to a player still holding the place is
+                // recoverable, and waking to a home screen is not.
+                controlsVisible = true
+                return@LaunchedEffect
+            }
+        }
+    }
+
     // Restart auto-hide when the first frame makes the controls usable.
     LaunchedEffect(start.started) {
         if (start.started) activityPulse++
@@ -329,12 +392,31 @@ fun PlayerLayer(
                     Key.MoveHome -> onPlayer { host?.seek(0.0) }
                     // The host clamps this clear of the final frame.
                     Key.MoveEnd -> onPlayer { host?.seek(status.durationSeconds) }
-                    Key.C -> onPlayer { host?.selectSubtitleTrack(cycleTrack(status.subtitleTracks, status.selectedSubtitleId, allowOff = true)) }
+                    Key.C -> onPlayer {
+                        val next = cycleTrack(
+                            status.subtitleTracks,
+                            status.selectedSubtitleId,
+                            allowOff = true,
+                        )
+                        host?.selectSubtitleTrack(next)
+                        session.rememberSubtitleChoice(
+                            language = status.subtitleTracks.firstOrNull { it.id == next }?.language,
+                            off = next == null,
+                        )
+                    }
                     Key.A -> onPlayer {
                         cycleTrack(status.audioTracks, status.selectedAudioId, allowOff = false)
-                            ?.let { host?.selectAudioTrack(it) }
+                            ?.let { next ->
+                                host?.selectAudioTrack(next)
+                                session.rememberAudioLanguage(
+                                    status.audioTracks.firstOrNull { it.id == next }?.language,
+                                )
+                            }
                     }
-                    Key.S -> onPlayer { host?.takeScreenshot() }
+                    Key.S -> onPlayer {
+                        host?.takeScreenshot()
+                        notify("Screenshot saved.")
+                    }
                     Key.I -> { statsVisible = !statsVisible; true }
                     // Bind the physical slash key because producing `?` varies by layout.
                     Key.Slash -> { shortcutsVisible = !shortcutsVisible; true }
@@ -400,8 +482,36 @@ fun PlayerLayer(
             host.Surface(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(seekStep) {
+                    .pointerInput(seekStep, controlsLocked) {
+                        if (controlsLocked) {
+                            // A locked screen still has to answer *something*, or it looks
+                            // like the app has hung. One tap reveals the way out and nothing
+                            // else happens.
+                            detectTapGestures { lockNoticePulse++ }
+                            return@pointerInput
+                        }
                         detectTapGestures(
+                            onPress = {
+                                try {
+                                    awaitRelease()
+                                } finally {
+                                    // Whatever ended the press ends the boost — a lift, a
+                                    // cancel, or the gesture being taken over by a drag.
+                                    boostedFrom?.let { previous ->
+                                        boostedFrom = null
+                                        host.setSpeed(previous)
+                                    }
+                                }
+                            },
+                            // Press and hold to skim, the way a podcast app does. Touch only:
+                            // a mouse has the speed menu and a right-hand full of other ways.
+                            onLongPress = {
+                                if (gesturesEnabled && boostedFrom == null) {
+                                    boostedFrom = status.speed
+                                    host.setSpeed(LONG_PRESS_SPEED)
+                                    activityPulse++
+                                }
+                            },
                             // detectTapGestures suppresses onTap when a double tap resolves.
                             onTap = {
                                 if (tapTogglesPause(pressWasTouch, controlsShownAtPress)) {
@@ -416,6 +526,91 @@ fun PlayerLayer(
                                 }
                             },
                         )
+                    }
+                    .pointerInput(gesturesEnabled, controlsLocked, status.durationSeconds) {
+                        if (!gesturesEnabled || controlsLocked) return@pointerInput
+                        var startX = 0f
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        var scrubOrigin = 0.0
+                        var volumeOrigin = 0.0
+                        var mode: SurfaceDrag? = null
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                startX = offset.x
+                                totalDx = 0f
+                                totalDy = 0f
+                                // Fixed at the start: the player keeps publishing new
+                                // positions during the drag, and adding the offset to a
+                                // moving number would make the target run away from the finger.
+                                scrubOrigin = status.positionSeconds
+                                volumeOrigin = status.volume
+                                mode = null
+                            },
+                            onDragEnd = {
+                                if (mode == SurfaceDrag.Seek) {
+                                    scrubTarget?.let { host.seek(it) }
+                                }
+                                scrubTarget = null
+                                mode = null
+                            },
+                            onDragCancel = {
+                                scrubTarget = null
+                                mode = null
+                            },
+                        ) { change, drag ->
+                            totalDx += drag.x
+                            totalDy += drag.y
+                            // Classified once and then held: a hand is never as straight as
+                            // the axis it means, and re-deciding mid-drag makes a diagonal
+                            // flicker between seeking and the volume.
+                            if (mode == null) {
+                                mode = classifySurfaceDrag(
+                                    totalDx = totalDx,
+                                    totalDy = totalDy,
+                                    startX = startX,
+                                    width = size.width.toFloat(),
+                                    slop = SURFACE_DRAG_SLOP,
+                                )
+                            }
+                            when (mode) {
+                                SurfaceDrag.Volume -> {
+                                    // Absolute from where the drag began, not a running sum of
+                                    // increments against status.volume: the player publishes
+                                    // its volume on a 200 ms timer, so a quick swipe would
+                                    // read the same stale number several times and land short.
+                                    val travelled = verticalDragFraction(
+                                        totalDy,
+                                        size.height.toFloat(),
+                                    )
+                                    host.setVolume(
+                                        (volumeOrigin + travelled * MAX_VOLUME)
+                                            .coerceIn(0.0, MAX_VOLUME),
+                                    )
+                                    volumePulse++
+                                }
+                                SurfaceDrag.Brightness -> {
+                                    brightness.adjust(
+                                        verticalDragFraction(drag.y, size.height.toFloat()),
+                                    )
+                                    brightnessPulse++
+                                }
+                                SurfaceDrag.Seek -> {
+                                    val offset = scrubSecondsFor(
+                                        dx = totalDx,
+                                        width = size.width.toFloat(),
+                                        durationSeconds = status.durationSeconds,
+                                    )
+                                    scrubTarget = (scrubOrigin + offset)
+                                        .coerceIn(0.0, status.durationSeconds)
+                                }
+                                null -> Unit
+                            }
+                            if (mode != null) {
+                                activityPulse++
+                                change.consume()
+                            }
+                        }
                     },
             )
         }
@@ -576,6 +771,57 @@ fun PlayerLayer(
                     VolumeOverlay(volume = status.volume, muted = status.muted)
                 }
 
+                var brightnessShown by remember { mutableStateOf(false) }
+                LaunchedEffect(brightnessPulse) {
+                    if (brightnessPulse > 0) {
+                        brightnessShown = true
+                        delay(VOLUME_OVERLAY_MILLIS.milliseconds)
+                        brightnessShown = false
+                    }
+                }
+                AnimatedVisibility(
+                    visible = brightnessShown,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 96.dp),
+                    enter = fadeIn(tween(110)) + scaleIn(tween(140), initialScale = 0.9f),
+                    exit = fadeOut(tween(220)),
+                ) {
+                    BrightnessOverlay(level = brightness.level ?: 1f)
+                }
+
+                scrubTarget?.let { target ->
+                    ScrubReadout(
+                        targetSeconds = target,
+                        fromSeconds = status.positionSeconds,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+
+                // The lock hides the chrome rather than disabling it, so nothing on screen
+                // invites a press that would be swallowed.
+                var lockNoticeShown by remember { mutableStateOf(false) }
+                LaunchedEffect(lockNoticePulse, controlsLocked) {
+                    if (!controlsLocked) {
+                        lockNoticeShown = false
+                        return@LaunchedEffect
+                    }
+                    lockNoticeShown = true
+                    delay(LOCK_NOTICE_MILLIS.milliseconds)
+                    lockNoticeShown = false
+                }
+                AnimatedVisibility(
+                    visible = controlsLocked && lockNoticeShown,
+                    modifier = Modifier.align(Alignment.Center),
+                    enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = 0.94f),
+                    exit = fadeOut(tween(200)),
+                ) {
+                    LockedNotice(
+                        onUnlock = {
+                            controlsLocked = false
+                            activityPulse++
+                        },
+                    )
+                }
+
                 // Report stalls after the starting stage has left composition.
                 AnimatedVisibility(
                     visible = status.waitingForData && status.hasMedia && !session.reconnecting,
@@ -650,20 +896,20 @@ fun PlayerLayer(
                 }
 
                 AnimatedVisibility(
-                    visible = controlsVisible,
+                    visible = chromeVisible,
                     modifier = Modifier.align(Alignment.TopStart),
                     enter = fadeIn(tween(140)) + slideInVertically { -it / 3 },
                     exit = fadeOut(tween(200)) + slideOutVertically { -it / 3 },
                 ) {
                     PlayerTitleBlock(
-                        title = request.media.title ?: request.media.name ?: "Untitled",
-                        episode = request.episodeSubtitle(),
+                        title = request.heading,
+                        episode = request.episodeSubtitle,
                         onBack = session::close,
                     )
                 }
 
                 AnimatedVisibility(
-                    visible = controlsVisible,
+                    visible = chromeVisible,
                     modifier = Modifier.align(Alignment.TopEnd).padding(22.dp),
                     enter = fadeIn(tween(140)) + slideInVertically { -it / 3 },
                     exit = fadeOut(tween(200)) + slideOutVertically { -it / 3 },
@@ -672,6 +918,7 @@ fun PlayerLayer(
                         if (request.extra != null) {
                             ControlButton(
                                 icon = "lucide:picture-in-picture-2",
+                                label = "Back to the page",
                                 onClick = {
                                     session.collapseToInline()
                                 },
@@ -685,6 +932,7 @@ fun PlayerLayer(
                                 } else {
                                     "lucide:maximize"
                                 },
+                                label = if (isFullscreen) "Leave fullscreen" else "Fullscreen",
                                 onClick = controller::toggle,
                             )
                         }
@@ -723,7 +971,7 @@ fun PlayerLayer(
                     UpNextCard(
                         season = nextSeason,
                         episode = nextEpisode,
-                        autoAdvance = settings?.autoPlay == true,
+                        autoAdvance = autoAdvanceAllowed(settings?.autoPlay == true, sleepTimer),
                         onPlay = {
                             session.open(
                                 media = request.media,
@@ -742,7 +990,7 @@ fun PlayerLayer(
                         skipTarget(segment, status.positionSeconds, status.durationSeconds) != null
                 }
                 AnimatedVisibility(
-                    visible = manualSkip != null,
+                    visible = manualSkip != null && !controlsLocked,
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 30.dp, bottom = 118.dp),
@@ -767,7 +1015,7 @@ fun PlayerLayer(
 
                 AnimatedVisibility(
                     // Do not expose transport controls before media is available.
-                    visible = controlsVisible && start.started,
+                    visible = chromeVisible && start.started,
                     modifier = Modifier.align(Alignment.BottomCenter),
                     enter = fadeIn(tween(120)) + slideInVertically { it / 4 },
                     exit = fadeOut(tween(220)) + slideOutVertically { it / 4 },
@@ -778,11 +1026,28 @@ fun PlayerLayer(
                         segments = segments,
                         onTogglePause = toggleTransport,
                         onSeek = { seconds -> onPlayer { host?.seek(seconds) } },
+                        seekStepSeconds = seekStep,
+                        onSkip = jump,
                         onShowShortcuts = { shortcutsVisible = !shortcutsVisible },
                         onSetVolume = { host?.setVolume(it) },
                         onSetMuted = { host?.setMuted(it) },
-                        onSelectAudio = { host?.selectAudioTrack(it) },
-                        onSelectSubtitle = { host?.selectSubtitleTrack(it) },
+                        onSelectAudio = { id ->
+                            host?.selectAudioTrack(id)
+                            // The language, not the id: the next episode is a different file
+                            // whose track three is somebody else's commentary.
+                            session.rememberAudioLanguage(
+                                status.audioTracks.firstOrNull { it.id == id }?.language,
+                            )
+                        },
+                        onSelectSubtitle = { id ->
+                            host?.selectSubtitleTrack(id)
+                            session.rememberSubtitleChoice(
+                                language = status.subtitleTracks
+                                    .firstOrNull { it.id == id }
+                                    ?.language,
+                                off = id == null,
+                            )
+                        },
                         onSetSubtitleDelay = { host?.setSubtitleDelay(it) },
                         onLoadSubtitleFile = if (canLoadSubtitleFile) {
                             { chooseSubtitleFile()?.let { useSubtitleFiles(listOf(it)) } }
@@ -795,9 +1060,24 @@ fun PlayerLayer(
                             scaling = it
                             host?.setScaling(it)
                         },
-                        onSelectSpeed = { host?.setSpeed(it) },
+                        onSelectSpeed = { speed ->
+                            host?.setSpeed(speed)
+                            session.rememberSpeed(speed)
+                        },
                         canChangeSource = request.extra == null,
                         onChangeSource = session::reopenSources,
+                        onTakeScreenshot = {
+                            onPlayer {
+                                host?.takeScreenshot()
+                                notify("Screenshot saved.")
+                            }
+                        },
+                        onLockControls = { controlsLocked = true },
+                        sleepTimer = sleepTimer,
+                        onSetSleepTimer = { choice ->
+                            sleepTimer = armSleepTimer(choice)
+                            notify(armSleepTimer(choice).label ?: "Sleep timer off.")
+                        },
                         episodeBrowser = request.episodeBrowser(
                             session = session,
                             playingProgress = status.progressFraction,
@@ -816,13 +1096,13 @@ fun PlayerLayer(
                 }
 
                 AnimatedVisibility(
-                    visible = subtitleNotice != null,
+                    visible = playerNotice != null,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 118.dp),
                     enter = fadeIn(tween(140)) + slideInVertically { it / 3 },
                     exit = fadeOut(tween(180)),
                 ) {
                     // Retain the message until its fade completes.
-                    val message = remember(subtitleNoticePulse) { subtitleNotice }
+                    val message = remember(playerNoticePulse) { playerNotice }
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
@@ -1201,6 +1481,10 @@ private const val UP_NEXT_URGENT_SECONDS = 3
 private const val TORRENT_POLL_MILLIS = 1500L
 private const val RESUME_NOTICE_MILLIS = 7000L
 private const val SUBTITLE_NOTICE_MILLIS = 4000L
+/** How long the unlock affordance stays up after the locked screen is touched. */
+private const val LOCK_NOTICE_MILLIS = 2500L
+/** Press and hold to skim. Double is the rate every app that does this settled on. */
+private const val LONG_PRESS_SPEED = 2.0
 // A remote mkv with many tracks routinely needs ten seconds of probing
 // before mpv reports anything, so patience here is normal, not a fault.
 private const val STALLED_SECONDS = 45
@@ -1302,7 +1586,7 @@ private fun PlayerTitleBlock(title: String, episode: String?, onBack: () -> Unit
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ControlButton(icon = "iconamoon:arrow-left-1", onClick = onBack)
+        ControlButton(icon = "iconamoon:arrow-left-1", label = "Back", onClick = onBack)
 
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
@@ -1324,18 +1608,6 @@ private fun PlayerTitleBlock(title: String, episode: String?, onBack: () -> Unit
             }
         }
     }
-}
-
-/** "S2E4 · Episode name", or null for a film. */
-private fun PlaybackRequest.episodeSubtitle(): String? {
-    // Extras use the media title as the heading and the video title as context.
-    extra?.let { return it.title }
-    val season = season ?: return null
-    val number = episode ?: return null
-    return listOfNotNull(
-        "S${season}E$number",
-        episodeTitle?.takeIf { it.isNotBlank() },
-    ).joinToString(" · ")
 }
 
 /**

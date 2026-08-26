@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.state
 
+import com.coveninja.cove.shared.data.TrackMemory
 import com.coveninja.cove.shared.model.AppSettings
 
 /**
@@ -147,3 +148,31 @@ fun AppSettings.playbackPreferences(originalLanguage: String?): PlaybackPreferen
         hardwareDecoding = hardwareDecoding,
     )
 }
+
+/**
+ * The viewer's remembered choice for this title, laid over the settings defaults.
+ *
+ * The memory wins wherever it has an opinion, because it is the more specific of the two: the
+ * settings say what to do with a title nothing is known about, and this says what was actually
+ * chosen the last time this one was open. Where the memory is silent the settings still decide
+ * — a viewer who picked an audio track but never touched the subtitles has not thereby
+ * expressed a subtitle preference.
+ *
+ * Subtitles are the awkward one, because "off" and "never chose" are different facts that a
+ * language string alone cannot tell apart, which is why [TrackMemory] carries a flag for it.
+ */
+fun PlaybackPreferences.withMemory(memory: TrackMemory): PlaybackPreferences = copy(
+    audioLanguages = memory.audioLanguage
+        .takeIf { it.isNotBlank() }
+        ?.let(::languageAliases)
+        ?: audioLanguages,
+    subtitleLanguages = memory.subtitleLanguage
+        .takeIf { it.isNotBlank() }
+        ?.let(::languageAliases)
+        ?: subtitleLanguages,
+    subtitlesEnabled = when {
+        memory.subtitlesOff -> false
+        memory.subtitleLanguage.isNotBlank() -> true
+        else -> subtitlesEnabled
+    },
+)

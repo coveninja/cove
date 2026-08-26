@@ -45,6 +45,9 @@ fun createLiveAppGraph(
         trackers = emptyList(),
         device   = UnavailableDeviceRepository,
         storage  = UnavailableStorageRepository,
+        // Likewise the track memory: it records what was chosen on a particular screen with
+        // particular speakers, and this graph is pointed at somebody else's machine.
+        trackMemory = UnavailableTrackMemoryRepository,
         onClose  = {
             scope.cancel()
             client.close()

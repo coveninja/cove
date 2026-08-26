@@ -121,6 +121,7 @@ class LocalBackendRuntime private constructor(
         device = deviceRepository,
         updates = updateRepository,
         storage = storageRepository,
+        trackMemory = stores.trackMemory,
         plugins = pluginRepository,
         onClose = ::close,
     )

@@ -1,5 +1,6 @@
 package com.coveninja.cove.desktop.player
 
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.sun.jna.Memory
 import com.sun.jna.Native
 import com.sun.jna.Pointer
@@ -38,6 +39,13 @@ class MpvSoftwarePlayer internal constructor(
     private val ytdlFormat: String? = null,
     /** Flags the hook passes yt-dlp itself; null passes none. See [ytdlRawOptions]. */
     private val ytdlRawOptions: String? = null,
+    /**
+     * Where `screenshot` writes. Null leaves mpv's own default, which is the *process working
+     * directory* — for a packaged launch that is wherever the desktop entry started Cove, so
+     * every screenshot went somewhere unfindable or failed silently against a read-only
+     * install. Android has always set this; the desktop simply never did.
+     */
+    private val screenshotDirectory: String? = null,
     private val frameConsumer: (SoftwareVideoFrame) -> Unit,
 ) : DesktopPlayer {
     private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
@@ -82,9 +90,17 @@ class MpvSoftwarePlayer internal constructor(
             handle.set(created)
 
             setOption(library, created, "vo",        "libmpv")
+            screenshotDirectory?.let {
+                setOption(library, created, "screenshot-directory", it)
+            }
             setOption(library, created, "terminal",  "no")
             setOption(library, created, "msg-level", "all=warn")
             setOption(library, created, "keep-open", "yes")
+            // Stated rather than left to mpv's identical default, and taken from the same
+            // constant the slider is drawn against: the ceiling is enforced in four places on
+            // the way to mpv and back, and a default agreeing with them by coincidence is not
+            // the same as one that cannot drift from them.
+            setOption(library, created, "volume-max", MAX_VOLUME.toInt().toString())
             // libmpv leaves the ytdl hook off where the mpv binary has it on. With
             // it on, a URL mpv cannot open directly is handed to yt-dlp — which is
             // what turns the YouTube page behind a trailer into a playable stream.
@@ -161,7 +177,7 @@ class MpvSoftwarePlayer internal constructor(
     override fun setVolume(volume: Double) {
         submitCommand("set volume") { library, target ->
             val value = Memory(Double.SIZE_BYTES.toLong()).apply {
-                setDouble(0, volume.coerceIn(0.0, 100.0))
+                setDouble(0, volume.coerceIn(0.0, MAX_VOLUME))
             }
             try {
                 library.mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, value)
@@ -410,7 +426,7 @@ class MpvSoftwarePlayer internal constructor(
                 paused          = paused,
                 positionSeconds = position,
                 durationSeconds = duration,
-                volume          = volume.coerceIn(0.0, 100.0),
+                volume          = volume.coerceIn(0.0, MAX_VOLUME),
                 muted           = muted,
                 title           = title,
                 videoCodec      = codec,

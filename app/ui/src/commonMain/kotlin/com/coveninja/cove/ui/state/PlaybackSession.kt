@@ -14,6 +14,7 @@ import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.data.TrackMemory
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.MediaTimestamps
@@ -23,6 +24,7 @@ import com.coveninja.cove.shared.data.PluginTransportCommand
 import com.coveninja.cove.shared.network.resolveTmdbImageUrl
 import com.coveninja.cove.shared.network.WatchProgressRequest
 import com.coveninja.cove.ui.model.Media
+import com.coveninja.cove.ui.model.displayImageUrl
 import com.coveninja.cove.ui.model.MediaEpisode
 import com.coveninja.cove.ui.model.MediaType
 import com.coveninja.cove.ui.model.MediaVideo
@@ -48,14 +50,35 @@ data class PlaybackRequest(
      */
     val extra: MediaVideo? = null,
 ) {
-    val label: String
+    /** The title on its own, which is what leads everywhere the episode is shown separately. */
+    val heading: String get() = media.title ?: media.name ?: "Untitled"
+
+    /** "S2E4 · Episode name", or the extra's own title. Null for a film, which has neither. */
+    val episodeSubtitle: String?
         get() {
-            val title = media.title ?: media.name ?: "Untitled"
-            extra?.let { return "$title · ${it.title}" }
-            if (season == null || episode == null) return title
-            val suffix = episodeTitle?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            return "$title · S${season}E$episode$suffix"
+            // Extras use the media title as the heading and the video title as context.
+            extra?.let { return it.title }
+            val season = season ?: return null
+            val number = episode ?: return null
+            return listOfNotNull(
+                "S${season}E$number",
+                episodeTitle?.takeIf { it.isNotBlank() },
+            ).joinToString(" · ")
         }
+
+    /** The two above on one line, for the places that have room for only one string. */
+    val label: String
+        get() = listOfNotNull(heading, episodeSubtitle).joinToString(" · ")
+
+    /** What a lock screen, a notification or a window title should say. */
+    fun nowPlaying(): NowPlaying = NowPlaying(
+        title = heading,
+        subtitle = episodeSubtitle,
+        // Resolved rather than passed through: a stored poster may still be a bare TMDB path
+        // or a loopback proxy URL from the retired app, neither of which any notification can
+        // fetch. w342 is a lock-screen thumbnail, not a page of artwork.
+        artworkUrl = displayImageUrl(media.posterUrl, "w342"),
+    )
 }
 
 /**
@@ -103,8 +126,23 @@ class PlaybackSession(
     private val scope: CoroutineScope,
     private val host: VideoPlayerHost?,
 ) {
-    var request by mutableStateOf<PlaybackRequest?>(null)
-        private set
+    private var currentRequest by mutableStateOf<PlaybackRequest?>(null)
+
+    /**
+     * What the session is playing, or null for none.
+     *
+     * Written through a setter rather than a plain state field so the host is told on every
+     * path — the six places this is assigned include the one that only upgrades the episode
+     * title once it resolves, and the close that clears it. A host that has to be told
+     * separately is a host that will eventually be told on five paths out of six.
+     */
+    var request: PlaybackRequest?
+        get() = currentRequest
+        private set(value) {
+            currentRequest = value
+            host?.setNowPlaying(value?.nowPlaying())
+        }
+
     var phase by mutableStateOf<PlaybackPhase?>(null)
         private set
 
@@ -513,6 +551,43 @@ class PlaybackSession(
     private fun playerCodecCapabilities(): VideoCodecCapabilities =
         host?.videoCodecCapabilities ?: VideoCodecCapabilities()
 
+    /**
+     * Records a track or speed the viewer chose, so the next episode opens the same way.
+     *
+     * Only ever called from an explicit choice — never from the automatic selection that
+     * happens on load, which would write the settings' own answer back as though it were the
+     * viewer's and make the memory impossible to clear. Extras are excluded for the same
+     * reason they are excluded on the way in.
+     */
+    fun rememberAudioLanguage(language: String?) {
+        updateMemory { it.copy(audioLanguage = language?.trim().orEmpty()) }
+    }
+
+    fun rememberSubtitleChoice(language: String?, off: Boolean) {
+        updateMemory {
+            it.copy(
+                subtitleLanguage = if (off) "" else language?.trim().orEmpty(),
+                subtitlesOff = off,
+            )
+        }
+    }
+
+    fun rememberSpeed(speed: Double) {
+        updateMemory { it.copy(speed = speed) }
+    }
+
+    private fun updateMemory(change: (TrackMemory) -> TrackMemory) {
+        val current = request ?: return
+        if (current.extra != null) return
+        val tmdbId = current.media.tmdbId
+        scope.launch {
+            runCatching {
+                val existing = graph.trackMemory.read(tmdbId)
+                graph.trackMemory.write(tmdbId, change(existing))
+            }
+        }
+    }
+
     fun close() {
         generation++
         stopProgressTicker()
@@ -540,7 +615,10 @@ class PlaybackSession(
         val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings ?: return
         if (!settings.rememberVolume) return
         val player = host ?: return
-        val fraction = (player.status.value.volume / 100.0).coerceIn(0.0, 1.0)
+        // Clamped at 1.0 deliberately, now that the player goes to MAX_VOLUME: a boost is
+        // compensation for one quiet mix, not a level to open every later title at, and
+        // AppSettings.defaultVolume is a 0..1 fraction its own slider is drawn against.
+        val fraction = (player.status.value.volume / NORMAL_VOLUME).coerceIn(0.0, 1.0)
         if (fraction == settings.defaultVolume) return
         scope.launch {
             runCatching { graph.settings.update(settings.copy(defaultVolume = fraction)) }
@@ -608,6 +686,16 @@ class PlaybackSession(
         settings: AppSettings?,
         showResumeNotice: Boolean,
     ) {
+        // An extra is a trailer, not the title: remembering that someone watched one with
+        // German subtitles is not a fact about the film, and applying it would be worse.
+        val memory = if (current.extra != null) {
+            TrackMemory.None
+        } else {
+            runCatching { graph.trackMemory.read(current.media.tmdbId) }
+                .getOrDefault(TrackMemory.None)
+        }
+        if (token != generation) return
+
         settings?.let {
             // An extra is not worth a details round trip merely to decide which
             // dub of a trailer to prefer; ordinary playback retains the richer lookup.
@@ -617,14 +705,20 @@ class PlaybackSession(
                 originalLanguageFor(current, it)
             }
             player.applyPreferences(
-                it.playbackPreferences(originalLanguage),
+                it.playbackPreferences(originalLanguage).withMemory(memory),
             )
         }
         if (token != generation) return
 
+        // After the preferences, and only when it is not the default: setting a speed the
+        // viewer never chose would make every title open at whatever the last one used.
+        if (memory.speed != 1.0) player.setSpeed(memory.speed)
+
         // AppSettings.defaultVolume is a 0..1 fraction; mpv's volume property is
         // 0..100. Passing it through unscaled is near-silent audio.
-        settings?.defaultVolume?.let { player.setVolume((it * 100.0).coerceIn(0.0, 100.0)) }
+        settings?.defaultVolume?.let {
+            player.setVolume((it * NORMAL_VOLUME).coerceIn(0.0, NORMAL_VOLUME))
+        }
         resumedFrom = startPositionSeconds.takeIf { showResumeNotice && it > 0.0 }
         player.load(url, startPositionSeconds.coerceAtLeast(0.0))
         startPlaybackMonitor(token)

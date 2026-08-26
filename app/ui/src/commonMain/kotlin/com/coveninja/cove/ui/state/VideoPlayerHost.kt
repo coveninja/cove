@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -61,8 +62,11 @@ data class PlaybackStatus(
     val paused: Boolean = true,
     val positionSeconds: Double = 0.0,
     val durationSeconds: Double = 0.0,
-    /** 0..100, matching mpv. Not the 0..1 scale AppSettings.defaultVolume uses. */
-    val volume: Double = 100.0,
+    /**
+     * 0..[MAX_VOLUME], matching mpv. Not the 0..1 scale AppSettings.defaultVolume uses, and
+     * not capped at [NORMAL_VOLUME] — anything above that is amplification.
+     */
+    val volume: Double = NORMAL_VOLUME,
     /**
      * Independent of [volume]: a muted player at volume 100 is silent. The "start
      * muted" setting mutes at load, so the UI has to read this rather than infer
@@ -192,6 +196,46 @@ fun classifyPlaybackTermination(
 }
 
 /**
+ * What is playing, as a person would name it.
+ *
+ * Separate from [PlaybackStatus] because it answers a different question and arrives from
+ * a different direction: the status is everything libmpv can be asked about a file, and a
+ * file knows its resolution and its chapter list but not that it is episode three. Only the
+ * session that opened it knows that, and until it says so the host has a URL and nothing
+ * else — which is the whole reason Android's lock screen used to read "Cove".
+ *
+ * No duration here on purpose. It is not known when a request opens, it is already published
+ * on [PlaybackStatus], and carrying it would mean revising this value every time a file
+ * loads, for a field every consumer can already read.
+ */
+data class NowPlaying(
+    val title: String,
+    /** The episode, or the extra's own name. Null for a film. */
+    val subtitle: String?,
+    val artworkUrl: String?,
+)
+
+/**
+ * Full volume, and the ceiling above it.
+ *
+ * 130 is mpv's own `volume-max` default, and above [NORMAL_VOLUME] it amplifies rather than
+ * attenuates — which is the point: quiet dialogue on laptop speakers is the standing complaint,
+ * and the UI used to stop at 100 and offer no way past it. Both hosts pass it to mpv explicitly
+ * rather than trusting a default that merely happens to agree.
+ *
+ * Raising this alone is not enough, and that is the whole trap: the volume passes through four
+ * separate clamps on its way to mpv and back — the layer above, the `VideoPlayerHost`, the
+ * `DesktopPlayer` beneath it, and the property readback that feeds the slider. Miss the write
+ * and nothing gets louder; miss the readback and the slider snaps home a fifth of a second
+ * later. Every one of them takes its ceiling from here, so there is one number to change.
+ */
+const val NORMAL_VOLUME = 100.0
+const val MAX_VOLUME = 130.0
+
+/** The default for a host that never reports one, shared so each does not allocate its own. */
+private val NO_MEDIA_PLAYING: StateFlow<NowPlaying?> = MutableStateFlow(null)
+
+/**
  * A video surface plus transport controls, implemented per platform. Desktop and
  * Android both wrap libmpv behind their platform-native surface hosts.
  *
@@ -202,6 +246,25 @@ fun classifyPlaybackTermination(
 @Stable
 interface VideoPlayerHost {
     val status: StateFlow<PlaybackStatus>
+
+    /**
+     * What the session last said it was playing, for the parts of a host that are outside
+     * the composition and cannot ask: Android's media session and notification, the desktop
+     * window title.
+     *
+     * Defaulted so a host that shows this nowhere — a test double, the TV shell's — does not
+     * have to carry a field for it.
+     */
+    val nowPlaying: StateFlow<NowPlaying?> get() = NO_MEDIA_PLAYING
+
+    /**
+     * Names what [load] is about to play, or clears it when playback ends.
+     *
+     * Called by the session rather than folded into [load] because the two do not happen
+     * together: the identity is known while sources are still resolving, and it survives a
+     * failover to a different source of the same episode.
+     */
+    fun setNowPlaying(value: NowPlaying?) = Unit
 
     /**
      * Video decoders exposed by the host. Android fills this from MediaCodecList;
@@ -252,7 +315,7 @@ interface VideoPlayerHost {
      */
     fun seekRelative(deltaSeconds: Double)
 
-    /** [volume] is 0..100, matching mpv. */
+    /** [volume] is 0..[MAX_VOLUME], matching mpv. Implementations clamp to that, not to 100. */
     fun setVolume(volume: Double)
 
     /** Toggles the player's own mute flag, which [setVolume] does not affect. */

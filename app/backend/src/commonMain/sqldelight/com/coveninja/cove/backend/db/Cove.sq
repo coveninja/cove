@@ -247,6 +247,26 @@ CREATE TABLE insights_cache (
     signature TEXT NOT NULL DEFAULT ''
 );
 
+-- What the viewer actually chose for a title, as opposed to what the settings would choose
+-- for them. Per title rather than global because the answer differs by title: the same
+-- household watches one show subtitled and another dubbed, and a single preference cannot
+-- express that. Device-local — it never leaves for the account, since it describes what was
+-- picked on this screen with these speakers rather than something true of the profile.
+CREATE TABLE track_memory (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    tmdb_id INTEGER NOT NULL,
+    -- Languages, not track ids: ids are positions in one file's track list and mean nothing
+    -- in the next episode, which is the only place this is ever read.
+    audio_language TEXT NOT NULL DEFAULT '',
+    subtitle_language TEXT NOT NULL DEFAULT '',
+    -- Distinct from an empty subtitle_language, which means "never chose". Switching
+    -- subtitles off is a choice, and one that has to survive the next episode.
+    subtitles_off INTEGER NOT NULL DEFAULT 0,
+    speed REAL NOT NULL DEFAULT 1.0,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (profile_id, tmdb_id)
+);
+
 selectMigrationMetadata:
 SELECT value FROM migration_metadata WHERE key = ?;
 
@@ -604,3 +624,15 @@ VALUES (?, ?, ?, ?);
 
 deleteInsightsCache:
 DELETE FROM insights_cache;
+
+selectTrackMemory:
+SELECT * FROM track_memory WHERE profile_id = ? AND tmdb_id = ?;
+
+upsertTrackMemory:
+INSERT OR REPLACE INTO track_memory(
+    profile_id, tmdb_id, audio_language, subtitle_language, subtitles_off, speed, updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+deleteTrackMemory:
+DELETE FROM track_memory WHERE profile_id = ? AND tmdb_id = ?;

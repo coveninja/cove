@@ -1,5 +1,6 @@
 package com.coveninja.cove.desktop.player
 
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.sun.jna.Memory
 import com.sun.jna.Pointer
 import com.sun.jna.StringArray
@@ -78,6 +79,7 @@ class MpvOpenGlPlayer(
             setOption(library, created, "terminal",  "no")
             setOption(library, created, "msg-level", "all=warn")
             setOption(library, created, "keep-open", "yes")
+            setOption(library, created, "volume-max", MAX_VOLUME.toInt().toString())
             // As in MpvSoftwarePlayer: libmpv defaults this off, and without it
             // --play cannot be handed a page URL.
             setOption(library, created, "ytdl", "yes")
@@ -140,7 +142,7 @@ class MpvOpenGlPlayer(
     override fun setVolume(volume: Double) {
         submitCommand("set volume") { library, target ->
             val v = Memory(Double.SIZE_BYTES.toLong()).apply {
-                setDouble(0, volume.coerceIn(0.0, 100.0))
+                setDouble(0, volume.coerceIn(0.0, MAX_VOLUME))
             }
             try {
                 library.mpv_set_property(target, "volume", Mpv.FORMAT_DOUBLE, v)
@@ -359,7 +361,7 @@ class MpvOpenGlPlayer(
                 paused          = paused,
                 positionSeconds = position,
                 durationSeconds = duration,
-                volume          = volume.coerceIn(0.0, 100.0),
+                volume          = volume.coerceIn(0.0, MAX_VOLUME),
                 muted           = muted,
                 title           = title,
                 videoCodec      = codec,

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +25,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +37,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -205,7 +209,7 @@ internal fun VolumeOverlay(
     muted: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val fraction = (volume / 100.0).coerceIn(0.0, 1.0).toFloat()
+    val fraction = (volume / MAX_VOLUME).coerceIn(0.0, 1.0).toFloat()
     val filled = androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (muted) 0f else fraction,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
@@ -240,6 +244,125 @@ internal fun VolumeOverlay(
         }
         Text(
             text = if (muted) "Muted" else "${volume.roundToInt()}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+// ── Gesture readouts ─────────────────────────────────────────────────────────
+
+/**
+ * The screen brightness a swipe is setting, in the same shape as the volume overlay.
+ *
+ * Deliberately the same shape: the two gestures are mirror images either side of the picture,
+ * and readouts that looked different would suggest they were different kinds of thing.
+ */
+@Composable
+internal fun BrightnessOverlay(level: Float, modifier: Modifier = Modifier) {
+    val filled = androidx.compose.animation.core.animateFloatAsState(
+        targetValue = level.coerceIn(0f, 1f),
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "BrightnessOverlayFill",
+    )
+
+    Row(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        IconifyIcon(
+            icon = if (level < 0.34f) "lucide:sun-dim" else "lucide:sun",
+            modifier = Modifier.size(17.dp),
+            tint = Color.White,
+        )
+        Box(
+            modifier = Modifier
+                .width(96.dp)
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Color.White.copy(alpha = 0.24f)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(filled.value.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .background(Color.White),
+            )
+        }
+        Text(
+            text = "${(level * 100).roundToInt()}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/**
+ * Where a drag-to-scrub would land, and how far that is from here.
+ *
+ * Both numbers, because either alone is guesswork: the timestamp says nothing about how big a
+ * jump it is, and the offset says nothing about where it lands in an episode.
+ */
+@Composable
+internal fun ScrubReadout(
+    targetSeconds: Double,
+    fromSeconds: Double,
+    modifier: Modifier = Modifier,
+) {
+    val delta = (targetSeconds - fromSeconds).roundToInt()
+    val sign = if (delta >= 0) "+" else "-"
+    Column(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = formatDuration(targetSeconds),
+            color = Color.White,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            text = "$sign${abs(delta)}s",
+            color = Color.White.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+/**
+ * The way out of a locked screen.
+ *
+ * Shown only when the screen is touched, and never permanently: a lock whose unlock button sat
+ * on screen the whole time would be as easy to hit by accident as the controls it is there to
+ * protect. Two presses to leave, for the same reason.
+ */
+@Composable
+internal fun LockedNotice(onUnlock: () -> Unit, modifier: Modifier = Modifier) {
+    var confirming by remember { mutableStateOf(false) }
+    Row(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(30.dp))
+            .clickable {
+                if (confirming) onUnlock() else confirming = true
+            }
+            .padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        IconifyIcon(
+            icon = if (confirming) "lucide:lock-open" else "lucide:lock",
+            modifier = Modifier.size(17.dp),
+            tint = Color.White,
+        )
+        Text(
+            text = if (confirming) "Tap again to unlock" else "Screen locked",
             color = Color.White,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,

@@ -17,8 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.coveninja.cove.shared.network.CoveJson
+import com.coveninja.cove.ui.state.MAX_VOLUME
 import com.coveninja.cove.ui.state.MediaChapter
 import com.coveninja.cove.ui.state.MediaTrack
+import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
 import com.coveninja.cove.ui.state.TrackKind
@@ -78,6 +80,13 @@ class AndroidMpvVideoPlayerHost(
 
     private val _status = MutableStateFlow(PlaybackStatus())
     override val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
+
+    private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
+    override val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
+
+    override fun setNowPlaying(value: NowPlaying?) {
+        _nowPlaying.value = value
+    }
     override val playsWebVideos: Boolean = true
     override val videoCodecCapabilities: VideoCodecCapabilities = probeVideoCodecCapabilities()
 
@@ -222,7 +231,7 @@ class AndroidMpvVideoPlayerHost(
     }
 
     override fun setVolume(volume: Double) = onMain {
-        val clamped = volume.coerceIn(0.0, 100.0)
+        val clamped = volume.coerceIn(0.0, MAX_VOLUME)
         pendingVolume = clamped
         if (initialized) {
             requireMpv().setPropertyDouble("volume", clamped)
@@ -427,6 +436,11 @@ class AndroidMpvVideoPlayerHost(
             setInitialOption("ao", "audiotrack")
             setInitialOption("force-window", "yes")
             setInitialOption("keep-open", "yes")
+            // Taken from MAX_VOLUME in :ui, like the desktop's. Set as an option rather than
+            // left to mpv's identical default, which also settles it against the viewer's own
+            // mpv.conf — this host does load one (config=yes below), and an option set before
+            // init outranks the config file, so the ceiling cannot be lowered under the slider.
+            setInitialOption("volume-max", MAX_VOLUME.toInt().toString())
             setInitialOption("cache", "yes")
             setInitialOption("demuxer-max-bytes", "32MiB")
             setInitialOption("demuxer-readahead-secs", "4")
@@ -593,7 +607,7 @@ class AndroidMpvVideoPlayerHost(
                 current.copy(positionSeconds = pendingSeekSeconds ?: value.coerceAtLeast(0.0))
             }
             "duration" -> current.copy(durationSeconds = value.coerceAtLeast(0.0))
-            "volume" -> current.copy(volume = value.coerceIn(0.0, 100.0))
+            "volume" -> current.copy(volume = value.coerceIn(0.0, MAX_VOLUME))
             "cache-buffering-state" -> current.copy(bufferingPercent = value.toInt().coerceIn(0, 100))
             "demuxer-cache-time" -> current.copy(bufferedSeconds = value.coerceAtLeast(0.0))
             "demuxer-cache-duration" -> current.copy(bufferedAheadSeconds = value.coerceAtLeast(0.0))

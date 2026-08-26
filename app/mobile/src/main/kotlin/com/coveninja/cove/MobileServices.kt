@@ -5,25 +5,38 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.graphics.Bitmap
 import android.content.Intent
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.IBinder
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.toBitmap
 import com.coveninja.cove.backend.AndroidBackendRuntime
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class PlaybackService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var mediaSession: MediaSession
     private lateinit var notifications: NotificationManager
+
+    /** The current title's poster, once it has been fetched. Null until then, and on failure. */
+    private var artwork: Bitmap? = null
+
+    /** What the last published metadata described, so an unchanged one is not republished. */
+    private var lastMetadataKey: List<Any?>? = null
     private val player get() = (application as CoveMobileApplication).playerHost()
 
     override fun onCreate() {
@@ -39,17 +52,52 @@ class PlaybackService : Service() {
                 override fun onSkipToPrevious() = player.seekRelative(-10.0)
                 override fun onSkipToNext() = player.seekRelative(30.0)
             })
-            setMetadata(MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, "Cove").build())
             isActive = true
         }
-        startForeground(PLAYBACK_NOTIFICATION_ID, playbackNotification(player.status.value))
+        startForeground(
+            PLAYBACK_NOTIFICATION_ID,
+            playbackNotification(player.status.value, player.nowPlaying.value),
+        )
+        // Both, because the two answer different halves of what a lock screen shows and
+        // neither changes when the other does: the title arrives once when a request opens,
+        // the position four times a second.
         serviceScope.launch {
-            player.status.collectLatest { status ->
-                updateMediaSession(status)
-                notifications.notify(PLAYBACK_NOTIFICATION_ID, playbackNotification(status))
+            combine(player.status, player.nowPlaying, ::Pair).collectLatest { (status, playing) ->
+                updateMediaSession(status, playing)
+                notifications.notify(
+                    PLAYBACK_NOTIFICATION_ID,
+                    playbackNotification(status, playing),
+                )
+            }
+        }
+        // Artwork is fetched off the status path: it is one image per title, it can fail, and
+        // it must never hold up the transport state that shares this notification.
+        serviceScope.launch {
+            player.nowPlaying.collectLatest { playing ->
+                artwork = playing?.artworkUrl?.let { loadArtwork(it) }
+                notifications.notify(
+                    PLAYBACK_NOTIFICATION_ID,
+                    playbackNotification(player.status.value, playing),
+                )
+                updateMediaSession(player.status.value, playing)
             }
         }
     }
+
+    /**
+     * The poster, or null.
+     *
+     * Through the app's own Coil loader rather than a fresh HTTP call, so a title already on
+     * screen costs nothing to show again here — it is the same URL the details page fetched.
+     */
+    private suspend fun loadArtwork(url: String): Bitmap? = runCatching {
+        val request = ImageRequest.Builder(this)
+            .data(url)
+            .build()
+        (SingletonImageLoader.get(this).execute(request) as? SuccessResult)
+            ?.image
+            ?.toBitmap()
+    }.getOrNull()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -70,20 +118,29 @@ class PlaybackService : Service() {
         super.onDestroy()
     }
 
-    private fun playbackNotification(status: PlaybackStatus): Notification {
+    private fun playbackNotification(
+        status: PlaybackStatus,
+        playing: NowPlaying?,
+    ): Notification {
         val playAction = if (status.paused) "Play" else "Pause"
         val playIcon = if (status.paused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause
         return Notification.Builder(this, PLAYBACK_CHANNEL)
             .setSmallIcon(R.drawable.ic_cove_notification)
-            .setContentTitle("Cove")
+            .setContentTitle(playing?.title ?: "Cove")
+            // The episode normally, but a transient state displaces it: someone glancing at a
+            // stalled player needs to know it is buffering more than they need to be told
+            // which episode they already chose.
             .setContentText(
                 when {
                     status.error != null -> status.error
                     status.waitingForData -> "Buffering…"
-                    status.paused -> "Playback paused"
-                    else -> "Playing"
+                    // A film has no episode line, so it says "Paused" and stops there rather
+                    // than padding it out with a word that describes nothing.
+                    status.paused -> listOfNotNull("Paused", playing?.subtitle).joinToString(" · ")
+                    else -> playing?.subtitle ?: "Playing"
                 },
             )
+            .apply { artwork?.let { setLargeIcon(it) } }
             .setContentIntent(activityIntent())
             .setOnlyAlertOnce(true)
             .setOngoing(!status.paused)
@@ -118,7 +175,8 @@ class PlaybackService : Service() {
             .build()
     }
 
-    private fun updateMediaSession(status: PlaybackStatus) {
+    private fun updateMediaSession(status: PlaybackStatus, playing: NowPlaying?) {
+        updateMetadata(status, playing)
         val state = when {
             status.endReached -> PlaybackState.STATE_STOPPED
             status.waitingForData || (!status.fileLoaded && !status.paused) -> PlaybackState.STATE_BUFFERING
@@ -137,6 +195,50 @@ class PlaybackService : Service() {
         )
     }
 
+    /**
+     * Pushes the metadata, but only when it has actually changed.
+     *
+     * The transport state arrives about four times a second and shares this method's caller;
+     * republishing a bitmap at that rate is wasted work and makes some lock screens flicker.
+     * The playback state below is cheap and does update every tick, which is what keeps the
+     * scrubber moving.
+     */
+    private fun updateMetadata(status: PlaybackStatus, playing: NowPlaying?) {
+        val durationMillis = if (status.durationSeconds > 0.0) {
+            (status.durationSeconds * 1_000).toLong()
+        } else {
+            0L
+        }
+        val key = listOf(playing?.title, playing?.subtitle, durationMillis, artwork != null)
+        if (key == lastMetadataKey) return
+        lastMetadataKey = key
+
+        // Without a duration the system media control draws no scrubber at all, which is why
+        // the lock screen used to offer nothing but a pair of buttons.
+        mediaSession.setMetadata(
+            MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, playing?.title ?: "Cove")
+                .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, playing?.title ?: "Cove")
+                .apply {
+                    playing?.subtitle?.let {
+                        putString(MediaMetadata.METADATA_KEY_ARTIST, it)
+                        putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, it)
+                    }
+                    artwork?.let {
+                        putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
+                        putBitmap(MediaMetadata.METADATA_KEY_ART, it)
+                    }
+                    if (status.durationSeconds > 0.0) {
+                        putLong(
+                            MediaMetadata.METADATA_KEY_DURATION,
+                            (status.durationSeconds * 1_000).toLong(),
+                        )
+                    }
+                }
+                .build(),
+        )
+    }
+
     private fun serviceIntent(action: String, requestCode: Int): PendingIntent = PendingIntent.getService(
         this,
         requestCode,
@@ -144,9 +246,11 @@ class PlaybackService : Service() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private companion object {
-        const val PLAYBACK_NOTIFICATION_ID = 101
-        const val PLAYBACK_CHANNEL = "cove_playback"
+    // Not private: the picture-in-picture window offers the same three transport actions the
+    // notification does, and both should mean the same thing by them.
+    companion object {
+        private const val PLAYBACK_NOTIFICATION_ID = 101
+        private const val PLAYBACK_CHANNEL = "cove_playback"
         const val ACTION_PLAY_PAUSE = "com.coveninja.cove.PLAY_PAUSE"
         const val ACTION_REWIND = "com.coveninja.cove.REWIND"
         const val ACTION_FORWARD = "com.coveninja.cove.FORWARD"

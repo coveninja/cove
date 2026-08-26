@@ -1,9 +1,13 @@
 package com.coveninja.cove
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.Icon
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.app.UiModeManager
 import android.content.res.Configuration
 import android.os.Build
@@ -20,6 +24,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -113,6 +119,17 @@ class MainActivity : ComponentActivity() {
                         is MobileRuntimeState.Ready -> {
                             val host = remember { mobileApplication.playerHost() }
                             playerHost = host
+                            // The floating window's play/pause glyph and its shape both come
+                            // from the params, and params are a snapshot — so they have to be
+                            // re-issued whenever either changes. Collected off the flow rather
+                            // than through composition: this is four updates a second of
+                            // position data with two fields worth reacting to.
+                            LaunchedEffect(host) {
+                                host.status
+                                    .map { it.paused to (it.renderWidth to it.renderHeight) }
+                                    .distinctUntilChanged()
+                                    .collect { refreshPictureInPictureParams() }
+                            }
                             val homeState by state.runtime.graph.content.home.collectAsState()
                             LaunchedEffect(homeState) {
                                 if (homeState !is HomeState.Loading) reportFullyDrawn()
@@ -210,20 +227,96 @@ class MainActivity : ComponentActivity() {
         }
         // Same reasoning as onUserLeaveHint: on a television, auto-enter would turn pressing
         // Home into a floating window rather than leaving the app.
-        if (!isTelevision) setPictureInPictureParams(pictureInPictureParams())
+        refreshPictureInPictureParams()
         updateSystemBars()
         updateOrientation()
     }
 
-    private fun pictureInPictureParams(): PictureInPictureParams = PictureInPictureParams.Builder()
-        .setAspectRatio(Rational(16, 9))
-        .apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                setAutoEnterEnabled(fullscreenPlaybackVisible)
-                setSeamlessResizeEnabled(true)
+    private fun pictureInPictureParams(): PictureInPictureParams {
+        val status = if (::playerHost.isInitialized) playerHost.status.value else null
+        val (width, height) = pictureInPictureAspect(
+            width = status?.renderWidth ?: 0,
+            height = status?.renderHeight ?: 0,
+        )
+        return PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(width, height))
+            // Without these the floating window is a picture and nothing else: no way to
+            // pause, no way to skip, and no way to do either without restoring the app first.
+            // They are pointed at the service actions that already existed for the
+            // notification, so this is wiring rather than new behaviour.
+            .setActions(pictureInPictureActions(status?.paused ?: true))
+            .apply {
+                // Where the window animates from. The video fills the window during
+                // fullscreen playback, so the window's own bounds are the closest thing to
+                // the picture available here — an exact hint would need the letterboxed
+                // video rect, which lives inside the composition.
+                runCatching {
+                    val bounds = android.graphics.Rect()
+                    window.decorView.getGlobalVisibleRect(bounds)
+                    if (!bounds.isEmpty) setSourceRectHint(bounds)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    setAutoEnterEnabled(fullscreenPlaybackVisible)
+                    setSeamlessResizeEnabled(true)
+                }
             }
-        }
-        .build()
+            .build()
+    }
+
+    /**
+     * Rewind, play/pause, forward — the three a floating window has room for.
+     *
+     * The middle one changes glyph and title with the transport, which is why the params have
+     * to be re-issued when playback pauses rather than set once: a floating window showing a
+     * play triangle over a playing film is worse than showing nothing.
+     */
+    private fun pictureInPictureActions(paused: Boolean): List<RemoteAction> = listOf(
+        remoteAction(
+            icon = android.R.drawable.ic_media_rew,
+            title = "Rewind",
+            action = PlaybackService.ACTION_REWIND,
+            requestCode = 11,
+        ),
+        remoteAction(
+            icon = if (paused) {
+                android.R.drawable.ic_media_play
+            } else {
+                android.R.drawable.ic_media_pause
+            },
+            title = if (paused) "Play" else "Pause",
+            action = PlaybackService.ACTION_PLAY_PAUSE,
+            requestCode = 12,
+        ),
+        remoteAction(
+            icon = android.R.drawable.ic_media_ff,
+            title = "Forward",
+            action = PlaybackService.ACTION_FORWARD,
+            requestCode = 13,
+        ),
+    )
+
+    private fun remoteAction(
+        icon: Int,
+        title: String,
+        action: String,
+        requestCode: Int,
+    ): RemoteAction = RemoteAction(
+        Icon.createWithResource(this, icon),
+        title,
+        title,
+        PendingIntent.getService(
+            this,
+            requestCode,
+            Intent(this, PlaybackService::class.java).setAction(action),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ),
+    )
+
+    /** Safe to call at any time: a no-op on a television and before a player exists. */
+    private fun refreshPictureInPictureParams() {
+        if (isTelevision) return
+        runCatching { setPictureInPictureParams(pictureInPictureParams()) }
+    }
 
     /**
      * The picture-in-picture state is a parameter rather than a read of the activity's own

@@ -136,6 +136,7 @@ class AndroidBackendRuntime private constructor(
         // Android keeps torrent downloads under filesDir, which the system never reclaims, so
         // the storage screen is if anything more load-bearing here than on the desktop.
         storage = storage,
+        trackMemory = stores.repositories.trackMemory,
         onClose = ::close,
     )
 

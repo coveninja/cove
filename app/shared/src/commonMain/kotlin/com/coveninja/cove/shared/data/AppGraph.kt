@@ -29,6 +29,8 @@ class AppGraph(
     val device: DeviceRepository = UnavailableDeviceRepository,
     val updates: UpdateRepository = UnavailableUpdateRepository,
     val storage: StorageRepository = UnavailableStorageRepository,
+    /** Per-title track choices. Device-local, like [device] and [storage], and never synced. */
+    val trackMemory: TrackMemoryRepository = UnavailableTrackMemoryRepository,
     val plugins: PluginRepository = UnavailablePluginRepository,
     /**
      * True when every repository above is a canned fixture rather than a live backend.

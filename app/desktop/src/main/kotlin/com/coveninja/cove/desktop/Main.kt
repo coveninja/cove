@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,6 +27,7 @@ import androidx.compose.ui.window.rememberWindowState
 import androidx.compose.ui.window.application
 import com.coveninja.cove.desktop.backend.SingleInstanceLock
 import com.coveninja.cove.desktop.player.DesktopPlayer
+import com.coveninja.cove.desktop.player.IdleInhibitor
 import com.coveninja.cove.desktop.player.MpvOpenGlPanel
 import com.coveninja.cove.desktop.player.MpvOpenGlPlayer
 import com.coveninja.cove.desktop.player.MpvSoftwarePlayer
@@ -154,10 +156,19 @@ fun main(args: Array<String>) {
                 // controller is built here and handed to :ui rather than :ui
                 // reaching for a window it cannot see.
                 val fullscreen = remember(windowState) { WindowFullscreenController(windowState) }
+
+                // The taskbar, the dock and the alt-tab switcher all read the window title,
+                // and every one of them said "Cove" whatever was playing.
+                val nowPlaying by playerHost.nowPlaying.collectAsState()
+                val shellName = if (tvShell) "Cove TV" else "Cove"
+                val windowTitle = nowPlaying?.let { "${it.title} — $shellName" } ?: shellName
+
+                KeepDisplayAwake(playerHost)
+
                 Window(
                     onCloseRequest = ::exitApplication,
                     state = windowState,
-                    title = if (tvShell) "Cove TV" else "Cove",
+                    title = windowTitle,
                     // The window's own icon — what a taskbar, a dock and an alt-tab switcher
                     // show. Separate from the packaged icon, and left as the stock Java one
                     // until now. Drawn from the same vector the UI uses, so there is no second
@@ -202,6 +213,12 @@ private fun StandalonePlayerWindow(
     softwareRenderer: Boolean,
     onClose: () -> Unit,
 ) {
+    // --play is still two hours of video on a screen nobody is touching.
+    val inhibitor = remember { IdleInhibitor.forThisPlatform() }
+    DisposableEffect(inhibitor) {
+        inhibitor.acquire()
+        onDispose { inhibitor.release() }
+    }
     Window(onCloseRequest = onClose, title = "Cove — $file") {
         CoveTheme {
             if (softwareRenderer) {
@@ -210,6 +227,24 @@ private fun StandalonePlayerWindow(
                 OpenGlPlayerSurface(file, fallbackToSoftware = true)
             }
         }
+    }
+}
+
+/**
+ * Holds off the screensaver for as long as the player is actually playing.
+ *
+ * Keyed on playing rather than merely open: a player left paused overnight has no claim on
+ * anyone's display, and mpv reports pause and media independently of one another.
+ */
+@Composable
+private fun KeepDisplayAwake(playerHost: MpvVideoPlayerHost) {
+    val status by playerHost.status.collectAsState()
+    val playing = status.hasMedia && !status.paused
+    val inhibitor = remember { IdleInhibitor.forThisPlatform() }
+
+    DisposableEffect(playing) {
+        if (playing) inhibitor.acquire() else inhibitor.release()
+        onDispose { inhibitor.release() }
     }
 }
 
