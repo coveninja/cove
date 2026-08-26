@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 private const val SCIENCE_FICTION = 878
@@ -205,6 +206,48 @@ class FixtureInsightsTest {
         assertTrue(
             titles.all { it.posterPath.isNotBlank() },
             "leaderboard posters come from the fixture catalog and must resolve",
+        )
+    }
+
+    /**
+     * The moments chapter is the flagship of the redesigned page, and a fixtures run is how
+     * its layout gets judged before real data exists. Fixture moments are derived from the
+     * same canned calendar as the heatmap, so these assertions also catch the two halves
+     * disagreeing — a "biggest day" the heatmap has no cell for would be worse than none.
+     */
+    @Test
+    fun `fixture activity carries moments for the chapter to show`() = runTest {
+        val stats = FixtureAppGraph().insights.activity()
+
+        val biggest = stats.biggestDay
+        assertNotNull(biggest, "the moments chapter needs a biggest day")
+        assertTrue(biggest.title.isNotBlank(), "a moment poster needs a title behind it")
+        assertTrue(
+            stats.calendar.containsKey(biggest.date),
+            "the biggest day must be a day the heatmap also has a cell for",
+        )
+        assertEquals(
+            stats.calendar.values.max(),
+            biggest.seconds,
+            "the biggest day should carry the calendar's largest total",
+        )
+
+        assertNotNull(stats.firstWatch, "the moments chapter needs a first watch")
+        assertNotNull(stats.longestSession, "the moments chapter needs a longest sitting")
+
+        val headliners = stats.monthlyHeadliners
+        assertTrue(
+            headliners.size >= 3,
+            "the twelve-title strip hides itself under three entries; got ${headliners.size}",
+        )
+        assertEquals(
+            headliners.map { it.date }.sorted(),
+            headliners.map { it.date },
+            "the strip reads as a year, so it has to arrive in month order",
+        )
+        assertTrue(
+            headliners.all { it.posterPath.isNotBlank() },
+            "every month in the strip needs artwork or the row has holes in it",
         )
     }
 

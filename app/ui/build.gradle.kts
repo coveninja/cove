@@ -54,6 +54,8 @@ kotlin {
 
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
+            // FileProvider, for handing the recap image to the share sheet.
+            implementation(libs.androidx.core.ktx)
         }
     }
 }

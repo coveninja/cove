@@ -57,7 +57,7 @@ internal fun StatTile(
     caption: String,
     modifier: Modifier = Modifier,
     detail: String? = null,
-    tone: Color = MaterialTheme.colorScheme.tertiary,
+    tone: Color = LocalInsightsAccent.current,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()

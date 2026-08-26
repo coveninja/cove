@@ -56,6 +56,40 @@ data class TitlePlayCount(
 )
 
 /**
+ * One dated event in a viewer's history, and whatever was on at the time.
+ *
+ * The counterpart to everything else on this class, which is aggregates. A sum describes a
+ * population; a moment describes a person, and "the Saturday you watched nine hours" is the
+ * kind of thing someone recognises about themselves in a way that "your average active day
+ * is 96 minutes" never is. That is the whole reason these exist.
+ *
+ * One type serves every moment on the page rather than four near-identical ones. The cost
+ * is that [date] means something slightly different for a monthly headliner — it is the
+ * first of that month, since the moment covers a month rather than a day — and that is
+ * spelled out here rather than left for a caller to discover.
+ */
+@Serializable
+data class WatchMoment(
+    /** ISO `YYYY-MM-DD`. The first of the month for an entry in [ActivityStats.monthlyHeadliners]. */
+    val date: String = "",
+    val seconds: Long = 0,
+    @SerialName("tmdb_id") val tmdbId: Int = 0,
+    @SerialName("media_type") val mediaType: String = "",
+    /**
+     * Empty when the title is no longer in the library.
+     *
+     * Activity rows are keyed by tmdb id and learn their name from `library_entries`, so a
+     * title that was watched and then removed still has time against it and nothing to call
+     * it. Presentation decides what to do about that; the model does not invent a name.
+     */
+    val title: String = "",
+    @SerialName("poster_path") val posterPath: String = "",
+) {
+    val isEmpty: Boolean
+        get() = date.isBlank() || seconds <= 0L
+}
+
+/**
  * Everything the activity tables can say about how a profile actually watches.
  *
  * Lives in `:shared` rather than beside the service that builds it because both the
@@ -91,4 +125,17 @@ data class ActivityStats(
     @SerialName("titles_watched_this_year") val titlesWatchedThisYear: List<ActivityTitle> = emptyList(),
     /** Titles started more than once, most-played first. */
     val rewatched: List<TitlePlayCount> = emptyList(),
+    /** The single day of the range with the most time on it, and what dominated it. */
+    @SerialName("biggest_day") val biggestDay: WatchMoment? = null,
+    /**
+     * The title that took the most time in each month of the range, earliest first.
+     *
+     * Months with nothing watched in them are absent rather than present and empty, so the
+     * list is between zero and twelve entries long and a caller must not index it by month.
+     */
+    @SerialName("monthly_headliners") val monthlyHeadliners: List<WatchMoment> = emptyList(),
+    /** The longest unbroken run of hours with real watching in them. */
+    @SerialName("longest_session") val longestSession: WatchMoment? = null,
+    /** The first day of the range with anything on it. */
+    @SerialName("first_watch") val firstWatch: WatchMoment? = null,
 )

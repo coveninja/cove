@@ -73,7 +73,7 @@ internal fun MonthBars(
 ) {
     val reveal = rememberChartReveal(bars)
     var focused by remember(bars) { mutableStateOf<Int?>(null) }
-    val currentColor = MaterialTheme.colorScheme.tertiary
+    val currentColor = LocalInsightsAccent.current
     val previousColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
     val axisColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val busiest = bars.indices.maxByOrNull { bars[it].thisYearSeconds }
@@ -177,7 +177,7 @@ internal fun MonthBars(
                     text = bar.label,
                     modifier = Modifier.weight(1f),
                     color = if (focused == index) {
-                        MaterialTheme.colorScheme.tertiary
+                        LocalInsightsAccent.current
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
@@ -278,22 +278,23 @@ internal fun WeekdayBars(
     val reveal = rememberChartReveal(seconds)
     val peak = (seconds.maxOrNull() ?: 0L).coerceAtLeast(1L)
     val busiest = seconds.indices.maxByOrNull { seconds[it] }?.takeIf { seconds[it] > 0L }
-    val accent = MaterialTheme.colorScheme.tertiary
+    val accent = LocalInsightsAccent.current
 
     val summary = busiest?.let {
         "Hours by day of week. ${weekdayName(it)} is the busiest at " +
             formatWatchDuration(seconds[it]) + "."
     } ?: "Hours by day of week. Nothing recorded."
 
+    // Hoisted so hover and tap drive one selection; see chartRowFocus.
+    var focused by remember(seconds) { mutableStateOf<Int?>(null) }
+
     Column(
         modifier = modifier.fillMaxWidth().semantics { contentDescription = summary },
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         seconds.forEachIndexed { index, value ->
-            val interaction = remember { MutableInteractionSource() }
-            val hovered by interaction.collectIsHoveredAsState()
             val emphasis by animateFloatAsState(
-                targetValue = if (hovered) 1f else 0f,
+                targetValue = if (focused == index) 1f else 0f,
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                 label = "WeekdayEmphasis",
             )
@@ -301,7 +302,11 @@ internal fun WeekdayBars(
             val fraction = (value.toFloat() / peak) * grown
 
             Row(
-                modifier = Modifier.hoverable(interaction),
+                modifier = Modifier.chartRowFocus(
+                    index = index,
+                    focused = focused,
+                    onFocusChange = { focused = it },
+                ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
@@ -372,7 +377,7 @@ internal fun WeekdayBars(
 internal fun RankedBars(
     bars: List<TasteBar>,
     modifier: Modifier = Modifier,
-    tone: Color = MaterialTheme.colorScheme.tertiary,
+    tone: Color = LocalInsightsAccent.current,
 ) {
     val reveal = rememberChartReveal(bars)
     // A slow highlight travelling along the top bar. Only the leader gets it — it marks
@@ -381,15 +386,16 @@ internal fun RankedBars(
 
     val summary = "Ranked: " + bars.joinToString(", ") { it.name } + "."
 
+    var focused by remember(bars) { mutableStateOf<Int?>(null) }
+
     Column(
         modifier = modifier.fillMaxWidth().semantics { contentDescription = summary },
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         bars.forEachIndexed { index, bar ->
-            val interaction = remember { MutableInteractionSource() }
-            val hovered by interaction.collectIsHoveredAsState()
+            val active = focused == index
             val emphasis by animateFloatAsState(
-                targetValue = if (hovered) 1f else 0f,
+                targetValue = if (active) 1f else 0f,
                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                 label = "RankedEmphasis",
             )
@@ -400,12 +406,16 @@ internal fun RankedBars(
             )
 
             Column(
-                modifier = Modifier.hoverable(interaction),
+                modifier = Modifier.chartRowFocus(
+                    index = index,
+                    focused = focused,
+                    onFocusChange = { focused = it },
+                ),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     text = bar.name,
-                    color = if (index == 0 || hovered) {
+                    color = if (index == 0 || active) {
                         MaterialTheme.colorScheme.onSurface
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -480,7 +490,7 @@ internal fun MiniBars(
     height: Dp = 68.dp,
 ) {
     val reveal = rememberChartReveal(values)
-    val accent = MaterialTheme.colorScheme.tertiary
+    val accent = LocalInsightsAccent.current
     val peakIndex = values.indices.maxByOrNull { values[it] }
 
     Column(modifier = modifier.fillMaxWidth()) {

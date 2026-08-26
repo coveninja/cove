@@ -149,7 +149,8 @@ class ActivityService(
         val byDayOfWeek = MutableList(7) { 0L }
         val byHourOfDay = MutableList(24) { 0L }
 
-        database.coveQueries.selectActivityHours(profileId).executeAsList().forEach { row ->
+        val hourRows = database.coveQueries.selectActivityHours(profileId).executeAsList()
+        hourRows.forEach { row ->
             val date = runCatching { LocalDate.parse(row.date) }.getOrNull() ?: return@forEach
             val seconds = row.seconds
             // Always all rows: the by-year series is the all-time chart, the month pair
@@ -171,7 +172,8 @@ class ActivityService(
 
         val titlesThisYear = linkedMapOf<String, Long>()
         val allTitles = linkedSetOf<String>()
-        database.coveQueries.selectActivityTitles(profileId).executeAsList().forEach { row ->
+        val titleRows = database.coveQueries.selectActivityTitles(profileId).executeAsList()
+        titleRows.forEach { row ->
             allTitles += row.title_key
             val date = runCatching { LocalDate.parse(row.date) }.getOrNull() ?: return@forEach
             if (inRange(date)) {
@@ -218,6 +220,18 @@ class ActivityService(
             .filter { it.title.isNotBlank() }
             .take(12)
 
+        // The moments read the same two lists again rather than a third query. Rows are
+        // reduced to plain strings at this boundary so the arithmetic stays testable
+        // without a database behind it.
+        val moments = buildMoments(
+            hours = hourRows.map { HourCell(it.date, it.hour.toInt(), it.seconds) },
+            titles = titleRows.map { TitleCell(it.date, it.title_key, it.seconds) },
+            names = entryByKey.mapValues { (_, entry) ->
+                TitleName(entry.title, entry.poster_path)
+            },
+            selectedYear = selectedYear,
+        )
+
         val activeDays = calendar.filterValues { it > 0 }.keys.sorted()
         // Streaks read from the whole history even when a single year is selected: a run
         // of days is a fact about the calendar, and clipping it at a year boundary would
@@ -241,6 +255,10 @@ class ActivityService(
             calendar = calendar.filterValues { it > 0 },
             titlesWatchedThisYear = topTitles,
             rewatched = plays,
+            biggestDay = moments.biggestDay,
+            monthlyHeadliners = moments.monthlyHeadliners,
+            longestSession = moments.longestSession,
+            firstWatch = moments.firstWatch,
         )
     }
 

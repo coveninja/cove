@@ -37,6 +37,20 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Cove"
         android:usesCleartextTraffic="false">
+
+        <!-- Lets the insights recap reach the share sheet. A share hands another app a URI
+             rather than bytes, and without a provider behind it that URI is one nothing else
+             is allowed to open. The authority is derived from the running package in
+             ImageExport.android.kt, so a suffixed debug application id still matches. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/cove_file_paths" />
+        </provider>
         <profileable android:shell="true" />
         <activity
             android:name=".MainActivity"

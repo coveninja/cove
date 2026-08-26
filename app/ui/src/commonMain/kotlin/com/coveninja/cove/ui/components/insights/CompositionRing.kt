@@ -181,15 +181,9 @@ internal fun RingLegend(
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         slices.forEachIndexed { index, slice ->
-            val interaction = remember { MutableInteractionSource() }
-            val hovered by interaction.collectIsHoveredAsState()
-            val active = hovered && slice.count > 0
-            // Only ever clears its own focus. Moving the pointer between two rows fires
-            // one row's exit and the other's entry with no guaranteed order, and an
-            // unguarded clear would land after the entry and blank the selection.
-            LaunchedEffect(active) {
-                if (active) onFocusChange(index) else if (focused == index) onFocusChange(null)
-            }
+            // Hover and tap both write the caller's selection, so the ring and its legend
+            // stay two views of one thing on a phone as well as under a pointer.
+            val active = focused == index && slice.count > 0
 
             val highlight by animateFloatAsState(
                 targetValue = if (active) 1f else 0f,
@@ -202,7 +196,13 @@ internal fun RingLegend(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .background(slice.color.copy(alpha = 0.10f * highlight))
-                    .hoverable(interaction, enabled = slice.count > 0)
+                    .chartRowFocus(
+                        index = index,
+                        focused = focused,
+                        onFocusChange = onFocusChange,
+                        // A slice with nothing in it has no arc to point at.
+                        enabled = slice.count > 0,
+                    )
                     .padding(horizontal = 8.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(9.dp),
                 verticalAlignment = Alignment.CenterVertically,

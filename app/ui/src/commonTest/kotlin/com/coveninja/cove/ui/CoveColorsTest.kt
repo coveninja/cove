@@ -41,6 +41,39 @@ class CoveColorsTest {
     }
 
     @Test
+    fun `insight chapter accents stay mutually distinguishable`() {
+        // The five chapter rules are what tell a reader they have moved from one part of
+        // the insights page to another. Two matching hues merge two chapters into one.
+        val chapters = listOf(
+            CoveColors.Insight.Year,
+            CoveColors.Insight.Moments,
+            CoveColors.Insight.Rhythm,
+            CoveColors.Insight.Library,
+            CoveColors.Insight.Taste,
+        )
+
+        assertEquals(chapters.size, chapters.distinct().size)
+    }
+
+    @Test
+    fun `insight chapter accents sit at one weight`() {
+        // Chapters are peers. One markedly brighter than the rest reads as the important
+        // one, which is a claim about the content that the palette has no business making.
+        val luminances = listOf(
+            CoveColors.Insight.Year,
+            CoveColors.Insight.Moments,
+            CoveColors.Insight.Rhythm,
+            CoveColors.Insight.Library,
+            CoveColors.Insight.Taste,
+        ).map { it.luminance() }
+
+        assertTrue(
+            luminances.max() - luminances.min() < 0.42f,
+            "chapter accents span too wide a luminance range: $luminances",
+        )
+    }
+
+    @Test
     fun `one hue per meaning across categories and statuses`() {
         // A category and the status that means the same thing must not drift apart, or
         // "finished" is one green on the library page and a different green in a toast.

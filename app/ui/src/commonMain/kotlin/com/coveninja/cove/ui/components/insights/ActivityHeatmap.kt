@@ -66,7 +66,7 @@ internal fun ActivityHeatmap(
 ) {
     val reveal = rememberChartReveal(weeks)
     val levels = heatLevelColors(
-        accent = MaterialTheme.colorScheme.tertiary,
+        accent = LocalInsightsAccent.current,
         empty = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
     )
     val ringColor = MaterialTheme.colorScheme.onSurface
@@ -128,7 +128,12 @@ internal fun ActivityHeatmap(
                             awaitPointerEventScope {
                                 while (true) {
                                     val event = awaitPointerEvent()
-                                    if (event.type == PointerEventType.Exit) {
+                                    // A finger lifting has to clear the readout. There is no
+                                    // Exit event on touch, so without this the value under
+                                    // whatever was tapped last stays on screen for good.
+                                    if (event.type == PointerEventType.Exit ||
+                                        event.isTouchRelease()
+                                    ) {
                                         hoveredCell = null
                                         continue
                                     }

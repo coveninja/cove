@@ -75,7 +75,7 @@ internal fun ViewingClock(
     // The busiest hour breathes. Slow and shallow enough to read as emphasis, not motion.
     val pulse = rememberDrift(durationMillis = 2_400, label = "ClockPulse")
 
-    val accent = MaterialTheme.colorScheme.tertiary
+    val accent = LocalInsightsAccent.current
     val quiet = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.13f)
     val guide = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.30f)
     val peak = (byHourOfDay.maxOrNull() ?: 0L).coerceAtLeast(1L)
@@ -101,7 +101,10 @@ internal fun ViewingClock(
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent()
-                            if (event.type == PointerEventType.Exit) {
+                            // A finger lifting has to clear the readout. There is no Exit
+                            // event on touch, so without this the value under whatever was
+                            // tapped last stays on screen for good.
+                            if (event.type == PointerEventType.Exit || event.isTouchRelease()) {
                                 hovered = null
                                 continue
                             }

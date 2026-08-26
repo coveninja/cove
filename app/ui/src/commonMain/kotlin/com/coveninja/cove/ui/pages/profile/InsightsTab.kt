@@ -1,5 +1,6 @@
 package com.coveninja.cove.ui.pages.profile
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,6 +47,10 @@ import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.insights.ActivityHeatmap
 import com.coveninja.cove.ui.components.insights.ChartLegend
 import com.coveninja.cove.ui.components.insights.CompositionRing
+import com.coveninja.cove.ui.components.insights.InsightsCard
+import com.coveninja.cove.ui.components.insights.InsightsChapter
+import com.coveninja.cove.ui.components.insights.InsightsChapterKind
+import com.coveninja.cove.ui.components.insights.InsightsTier
 import com.coveninja.cove.ui.components.insights.MonthBars
 import com.coveninja.cove.ui.components.insights.RankedBars
 import com.coveninja.cove.ui.components.insights.RingLegend
@@ -58,7 +67,9 @@ import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.pages.common.WindowSizeClass
 import com.coveninja.cove.ui.pages.common.ShimmerBlock
 import com.coveninja.cove.ui.pages.common.StaggeredAppear
+import com.coveninja.cove.ui.platform.rememberImageExporter
 import com.coveninja.cove.ui.state.LocalAppGraph
+import kotlinx.datetime.number
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.todayIn
 import kotlin.time.Clock
@@ -164,77 +175,232 @@ internal fun InsightsTab(
     val twoUp = PageLayoutDefaults.Viewport.sizeClass == WindowSizeClass.Expanded
     val breakdown = libraryBreakdown(entries)
 
+    val comparison = ratingComparison(entries)
+    val finish = finishStats(progress)
+    val exporter = rememberImageExporter()
+    var showRecap by remember { mutableStateOf(false) }
+
+    if (showRecap) {
+        InsightsRecapDialog(
+            stats = stats,
+            profile = profile,
+            breakdown = breakdown,
+            range = state.range,
+            today = today,
+            exporter = exporter,
+            onDismiss = { showRecap = false },
+        )
+    }
+
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        InsightsHero(activity = stats, thisYear = today.year)
+        InsightsHero(
+            activity = stats,
+            thisYear = today.year,
+            breakdown = breakdown,
+            decades = profile.decades,
+        )
 
         RangePicker(selected = state.range, onSelect = { state.range = it })
 
         StatTiles(stats = stats, breakdown = breakdown, compact = compact, range = state.range)
 
+        // Only where there is something to put in the picture and somewhere to send it. A
+        // host with no exporter gets no control rather than one that does nothing.
+        if (exporter != null && stats.totalSeconds > 0L) {
+            RecapPrompt(onClick = { showRecap = true })
+        }
+
+        // Chapters, rather than one uniform run of cards. Each carries its own accent and
+        // opens with a rule, so the page changes temperature as it is read instead of
+        // presenting fifteen identical panels in a column. A chapter with nothing under it
+        // draws nothing at all — the rule is inside the same guard as its cards, or an
+        // empty profile would grow a heading with a blank space beneath it.
+        //
         // Cards arrive in reading order rather than all at once. The taste half composes
         // whenever its slower fetch lands, so the same wrapper doubles as its arrival
         // animation instead of it popping in fully formed.
-        if (stats.totalSeconds > 0L) {
-            StaggeredAppear(index = 1) { MonthlySection(stats = stats, thisYear = today.year) }
-            StaggeredAppear(index = 2) { RhythmSection(stats = stats, compact = compact) }
-            StaggeredAppear(index = 3) {
-                HeatmapSection(stats = stats, today = today, range = state.range)
-            }
-        }
-
-        if (state.range == InsightsRange.AllTime && stats.byYear.size > 1) {
-            StaggeredAppear(index = 4) { AllTimeSection(stats = stats) }
-        }
-
-        if (stats.titlesWatchedThisYear.isNotEmpty()) {
-            StaggeredAppear(index = 4) {
-                SettingsCard(
-                    title = "Your top picks by watch time",
-                    iconName = "lucide:flame",
-                    description = rangeLeaderboardCaption(state.range),
-                ) {
-                    TopTitlesRow(
-                        titles = stats.titlesWatchedThisYear,
-                        onOpenMedia = onOpenMedia,
-                        modifier = Modifier.padding(top = InsightsCardTop, bottom = 16.dp),
-                    )
+        val hasYear = stats.totalSeconds > 0L ||
+            stats.titlesWatchedThisYear.isNotEmpty() ||
+            (state.range == InsightsRange.AllTime && stats.byYear.size > 1)
+        if (hasYear) {
+            InsightsChapter(
+                kind = InsightsChapterKind.Year,
+                summary = heroContext(stats, state.range, today.year),
+            ) {
+                if (stats.titlesWatchedThisYear.isNotEmpty()) {
+                    StaggeredAppear(index = 1) {
+                        InsightsCard(
+                            eyebrow = "Most watched",
+                            headline = leaderboardHeadline(
+                                stats.titlesWatchedThisYear,
+                                state.range,
+                            ),
+                            tier = InsightsTier.Feature,
+                            support = rangeLeaderboardCaption(state.range),
+                        ) {
+                            TopTitlesRow(
+                                titles = stats.titlesWatchedThisYear,
+                                onOpenMedia = onOpenMedia,
+                                modifier = Modifier.padding(
+                                    top = InsightsCardTop,
+                                    bottom = 16.dp,
+                                ),
+                            )
+                        }
+                    }
                 }
-            }
-        }
-
-        // The smaller cards pair up on a desktop window. In one column they leave most of a
-        // 1000dp page empty, and the page is long enough that halving its height matters
-        // more than keeping a single reading order.
-        CardGrid(
-            twoUp = twoUp,
-            cards = buildList {
-                if (entries.isNotEmpty()) {
-                    add { CompositionSection(breakdown = breakdown, compact = true) }
+                if (stats.totalSeconds > 0L) {
+                    StaggeredAppear(index = 2) {
+                        MonthlySection(
+                            stats = stats,
+                            thisYear = today.year,
+                            currentMonth = today.month.number,
+                        )
+                    }
                 }
-                val comparison = ratingComparison(entries)
-                if (comparison.rated > 0) add { CrowdSection(comparison = comparison) }
-                val finish = finishStats(progress)
-                if (finish.started > 0) add { FinishSection(stats = finish) }
-                if (entries.isNotEmpty()) {
-                    add { GrowthSection(entries = entries, today = today) }
+                if (state.range == InsightsRange.AllTime && stats.byYear.size > 1) {
+                    StaggeredAppear(index = 3) { AllTimeSection(stats = stats) }
                 }
-                if (profile.decades.isNotEmpty()) add { DecadesSection(profile = profile) }
-                if (profile.languages.isNotEmpty()) add { LanguagesSection(profile = profile) }
                 if (stats.rewatched.isNotEmpty()) {
-                    add { RewatchSection(titles = stats.rewatched, onOpenMedia = onOpenMedia) }
+                    StaggeredAppear(index = 4) {
+                        RewatchSection(titles = stats.rewatched, onOpenMedia = onOpenMedia)
+                    }
                 }
-                state.trackers.orEmpty().forEach { tracker ->
-                    add { TrackerSection(stats = tracker) }
-                }
-            },
-        )
-
-        TasteSections(profile = profile, onOpenMedia = onOpenMedia, compact = compact)
-
-        if (profile.signalsUsed > 0) {
-            StaggeredAppear(index = 9) {
-                RecommendationExplainer(signalsUsed = profile.signalsUsed)
             }
+        }
+
+        if (hasMoments(stats)) {
+            InsightsChapter(
+                kind = InsightsChapterKind.Moments,
+                summary = stats.longestSession
+                    ?.takeIf { !it.isEmpty }
+                    ?.let { formatWatchDuration(it.seconds) + " longest sitting" },
+            ) {
+                MomentsSections(
+                    stats = stats,
+                    today = today,
+                    range = state.range,
+                    onOpenMedia = onOpenMedia,
+                )
+            }
+        }
+
+        if (stats.totalSeconds > 0L) {
+            InsightsChapter(
+                kind = InsightsChapterKind.Rhythm,
+                summary = peakHour(stats.byHourOfDay)?.let { "peaks at ${formatHour(it)}" },
+            ) {
+                StaggeredAppear(index = 5) { RhythmSection(stats = stats, compact = compact) }
+                StaggeredAppear(index = 6) {
+                    HeatmapSection(stats = stats, today = today, range = state.range)
+                }
+            }
+        }
+
+        val libraryCards = buildList<@Composable () -> Unit> {
+            if (entries.isNotEmpty()) {
+                add { CompositionSection(breakdown = breakdown, compact = true) }
+            }
+            if (comparison.rated > 0) add { CrowdSection(comparison = comparison) }
+            if (finish.started > 0) add { FinishSection(stats = finish) }
+            if (entries.isNotEmpty()) add { GrowthSection(entries = entries, today = today) }
+            state.trackers.orEmpty().forEach { tracker ->
+                add { TrackerSection(stats = tracker) }
+            }
+        }
+        if (libraryCards.isNotEmpty()) {
+            InsightsChapter(
+                kind = InsightsChapterKind.Library,
+                summary = breakdown.total.takeIf { it > 0 }?.let { "$it saved" },
+            ) {
+                // The smaller cards pair up on a desktop window. In one column they leave
+                // most of a 1000dp page empty, and the page is long enough that halving its
+                // height matters more than keeping a single reading order.
+                CardGrid(twoUp = twoUp, cards = libraryCards, firstIndex = 7)
+            }
+        }
+
+        val hasTaste = profile.topMovieGenres.isNotEmpty() ||
+            profile.topTvGenres.isNotEmpty() ||
+            profile.topKeywords.isNotEmpty() ||
+            profile.topPeople.isNotEmpty() ||
+            profile.topStudios.isNotEmpty() ||
+            profile.topContributors.isNotEmpty() ||
+            profile.negativeContributors.isNotEmpty() ||
+            profile.decades.isNotEmpty() ||
+            profile.languages.isNotEmpty() ||
+            profile.signalsUsed > 0
+        if (hasTaste) {
+            InsightsChapter(
+                kind = InsightsChapterKind.Taste,
+                summary = profile.signalsUsed.takeIf { it > 0 }?.let { "$it signals" },
+            ) {
+                TasteSections(profile = profile, onOpenMedia = onOpenMedia, compact = compact)
+
+                val eraCards = buildList<@Composable () -> Unit> {
+                    if (profile.decades.isNotEmpty()) add { DecadesSection(profile = profile) }
+                    if (profile.languages.isNotEmpty()) {
+                        add { LanguagesSection(profile = profile) }
+                    }
+                }
+                if (eraCards.isNotEmpty()) {
+                    CardGrid(twoUp = twoUp, cards = eraCards, firstIndex = 11)
+                }
+
+                if (profile.signalsUsed > 0) {
+                    StaggeredAppear(index = 13) {
+                        RecommendationExplainer(signalsUsed = profile.signalsUsed)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The way into the recap image.
+ *
+ * A row rather than a button in a corner: this is the one thing on the page that leaves the
+ * app, and a viewer who never notices it never finds out the feature exists.
+ */
+@Composable
+private fun RecapPrompt(onClick: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.tertiary
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = RowPadding, vertical = 13.dp),
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconifyIcon(
+                icon = "lucide:gallery-horizontal-end",
+                modifier = Modifier.size(17.dp),
+                tint = accent,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Your year as a picture",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Made from what you actually watched.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            IconifyIcon(
+                icon = "lucide:chevron-right",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -279,12 +445,16 @@ private fun rangeLeaderboardCaption(range: InsightsRange): String = when (range)
  * a `verticalScroll`, and the lazy staggered grid cannot be nested in one.
  */
 @Composable
-private fun CardGrid(twoUp: Boolean, cards: List<@Composable () -> Unit>) {
+private fun CardGrid(
+    twoUp: Boolean,
+    cards: List<@Composable () -> Unit>,
+    firstIndex: Int,
+) {
     if (cards.isEmpty()) return
     if (!twoUp) {
         Column(verticalArrangement = Arrangement.spacedBy(CardSpacing)) {
             cards.forEachIndexed { index, card ->
-                StaggeredAppear(index = index + 5) { card() }
+                StaggeredAppear(index = index + firstIndex) { card() }
             }
         }
         return
@@ -292,7 +462,7 @@ private fun CardGrid(twoUp: Boolean, cards: List<@Composable () -> Unit>) {
     Layout(
         content = {
             cards.forEachIndexed { index, card ->
-                StaggeredAppear(index = index + 5) { card() }
+                StaggeredAppear(index = index + firstIndex) { card() }
             }
         },
     ) { measurables, constraints ->
@@ -431,11 +601,11 @@ private fun StatTiles(
 // ── Sections ─────────────────────────────────────────────────────────────────
 
 @Composable
-private fun MonthlySection(stats: ActivityStats, thisYear: Int) {
-    SettingsCard(
-        title = "Hours by month",
-        iconName = "lucide:chart-line",
-        description = "This year measured against the same months last year.",
+private fun MonthlySection(stats: ActivityStats, thisYear: Int, currentMonth: Int) {
+    InsightsCard(
+        eyebrow = "Across the year",
+        headline = monthlyHeadline(stats.byMonthThisYear, currentMonth),
+        support = "This year measured against the same months last year.",
     ) {
         Column(
             modifier = Modifier
@@ -456,15 +626,19 @@ private fun MonthlySection(stats: ActivityStats, thisYear: Int) {
 
 @Composable
 private fun RhythmSection(stats: ActivityStats, compact: Boolean) {
-    SettingsCard(
-        title = "Your rhythm",
-        iconName = "lucide:clock-3",
-        description = rhythmSummary(stats) ?: "When your watching actually happens.",
+    InsightsCard(
+        eyebrow = "When you watch",
+        headline = rhythmHeadline(stats),
     ) {
         Column(
             modifier = Modifier
                 .padding(horizontal = RowPadding)
-                .padding(top = InsightsCardTop, bottom = 18.dp),
+                .padding(top = InsightsCardTop, bottom = 18.dp)
+                // Two charts and no text between them: without this the card reads out as
+                // nothing at all, which is why the long form of the sentence still exists.
+                .semantics {
+                    rhythmSummary(stats)?.let { contentDescription = it }
+                },
         ) {
             if (compact) {
                 Column(
@@ -502,10 +676,9 @@ private fun HeatmapSection(
     // The grid always ends on the last day the range covers, so a past year fills its own
     // columns instead of being squeezed into a window that ends today.
     val window = heatmapWindow(range, today)
-    SettingsCard(
-        title = "The year, day by day",
-        iconName = "lucide:calendar-days",
-        description = "Every day you watched something, and roughly how much.",
+    InsightsCard(
+        eyebrow = "Day by day",
+        headline = heatmapHeadline(activeDays, range, today),
     ) {
         Box(
             modifier = Modifier
@@ -553,10 +726,10 @@ private fun CompositionSection(breakdown: LibraryBreakdown, compact: Boolean) {
         ),
     )
 
-    SettingsCard(
-        title = "Where your titles sit",
-        iconName = "lucide:library",
-        description = "${breakdown.movies} " +
+    InsightsCard(
+        eyebrow = "Where your titles sit",
+        headline = compositionHeadline(breakdown),
+        support = "${breakdown.movies} " +
             (if (breakdown.movies == 1) "movie" else "movies") +
             " · ${breakdown.shows} " +
             (if (breakdown.shows == 1) "show" else "shows"),
@@ -632,6 +805,7 @@ private fun TasteSections(
                 tvBars = tvBars,
                 disliked = profile.dislikedGenres,
                 compact = compact,
+                headline = genreHeadline(profile.topMovieGenres, profile.topTvGenres),
             )
         }
     }
@@ -656,11 +830,11 @@ private fun GenreCard(
     tvBars: List<TasteBar>,
     disliked: List<DiscoveryTaste>,
     compact: Boolean,
+    headline: String,
 ) {
-    SettingsCard(
-        title = "What you enjoy most",
-        iconName = "lucide:heart",
-        description = "The genres your library argues for hardest.",
+    InsightsCard(
+        eyebrow = "What you like",
+        headline = headline,
     ) {
         Column(
             modifier = Modifier
@@ -726,10 +900,10 @@ private fun GenreCard(
 
 @Composable
 private fun SignalsCard(profile: DiscoveryInsights) {
-    SettingsCard(
-        title = "Your taste signals",
-        iconName = "lucide:sparkles",
-        description = "Themes, people and studios that shape your recommendations.",
+    InsightsCard(
+        eyebrow = "Taste signals",
+        headline = signalsHeadline(profile),
+        support = "Themes, people and studios that shape your recommendations.",
     ) {
         Column(
             modifier = Modifier
@@ -761,10 +935,10 @@ private fun SignalsCard(profile: DiscoveryInsights) {
 
 @Composable
 private fun ContributorsCard(profile: DiscoveryInsights, onOpenMedia: (Media) -> Unit) {
-    SettingsCard(
-        title = "Titles that shaped your profile",
-        iconName = "lucide:badge-check",
-        description = "The strongest pulls in each direction.",
+    InsightsCard(
+        eyebrow = "Biggest influences",
+        headline = contributorsHeadline(profile),
+        support = "The strongest pulls in each direction.",
     ) {
         Column(
             modifier = Modifier.padding(top = InsightsCardTop, bottom = 18.dp),

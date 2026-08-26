@@ -46,8 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -64,8 +62,9 @@ import com.coveninja.cove.shared.model.DiscoveryTaste
 import com.coveninja.cove.shared.model.StudioEntry
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.common.CoveAsyncImage
+import com.coveninja.cove.shared.model.DecadeCount
+import com.coveninja.cove.ui.components.insights.PosterWall
 import com.coveninja.cove.ui.components.insights.rememberCountUp
-import com.coveninja.cove.ui.components.insights.rememberDrift
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
@@ -84,18 +83,30 @@ import com.coveninja.cove.shared.model.MediaType as DomainMediaType
  * Total watch time is the number people actually want, so it gets display-scale type, the
  * accent, and the page's only gradient wash. Everything below this is deliberately calmer:
  * if two things shout, neither is the headline.
+ *
+ * It sits on [PosterWall] — the viewer's own most-watched artwork — which is what makes the
+ * page feel like theirs before a single number has been read. The wall is decoration and
+ * says so: it carries no content description, and the scrims inside it mean the text does
+ * not depend on which posters happened to land under it.
  */
 @Composable
 internal fun InsightsHero(
     activity: ActivityStats,
     thisYear: Int,
+    breakdown: LibraryBreakdown,
+    decades: List<DecadeCount>,
     modifier: Modifier = Modifier,
 ) {
     val compact = PageLayoutDefaults.IsCompact
     val accent = MaterialTheme.colorScheme.tertiary
     val delta = yearOverYearDelta(activity.thisYearSeconds, activity.lastYearSeconds)
     val counted = rememberCountUp(activity.totalSeconds)
-    val drift = rememberDrift(durationMillis = 16_000, label = "HeroGlow")
+    val identity = remember(breakdown, activity.byHourOfDay, decades) {
+        identityLine(breakdown, activity, decades)
+    }
+    val posters = remember(activity.titlesWatchedThisYear) {
+        activity.titlesWatchedThisYear.map { it.posterPath }.filter { it.isNotBlank() }
+    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -103,30 +114,27 @@ internal fun InsightsHero(
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, accent.copy(alpha = 0.22f)),
     ) {
-        Box(
-            modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            accent.copy(alpha = 0.18f),
-                            accent.copy(alpha = 0.04f),
-                            Color.Transparent,
+        Box {
+            PosterWall(
+                posterPaths = posters,
+                modifier = Modifier.matchParentSize(),
+                scrim = MaterialTheme.colorScheme.surfaceContainer,
+            )
+            // The accent wash stays, on top of the wall rather than instead of it. Without
+            // it a hero backed by cool artwork loses its tie to the rest of the page.
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                accent.copy(alpha = 0.16f),
+                                accent.copy(alpha = 0.04f),
+                                Color.Transparent,
+                            ),
                         ),
                     ),
-                )
-                .drawBehind {
-                    drawRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(accent.copy(alpha = 0.20f), Color.Transparent),
-                            center = Offset(
-                                x = size.width * (0.10f + 0.55f * drift),
-                                y = size.height * (0.85f - 0.35f * drift),
-                            ),
-                            radius = size.minDimension * 1.25f,
-                        ),
-                    )
-                },
-        ) {
+            )
             Column(
                 modifier = Modifier.padding(horizontal = RowPadding, vertical = 22.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -173,6 +181,15 @@ internal fun InsightsHero(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                identity?.let {
+                    Text(
+                        text = it,
+                        modifier = Modifier.padding(top = 2.dp),
+                        color = accent,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
         }
     }

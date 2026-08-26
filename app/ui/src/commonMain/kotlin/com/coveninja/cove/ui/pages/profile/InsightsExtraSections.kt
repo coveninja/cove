@@ -32,14 +32,16 @@ import com.coveninja.cove.shared.model.TitlePlayCount
 import com.coveninja.cove.shared.model.TrackerProvider
 import com.coveninja.cove.shared.model.TrackerStats
 import com.coveninja.cove.ui.CoveColors
+import com.coveninja.cove.ui.components.insights.InsightsCard
+import com.coveninja.cove.ui.components.insights.InsightsTier
 import com.coveninja.cove.ui.components.insights.MiniBars
 import com.coveninja.cove.ui.components.insights.RankedBars
 import com.coveninja.cove.ui.components.insights.rememberChartReveal
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.toUiMedia
-import kotlinx.datetime.LocalDate
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.datetime.LocalDate
 
 // The cards added after the first pass. Kept apart from InsightsSections so the shape of
 // the original page stays readable; these are all small, self-contained, and sit in the
@@ -60,14 +62,13 @@ internal fun CrowdSection(comparison: RatingComparison) {
     val generous = comparison.averageDelta > 0
     val rounded = (abs(comparison.averageDelta) * 10).roundToInt() / 10.0
 
-    SettingsCard(
-        title = "You against the crowd",
-        iconName = "lucide:star",
-        description = "How your ratings compare with everyone else's.",
+    InsightsCard(
+        eyebrow = "Against the crowd",
+        headline = crowdHeadline(comparison),
+        tier = InsightsTier.Quiet,
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics {
                     contentDescription = "Across ${comparison.rated} rated titles you score " +
@@ -148,14 +149,13 @@ private fun trim(value: Double): String = ((value * 10).roundToInt() / 10.0).toS
 internal fun FinishSection(stats: FinishStats) {
     val percent = (stats.rate * 100).roundToInt()
 
-    SettingsCard(
-        title = "Finishing what you start",
-        iconName = "lucide:badge-check",
-        description = "Of everything you have begun, how much you saw through.",
+    InsightsCard(
+        eyebrow = "Follow-through",
+        headline = finishHeadline(stats),
+        tier = InsightsTier.Quiet,
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics {
                     contentDescription = "You finish $percent percent of what you start, " +
@@ -220,14 +220,17 @@ internal fun GrowthSection(entries: List<LibraryEntry>, today: LocalDate) {
     val growth = libraryGrowth(entries, today)
     val total = growth.sumOf { it.added }
 
-    SettingsCard(
-        title = "How your library grew",
-        iconName = "lucide:bookmark-plus",
-        description = "Titles saved per month over the past year.",
+    InsightsCard(
+        eyebrow = "Library growth",
+        headline = if (total > 0) {
+            "$total " + (if (total == 1) "title" else "titles") + " saved in the past year"
+        } else {
+            "Titles saved per month"
+        },
+        tier = InsightsTier.Quiet,
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics {
                     contentDescription = "$total titles saved in the past twelve months."
@@ -237,11 +240,6 @@ internal fun GrowthSection(entries: List<LibraryEntry>, today: LocalDate) {
             MiniBars(
                 values = growth.map { it.fraction },
                 labels = growth.map { it.label },
-            )
-            Text(
-                text = "$total saved in the past year",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
             )
         }
     }
@@ -255,11 +253,9 @@ internal fun AllTimeSection(stats: ActivityStats) {
     val bars = yearBars(stats.byYear)
     val best = bars.maxByOrNull { it.seconds }
 
-    SettingsCard(
-        title = "Every year on record",
-        iconName = "lucide:calendar-clock",
-        description = best?.let { "${it.year} was your biggest year." }
-            ?: "Watch time by year.",
+    InsightsCard(
+        eyebrow = "Every year on record",
+        headline = best?.let { "${it.year} was your biggest year" } ?: "Watch time by year",
     ) {
         Column(
             modifier = Modifier
@@ -328,17 +324,16 @@ internal fun DecadesSection(profile: DiscoveryInsights) {
         )
     }
 
-    SettingsCard(
-        title = "The eras you watch",
-        iconName = "lucide:clock-3",
-        description = profile.averageRuntimeMinutes
+    InsightsCard(
+        eyebrow = "Your era",
+        headline = decadesHeadline(profile.decades),
+        tier = InsightsTier.Quiet,
+        support = profile.averageRuntimeMinutes
             .takeIf { it > 0 }
-            ?.let { "Typically ${it}m at a sitting." }
-            ?: "Release decades across your library.",
+            ?.let { "Typically ${it}m at a sitting." },
     ) {
         Box(
             modifier = Modifier
-                .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics {
                     contentDescription = scaled.joinToString(", ") { it.name }
@@ -359,14 +354,13 @@ internal fun LanguagesSection(profile: DiscoveryInsights) {
         TasteBar(name, count.toDouble(), count.toFloat() / peak)
     }
 
-    SettingsCard(
-        title = "Where it comes from",
-        iconName = "lucide:languages",
-        description = "Original languages across your library.",
+    InsightsCard(
+        eyebrow = "Beyond English",
+        headline = languagesHeadline(profile.languages),
+        tier = InsightsTier.Quiet,
     ) {
         Box(
             modifier = Modifier
-                .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics { contentDescription = bars.joinToString(", ") { it.name } },
         ) {
@@ -380,10 +374,10 @@ internal fun LanguagesSection(profile: DiscoveryInsights) {
 /** The titles worth going back to. */
 @Composable
 internal fun RewatchSection(titles: List<TitlePlayCount>, onOpenMedia: (Media) -> Unit) {
-    SettingsCard(
-        title = "Worth going back to",
-        iconName = "lucide:rotate-ccw",
-        description = "Titles you have started more than once.",
+    InsightsCard(
+        eyebrow = "Worth going back to",
+        headline = "${titles.size} " +
+            (if (titles.size == 1) "title" else "titles") + " you started again",
     ) {
         Column(
             modifier = Modifier
@@ -448,15 +442,14 @@ internal fun TrackerSection(stats: TrackerStats) {
     val totalHours = (stats.movieMinutes + stats.episodeMinutes) / 60
     val label = TrackerProvider.fromKey(stats.provider)?.label ?: stats.provider
 
-    SettingsCard(
-        title = "All time on $label",
-        iconName = "lucide:cloud-check",
-        description = "Totals from your linked $label account, including anything " +
-            "watched before Cove.",
+    InsightsCard(
+        eyebrow = "Linked account",
+        headline = "$label has ${totalHours}h on record",
+        tier = InsightsTier.Quiet,
+        support = "Everything on that account, including anything watched before Cove.",
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = RowPadding)
                 .padding(top = InsightsCardTop, bottom = 18.dp)
                 .semantics {
                     contentDescription = "$label reports ${stats.moviesWatched} movies and " +

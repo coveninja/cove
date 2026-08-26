@@ -124,6 +124,27 @@ object CoveColors {
     }
 
     /**
+     * Chapter accents for the insights page.
+     *
+     * Its own family rather than borrowed from [Status] or [Segment]. Both of those carry a
+     * meaning — an outcome, a stretch of video — and reusing one here would be the second
+     * thing a hue stands for, which is exactly what [Status] documents itself against.
+     * These say nothing but "a different part of the page".
+     *
+     * They exist because the insights page was drawn entirely in the brand accent, and a
+     * page where everything is the accent has no emphasis left to spend. Picked at close to
+     * one lightness so no chapter shouts over its neighbours on Cove's near-black surface;
+     * [Year] stays the brand green because it is the chapter that owns the headline total.
+     */
+    object Insight {
+        val Year = Brand.Accent
+        val Moments = Color(0xFFE9A23B)
+        val Rhythm = Color(0xFF4FA8D8)
+        val Library = Color(0xFF8B7BF0)
+        val Taste = Color(0xFFE0709A)
+    }
+
+    /**
      * The green ramp, deepest to palest.
      *
      * An ordered ramp rather than a set of roles, because nothing here means anything — it is

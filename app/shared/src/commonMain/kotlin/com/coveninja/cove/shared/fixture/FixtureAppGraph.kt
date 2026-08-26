@@ -662,6 +662,31 @@ private fun buildFixtureActivity(): ActivityStats {
         }
         .sortedByDescending(ActivityTitle::seconds)
 
+    // Moments, derived from the same canned calendar rather than invented separately, so a
+    // fixtures run cannot show a "biggest day" that disagrees with its own heatmap.
+    val biggestDate = calendar.entries.maxByOrNull { it.value }
+    val firstDate = calendar.keys.minOrNull()
+    fun momentAt(date: String?, seconds: Long, pick: Int): WatchMoment? {
+        if (date == null || seconds <= 0L || topTitles.isEmpty()) return null
+        val title = topTitles[pick.mod(topTitles.size)]
+        return WatchMoment(
+            date = date,
+            seconds = seconds,
+            tmdbId = title.tmdbId,
+            mediaType = title.mediaType,
+            title = title.title,
+            posterPath = title.posterPath,
+        )
+    }
+    val headliners = calendar.keys
+        .filter { it.startsWith("$thisYear-") }
+        .groupBy { it.take(7) }
+        .toSortedMap()
+        .entries
+        .mapIndexedNotNull { index, (month, days) ->
+            momentAt("$month-01", days.sumOf { calendar[it] ?: 0L }, index)
+        }
+
     return ActivityStats(
         totalSeconds = total,
         totalTitles = fixtureEntries.size,
@@ -691,6 +716,10 @@ private fun buildFixtureActivity(): ActivityStats {
                 )
             }
             .filter { it.plays > 1 },
+        biggestDay = momentAt(biggestDate?.key, biggestDate?.value ?: 0L, 0),
+        monthlyHeadliners = headliners,
+        longestSession = momentAt(biggestDate?.key, (biggestDate?.value ?: 0L) * 3 / 4, 1),
+        firstWatch = momentAt(firstDate, calendar[firstDate] ?: 0L, 2),
     )
 }
 

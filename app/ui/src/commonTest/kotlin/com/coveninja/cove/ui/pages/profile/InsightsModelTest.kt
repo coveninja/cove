@@ -2,6 +2,8 @@ package com.coveninja.cove.ui.pages.profile
 
 import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.ActivityTitle
+import com.coveninja.cove.shared.model.ContributingTitle
+import com.coveninja.cove.shared.model.DecadeCount
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.DiscoveryTaste
 import com.coveninja.cove.shared.model.InsightsRange
@@ -9,6 +11,8 @@ import com.coveninja.cove.shared.model.LanguageCount
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.StudioEntry
+import com.coveninja.cove.shared.model.WatchMoment
 import com.coveninja.cove.shared.model.WatchProgress
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.isoDayNumber
@@ -484,5 +488,410 @@ class InsightsModelTest {
         assertFalse(
             insightsAreEmpty(ActivityStats(), DiscoveryInsights(signalsUsed = 3), libraryCount = 0),
         )
+    }
+
+    // ── Headlines ────────────────────────────────────────────────────────────
+    //
+    // These are the sentences the page states about the viewer, so the thing worth
+    // asserting is not the wording but the *claim*: that a headline names the right month,
+    // that it declines to name a decade nothing dominates, and that it falls back rather
+    // than overclaiming when the data underneath it is thin.
+
+    @Test
+    fun `time bands split the day where the words change`() {
+        assertEquals(TimeBand.Morning, timeBand(5))
+        assertEquals(TimeBand.Morning, timeBand(11))
+        assertEquals(TimeBand.Afternoon, timeBand(12))
+        assertEquals(TimeBand.Afternoon, timeBand(16))
+        assertEquals(TimeBand.Evening, timeBand(17))
+        assertEquals(TimeBand.Evening, timeBand(21))
+        assertEquals(TimeBand.Night, timeBand(22))
+        // The night band wraps midnight rather than restarting there: 1am belongs to the
+        // sitting that began the evening before. Splitting at 0 files it under Morning.
+        assertEquals(TimeBand.Night, timeBand(0))
+        assertEquals(TimeBand.Night, timeBand(4))
+    }
+
+    @Test
+    fun `the night band is the only one that reads differently on its own`() {
+        assertEquals("nights", bandAfterWeekday(TimeBand.Night))
+        assertEquals("late nights", bandAlone(TimeBand.Night))
+        // Every other band is the same word either way; making them differ would be churn.
+        assertEquals(bandAfterWeekday(TimeBand.Evening), bandAlone(TimeBand.Evening))
+        assertEquals(bandAfterWeekday(TimeBand.Morning), bandAlone(TimeBand.Morning))
+    }
+
+    @Test
+    fun `the monthly headline names the peak month`() {
+        val months = MutableList(12) { 0L }
+        months[2] = 9 * 3600L
+        months[6] = 4 * 3600L
+        // March, not July: picking the last maximum instead of the first, or reading the
+        // index one out, both name the wrong month here.
+        assertEquals("March was your biggest month", monthlyHeadline(months, currentMonth = 8))
+    }
+
+    @Test
+    fun `the running month is only ever the biggest so far`() {
+        val months = MutableList(12) { 0L }
+        months[7] = 9 * 3600L
+        // August is the peak *and* the month in progress, so the claim is qualified. Drop
+        // the qualifier and the page states something the rest of the month can overturn.
+        assertEquals("August is your biggest month so far", monthlyHeadline(months, 8))
+        // The same data seen from September is a settled fact.
+        assertEquals("August was your biggest month", monthlyHeadline(months, 9))
+    }
+
+    @Test
+    fun `a year with nothing in it gets no monthly claim`() {
+        assertEquals("This year against last", monthlyHeadline(List(12) { 0L }, currentMonth = 8))
+    }
+
+    @Test
+    fun `the rhythm headline joins the weekday to the part of day`() {
+        val stats = ActivityStats(
+            byHourOfDay = List(24) { if (it == 21) 5_000L else 0L },
+            byDayOfWeek = List(7) { if (it == 0) 5_000L else 0L },
+        )
+        // 21:00 is the Evening band, and index 0 of byDayOfWeek is Sunday. A Monday-based
+        // weekday index, or an off-by-one band boundary, both change this string.
+        assertEquals("Sunday evenings, around 9 pm", rhythmHeadline(stats))
+    }
+
+    @Test
+    fun `half a habit is not stated at all`() {
+        val noHours = ActivityStats(byDayOfWeek = List(7) { if (it == 3) 900L else 0L })
+        val noDays = ActivityStats(byHourOfDay = List(24) { if (it == 20) 900L else 0L })
+        // Naming a weekday with no time, or a time with no weekday, would read as a fact
+        // the page cannot actually support.
+        assertEquals("When your watching actually happens", rhythmHeadline(noHours))
+        assertEquals("When your watching actually happens", rhythmHeadline(noDays))
+    }
+
+    @Test
+    fun `the heatmap denominator follows the range`() {
+        // today is 2026-08-17, the 229th day of a non-leap year.
+        assertEquals(
+            "You watched on 100 of the year's 229 days so far",
+            heatmapHeadline(100, InsightsRange.ThisYear, today),
+        )
+        // A finished year is measured against the whole of itself, not against today.
+        assertEquals(
+            "You watched on 100 of 365 days",
+            heatmapHeadline(100, InsightsRange.LastYear, today),
+        )
+        // All-time has no denominator to offer, and must not invent one.
+        assertEquals(
+            "You watched on 100 separate days",
+            heatmapHeadline(100, InsightsRange.AllTime, today),
+        )
+        assertEquals(
+            "You watched on 1 separate day",
+            heatmapHeadline(1, InsightsRange.AllTime, today),
+        )
+    }
+
+    @Test
+    fun `leap years are counted as leap years`() {
+        assertEquals(366, daysInYear(2024))
+        assertEquals(365, daysInYear(2026))
+        // The century rules, which a naive `year % 4` gets wrong in both directions.
+        assertEquals(366, daysInYear(2000))
+        assertEquals(365, daysInYear(1900))
+    }
+
+    @Test
+    fun `the library headline reports what the titles are doing`() {
+        val mixed = libraryBreakdown(
+            listOf(
+                entry(1, LibraryStatus.Finished),
+                entry(2, LibraryStatus.Finished),
+                entry(3, LibraryStatus.Watching),
+                entry(4, LibraryStatus.WatchLater),
+            ),
+        )
+        assertEquals("2 finished, 1 still going", compositionHeadline(mixed))
+
+        // Nothing in progress: the sentence changes shape rather than saying "0 still going".
+        val doneOnly = libraryBreakdown(
+            listOf(entry(1, LibraryStatus.Finished), entry(2, LibraryStatus.WatchLater)),
+        )
+        assertEquals("1 of 2 finished", compositionHeadline(doneOnly))
+
+        val untouched = libraryBreakdown(listOf(entry(1, LibraryStatus.WatchLater)))
+        assertEquals("1 title saved", compositionHeadline(untouched))
+    }
+
+    @Test
+    fun `follow-through is reported as a number, never as a verdict`() {
+        assertEquals(
+            "You finish 80% of what you start",
+            finishHeadline(FinishStats(started = 10, finished = 8, rate = 0.8f, stalled = emptyList())),
+        )
+        // The one special case, because "You finish 100% of what you start" is stilted.
+        assertEquals(
+            "You finish almost everything you start",
+            finishHeadline(FinishStats(started = 10, finished = 10, rate = 1f, stalled = emptyList())),
+        )
+        // A low rate gets the same neutral sentence — the page does not editorialise about
+        // abandoning things, for the same reason a falling year badge is grey and not red.
+        assertEquals(
+            "You finish 10% of what you start",
+            finishHeadline(FinishStats(started = 10, finished = 1, rate = 0.1f, stalled = emptyList())),
+        )
+    }
+
+    @Test
+    fun `genres are merged across movies and shows before they are ranked`() {
+        val movies = listOf(DiscoveryTaste(1, "Sci-Fi", 3.0), DiscoveryTaste(2, "Thriller", 5.0))
+        val tv = listOf(DiscoveryTaste(1, "Sci-Fi", 4.0), DiscoveryTaste(3, "Drama", 2.0))
+        // Sci-Fi wins on 3 + 4 = 7 despite losing to Thriller in the movie list alone.
+        // Ranking the two lists separately puts Thriller first and buries the real answer.
+        assertEquals("Sci-Fi, Thriller and Drama", genreHeadline(movies, tv))
+    }
+
+    @Test
+    fun `genre headlines read as a list of whatever length survives`() {
+        assertEquals("Sci-Fi", genreHeadline(listOf(DiscoveryTaste(1, "Sci-Fi", 3.0)), emptyList()))
+        assertEquals(
+            "Sci-Fi and Drama",
+            genreHeadline(
+                listOf(DiscoveryTaste(1, "Sci-Fi", 3.0), DiscoveryTaste(2, "Drama", 1.0)),
+                emptyList(),
+            ),
+        )
+        assertEquals(
+            "The genres your library argues for hardest",
+            genreHeadline(emptyList(), emptyList()),
+        )
+        // Negative weights are the *disliked* list; they must never be named as a favourite.
+        assertEquals(
+            "The genres your library argues for hardest",
+            genreHeadline(listOf(DiscoveryTaste(1, "Horror", -4.0)), emptyList()),
+        )
+    }
+
+    @Test
+    fun `a rating gap too small to be real is reported as agreement`() {
+        assertEquals(
+            "You rate 0.8 above the crowd",
+            crowdHeadline(RatingComparison(12, 0.8, 8, 4, emptyList())),
+        )
+        assertEquals(
+            "You rate 0.8 below the crowd",
+            crowdHeadline(RatingComparison(12, -0.8, 4, 8, emptyList())),
+        )
+        // Under a fifth of a point the sign is decided by a couple of titles and would flip
+        // between visits; stating a direction there would be the page guessing.
+        assertEquals(
+            "You rate about the same as everyone else",
+            crowdHeadline(RatingComparison(12, 0.1, 6, 6, emptyList())),
+        )
+    }
+
+    @Test
+    fun `a decade is only claimed when one actually dominates`() {
+        val dominant = listOf(DecadeCount(2010, 7), DecadeCount(1990, 2), DecadeCount(2020, 1))
+        assertEquals("The 2010s are your decade", decadesHeadline(dominant))
+
+        // Four near-equal decades: naming the largest would be reading meaning into noise,
+        // so the honest finding is the spread instead.
+        val spread = listOf(
+            DecadeCount(2010, 3),
+            DecadeCount(1990, 3),
+            DecadeCount(2000, 3),
+            DecadeCount(1980, 2),
+        )
+        assertEquals("You range from the 1980s to the 2010s", decadesHeadline(spread))
+    }
+
+    @Test
+    fun `the language headline states a share it can be checked against`() {
+        val quarter = listOf(LanguageCount("en", 75), LanguageCount("ja", 25))
+        assertEquals("25% of your titles aren't in English", languagesHeadline(quarter))
+
+        assertEquals(
+            "Everything you watch is in English",
+            languagesHeadline(listOf(LanguageCount("en", 40))),
+        )
+        // Merged by display name first, so zh and cn count as one language and not two.
+        val chinese = listOf(
+            LanguageCount("en", 50),
+            LanguageCount("zh", 25),
+            LanguageCount("cn", 25),
+        )
+        assertEquals("50% of your titles aren't in English", languagesHeadline(chinese))
+    }
+
+    @Test
+    fun `the identity line needs at least two clauses to be worth printing`() {
+        val shows = libraryBreakdown(
+            List(8) { entry(it, LibraryStatus.Finished, MediaType.Tv) } +
+                List(2) { entry(it + 100, LibraryStatus.Finished, MediaType.Movie) },
+        )
+        val nights = ActivityStats(byHourOfDay = List(24) { if (it == 23) 900L else 0L })
+        val decades = listOf(DecadeCount(2010, 8), DecadeCount(1990, 2))
+        assertEquals(
+            "mostly series · late nights · the 2010s",
+            identityLine(shows, nights, decades),
+        )
+
+        // One clause is not a portrait — it says less than the total directly above it.
+        assertNull(identityLine(shows, ActivityStats(), emptyList()))
+    }
+
+    @Test
+    fun `a library that leans neither way is not called one or the other`() {
+        val even = libraryBreakdown(
+            List(5) { entry(it, LibraryStatus.Finished, MediaType.Tv) } +
+                List(5) { entry(it + 100, LibraryStatus.Finished, MediaType.Movie) },
+        )
+        val nights = ActivityStats(byHourOfDay = List(24) { if (it == 23) 900L else 0L })
+        val decades = listOf(DecadeCount(2010, 8), DecadeCount(1990, 2))
+        // The shape clause drops out, leaving two: someone with five of each watches both.
+        assertEquals("late nights · the 2010s", identityLine(even, nights, decades))
+    }
+
+    @Test
+    fun `the hero only claims a best year once there is another to beat`() {
+        val onlyYear = ActivityStats(totalSeconds = 100, byYear = mapOf("2026" to 100L))
+        // A first year of use has beaten nothing, so there is no claim to make.
+        assertNull(heroContext(onlyYear, InsightsRange.ThisYear, 2026))
+
+        val beaten = ActivityStats(
+            totalSeconds = 300,
+            byYear = mapOf("2025" to 100L, "2026" to 300L),
+        )
+        assertEquals("your biggest year yet", heroContext(beaten, InsightsRange.ThisYear, 2026))
+        // 2026 is the best year, so viewing 2025 must not inherit the badge.
+        assertNull(heroContext(beaten, InsightsRange.LastYear, 2026))
+        assertEquals("across 2 years", heroContext(beaten, InsightsRange.AllTime, 2026))
+    }
+
+    @Test
+    fun `the leaderboard names the title and the period together`() {
+        val titles = listOf(
+            ActivityTitle(1, "tv", 9_000, "Severance", ""),
+            ActivityTitle(2, "movie", 3_000, "Arrival", ""),
+        )
+        assertEquals("Severance led your year", leaderboardHeadline(titles, InsightsRange.ThisYear))
+        assertEquals("Severance led last year", leaderboardHeadline(titles, InsightsRange.LastYear))
+        assertEquals(
+            "Severance is your most-watched",
+            leaderboardHeadline(titles, InsightsRange.AllTime),
+        )
+        // Activity rows are keyed by tmdb id and learn their name from the library, so a
+        // title watched and then removed arrives here nameless rather than absent.
+        assertEquals(
+            "The titles you gave the most hours to",
+            leaderboardHeadline(listOf(ActivityTitle(1, "tv", 9_000, "", "")), InsightsRange.ThisYear),
+        )
+    }
+
+    @Test
+    fun `taste signals fall back through people, themes, then studios`() {
+        val people = DiscoveryInsights(topPeople = listOf(DiscoveryTaste(1, "Denis Villeneuve", 4.0)))
+        assertEquals("Denis Villeneuve shows up more than anyone", signalsHeadline(people))
+
+        val themes = DiscoveryInsights(topKeywords = listOf(DiscoveryTaste(2, "time loop", 3.0)))
+        assertEquals("You keep coming back to time loop", signalsHeadline(themes))
+
+        val studios = DiscoveryInsights(topStudios = listOf(StudioEntry(3, "A24", 6)))
+        assertEquals("A24 made more of your library than anyone", signalsHeadline(studios))
+
+        assertEquals(
+            "Themes, people and studios behind your recommendations",
+            signalsHeadline(DiscoveryInsights()),
+        )
+    }
+
+    @Test
+    fun `contributors name whichever direction the profile actually has`() {
+        val positive = DiscoveryInsights(
+            topContributors = listOf(ContributingTitle(1, "tv", "Severance", "", 4.0)),
+        )
+        assertEquals("Severance shaped your profile most", contributorsHeadline(positive))
+
+        // A profile with only negative signal still has something true to say.
+        val negative = DiscoveryInsights(
+            negativeContributors = listOf(ContributingTitle(2, "movie", "Morbius", "", -3.0)),
+        )
+        assertEquals("Morbius steered you away hardest", contributorsHeadline(negative))
+
+        assertEquals(
+            "The strongest pulls in each direction",
+            contributorsHeadline(DiscoveryInsights()),
+        )
+    }
+
+    // ── Moments ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun `a date in this year carries its weekday and an older one carries its year`() {
+        // today is 2026-08-17. 14 March 2026 was a Saturday.
+        assertEquals("Saturday 14 March", formatMomentDate("2026-03-14", today))
+        // An older date drops the weekday, which nobody can place, and gains the year,
+        // which is the part that actually locates it.
+        assertEquals("14 March 2025", formatMomentDate("2025-03-14", today))
+        assertNull(formatMomentDate("not-a-date", today))
+    }
+
+    @Test
+    fun `a monthly headliner is labelled by its month`() {
+        assertEquals("Mar", momentMonthLabel("2026-03-01"))
+        assertEquals("Dec", momentMonthLabel("2026-12-01"))
+        assertNull(momentMonthLabel(""))
+    }
+
+    @Test
+    fun `moment headlines lead with whichever half is the claim`() {
+        val day = WatchMoment(date = "2026-03-14", seconds = 9 * 3600 + 12 * 60, tmdbId = 1)
+        // The biggest day is a claim about a date, so the date is in the sentence.
+        assertEquals("9h 12m on Saturday 14 March", biggestDayHeadline(day, today))
+        // The longest sitting is a claim about a duration; its date is a qualifier and
+        // belongs in the support line, not here.
+        assertEquals("9h 12m without stopping", longestSessionHeadline(day))
+    }
+
+    @Test
+    fun `an empty moment produces no headline at all`() {
+        val empty = WatchMoment(date = "", seconds = 900)
+        val dateless = WatchMoment(date = "2026-03-14", seconds = 0)
+        assertNull(biggestDayHeadline(empty, today))
+        assertNull(biggestDayHeadline(dateless, today))
+        assertNull(longestSessionHeadline(empty))
+        assertNull(firstWatchHeadline(empty, today, InsightsRange.ThisYear))
+    }
+
+    @Test
+    fun `the first watch names the title only when there is one`() {
+        val named = WatchMoment(date = "2026-01-02", seconds = 3600, tmdbId = 1, title = "Arrival")
+        assertEquals(
+            "You started with Arrival on Friday 2 January",
+            firstWatchHeadline(named, today, InsightsRange.ThisYear),
+        )
+        // All-time is not a year anyone started, so the phrasing changes with it.
+        assertEquals(
+            "It all started with Arrival on Friday 2 January",
+            firstWatchHeadline(named, today, InsightsRange.AllTime),
+        )
+        // A title the library has forgotten leaves the date standing on its own rather
+        // than producing "You started with  on ...".
+        val nameless = WatchMoment(date = "2026-01-02", seconds = 3600, tmdbId = 1)
+        assertEquals(
+            "You started on Friday 2 January",
+            firstWatchHeadline(nameless, today, InsightsRange.ThisYear),
+        )
+    }
+
+    // ── Recap ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `the recap file is named after the period it covers`() {
+        // today is 2026-08-17. A downloads folder full of "image.png" is the thing this
+        // avoids, so the period has to be in the name and has to follow the range.
+        assertEquals("cove-2026.png", recapFileName(InsightsRange.ThisYear, today))
+        assertEquals("cove-2025.png", recapFileName(InsightsRange.LastYear, today))
+        assertEquals("cove-all-time.png", recapFileName(InsightsRange.AllTime, today))
     }
 }

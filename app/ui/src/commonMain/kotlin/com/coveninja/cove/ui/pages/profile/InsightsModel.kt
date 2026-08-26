@@ -2,6 +2,7 @@ package com.coveninja.cove.ui.pages.profile
 
 import com.coveninja.cove.shared.model.ActivityStats
 import com.coveninja.cove.shared.model.ActivityTitle
+import com.coveninja.cove.shared.model.DecadeCount
 import com.coveninja.cove.shared.model.DiscoveryInsights
 import com.coveninja.cove.shared.model.DiscoveryTaste
 import com.coveninja.cove.shared.model.InsightsRange
@@ -9,6 +10,7 @@ import com.coveninja.cove.shared.model.LanguageCount
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.WatchMoment
 import com.coveninja.cove.shared.model.WatchProgress
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -573,3 +575,411 @@ private val LANGUAGE_NAMES = mapOf(
     "fa" to "Persian", "vi" to "Vietnamese", "ta" to "Tamil", "te" to "Telugu",
     "ml" to "Malayalam", "is" to "Icelandic", "ca" to "Catalan",
 )
+
+// ── Headlines ────────────────────────────────────────────────────────────────
+//
+// Every section on the page is headed by a small-caps eyebrow and a headline. The eyebrow
+// is the fixed label the section used to carry as its title ("ACROSS THE YEAR"); the
+// headline is a sentence about the viewer, computed from their own numbers.
+//
+// The rule each of these obeys: state a fact or say nothing new. When the data is too thin
+// to support a claim, the function returns the neutral description the section used to
+// show rather than a hedged sentence or an overclaim. A page that tells someone the 2010s
+// are "their decade" on the strength of four titles is worse than one that stays quiet.
+
+/**
+ * Which part of the day an hour belongs to.
+ *
+ * Four bands rather than the hour itself, because the sentence the page wants to say is
+ * about a habit and an hour is about one evening. The night band deliberately wraps
+ * midnight: someone watching at 1am is finishing a night, not starting a morning, and a
+ * band that split at midnight would file the two halves of one sitting under opposite
+ * words.
+ */
+enum class TimeBand { Morning, Afternoon, Evening, Night }
+
+fun timeBand(hour: Int): TimeBand = when (((hour % 24) + 24) % 24) {
+    in 5..11 -> TimeBand.Morning
+    in 12..16 -> TimeBand.Afternoon
+    in 17..21 -> TimeBand.Evening
+    else -> TimeBand.Night
+}
+
+/** Reads after a weekday: "Sunday **evenings**". */
+fun bandAfterWeekday(band: TimeBand): String = when (band) {
+    TimeBand.Morning -> "mornings"
+    TimeBand.Afternoon -> "afternoons"
+    TimeBand.Evening -> "evenings"
+    TimeBand.Night -> "nights"
+}
+
+/**
+ * Reads on its own: "**late nights**".
+ *
+ * Differs from [bandAfterWeekday] in the night case only. "Sunday late nights" is not
+ * English, while a bare "nights" in a list of habits is too vague to be worth the words.
+ */
+fun bandAlone(band: TimeBand): String = when (band) {
+    TimeBand.Night -> "late nights"
+    else -> bandAfterWeekday(band)
+}
+
+/**
+ * The month chart's headline: which month of this year has the most time on it.
+ *
+ * [currentMonth] is 1-based and may be null when the chart is not showing the running
+ * year. When the peak *is* the running month the claim is qualified with "so far" — a
+ * fortnight into August, calling it the biggest month is a statement the rest of the month
+ * can quietly overturn.
+ */
+fun monthlyHeadline(byMonthThisYear: List<Long>, currentMonth: Int?): String {
+    val index = byMonthThisYear.indices.maxByOrNull { byMonthThisYear[it] }
+        ?: return MONTHLY_FALLBACK
+    if (byMonthThisYear[index] <= 0L) return MONTHLY_FALLBACK
+    val name = MONTHS_FULL.getOrNull(index) ?: return MONTHLY_FALLBACK
+    return if (currentMonth != null && currentMonth == index + 1) {
+        "$name is your biggest month so far"
+    } else {
+        "$name was your biggest month"
+    }
+}
+
+private const val MONTHLY_FALLBACK = "This year against last"
+
+/**
+ * The rhythm headline: the weekday and the part of the day the viewer actually watches in.
+ *
+ * Falls back to the neutral line when either half is unknown, matching [rhythmSummary] —
+ * naming a weekday without a time, or a time without a weekday, is half a habit.
+ */
+fun rhythmHeadline(activity: ActivityStats): String {
+    val hour = peakHour(activity.byHourOfDay) ?: return RHYTHM_FALLBACK
+    val weekday = busiestWeekday(activity.byDayOfWeek) ?: return RHYTHM_FALLBACK
+    return "${weekdayName(weekday)} ${bandAfterWeekday(timeBand(hour))}, " +
+        "around ${formatHour(hour)}"
+}
+
+private const val RHYTHM_FALLBACK = "When your watching actually happens"
+
+/**
+ * The heatmap headline: how many days of the period had anything on them.
+ *
+ * The denominator differs by range and is the whole point of the sentence. A running year
+ * is measured against the days that have actually elapsed — against 365 it would report a
+ * worse figure every January and a better one every December, for no reason but the date.
+ * All-time has no meaningful denominator at all, so it does not invent one.
+ */
+fun heatmapHeadline(activeDays: Int, range: InsightsRange, today: LocalDate): String {
+    if (activeDays <= 0) return HEATMAP_FALLBACK
+    return when (range) {
+        InsightsRange.ThisYear ->
+            "You watched on $activeDays of the year's ${today.dayOfYear} days so far"
+        InsightsRange.LastYear ->
+            "You watched on $activeDays of ${daysInYear(today.year - 1)} days"
+        InsightsRange.AllTime ->
+            "You watched on $activeDays separate " + if (activeDays == 1) "day" else "days"
+    }
+}
+
+private const val HEATMAP_FALLBACK = "Every day you watched something"
+
+/** 366 in a leap year, 365 otherwise — the heatmap denominator has to be the real one. */
+fun daysInYear(year: Int): Int =
+    if (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) 366 else 365
+
+/** The library headline: what the saved titles are actually doing. */
+fun compositionHeadline(breakdown: LibraryBreakdown): String {
+    val finished = breakdown.statusCounts[LibraryStatus.Finished] ?: 0
+    val watching = breakdown.statusCounts[LibraryStatus.Watching] ?: 0
+    return when {
+        finished > 0 && watching > 0 -> "$finished finished, $watching still going"
+        finished > 0 -> "$finished of ${breakdown.total} finished"
+        breakdown.total > 0 -> "${breakdown.total} " +
+            (if (breakdown.total == 1) "title" else "titles") + " saved"
+        else -> "What your library is made of"
+    }
+}
+
+/**
+ * The follow-through headline.
+ *
+ * Deliberately a plain percentage rather than a verdict. The page has no business telling
+ * someone that abandoning things is a failing — the same reason [YearDelta] renders a fall
+ * in grey rather than red — so this reports the number and stops.
+ */
+fun finishHeadline(stats: FinishStats): String {
+    if (stats.started <= 0) return "How often you reach the end"
+    if (stats.rate >= 0.95f) return "You finish almost everything you start"
+    return "You finish ${(stats.rate * 100).roundToInt()}% of what you start"
+}
+
+/**
+ * The taste headline: the three strongest genres, whichever side of the library they came
+ * from.
+ *
+ * Movie and TV genres are merged by name and summed. They are weights from one profile on
+ * one scale, so a viewer whose science fiction is split across both halves should see it
+ * counted once and ranked accordingly, rather than losing to a genre that only ever
+ * appears in one list.
+ */
+fun genreHeadline(movieGenres: List<DiscoveryTaste>, tvGenres: List<DiscoveryTaste>): String {
+    val merged = (movieGenres + tvGenres)
+        .filter { it.score > 0.0 }
+        .groupBy { it.name }
+        .map { (name, group) -> name to group.sumOf(DiscoveryTaste::score) }
+        .sortedWith(compareByDescending<Pair<String, Double>> { it.second }.thenBy { it.first })
+        .take(3)
+        .map { it.first }
+    return when (merged.size) {
+        0 -> "The genres your library argues for hardest"
+        1 -> merged[0]
+        2 -> "${merged[0]} and ${merged[1]}"
+        else -> "${merged[0]}, ${merged[1]} and ${merged[2]}"
+    }
+}
+
+/**
+ * The crowd headline, on the ten-point scale both sides were converted to.
+ *
+ * A gap under [CROWD_NOISE] is reported as agreement rather than as a direction. Below
+ * that the sign is decided by a couple of titles and would flip between visits, which
+ * would make the page look like it was guessing — because it would be.
+ */
+fun crowdHeadline(comparison: RatingComparison): String {
+    if (comparison.rated <= 0) return "How your scores sit against everyone else's"
+    val delta = comparison.averageDelta
+    if (abs(delta) < CROWD_NOISE) return "You rate about the same as everyone else"
+    val amount = ((abs(delta) * 10).roundToInt() / 10.0)
+    return if (delta > 0) {
+        "You rate $amount above the crowd"
+    } else {
+        "You rate $amount below the crowd"
+    }
+}
+
+private const val CROWD_NOISE = 0.25
+
+/**
+ * The decade headline.
+ *
+ * Claims a decade only when it holds [DOMINANT_SHARE] of the engaged set. Below that the
+ * honest finding is the spread, not a favourite: naming the largest of five near-equal
+ * decades as "your decade" is the page reading meaning into noise.
+ */
+fun decadesHeadline(decades: List<DecadeCount>): String {
+    val total = decades.sumOf(DecadeCount::count)
+    if (total <= 0) return "The eras your library comes from"
+    val top = decades.maxByOrNull(DecadeCount::count) ?: return "The eras your library comes from"
+    if (top.count.toDouble() / total >= DOMINANT_SHARE) {
+        return "The ${decadeLabel(top.decade)} are your decade"
+    }
+    val oldest = decades.minOf(DecadeCount::decade)
+    val newest = decades.maxOf(DecadeCount::decade)
+    if (oldest == newest) return "The ${decadeLabel(oldest)}, almost entirely"
+    return "You range from the ${decadeLabel(oldest)} to the ${decadeLabel(newest)}"
+}
+
+private const val DOMINANT_SHARE = 0.30
+
+/**
+ * The language headline: how much of the library is not in English.
+ *
+ * A percentage rather than a "1 in 4", which reads more warmly and is usually wrong — a
+ * 40% share becomes "1 in 3" once it is rounded to a whole denominator, and the page would
+ * be stating a number nobody can reproduce from the chart underneath it.
+ */
+fun languagesHeadline(languages: List<LanguageCount>): String {
+    val named = namedLanguages(languages)
+    val total = named.sumOf { it.second }
+    if (total <= 0) return "The languages your library is in"
+    val english = named.firstOrNull { it.first == "English" }?.second ?: 0
+    val share = (total - english).toDouble() / total
+    return when {
+        share <= 0.0 -> "Everything you watch is in English"
+        share < 0.05 -> "Almost everything you watch is in English"
+        share >= 0.95 -> "Almost nothing you watch is in English"
+        else -> "${(share * 100).roundToInt()}% of your titles aren't in English"
+    }
+}
+
+/**
+ * The one line under the hero total: the viewer's habits as three clauses at most.
+ *
+ * Null unless at least two clauses survive. One clause is not a portrait — "mostly series"
+ * on its own says less than the number directly above it already did — and the line is
+ * better absent than thin.
+ */
+fun identityLine(
+    breakdown: LibraryBreakdown,
+    activity: ActivityStats,
+    decades: List<DecadeCount>,
+): String? {
+    val clauses = buildList {
+        shapeClause(breakdown)?.let(::add)
+        peakHour(activity.byHourOfDay)?.let { add(bandAlone(timeBand(it))) }
+        dominantDecade(decades)?.let { add("the ${decadeLabel(it)}") }
+    }
+    return if (clauses.size < 2) null else clauses.joinToString(" · ")
+}
+
+/**
+ * "Mostly series" or "mostly films", when the library actually leans one way.
+ *
+ * Null inside [SHAPE_LEAN] of even. Someone with 51 films and 49 shows watches both, and
+ * telling them they are "mostly a film person" is a claim their own library contradicts.
+ */
+private fun shapeClause(breakdown: LibraryBreakdown): String? {
+    val total = breakdown.movies + breakdown.shows
+    if (total <= 0) return null
+    val showShare = breakdown.shows.toDouble() / total
+    return when {
+        showShare >= SHAPE_LEAN -> "mostly series"
+        showShare <= 1.0 - SHAPE_LEAN -> "mostly films"
+        else -> null
+    }
+}
+
+private const val SHAPE_LEAN = 0.6
+
+/** The decade holding [DOMINANT_SHARE] of the set, or null when nothing dominates. */
+private fun dominantDecade(decades: List<DecadeCount>): Int? {
+    val total = decades.sumOf(DecadeCount::count)
+    if (total <= 0) return null
+    val top = decades.maxByOrNull(DecadeCount::count) ?: return null
+    return top.decade.takeIf { top.count.toDouble() / total >= DOMINANT_SHARE }
+}
+
+/**
+ * The qualifying line beside the hero total.
+ *
+ * Note what this deliberately does not say: how many *days* the total comes to.
+ * [formatWatchDuration] documents why hours never roll up into days, and a second line
+ * doing it anyway would undo that decision one label further down the same card.
+ */
+fun heroContext(activity: ActivityStats, range: InsightsRange, thisYear: Int): String? {
+    if (activity.totalSeconds <= 0L) return null
+    return when (range) {
+        InsightsRange.AllTime -> activity.byYear.keys.size
+            .takeIf { it > 1 }
+            ?.let { "across $it years" }
+        InsightsRange.ThisYear, InsightsRange.LastYear -> {
+            val year = if (range == InsightsRange.ThisYear) thisYear else thisYear - 1
+            val best = activity.byYear.maxByOrNull { it.value } ?: return null
+            // Only worth saying once there is another year to have beaten.
+            if (activity.byYear.size > 1 && best.key == year.toString()) {
+                "your biggest year yet"
+            } else {
+                null
+            }
+        }
+    }
+}
+
+/**
+ * The leaderboard headline: whichever title took the most hours, named.
+ *
+ * The single most personal line the page can produce from activity alone, which is why it
+ * heads the one card on the page drawn at feature weight. Falls back when the top entry has
+ * no title — the activity tables key rows by tmdb id and only learn the name from the
+ * library, so a title watched and then removed from the library reaches here nameless.
+ */
+fun leaderboardHeadline(titles: List<ActivityTitle>, range: InsightsRange): String {
+    val top = titles.firstOrNull()?.title?.takeIf { it.isNotBlank() }
+        ?: return "The titles you gave the most hours to"
+    return when (range) {
+        InsightsRange.ThisYear -> "$top led your year"
+        InsightsRange.LastYear -> "$top led last year"
+        InsightsRange.AllTime -> "$top is your most-watched"
+    }
+}
+
+/**
+ * The taste-signals headline, from whichever signal the profile actually has.
+ *
+ * Ordered people, then themes, then studios — least to most abstract from the reader's point
+ * of view. A name is something someone recognises about themselves; a studio is a fact they
+ * may never have noticed.
+ */
+fun signalsHeadline(profile: DiscoveryInsights): String {
+    profile.topPeople.firstOrNull()?.name?.takeIf { it.isNotBlank() }?.let {
+        return "$it shows up more than anyone"
+    }
+    profile.topKeywords.firstOrNull()?.name?.takeIf { it.isNotBlank() }?.let {
+        return "You keep coming back to $it"
+    }
+    profile.topStudios.firstOrNull()?.name?.takeIf { it.isNotBlank() }?.let {
+        return "$it made more of your library than anyone"
+    }
+    return "Themes, people and studios behind your recommendations"
+}
+
+/** The contributors headline: the title that moved the profile hardest, either way. */
+fun contributorsHeadline(profile: DiscoveryInsights): String {
+    profile.topContributors.firstOrNull()?.title?.takeIf { it.isNotBlank() }?.let {
+        return "$it shaped your profile most"
+    }
+    profile.negativeContributors.firstOrNull()?.title?.takeIf { it.isNotBlank() }?.let {
+        return "$it steered you away hardest"
+    }
+    return "The strongest pulls in each direction"
+}
+
+// ── Moments ──────────────────────────────────────────────────────────────────
+
+/**
+ * A moment's date, written the way someone would say it.
+ *
+ * The weekday is carried for a date in the current year and dropped for an older one: "the
+ * Saturday you watched nine hours" is a thing a person can place, while "Saturday" about a
+ * date eighteen months ago is a detail nobody can use, and the year is the part that
+ * actually locates it. Null when the stored date will not parse, which is the same answer
+ * every other reader of these strings gives.
+ */
+fun formatMomentDate(iso: String, today: LocalDate): String? {
+    val date = runCatching { LocalDate.parse(iso) }.getOrNull() ?: return null
+    val month = MONTHS_FULL.getOrNull(date.month.number - 1) ?: return null
+    if (date.year != today.year) return "${date.day} $month ${date.year}"
+    val weekday = WEEKDAYS_FROM_SUNDAY[date.dayOfWeek.isoDayNumber % 7]
+    return "$weekday ${date.day} $month"
+}
+
+/** A monthly headliner's month, three letters, for the label under its poster. */
+fun momentMonthLabel(iso: String): String? {
+    val date = runCatching { LocalDate.parse(iso) }.getOrNull() ?: return null
+    return MONTHS_SHORT.getOrNull(date.month.number - 1)
+}
+
+/** "9h 12m on Saturday 14 March" — the biggest single day of the range. */
+fun biggestDayHeadline(moment: WatchMoment, today: LocalDate): String? {
+    if (moment.isEmpty) return null
+    val date = formatMomentDate(moment.date, today) ?: return null
+    return "${formatWatchDuration(moment.seconds)} on $date"
+}
+
+/**
+ * "4h 12m without stopping" — the longest unbroken run.
+ *
+ * The duration leads rather than the date, because the duration is the claim. Which evening
+ * it happened on is the qualifier, and belongs in the support line underneath.
+ */
+fun longestSessionHeadline(moment: WatchMoment): String? {
+    if (moment.isEmpty) return null
+    return "${formatWatchDuration(moment.seconds)} without stopping"
+}
+
+/**
+ * How the range opened.
+ *
+ * Names the title when the library still knows it and falls back to the bare date when it
+ * does not — "You started the year with something on 2 January" would be worse than saying
+ * nothing about what was on.
+ */
+fun firstWatchHeadline(moment: WatchMoment, today: LocalDate, range: InsightsRange): String? {
+    if (moment.isEmpty) return null
+    val date = formatMomentDate(moment.date, today) ?: return null
+    val opened = if (range == InsightsRange.AllTime) "It all started" else "You started"
+    val title = moment.title.takeIf { it.isNotBlank() }
+        ?: return "$opened on $date"
+    return "$opened with $title on $date"
+}
+

@@ -8,15 +8,25 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.state.LocalMotionPolicy
 import kotlin.math.min
@@ -179,3 +189,65 @@ internal fun heatLevelColors(accent: Color, empty: Color): List<Color> = listOf(
 
 /** Corner radius shared by the small cells and swatches so they read as one family. */
 internal val CellCorner = 2.5.dp
+
+/**
+ * Row-level emphasis a finger can reach.
+ *
+ * The charts on this page were built with `hoverable` alone, which on a phone means the
+ * weekday bars, the ranked taste bars and the ring's legend reveal precisely nothing: there
+ * is no pointer to hover, so the emphasis animation never runs and the numbers behind it are
+ * unreachable. `MonthBars` had already solved this by pairing hover with a tap that writes
+ * the same state; this is that pattern, extracted, so the remaining charts cannot each
+ * solve it differently or forget to.
+ *
+ * Hover and tap both drive one caller-owned selection rather than a local flag, because on a
+ * chart with a shared readout the row and the readout are two views of the same thing.
+ * Tapping the focused row clears it, which is the only way to dismiss a selection on a
+ * device with no pointer to move away.
+ *
+ * A row only ever clears *its own* focus. Moving a pointer between two rows fires one row's
+ * exit and the other's entry in no guaranteed order, and an unguarded clear lands after the
+ * entry and blanks the selection that just arrived.
+ */
+@Composable
+internal fun Modifier.chartRowFocus(
+    index: Int,
+    focused: Int?,
+    onFocusChange: (Int?) -> Unit,
+    enabled: Boolean = true,
+): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    // pointerInput only restarts when its key changes, so without these it would go on
+    // reading whichever selection was current when the chart first composed.
+    val current by rememberUpdatedState(focused)
+    val notify by rememberUpdatedState(onFocusChange)
+
+    LaunchedEffect(hovered, enabled) {
+        if (!enabled) return@LaunchedEffect
+        if (hovered) notify(index) else if (current == index) notify(null)
+    }
+
+    return this
+        .hoverable(interaction, enabled = enabled)
+        .pointerInput(index) {
+            detectTapGestures {
+                if (enabled) notify(if (current == index) null else index)
+            }
+        }
+}
+
+/**
+ * Whether a pointer event is a finger letting go.
+ *
+ * The heatmap and the clock read raw pointer events so they can track a position rather than
+ * a hit target, which means they see a touch as a press and never see it end. Without this
+ * the readout latches to whatever was tapped last and stays there for good — the value under
+ * a finger that lifted an hour ago is not what the chart is showing.
+ *
+ * Restricted to touch on purpose: a mouse click is also a release, and clearing on that
+ * would blank the readout every time a desktop viewer clicked the chart.
+ */
+internal fun PointerEvent.isTouchRelease(): Boolean =
+    type == PointerEventType.Release && changes.lastOrNull()?.type == PointerType.Touch
+

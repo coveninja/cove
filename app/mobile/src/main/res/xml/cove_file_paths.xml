@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What the FileProvider is allowed to hand out.
+
+    Exactly one directory, inside the cache, which only the image export writes to. A
+    provider scoped to the whole of cache-path or files-path would let any URI this app can
+    construct be read by any app it shares with, which is a good deal more than "share this
+    one picture" needs.
+-->
+<paths>
+    <cache-path
+        name="shared-images"
+        path="shared-images/" />
+</paths>
