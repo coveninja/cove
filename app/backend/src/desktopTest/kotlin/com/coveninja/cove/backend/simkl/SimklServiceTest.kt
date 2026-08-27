@@ -36,9 +36,12 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -77,6 +80,11 @@ class SimklServiceTest {
         backend(client).use { fixture ->
             val service = fixture.service
             assertEquals("ABCD", service.startDeviceFlow().userCode)
+            // startDeviceFlow leaves a polling job behind, and runTest's virtual clock fires
+            // its first delay the moment this coroutine parks on the mock engine's own
+            // dispatcher — so without the cancel that cancelLink() performs, the poll below
+            // races a second, concurrent poll of the same code.
+            service.unlink()
             assertEquals("authorized", service.poll("ABCD").status)
             assertEquals("cove-user", service.status().username)
             // The account id rides in the refresh_token column because Simkl issues no
@@ -101,6 +109,48 @@ class SimklServiceTest {
             assertTrue(scrobble.path.contains("app-version=1.2.3"), scrobble.path)
             assertTrue(scrobble.body.contains("\"tmdb\":\"42\""), scrobble.body)
             assertTrue(scrobble.body.contains("\"progress\":12.5"), scrobble.body)
+        }
+    }
+
+    /**
+     * A link cancelled while the account fetch is in flight leaves the stored session alone.
+     *
+     * `save` is not a suspend function, so it runs even in a cancelled coroutine: a
+     * `CancellationException` swallowed inside `fetchAccount` still reaches it, carrying
+     * blanks where the username and account id belong.
+     */
+    @Test
+    fun linkCancelledDuringAccountFetchLeavesTheStoredSessionUntouched() = runTest {
+        val reachedAccountFetch = CompletableDeferred<Unit>()
+        val client = mockClient { path, _, _ ->
+            when {
+                path.startsWith("/oauth/pin/") -> json(
+                    """{"result":"OK","access_token":"access"}""",
+                )
+                path.startsWith("/users/settings") -> {
+                    reachedAccountFetch.complete(Unit)
+                    // Never answers; the poll is cancelled while it waits here.
+                    CompletableDeferred<Unit>().await()
+                    json("""{"user":{"name":"cove-user"},"account":{"id":4242}}""")
+                }
+                else -> error("unexpected Simkl path $path")
+            }
+        }
+        backend(client).use { fixture ->
+            fixture.database.coveQueries.upsertTrackerSession(
+                "p1", "simkl", "stored", "1111", 0, "existing-user", "",
+            )
+            val poll = launch { fixture.service.poll("ABCD") }
+            reachedAccountFetch.await()
+            poll.cancelAndJoin()
+
+            val session = fixture.database.coveQueries
+                .selectTrackerSession("p1", "simkl").executeAsOne()
+            // Mutation check: swallow the cancellation in fetchAccount and the row is
+            // overwritten — "access" with an empty username and account id.
+            assertEquals("stored", session.access_token)
+            assertEquals("existing-user", session.username)
+            assertEquals("1111", session.refresh_token)
         }
     }
 

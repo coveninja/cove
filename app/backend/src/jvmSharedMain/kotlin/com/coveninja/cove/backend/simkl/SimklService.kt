@@ -29,6 +29,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.encodeURLParameter
 import java.time.Clock
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -306,10 +307,23 @@ class SimklService(
         }.getOrNull()?.takeUnless { it.isEmpty }
     }
 
+    /**
+     * The name and account id, or blanks for anything Simkl would not answer — a link is
+     * still worth keeping when only this call failed.
+     *
+     * Cancellation is the one failure that must not read as a blank answer. `save` below is
+     * not a suspend function, so it runs even in a cancelled coroutine: swallowing the
+     * `CancellationException` here would write an empty username and account id over the row
+     * the poll was about to fill in.
+     */
     private suspend fun fetchAccount(accessToken: String): Pair<String, String> {
-        val response = runCatching {
+        val response = try {
             http.write(HttpMethod.Post, "/users/settings", null, accessToken)
-        }.getOrNull() ?: return "" to ""
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            return "" to ""
+        }
         if (response.status != 200) return "" to ""
         return runCatching {
             val root = CoveJson.parseToJsonElement(response.body).jsonObject

@@ -69,6 +69,11 @@ class TraktServiceTest {
         backend(client).use { fixture ->
             val service = fixture.service
             assertEquals("ABCD", service.startDeviceFlow().userCode)
+            // startDeviceFlow leaves a polling job behind, and runTest's virtual clock fires
+            // its first delay the moment this coroutine parks on the mock engine's own
+            // dispatcher — so without the cancel that cancelLink() performs, the poll below
+            // races a second, concurrent poll of the same code.
+            service.unlink()
             assertEquals("authorized", service.poll("device").status)
             assertEquals("cove-user", service.status().username)
 
