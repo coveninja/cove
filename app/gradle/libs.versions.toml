@@ -1,7 +1,7 @@
 [versions]
 kotlin                = "2.4.10"
-android-gradle-plugin = "9.3.1"
-compose-multiplatform = "1.11.1"
+android-gradle-plugin = "9.3.2"
+compose-multiplatform = "1.12.0"
 compose-hot-reload    = "1.2.0"
 # Underlying material3 version bundled by CMP 1.11.1; declared here for
 # explicit pinning in later phases if needed. Build files use compose.material3
@@ -17,7 +17,7 @@ jna                   = "5.19.1"
 jogl                  = "2.6.0"
 sqldelight            = "2.3.2"
 jlibtorrent           = "2.0.12.9"
-graaljs               = "25.1.3"
+graaljs               = "25.3.4.1"
 androidx-activity     = "1.13.0"
 androidx-core         = "1.19.0"
 mpv-android           = "1.0.0"
