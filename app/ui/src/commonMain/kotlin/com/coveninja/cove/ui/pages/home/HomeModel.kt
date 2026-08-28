@@ -15,6 +15,8 @@ import com.coveninja.cove.ui.state.watchFraction
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.daysUntil
 import kotlin.math.roundToInt
+import com.coveninja.cove.shared.model.MediaType as DomainMediaType
+import com.coveninja.cove.ui.model.MediaType as UiMediaType
 
 /**
  * Everything Home decides before it draws anything.
@@ -255,6 +257,88 @@ data class BacklogRow(val media: Media, val item: CalendarItem) {
  */
 fun backlogRows(items: List<CalendarItem>, resolve: (CalendarItem) -> Media?): List<BacklogRow> =
     items.mapNotNull { item -> resolve(item)?.let { media -> BacklogRow(media, item) } }
+
+// ── Card menus ──────────────────────────────────────────────────────────────
+
+/**
+ * What a wide card's context menu can do, and with which glyph.
+ *
+ * The kinds are the whole vocabulary of that menu: what a card offers is decided here, in
+ * plain data, and the composable only draws the list it is handed. Which of them a given row
+ * earns is the part that is easy to get wrong — offering "play from beginning" for something
+ * never started, or an episode-scoped action on a row that names no episode — so it is
+ * decided by [continueCardActions] and [backlogCardActions] where a test can hold it still.
+ */
+enum class WideCardActionKind(val icon: String) {
+    Play("lucide:play"),
+    PlayFromStart("lucide:rotate-ccw"),
+    ChooseSource("lucide:list-video"),
+    OpenDetails("lucide:info"),
+    MarkWatched("iconamoon:history"),
+    ClearProgress("iconamoon:close"),
+}
+
+/** One entry of that menu: what it does, and what it says it does. */
+data class WideCardAction(val kind: WideCardActionKind, val label: String) {
+    val icon: String get() = kind.icon
+}
+
+/**
+ * The menu for a carry-on card, which stands for one episode or one film.
+ *
+ * Everything about a resume point is conditional on there being one. An unstarted row — a
+ * show marked as watching that has never been played — knows no episode at all, so it is
+ * offered neither a restart nor a way off the rail, and no episode to tick off: the season
+ * and number would have to be invented, and inventing them marks the wrong episode watched.
+ * An unstarted *film* is the exception that still gets [WideCardActionKind.MarkWatched],
+ * because a film is the episode; there is nothing left to name.
+ */
+fun continueCardActions(row: ContinueRow): List<WideCardAction> = buildList {
+    val resumable = row.watchFraction != null
+    val series = row.media.type == UiMediaType.Series
+
+    add(WideCardAction(WideCardActionKind.Play, if (resumable) "Resume" else "Play"))
+    if (resumable) {
+        add(WideCardAction(WideCardActionKind.PlayFromStart, "Play from beginning"))
+    }
+    add(WideCardAction(WideCardActionKind.ChooseSource, "Choose source…"))
+    add(WideCardAction(WideCardActionKind.OpenDetails, if (series) "Go to show" else "View details"))
+
+    if (series) {
+        // Names the episode rather than saying "this one", because the card can be acted on
+        // from a rail where four shows sit side by side.
+        row.episodeMarker?.let { add(WideCardAction(WideCardActionKind.MarkWatched, "Mark $it watched")) }
+    } else {
+        add(WideCardAction(WideCardActionKind.MarkWatched, "Mark as watched"))
+    }
+
+    if (resumable) {
+        add(WideCardAction(WideCardActionKind.ClearProgress, "Remove from Continue watching"))
+    }
+}
+
+/**
+ * The menu for a backlog card, which stands for the next episode waiting.
+ *
+ * No resume point exists behind one of these, so there is nothing to restart and nothing to
+ * clear — the way off this rail is to watch the episode or to tick it off, and ticking it off
+ * moves the entry on to the next one rather than removing it.
+ */
+fun backlogCardActions(row: BacklogRow): List<WideCardAction> = buildList {
+    val movie = row.item.type == DomainMediaType.Movie
+
+    add(WideCardAction(WideCardActionKind.Play, "Play"))
+    add(WideCardAction(WideCardActionKind.ChooseSource, "Choose source…"))
+    add(WideCardAction(WideCardActionKind.OpenDetails, if (movie) "View details" else "Go to show"))
+
+    if (movie) {
+        add(WideCardAction(WideCardActionKind.MarkWatched, "Mark as watched"))
+    } else {
+        row.item.episodeMarker()?.let {
+            add(WideCardAction(WideCardActionKind.MarkWatched, "Mark $it watched"))
+        }
+    }
+}
 
 // ── Hero ────────────────────────────────────────────────────────────────────
 

@@ -235,9 +235,24 @@ class PlaybackSession(
     private var userSubtitles: List<UserSubtitle> = emptyList()
 
     /**
+     * Set by `open(fromStart = true)`, and spent by the first position actually recorded.
+     *
+     * Not spent by the load, and not left standing for the session either — both are wrong at
+     * one end. Every later load goes through the same resume block, so a flag that survived
+     * would send a viewer back to zero on a source switch half an hour in; but a flag spent on
+     * the attempt would lose the request entirely when the first source fails to open, and the
+     * failover that follows would resume the very position the viewer asked to leave. What
+     * settles it is whether anything played: once [saveProgress] has written a real position,
+     * the resume point *is* this playthrough and every later load should honour it.
+     */
+    private var startFromBeginning = false
+
+    /**
      * @param forcePicker show the source list even when the settings would have
      *   picked one, and even when only one came back. This is the "choose a
      *   source" entry point from the details overlay, not the Watch button.
+     * @param fromStart ignore the resume point for this one load. "Play from
+     *   beginning" is a different request from Watch, not a different setting.
      */
     fun open(
         media: Media,
@@ -245,6 +260,7 @@ class PlaybackSession(
         episode: Int? = null,
         episodeTitle: String? = null,
         forcePicker: Boolean = false,
+        fromStart: Boolean = false,
     ) {
         val domainType = media.type.toDomainType()
         if (domainType == null) {
@@ -278,6 +294,7 @@ class PlaybackSession(
         browsingSeason = null
         browsingEpisodes = emptyList()
         request = PlaybackRequest(media, season, episode, episodeTitle)
+        startFromBeginning = fromStart
         presentation = PlaybackPresentation.Fullscreen
         phase = PlaybackPhase.Resolving
 
@@ -679,7 +696,11 @@ class PlaybackSession(
 
         scope.launch {
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
-            val resumeFrom = if (settings?.rememberPosition != false) resumePosition(current) else 0.0
+            val resumeFrom = if (!startFromBeginning && settings?.rememberPosition != false) {
+                resumePosition(current)
+            } else {
+                0.0
+            }
             if (token != generation) return@launch
             loadCurrentSource(
                 current = current,
@@ -1009,6 +1030,10 @@ class PlaybackSession(
             completed = !status.interrupted && !reconnecting && !recoveryFailed &&
                 position / duration >= COMPLETED_FRACTION,
         )
+        // Something has genuinely played, so the resume point from here on is this
+        // playthrough rather than the one "play from beginning" was asked to ignore.
+        startFromBeginning = false
+
         // Fire-and-forget on the composition scope: a failed save must never
         // interrupt playback, and at close there is nothing left to await on.
         scope.launch { runCatching { graph.library.recordProgress(payload) } }

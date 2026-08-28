@@ -231,6 +231,17 @@ class HomeModelTest {
         assertEquals(2, rows(entries, limit = 2).size)
     }
 
+    // What "Remove from Continue watching" leaves behind, and why it is a zeroed row rather
+    // than no row: a film marked as watching with *no* progress at all qualifies again as
+    // unstarted, so deleting the row would put the card straight back on the rail.
+    @Test
+    fun `a cleared resume point takes a title off the rail rather than making it unstarted`() {
+        val entries = listOf(entry(1, "Cleared", type = MediaType.Movie))
+        val cleared = listOf(progress(1, position = 0.0, duration = 0.0, type = MediaType.Movie))
+
+        assertTrue(rows(entries, cleared).isEmpty())
+    }
+
     // ── ContinueRow labels ──────────────────────────────────────────────────
 
     @Test
@@ -408,6 +419,90 @@ class HomeModelTest {
 
         assertEquals(1, row.waitingCount)
         assertEquals("1 waiting", row.badge)
+    }
+
+    // ── Card menus ──────────────────────────────────────────────────────────
+
+    private fun kinds(actions: List<WideCardAction>) = actions.map(WideCardAction::kind)
+
+    private fun label(actions: List<WideCardAction>, kind: WideCardActionKind) =
+        actions.singleOrNull { it.kind == kind }?.label
+
+    @Test
+    fun `a resume row is offered a restart and a way off the rail`() {
+        val row = rows(
+            listOf(entry(1, "Show", watched = 3 to 7)),
+            listOf(progress(1, position = 600.0, duration = 2_400.0)),
+        ).single()
+
+        val actions = continueCardActions(row)
+
+        assertTrue(WideCardActionKind.PlayFromStart in kinds(actions))
+        assertTrue(WideCardActionKind.ClearProgress in kinds(actions))
+        // "Play" would be a lie on something already half-watched, and the entry sits
+        // directly above the one that really does start it over.
+        assertEquals("Resume", label(actions, WideCardActionKind.Play))
+    }
+
+    // The rail can show four shows side by side, so "mark this watched" has to say which
+    // episode it means — and it has to be the episode the card itself stands for.
+    @Test
+    fun `the watched action names the episode the card stands for`() {
+        val row = rows(
+            listOf(entry(1, "Show", watched = 3 to 7)),
+            listOf(progress(1, position = 600.0, duration = 2_400.0)),
+        ).single()
+
+        assertEquals("Mark S3 E7 watched", label(continueCardActions(row), WideCardActionKind.MarkWatched))
+        assertEquals("Go to show", label(continueCardActions(row), WideCardActionKind.OpenDetails))
+    }
+
+    // An unstarted show knows no episode at all: its counters are empty and no progress row
+    // exists. Every episode-scoped entry would have to invent a season and number, and
+    // inventing them marks the wrong episode watched.
+    @Test
+    fun `an unstarted show is offered nothing that needs an episode`() {
+        val row = rows(listOf(entry(1, "Started"))).single()
+
+        val actions = continueCardActions(row)
+
+        assertEquals(
+            listOf(
+                WideCardActionKind.Play,
+                WideCardActionKind.ChooseSource,
+                WideCardActionKind.OpenDetails,
+            ),
+            kinds(actions),
+        )
+        assertEquals("Play", label(actions, WideCardActionKind.Play))
+    }
+
+    // A film is its own episode, so there is nothing left to name and the action stands.
+    @Test
+    fun `an unstarted film can still be marked watched`() {
+        val row = rows(listOf(entry(1, "Film", type = MediaType.Movie))).single()
+
+        val actions = continueCardActions(row)
+
+        assertEquals("Mark as watched", label(actions, WideCardActionKind.MarkWatched))
+        assertEquals("View details", label(actions, WideCardActionKind.OpenDetails))
+        assertTrue(WideCardActionKind.PlayFromStart !in kinds(actions))
+    }
+
+    // Nothing has been played behind a backlog entry, so there is no resume point to restart
+    // or to clear — offering either would promise something the row cannot do.
+    @Test
+    fun `a backlog row names the waiting episode and has no resume point`() {
+        val row = backlog(
+            calendarItem(1, "Show", "2026-08-04", CalendarItem.KIND_AVAILABLE, waitingCount = 3)
+                .copy(seasonNumber = 2, episodeNumber = 3),
+        ).single()
+
+        val actions = backlogCardActions(row)
+
+        assertEquals("Mark S2 E3 watched", label(actions, WideCardActionKind.MarkWatched))
+        assertTrue(WideCardActionKind.ClearProgress !in kinds(actions))
+        assertTrue(WideCardActionKind.PlayFromStart !in kinds(actions))
     }
 
     // ── comingUp ────────────────────────────────────────────────────────────

@@ -447,6 +447,12 @@ private fun CoveAppContent(
                         mediaCard = pageMediaCard,
                         onOpenMedia = openMedia,
                         onPlayMedia = { playback.open(it) },
+                        onPlayFromStart = { media, season, episode ->
+                            playback.open(media, season, episode, fromStart = true)
+                        },
+                        onChooseSource = { media, season, episode ->
+                            playback.open(media, season, episode, forcePicker = true)
+                        },
                         onExplore = { selectedDestination = NavDestination.Explore },
                         onExploreCatalog = { catalogDescriptor ->
                             explorePageState.showCatalog(catalogDescriptor)

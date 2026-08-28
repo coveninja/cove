@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -353,6 +354,20 @@ private fun entry(season: Int, episode: Int) = LibraryEntry(
 
 private val oneSource = listOf(StreamSource(name = "Only", url = "https://example.com/a.mkv"))
 
+private val twoSources = listOf(
+    StreamSource(name = "A", url = "https://example.com/a.mkv"),
+    StreamSource(name = "B", url = "https://example.com/b.mkv"),
+)
+
+private fun storedAt(position: Double) = WatchProgress(
+    id = "p",
+    libraryEntryId = "e",
+    tmdbId = 550,
+    mediaType = DomainMediaType.Movie,
+    positionSeconds = position,
+    durationSeconds = 7000.0,
+)
+
 private class Harness(
     scheduler: TestCoroutineScheduler,
     settings: AppSettings,
@@ -649,6 +664,70 @@ class PlaybackSessionTest {
         runCurrent()
 
         assertEquals(0.0, h.host.loadedFrom)
+    }
+
+    @Test
+    fun `play from beginning ignores the resume point`() = playbackTest { h ->
+        h.library.storedProgress = WatchProgress(
+            id = "p",
+            libraryEntryId = "e",
+            tmdbId = 550,
+            mediaType = DomainMediaType.Movie,
+            positionSeconds = 610.0,
+            durationSeconds = 7000.0,
+        )
+
+        h.session.open(movie(), fromStart = true)
+        runCurrent()
+
+        assertEquals(0.0, h.host.loadedFrom)
+    }
+
+    // A source that never opened means nothing played, so the request to start over still
+    // stands: resuming here would drop the viewer back at the position they just asked to
+    // leave, and the failover is exactly when they are least able to argue with it.
+    @Test
+    fun `a source that fails before anything plays keeps the restart`() = playbackTest(
+        sources = twoSources,
+    ) { h ->
+        h.library.storedProgress = storedAt(610.0)
+
+        h.session.open(movie(), fromStart = true)
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.first())
+        runCurrent()
+        assertEquals(0.0, h.host.loadedFrom)
+
+        assertTrue(h.session.failoverToNextSource(), "expected another source")
+        runCurrent()
+
+        assertEquals(0.0, h.host.loadedFrom)
+    }
+
+    // Once a real position has been recorded, the resume point is this playthrough — so every
+    // later load honours it. A flag left standing would restart a viewer who merely switched
+    // source half an hour in.
+    @Test
+    fun `a restart stops applying once a position has been recorded`() = playbackTest(
+        sources = twoSources,
+    ) { h ->
+        h.library.storedProgress = storedAt(610.0)
+
+        h.session.open(movie(), fromStart = true)
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.first())
+        runCurrent()
+        assertEquals(0.0, h.host.loadedFrom)
+
+        h.host.report(position = 950.0, duration = 7000.0)
+        // Well past the progress ticker's interval, so at least one save has run.
+        advanceTimeBy(30_000)
+        runCurrent()
+
+        assertTrue(h.session.failoverToNextSource(), "expected another source")
+        runCurrent()
+
+        assertEquals(610.0, h.host.loadedFrom)
     }
 
     @Test
