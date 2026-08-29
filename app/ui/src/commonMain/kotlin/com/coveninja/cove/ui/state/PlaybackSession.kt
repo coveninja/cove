@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /** What is being played: a movie, one episode of a series, or an extra. */
 data class PlaybackRequest(
@@ -195,6 +197,42 @@ class PlaybackSession(
         private set
 
     /**
+     * How long this sitting has been watching, for the reminder the player shows.
+     *
+     * Kept here rather than in the player layer because that layer is thrown away every time
+     * the viewer closes the player or collapses an extra to inline — it returns early on both
+     * — and a counter that restarted on each title would never reach the second hour of an
+     * evening spent watching three things. [close] deliberately leaves it alone; the gap rule
+     * in [advanceWatchReminder] is what ends a sitting.
+     */
+    var watchReminder by mutableStateOf(WatchReminder())
+        private set
+
+    private var lastWatchTick: Instant? = null
+
+    /**
+     * Counts [elapsedSeconds] of actual playback. Called once a second by whichever shell.
+     *
+     * The gap between ticks is wall-clock rather than monotonic, which is the opposite of the
+     * choice everything else here makes: a monotonic clock does not advance while the machine
+     * is suspended, so a laptop closed mid-film and opened the next evening would carry last
+     * night's hours into tonight and remind somebody twenty minutes in. A clock adjustment can
+     * fake a gap instead, which costs nothing worse than a reminder arriving late.
+     */
+    fun tickWatchReminder(elapsedSeconds: Int) {
+        val now = Clock.System.now()
+        val gap = lastWatchTick?.let { (now - it).inWholeSeconds.toInt().coerceAtLeast(0) }
+            ?: SITTING_GAP_SECONDS
+        lastWatchTick = now
+        watchReminder = advanceWatchReminder(watchReminder, elapsedSeconds, gap)
+    }
+
+    /** Records that the reminder has been shown, so the next one waits a whole interval. */
+    fun noteWatchReminderShown(intervalHours: Int) {
+        watchReminder = markWatchReminderShown(watchReminder, intervalHours)
+    }
+
+    /**
      * Where playback was resumed from, if it was. Cleared once acknowledged so
      * the notice does not reappear on every recomposition.
      */
@@ -235,9 +273,24 @@ class PlaybackSession(
     private var userSubtitles: List<UserSubtitle> = emptyList()
 
     /**
+     * Set by `open(fromStart = true)`, and spent by the first position actually recorded.
+     *
+     * Not spent by the load, and not left standing for the session either — both are wrong at
+     * one end. Every later load goes through the same resume block, so a flag that survived
+     * would send a viewer back to zero on a source switch half an hour in; but a flag spent on
+     * the attempt would lose the request entirely when the first source fails to open, and the
+     * failover that follows would resume the very position the viewer asked to leave. What
+     * settles it is whether anything played: once [saveProgress] has written a real position,
+     * the resume point *is* this playthrough and every later load should honour it.
+     */
+    private var startFromBeginning = false
+
+    /**
      * @param forcePicker show the source list even when the settings would have
      *   picked one, and even when only one came back. This is the "choose a
      *   source" entry point from the details overlay, not the Watch button.
+     * @param fromStart ignore the resume point for this one load. "Play from
+     *   beginning" is a different request from Watch, not a different setting.
      */
     fun open(
         media: Media,
@@ -245,6 +298,7 @@ class PlaybackSession(
         episode: Int? = null,
         episodeTitle: String? = null,
         forcePicker: Boolean = false,
+        fromStart: Boolean = false,
     ) {
         val domainType = media.type.toDomainType()
         if (domainType == null) {
@@ -278,6 +332,7 @@ class PlaybackSession(
         browsingSeason = null
         browsingEpisodes = emptyList()
         request = PlaybackRequest(media, season, episode, episodeTitle)
+        startFromBeginning = fromStart
         presentation = PlaybackPresentation.Fullscreen
         phase = PlaybackPhase.Resolving
 
@@ -679,7 +734,11 @@ class PlaybackSession(
 
         scope.launch {
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
-            val resumeFrom = if (settings?.rememberPosition != false) resumePosition(current) else 0.0
+            val resumeFrom = if (!startFromBeginning && settings?.rememberPosition != false) {
+                resumePosition(current)
+            } else {
+                0.0
+            }
             if (token != generation) return@launch
             loadCurrentSource(
                 current = current,
@@ -824,13 +883,96 @@ class PlaybackSession(
         return true
     }
 
-    /** User-requested retry of the current source; never spends another automatic retry. */
+    /**
+     * User-requested retry of the current source; never spends another automatic retry.
+     *
+     * Resolves the source again before reloading it, which is the difference between this
+     * and the automatic reconnect. A stream's URL is not a permanent address: the backend
+     * will only serve a URL it has registered from a listing, and several providers mint a
+     * playback link per request. Once either lapses, the URL in hand is dead for good — so
+     * a retry that reloaded it, as this used to, could not work however many times it was
+     * pressed. Re-listing is what mints a new link and re-registers it.
+     *
+     * The old URL is the fallback throughout: a listing that fails, or comes back without
+     * this source in it, leaves the button no worse than it was.
+     */
     fun retryCurrentSource() {
-        val status = host?.status?.value ?: return
-        val start = status.positionSeconds
+        val current = request ?: return
+        val playing = phase as? PlaybackPhase.Playing ?: return
+        val player = host ?: return
+        val start = player.status.value.positionSeconds
             .takeIf { it.isFinite() && it >= 0.0 }
             ?: interruptionPositionSeconds
-        reloadCurrentSource(start, generation)
+
+        // An extra has no source list behind it, so there is nothing to resolve — and
+        // resolving one would replace the trailer with the film, as in reopenSources().
+        if (current.extra != null) {
+            reloadCurrentSource(start, generation)
+            return
+        }
+
+        val token = generation
+        reconnecting = true
+        recoveryFailed = false
+        reloadJob?.cancel()
+        reloadJob = scope.launch {
+            val url = refreshedUrl(current, playing.source, token) ?: playing.url
+            if (token != generation) return@launch
+            val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
+            loadCurrentSource(
+                current = current,
+                player = player,
+                url = url,
+                startPositionSeconds = start.coerceAtLeast(0.0),
+                token = token,
+                settings = settings,
+                showResumeNotice = false,
+            )
+        }
+    }
+
+    /**
+     * Lists the sources again and returns [source]'s current URL, or null to keep the old one.
+     *
+     * `refresh` is set because the listing cache would otherwise hand back the very link that
+     * just stopped working. Costs a provider fan-out, which is why only an explicit press
+     * comes through here and the automatic reconnect does not.
+     */
+    private suspend fun refreshedUrl(
+        current: PlaybackRequest,
+        source: StreamSource,
+        token: Int,
+    ): String? {
+        val domainType = current.media.type.toDomainType() ?: return null
+        val candidates = runCatching {
+            graph.playback.streams(
+                tmdbId = current.media.tmdbId,
+                type = domainType,
+                season = current.season,
+                episode = current.episode,
+                refresh = true,
+            )
+        }.getOrNull() ?: return null
+        if (token != generation) return null
+
+        // Matched on the release rather than on position or address: the list is re-ranked
+        // every time, and the viewer asked to retry this source rather than whatever now
+        // sorts where it used to. See releaseKey for why the URL cannot be the identity here.
+        val key = source.releaseKey()
+        val found = candidates.firstOrNull { it.releaseKey() == key } ?: return null
+        val url = runCatching { graph.playback.playUrl(found, current.season, current.episode) }
+            .getOrNull() ?: return null
+
+        // Kept so a later failover steps through a list that is still resolvable, and so a
+        // second interruption reloads the URL that worked rather than the one that did not.
+        // Filtered and ordered as open() does — a failover reads this, and it must not be
+        // handed a software-only candidate ahead of one the player can decode.
+        resolvedCandidates = candidates
+            .filter { !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank() }
+            .map { StreamChoice(it, it.compatibilityWith(playerCodecCapabilities())) }
+            .sortedBy { choice -> choice.compatibility.selectionPriority() }
+        phase = PlaybackPhase.Playing(found, url)
+        return url
     }
 
     private fun reloadCurrentSource(startPositionSeconds: Double, token: Int) {
@@ -1009,6 +1151,10 @@ class PlaybackSession(
             completed = !status.interrupted && !reconnecting && !recoveryFailed &&
                 position / duration >= COMPLETED_FRACTION,
         )
+        // Something has genuinely played, so the resume point from here on is this
+        // playthrough rather than the one "play from beginning" was asked to ignore.
+        startFromBeginning = false
+
         // Fire-and-forget on the composition scope: a failed save must never
         // interrupt playback, and at close there is nothing left to await on.
         scope.launch { runCatching { graph.library.recordProgress(payload) } }
@@ -1179,3 +1325,20 @@ internal fun StreamSource.identityKey(): String =
     url?.takeIf { it.isNotBlank() }
         ?: infoHash?.takeIf { it.isNotBlank() }
         ?: "${name.orEmpty()}|${title.orEmpty()}"
+
+/**
+ * Identifies the same *release* across two listings, which [identityKey] cannot.
+ *
+ * That one keys on the URL, which is right where it is used — `failedSources` is a record
+ * of addresses that did not work. It is exactly wrong for matching a source to itself in a
+ * fresh listing, because the URL is the part that changes: a provider that mints a playback
+ * link per request answers the second listing with a different address for the same file,
+ * and keying on it would find no match and quietly retry the dead link.
+ *
+ * So this is everything about a candidate except where to fetch it. An infoHash names the
+ * content outright; without one, the provider's label, the release name and the size are
+ * what the viewer was looking at when they picked it.
+ */
+internal fun StreamSource.releaseKey(): String =
+    infoHash?.takeIf { it.isNotBlank() }?.lowercase()
+        ?: "${addonName.orEmpty()}|${name.orEmpty()}|${title.orEmpty()}|$sizeBytes"

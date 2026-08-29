@@ -101,6 +101,8 @@ private val settingsJson = """
   "homeCatalogRows": 6,
   "homeContinueRows": 20,
   "homeUpcomingDays": 30,
+  "watchReminderEnabled": false,
+  "watchReminderHours": 4,
   "updatedAt": "2026-08-05T01:02:03Z"
 }
 """.trimIndent()
@@ -234,6 +236,10 @@ class LiveSettingsRepositoryTest {
         assertEquals(6,  sent.homeCatalogRows,   "homeCatalogRows")
         assertEquals(20, sent.homeContinueRows,  "homeContinueRows")
         assertEquals(30, sent.homeUpcomingDays,  "homeUpcomingDays")
+        // Both non-default: a reminder switched off must not come back on, and an interval
+        // chosen on one device must not be replaced by the shipped two hours on the next.
+        assertEquals(false, sent.watchReminderEnabled, "watchReminderEnabled")
+        assertEquals(4, sent.watchReminderHours, "watchReminderHours")
 
         // The general invariant behind all the assertions above: whatever keys
         // the server sent us must come back. Any field the model does not know

@@ -53,6 +53,14 @@ internal const val TV_SEEK_STEP_SECONDS = 10.0
 internal const val TV_CONTROLS_HIDE_DELAY_MILLIS = 4_500L
 
 /**
+ * How long a transient notice stays readable.
+ *
+ * Longer than the phone's four seconds: a television is across the room, and the notices it
+ * shows arrive unannounced rather than as the answer to something just pressed.
+ */
+internal const val TV_NOTICE_MILLIS = 6_000L
+
+/**
  * Whether the centre button should skip the segment on screen rather than summon the controls.
  *
  * The skip hint is not focusable, on purpose: it appears in the middle of a film, and something

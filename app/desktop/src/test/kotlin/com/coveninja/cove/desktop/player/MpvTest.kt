@@ -3,6 +3,8 @@ package com.coveninja.cove.desktop.player
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Unit tests for the genuinely testable parts of the mpv integration.
@@ -116,5 +118,24 @@ class MpvTest {
     @Test
     fun `fractional resume points truncate to whole seconds`() {
         assertEquals("90", mpvStartOption(90.7))
+    }
+
+    // The hook runs on load failure, so leaving it armed for a Cove stream meant it only ever
+    // ran once something had already gone wrong — and then reported "youtube-dl failed" for a
+    // stream that had nothing to do with YouTube, hiding the HTTP status that explained it.
+    @Test
+    fun `the ytdl hook is off for streams the backend serves`() {
+        assertFalse(ytdlEnabledFor("http://127.0.0.1:6969/api/play?url=https%3A%2F%2Fcdn.test%2Fa.mkv"))
+        assertFalse(ytdlEnabledFor("http://127.0.0.1:6969/api/v1/play?hash=abc"))
+        // Android's media host takes an ephemeral port, so the port cannot be part of the test.
+        assertFalse(ytdlEnabledFor("http://127.0.0.1:41234/api/play?url=x"))
+        assertFalse(ytdlEnabledFor("http://localhost:6969/api/play?url=x"))
+        assertFalse(ytdlEnabledFor("/home/someone/Videos/film.mkv"), "a local file is not a page")
+    }
+
+    @Test
+    fun `the ytdl hook stays on for the pages it exists for`() {
+        assertTrue(ytdlEnabledFor("https://www.youtube.com/watch?v=abc"))
+        assertTrue(ytdlEnabledFor("https://youtu.be/abc"))
     }
 }

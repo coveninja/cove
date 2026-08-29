@@ -492,7 +492,13 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                     }
                 }
                 val streams = coroutineScope {
-                    val addonStreams = async { addons.streams(type, stremioId) }
+                    val addonStreams = async {
+                        addons.streams(
+                            type,
+                            stremioId,
+                            refresh = call.request.queryParameters["refresh"] == "1",
+                        )
+                    }
                     val nuvioStreams = services.nuvio?.let { nuvio ->
                         async {
                             val metadata = catalog.media(id, type)

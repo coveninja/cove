@@ -87,3 +87,21 @@ fun sleepTimerElapsed(timer: SleepTimer): Boolean =
  */
 fun autoAdvanceAllowed(autoPlay: Boolean, timer: SleepTimer): Boolean =
     autoPlay && timer.choice != SleepTimerChoice.AfterThisEpisode
+
+/** How long before a duration timer fires the player says so. */
+const val SLEEP_TIMER_WARNING_SECONDS = 60
+
+/**
+ * True when one tick took a duration timer from above a minute to at or below it.
+ *
+ * A comparison across the tick rather than a flag on the timer: a flag would have to be
+ * cleared on every path that re-arms one, and the arming paths are the easy ones to miss.
+ * Zero is excluded — a timer at zero is stopping playback this instant, and a warning that
+ * something is about to happen is worth nothing once it has.
+ */
+fun sleepTimerWarningDue(before: SleepTimer, after: SleepTimer): Boolean {
+    if (after.choice !is SleepTimerChoice.After) return false
+    val was = before.remainingSeconds ?: return false
+    val now = after.remainingSeconds ?: return false
+    return was > SLEEP_TIMER_WARNING_SECONDS && now in 1..SLEEP_TIMER_WARNING_SECONDS
+}

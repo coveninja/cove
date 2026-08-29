@@ -16,6 +16,13 @@ data class AppSettings(
     val openOnMute: Boolean = false,
     val defaultVolume: Double = 1.0,
     val autoPlay: Boolean = false,
+    /**
+     * A transient note in the player after this many hours of watching in one sitting,
+     * pointing at the sleep timer. On by default: the timer only ever helps somebody who
+     * armed it before they were tired, and nothing else mentions that it exists.
+     */
+    val watchReminderEnabled: Boolean = true,
+    val watchReminderHours: Int = 2,
     val rememberPosition: Boolean = true,
     /** How far the skip buttons and the arrow keys jump. */
     val seekStepSeconds: Double = 10.0,

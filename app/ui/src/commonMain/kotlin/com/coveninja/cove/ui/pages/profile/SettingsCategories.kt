@@ -18,6 +18,7 @@ import com.coveninja.cove.ui.state.orderedSubtitleLanguages
 import com.coveninja.cove.ui.state.resolveBorderStyle
 import com.coveninja.cove.ui.state.withAudioLanguages
 import com.coveninja.cove.ui.state.withSubtitleLanguages
+import kotlin.math.roundToInt
 
 /**
  * The settings are grouped rather than stacked: a single scroll of thirty
@@ -194,6 +195,30 @@ fun SettingsCategoryContent(
                                 description = "Continue series without stopping between episodes.",
                                 checked = settings.autoPlay,
                                 onCheckedChange = { editor.edit { copy(autoPlay = it) } },
+                            )
+                        },
+                        {
+                            SettingToggle(
+                                title = "Watch reminder",
+                                description = "A quiet note after a long stretch, with the " +
+                                    "sleep timer a menu away.",
+                                checked = settings.watchReminderEnabled,
+                                onCheckedChange = {
+                                    editor.edit { copy(watchReminderEnabled = it) }
+                                },
+                            )
+                        },
+                        {
+                            SettingSlider(
+                                title = "Remind me after",
+                                description = "Hours of watching in one sitting before " +
+                                    "Cove says something.",
+                                value = settings.watchReminderHours.toFloat(),
+                                range = 1f..4f,
+                                format = { "${it.roundToInt()}h" },
+                                onCommit = {
+                                    editor.edit { copy(watchReminderHours = it.roundToInt()) }
+                                },
                             )
                         },
                         {

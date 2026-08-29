@@ -262,6 +262,27 @@ data class NowPlaying(
 const val NORMAL_VOLUME = 100.0
 const val MAX_VOLUME = 130.0
 
+/**
+ * ffmpeg's HTTP reconnect flags, as one mpv `stream-lavf-o` value.
+ *
+ * With `keep-open=yes` a read error is otherwise permanent: mpv parks, `interrupted` goes
+ * true, and the viewer is told the stream stopped before the end — of a source that would
+ * have answered a second request perfectly well. Addon streams drop mid-file often enough
+ * that this is ordinary rather than exceptional.
+ *
+ * `reconnect_streamed` is included because a response without a length is not seekable as
+ * far as ffmpeg is concerned, and those are exactly the streams that most need retrying.
+ * `reconnect_at_eof` is deliberately absent: it treats a clean end-of-file as an error too,
+ * and the natural end is what decides whether the next episode plays. `reconnect_delay_max`
+ * bounds the retries, so a genuinely dead upstream still gives up rather than looping.
+ *
+ * Lives here because both hosts need the identical string and neither module can see the
+ * other — the desktop had none of this for a long time while Android did, which is the kind
+ * of divergence a shared constant is for.
+ */
+const val RECONNECT_STREAM_OPTIONS =
+    "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=10"
+
 /** The default for a host that never reports one, shared so each does not allocate its own. */
 private val NO_MEDIA_PLAYING: StateFlow<NowPlaying?> = MutableStateFlow(null)
 
