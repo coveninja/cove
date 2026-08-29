@@ -221,15 +221,22 @@ class AddonManager(
         invalidateStreamCache()
     }
 
+    /**
+     * @param refresh ask the providers again instead of answering from the cache; the
+     *   fresh result is still cached. This is for a viewer retrying a stream that died:
+     *   several providers mint a playback link per request, so the cached listing holds
+     *   the very link that just stopped working and a retry served from it cannot help.
+     */
     suspend fun streams(
         type: MediaType,
         stremioId: String,
+        refresh: Boolean = false,
     ): List<AddonStream> {
         val key = "${cacheToken()}|${type.wireName}|$stremioId"
         val now = Clock.System.now().toEpochMilliseconds()
         streamCacheMutex.withLock {
             streamCache.entries.removeAll { it.value.expiresAt <= now }
-            streamCache[key]?.let { return it.streams }
+            if (!refresh) streamCache[key]?.let { return it.streams }
         }
         val result = coroutineScope {
         val providers = entries().filter { entry ->

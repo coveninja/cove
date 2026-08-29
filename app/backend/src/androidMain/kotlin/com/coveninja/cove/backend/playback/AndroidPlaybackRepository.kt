@@ -27,6 +27,7 @@ internal class AndroidPlaybackRepository(
         type: MediaType,
         season: Int?,
         episode: Int?,
+        refresh: Boolean,
     ): List<StreamSource> {
         val imdbId = catalog.imdbId(tmdbId, type)
         val stremioId = buildString {
@@ -41,7 +42,7 @@ internal class AndroidPlaybackRepository(
         // addon fan-out first meant Android paid its fifteen-second timeout and the Nuvio budget
         // end to end, for two sets of requests that share nothing.
         val (stremio, scraped) = coroutineScope {
-            val addonStreams = async { addons.streams(type, stremioId) }
+            val addonStreams = async { addons.streams(type, stremioId, refresh) }
             val scrapedStreams = async {
                 nuvio?.let { manager ->
                     val title = catalog.media(tmdbId, type)

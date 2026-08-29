@@ -21,7 +21,8 @@ class LivePlaybackRepository(private val api: CoveApi) : PlaybackRepository {
         type: MediaType,
         season: Int?,
         episode: Int?,
-    ): List<StreamSource> = api.streams(tmdbId, type, season, episode)
+        refresh: Boolean,
+    ): List<StreamSource> = api.streams(tmdbId, type, season, episode, refresh)
 
     override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =
         runCatching { api.timestamps(tmdbId, season, episode) }.getOrDefault(MediaTimestamps.None)
@@ -86,6 +87,7 @@ object UnavailablePlaybackRepository : PlaybackRepository {
         type: MediaType,
         season: Int?,
         episode: Int?,
+        refresh: Boolean,
     ): List<StreamSource> = throw IllegalStateException(REASON)
 
     override suspend fun timestamps(tmdbId: Int, season: Int?, episode: Int?): MediaTimestamps =

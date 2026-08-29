@@ -61,6 +61,10 @@ import com.coveninja.cove.ui.state.armSleepTimer
 import com.coveninja.cove.ui.state.autoAdvanceAllowed
 import com.coveninja.cove.ui.state.previousEpisodeBefore
 import com.coveninja.cove.ui.state.sleepTimerElapsed
+import com.coveninja.cove.ui.state.sleepTimerWarningDue
+import com.coveninja.cove.ui.state.currentLocalHour
+import com.coveninja.cove.ui.state.watchReminderDue
+import com.coveninja.cove.ui.state.watchReminderMessage
 import com.coveninja.cove.ui.state.tickSleepTimer
 import com.coveninja.cove.ui.state.playbackSegments
 import com.coveninja.cove.ui.state.segmentAt
@@ -144,6 +148,15 @@ internal fun TvPlayerLayer(
     var sleepTimer by remember(request.media.id, request.season, request.episode) {
         mutableStateOf(SleepTimer.Off)
     }
+    // One transient line for anything the player has to say without being asked — the sleep
+    // timer's warning, and the reminder about how long this has been going on. The pulse lets
+    // the same message show twice without the fade having to be tracked separately.
+    var playerNotice by remember { mutableStateOf<String?>(null) }
+    var playerNoticePulse by remember { mutableStateOf(0) }
+    val notify: (String) -> Unit = { message ->
+        playerNotice = message
+        playerNoticePulse++
+    }
     val panelOpen = panelPage != null
 
     // Playing can precede the first frame, especially for torrents.
@@ -180,10 +193,46 @@ internal fun TvPlayerLayer(
         if (sleepTimer.choice !is SleepTimerChoice.After) return@LaunchedEffect
         while (!sleepTimerElapsed(sleepTimer)) {
             delay(1_000.milliseconds)
-            sleepTimer = tickSleepTimer(sleepTimer, elapsedSeconds = 1)
+            val before = sleepTimer
+            sleepTimer = tickSleepTimer(before, elapsedSeconds = 1)
+            // This shell closes the player outright rather than pausing it, which makes the
+            // warning worth more here than anywhere: without it the first sign of the timer
+            // is the home screen.
+            if (sleepTimerWarningDue(before, sleepTimer)) notify("Sleep timer — 1 minute left.")
         }
         session.close()
     }
+
+    LaunchedEffect(playerNoticePulse) {
+        if (playerNotice != null) {
+            delay(TV_NOTICE_MILLIS.milliseconds)
+            playerNotice = null
+        }
+    }
+
+    // Counted on the session so the sitting survives this layer, which is rebuilt for every
+    // title. Paused and stalled time is not watching time.
+    LaunchedEffect(settings?.watchReminderEnabled, settings?.watchReminderHours, phase) {
+        val hours = settings?.takeIf { it.watchReminderEnabled }?.watchReminderHours
+            ?: return@LaunchedEffect
+        if (phase !is PlaybackPhase.Playing) return@LaunchedEffect
+        while (true) {
+            delay(1_000.milliseconds)
+            if (status.paused || status.waitingForData) continue
+            session.tickWatchReminder(1)
+            if (watchReminderDue(session.watchReminder, hours)) {
+                notify(
+                    watchReminderMessage(
+                        watchedSeconds = session.watchReminder.watchedSeconds,
+                        localHour = currentLocalHour(),
+                        hint = "Sleep timer's in the panel.",
+                    ),
+                )
+                session.noteWatchReminderShown(hours)
+            }
+        }
+    }
+
     LaunchedEffect(seekFeedback?.id) {
         if (seekFeedback != null) {
             delay(SEEK_FEEDBACK_WINDOW_MILLIS.milliseconds)
@@ -529,6 +578,20 @@ internal fun TvPlayerLayer(
                 onOpenPanel = { panelPage = TvPanelPage.Root },
                 onFocusChanged = { barHasFocus = it },
             )
+        }
+
+        AnimatedVisibility(
+            visible = playerNotice != null,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = dimens.overscanHorizontal, top = dimens.overscanVertical)
+                .zIndex(9f),
+            enter = fadeIn(tween(160)) + slideInVertically { -it / 3 },
+            exit = fadeOut(tween(180)),
+        ) {
+            // Retain the message until its fade completes.
+            val message = remember(playerNoticePulse) { playerNotice }
+            TvTransientNotice(label = message.orEmpty())
         }
 
         // Outside the panel on purpose: a readout that vanished with the surface used to

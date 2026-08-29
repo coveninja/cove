@@ -73,6 +73,54 @@ class AddonManagerTest {
         http.close()
     }
 
+    // A provider that mints a playback link per request leaves the cache holding the very
+    // link that just died, so a viewer's retry served from it asks for the dead one again.
+    // The bypass has to stay opt-in, though: this is a fan-out across every enabled
+    // provider, and the ordinary listing runs on the path to playback.
+    @Test
+    fun `a refreshing listing asks the provider again, and only then`() = runBlocking {
+        var streamRequests = 0
+        val http = HttpClient(MockEngine { request ->
+            val body = when {
+                request.url.encodedPath.endsWith("/manifest.json") ->
+                    """{"id":"provider.one","name":"Provider One","resources":["stream"],"types":["movie","series"]}"""
+                "/stream/movie/" in request.url.encodedPath -> {
+                    streamRequests++
+                    """{"streams":[{"name":"1080p","url":"https://cdn.test/$streamRequests.mkv"}]}"""
+                }
+                else -> error("unexpected URL ${request.url}")
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        })
+        val dir = Files.createTempDirectory("cove-addons")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val manager = AddonManager(
+                store.database,
+                ActiveProfileSession(store.database),
+                http,
+                { "now" },
+            )
+            manager.add("https://addon.test/manifest.json")
+
+            assertEquals("https://cdn.test/1.mkv", manager.streams(MediaType.Movie, "tt123").single().url)
+            assertEquals(1, streamRequests)
+
+            // The cached answer is the one that just failed, so the retry must not get it.
+            assertEquals(
+                "https://cdn.test/2.mkv",
+                manager.streams(MediaType.Movie, "tt123", refresh = true).single().url,
+            )
+            assertEquals(2, streamRequests)
+
+            // And the refreshed result replaces the cached one rather than bypassing the
+            // cache for good — the next ordinary listing is still free.
+            assertEquals("https://cdn.test/2.mkv", manager.streams(MediaType.Movie, "tt123").single().url)
+            assertEquals(2, streamRequests)
+        }
+        http.close()
+    }
+
     // Official integrations are gated on the same enabled flag, so they have to be
     // switchable. setEnabled used to carry a copy of remove()'s source guard —
     // message and all — which turned every built-in toggle into an HTTP 400.

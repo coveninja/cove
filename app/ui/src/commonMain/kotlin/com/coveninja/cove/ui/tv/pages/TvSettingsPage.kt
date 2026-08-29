@@ -208,6 +208,28 @@ private fun PlaybackRows(settings: AppSettings, editor: SettingsEditor) {
         onActivate = { editor.edit { copy(autoPlay = !autoPlay) } },
     )
     TvSettingRow(
+        label = "Watch reminder",
+        detail = "A quiet note after a long stretch, pointing at the sleep timer.",
+        // One row rather than a switch and an interval: on a remote, "off" is simply the
+        // step before one hour.
+        value = watchReminderLabel(settings.watchReminderEnabled, settings.watchReminderHours),
+        highlighted = settings.watchReminderEnabled,
+        onActivate = {
+            editor.edit {
+                val next = cycleOption(
+                    WatchReminderSteps,
+                    if (watchReminderEnabled) watchReminderHours else 0,
+                )
+                copy(
+                    watchReminderEnabled = next > 0,
+                    // Off keeps the hours it was set to, so cycling past it comes back
+                    // to the same interval rather than resetting the viewer's choice.
+                    watchReminderHours = if (next > 0) next else watchReminderHours,
+                )
+            }
+        },
+    )
+    TvSettingRow(
         label = "Remember where you stopped",
         detail = "Resume part-watched titles instead of starting again.",
         value = onOff(settings.rememberPosition),

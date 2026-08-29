@@ -41,6 +41,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -114,14 +115,17 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
     var requestedSeason: Int? = null
     var requestedEpisode: Int? = null
     var streamRequests = 0
+    var refreshRequests = 0
 
     override suspend fun streams(
         tmdbId: Int,
         type: DomainMediaType,
         season: Int?,
         episode: Int?,
+        refresh: Boolean,
     ): List<StreamSource> {
         streamRequests++
+        if (refresh) refreshRequests++
         requestedSeason = season
         requestedEpisode = episode
         return sources
@@ -848,6 +852,57 @@ class PlaybackSessionTest {
             val saved = assertNotNull(h.library.recorded.lastOrNull())
             assertEquals(950.0, saved.positionSeconds)
             assertTrue(!saved.completed, "an interruption must never complete the title")
+        }
+
+    @Test
+    fun `a manual retry plays the source's freshly minted url`() =
+        playbackTest { h ->
+            val release = StreamSource(
+                name = "Provider 1080p",
+                title = "movie.1080p.WEB.mkv",
+                url = "https://debrid.test/first",
+                sizeBytes = 4_000,
+            )
+            h.playback.sources = listOf(release)
+            h.session.open(movie())
+            runCurrent()
+            val initialUrl = assertNotNull(h.host.loadedUrl)
+
+            h.host.reportPlayback(position = 400.0, duration = 1000.0)
+            runCurrent()
+
+            // The same release, re-listed at a new address — which is what a provider that
+            // mints a link per request answers with, and what the dead URL cannot be matched
+            // to. Everything but the address is unchanged.
+            h.playback.sources = listOf(release.copy(url = "https://debrid.test/second"))
+            h.session.retryCurrentSource()
+            runCurrent()
+
+            val (url, position) = h.host.loads.last()
+            assertNotEquals(initialUrl, url, "retrying the dead address is the bug")
+            assertEquals("http://127.0.0.1:6969/api/play?url=https://debrid.test/second", url)
+            assertEquals(400.0, position, "a retry resumes where the stream stopped")
+            assertEquals(1, h.playback.refreshRequests, "the cached listing holds the dead link")
+        }
+
+    @Test
+    fun `a manual retry falls back to the current url when the listing cannot help`() =
+        playbackTest { h ->
+            h.session.open(movie())
+            runCurrent()
+            val initialUrl = assertNotNull(h.host.loadedUrl)
+            h.host.reportPlayback(position = 400.0, duration = 1000.0)
+            runCurrent()
+
+            // Nothing came back — the backend is unreachable, or every provider timed out.
+            // Reloading what is in hand is worth more than refusing to do anything.
+            h.playback.sources = emptyList()
+            h.session.retryCurrentSource()
+            runCurrent()
+
+            assertEquals(initialUrl to 400.0, h.host.loads.last())
+            assertTrue(h.session.reconnecting)
+            assertTrue(!h.session.recoveryFailed)
         }
 
     @Test

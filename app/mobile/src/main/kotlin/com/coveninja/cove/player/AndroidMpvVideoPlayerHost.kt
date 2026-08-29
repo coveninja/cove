@@ -22,6 +22,7 @@ import com.coveninja.cove.ui.state.MediaChapter
 import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.RECONNECT_STREAM_OPTIONS
 import com.coveninja.cove.ui.state.SubtitleStyle
 import com.coveninja.cove.ui.state.VideoCodecCapabilities
 import com.coveninja.cove.ui.state.VideoDecoderSupport
@@ -1101,15 +1102,6 @@ internal fun mpvEndOfFileIsFailure(
  * as --js-runtimes; on a host without one they return storyboards and nothing else.
  */
 internal const val YOUTUBE_PLAYER_CLIENTS = "youtube:player_client=mweb,tv_simply"
-
-/**
- * ffmpeg's HTTP reconnect flags, as one `stream-lavf-o` value.
- *
- * `reconnect_streamed` is included because a response without a length is not seekable as far
- * as ffmpeg is concerned, and those are exactly the addon streams that most need retrying.
- */
-internal const val RECONNECT_STREAM_OPTIONS =
-    "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=10"
 
 /** The User-Agent mpv should send, or blank to leave mpv's own default alone. */
 internal fun mpvUserAgent(headers: Map<String, String>): String =

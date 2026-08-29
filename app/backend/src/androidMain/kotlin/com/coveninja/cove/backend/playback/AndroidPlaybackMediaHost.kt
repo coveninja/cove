@@ -178,35 +178,44 @@ internal class AndroidPlaybackMediaHost private constructor(
         val requestHeaders = registered.headers.toMutableMap().also { headers ->
             call.request.header(HttpHeaders.Range)?.let { headers[HttpHeaders.Range] = it }
         }
-        publicGet(url, requestHeaders, allowLanStreamSources(), streaming = true) { upstream ->
-            val contentType = upstream.headers[HttpHeaders.ContentType]
-                ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
-                ?: ContentType.Application.OctetStream
-            for (name in FORWARDED_RESPONSE_HEADERS) {
-                upstream.headers[name]?.let { call.response.header(name, it) }
-            }
-            // The response producer does not necessarily run inside respondBytesWriter — under
-            // some engines it is invoked later, once the engine is ready to write the body — and
-            // the upstream body dies with this block. So the block waits for the copy either way:
-            // where the producer is synchronous the deferred is already complete by the time
-            // respondBytesWriter returns, and where it is deferred this is what keeps the socket
-            // it reads from open.
-            val copied = CompletableDeferred<Unit>()
-            call.respondBytesWriter(
-                contentType = contentType,
-                status = upstream.status,
-                contentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
-            ) {
-                try {
-                    upstream.bodyAsChannel().copyTo(this)
-                    copied.complete(Unit)
-                } catch (failure: Throwable) {
-                    logTruncatedMediaBody(url, failure, isClosedForWrite)
-                    copied.completeExceptionally(failure)
-                    throw failure
+        // Held for the length of the read, not the length of the listing that produced it.
+        // A film served as one uninterrupted request never comes back through lookup, so
+        // without this the entry ages out underneath the reader and the next range request
+        // — the reconnect — is refused by our own 403.
+        streams.pin(url)
+        try {
+            publicGet(url, requestHeaders, allowLanStreamSources(), streaming = true) { upstream ->
+                val contentType = upstream.headers[HttpHeaders.ContentType]
+                    ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
+                    ?: ContentType.Application.OctetStream
+                for (name in FORWARDED_RESPONSE_HEADERS) {
+                    upstream.headers[name]?.let { call.response.header(name, it) }
                 }
+                // The response producer does not necessarily run inside respondBytesWriter — under
+                // some engines it is invoked later, once the engine is ready to write the body — and
+                // the upstream body dies with this block. So the block waits for the copy either way:
+                // where the producer is synchronous the deferred is already complete by the time
+                // respondBytesWriter returns, and where it is deferred this is what keeps the socket
+                // it reads from open.
+                val copied = CompletableDeferred<Unit>()
+                call.respondBytesWriter(
+                    contentType = contentType,
+                    status = upstream.status,
+                    contentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+                ) {
+                    try {
+                        upstream.bodyAsChannel().copyTo(this)
+                        copied.complete(Unit)
+                    } catch (failure: Throwable) {
+                        logTruncatedMediaBody(url, failure, isClosedForWrite)
+                        copied.completeExceptionally(failure)
+                        throw failure
+                    }
+                }
+                copied.await()
             }
-            copied.await()
+        } finally {
+            streams.unpin(url)
         }
     }
 
@@ -480,8 +489,29 @@ private fun imageContentType(file: String): ContentType =
         else -> ContentType.Application.OctetStream
     }
 
-private data class RegisteredStream(val headers: Map<String, String>, val expiresAt: Long)
+private data class RegisteredStream(
+    val headers: Map<String, String>,
+    val expiresAt: Long,
+    /** Requests currently reading this stream; a pinned entry never expires. */
+    val pins: Int = 0,
+)
 
+/**
+ * The URLs `/play` will proxy, and the headers to send with each.
+ *
+ * The entry is what makes an addon's URL playable at all, so its lifetime is the lifetime
+ * of the playback that uses it — and neither of the two ways playback holds one is a clock.
+ * A reconnect comes back through [lookup] hours after the list was fetched (ffmpeg re-opens
+ * the URL on any mid-stream read error, which on these sources is routine), and a single
+ * uninterrupted read holds one request open for the whole film without ever calling [lookup]
+ * again. An absolute TTL measured from the listing fails both: it expired a stream that was
+ * playing, `/play` answered 403, and every retry of that URL answered 403 for ever after,
+ * because nothing but a fresh listing could put the entry back.
+ *
+ * So expiry is idle time. [lookup] renews, [pin] holds an entry for as long as a request is
+ * reading it, and only a stream nobody has touched for [ttlMillis] is forgotten — which is
+ * still the bound that matters, since this map is what stops `/play` fetching arbitrary URLs.
+ */
 private class StreamRegistry(
     private val ttlMillis: Long = 30 * 60 * 1_000L,
     private val nowMillis: () -> Long = System::currentTimeMillis,
@@ -490,19 +520,37 @@ private class StreamRegistry(
 
     fun remember(streams: List<AddonStream>) {
         val now = nowMillis()
-        entries.entries.removeIf { it.value.expiresAt <= now }
+        entries.entries.removeIf { it.value.pins == 0 && it.value.expiresAt <= now }
         streams.asSequence().filter { it.url.isNotBlank() }.forEach { stream ->
-            entries[stream.url] = RegisteredStream(stream.headers.toMap(), now + ttlMillis)
+            entries.compute(stream.url) { _, existing ->
+                RegisteredStream(
+                    headers = stream.headers.toMap(),
+                    expiresAt = now + ttlMillis,
+                    pins = existing?.pins ?: 0,
+                )
+            }
         }
     }
 
-    fun lookup(url: String): RegisteredStream? {
-        val entry = entries[url] ?: return null
-        if (entry.expiresAt <= nowMillis()) {
-            entries.remove(url, entry)
-            return null
+    /** The entry for [url], renewing its lease. Null once it has gone unused for the TTL. */
+    fun lookup(url: String): RegisteredStream? = entries.computeIfPresent(url) { _, entry ->
+        if (entry.pins == 0 && entry.expiresAt <= nowMillis()) null
+        else entry.copy(expiresAt = nowMillis() + ttlMillis)
+    }
+
+    /** Holds [url] for as long as a request is reading it. Balanced by [unpin]. */
+    fun pin(url: String) {
+        entries.computeIfPresent(url) { _, entry -> entry.copy(pins = entry.pins + 1) }
+    }
+
+    /** Releases a [pin], restarting the entry's idle clock from now. */
+    fun unpin(url: String) {
+        entries.computeIfPresent(url) { _, entry ->
+            entry.copy(
+                expiresAt = nowMillis() + ttlMillis,
+                pins = (entry.pins - 1).coerceAtLeast(0),
+            )
         }
-        return entry
     }
 }
 

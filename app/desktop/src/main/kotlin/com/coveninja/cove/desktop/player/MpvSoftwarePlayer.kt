@@ -1,6 +1,7 @@
 package com.coveninja.cove.desktop.player
 
 import com.coveninja.cove.ui.state.MAX_VOLUME
+import com.coveninja.cove.ui.state.RECONNECT_STREAM_OPTIONS
 import com.sun.jna.Memory
 import com.sun.jna.Native
 import com.sun.jna.Pointer
@@ -101,11 +102,17 @@ class MpvSoftwarePlayer internal constructor(
             // the way to mpv and back, and a default agreeing with them by coincidence is not
             // the same as one that cannot drift from them.
             setOption(library, created, "volume-max", MAX_VOLUME.toInt().toString())
-            // libmpv leaves the ytdl hook off where the mpv binary has it on. With
-            // it on, a URL mpv cannot open directly is handed to yt-dlp — which is
-            // what turns the YouTube page behind a trailer into a playable stream.
-            // Costs nothing for ordinary streams: the hook runs on load failure,
-            // not on load. See MpvVideoPlayerHost.playsWebVideos.
+            // libmpv leaves the ytdl hook off where the mpv binary has it on. With it on,
+            // a URL mpv cannot open directly is handed to yt-dlp — which is what turns the
+            // YouTube page behind a trailer into a playable stream.
+            //
+            // On, but only for the loads that are pages: the hook fires on load *failure*,
+            // so for an ordinary stream it never runs except at the exact moment something
+            // has gone wrong — and then it spends a second shelling out to yt-dlp against
+            // `http://127.0.0.1:6969/api/play?url=…`, which cannot be extracted, and buries
+            // the real reason under "youtube-dl failed: unexpected error occurred". [load]
+            // sets this per file; see [ytdlEnabledFor]. Android turns the hook off outright
+            // because it resolves pages itself before mpv sees them.
             setOption(library, created, "ytdl", "yes")
             // All three are set before initialize because ytdl_hook reads them when
             // the script loads. The search path names the managed copy first and then
@@ -122,6 +129,24 @@ class MpvSoftwarePlayer internal constructor(
                 "hwdec",
                 if (hardwareDecoding) "auto-copy" else "no",
             )
+            // Everything from here to network-timeout was on Android and not here, which is
+            // the whole reason a desktop stream that dropped mid-file ended the session where
+            // a phone's recovered. See RECONNECT_STREAM_OPTIONS for what the flags do and why
+            // reconnect_at_eof is not among them. Set tolerantly, as Android sets it: a libmpv
+            // that does not recognise the option must cost the reconnect, not the whole player.
+            setOptionalOption(library, created, "stream-lavf-o", RECONNECT_STREAM_OPTIONS)
+            setOption(library, created, "cache", "yes")
+            setOption(library, created, "demuxer-max-bytes", "32MiB")
+            setOption(library, created, "demuxer-readahead-secs", "4")
+            setOption(library, created, "cache-pause-initial", "no")
+            setOption(library, created, "cache-pause-wait", "2")
+            // Explicit rather than left to mpv's default, because the number on the other
+            // side of it is one of ours: the torrent engine waits up to its own
+            // pieceTimeoutMillis for the pieces under a read, and every one of those waits
+            // happens with mpv already blocked on the socket. Whichever of the two is
+            // shorter decides what the viewer is told, and the engine's version of the
+            // story is the useful one. So this stays comfortably the larger of the pair.
+            setOption(library, created, "network-timeout", "90")
 
             checkMpv(library, library.mpv_initialize(created), "initialize")
             // The only running commentary available while a file is opening.
@@ -151,6 +176,8 @@ class MpvSoftwarePlayer internal constructor(
 
     override fun load(source: String, startPositionSeconds: Double) {
         _snapshot.value = _snapshot.value.copy(loadError = null)
+        // Per file, and before loadfile, because the hook reads it when the load fails.
+        command("set", "ytdl", if (ytdlEnabledFor(source)) "yes" else "no")
         // start applies to the next file loaded, so it is set before loadfile
         // rather than passed to it — see mpvLoadFileArgs for why.
         command("set", "start", mpvStartOption(startPositionSeconds))
@@ -524,6 +551,17 @@ class MpvSoftwarePlayer internal constructor(
 
     private fun setOption(library: MpvLibrary, target: Pointer, name: String, value: String) {
         checkMpv(library, library.mpv_set_option_string(target, name, value), "set option $name")
+    }
+
+    /** [setOption] for an option worth having but not worth refusing to start over. */
+    private fun setOptionalOption(library: MpvLibrary, target: Pointer, name: String, value: String) {
+        val result = library.mpv_set_option_string(target, name, value)
+        if (result < 0) {
+            System.err.println(
+                "Cove mpv: this libmpv rejected $name (${library.mpv_error_string(result)}); " +
+                    "continuing without it",
+            )
+        }
     }
 
     private fun getFlag(library: MpvLibrary, target: Pointer, name: String): Boolean? {
