@@ -390,11 +390,141 @@ class MediaBoundaryTest {
         }
     }
 
-    private fun boundary(client: HttpClient) = MediaBoundary(
+    @Test
+    fun `a stream that is being played keeps its registration past the idle window`() = runBlocking {
+        var now = 0L
+        val boundary = boundary(HttpClient(MockEngine { error("upstream should not be called") }), { now })
+        boundary.registerStreams(listOf(AddonStream(url = "https://video.test/movie.mkv")))
+        val play = "/play?url=https%3A%2F%2Fvideo.test%2Fmovie.mkv"
+
+        testApplication {
+            application { mediaRoutes(boundary) }
+            val client = createClient { followRedirects = false }
+
+            // Twenty minutes in: a mid-stream reconnect, which on an addon stream is an
+            // ordinary event rather than a failure — ffmpeg re-opens the URL on any read error.
+            now = 20 * 60 * 1_000L
+            assertEquals(HttpStatusCode.TemporaryRedirect, client.get(play).status)
+
+            // Forty minutes in. Measured from the listing this is long past the window, which
+            // is where a film longer than half an hour used to die on a 403 of our own — and
+            // why retrying it could never work, since only a fresh listing re-registered it.
+            now = 40 * 60 * 1_000L
+            assertEquals(HttpStatusCode.TemporaryRedirect, client.get(play).status)
+        }
+    }
+
+    @Test
+    fun `a stream nobody played is forgotten once its window lapses`() = runBlocking {
+        var now = 0L
+        val boundary = boundary(HttpClient(MockEngine { error("upstream should not be called") }), { now })
+        boundary.registerStreams(listOf(AddonStream(url = "https://video.test/movie.mkv")))
+
+        testApplication {
+            application { mediaRoutes(boundary) }
+            val client = createClient { followRedirects = false }
+            now = 31 * 60 * 1_000L
+            // The registry is what stops /play fetching arbitrary URLs, so renewing on use
+            // must not amount to never expiring at all.
+            assertEquals(
+                HttpStatusCode.Forbidden,
+                client.get("/play?url=https%3A%2F%2Fvideo.test%2Fmovie.mkv").status,
+            )
+        }
+    }
+
+    @Test
+    fun `a registration survives a read that outlasts the window without reopening`() = runBlocking {
+        // The other half of the failure, and the half renewal-on-lookup cannot reach: a film
+        // served as one uninterrupted request comes through lookup exactly once, at the start.
+        // Nothing renews it for the next two hours, so without the pin the entry expires
+        // underneath the reader and the first range request after it — a seek, or the
+        // reconnect at the end of a long read — is refused.
+        var now = 0L
+        val head = ByteArray(64 * 1024) { 'a'.code.toByte() }
+        val tail = ByteArray(16 * 1024) { 'b'.code.toByte() }
+        val body = ByteChannel(autoFlush = true)
+        var upstreamCalls = 0
+        val upstream = HttpClient(MockEngine {
+            // Only the first request is the long read. The second is the probe below, and it
+            // needs a body of its own — sharing the channel would have the two compete for it.
+            if (upstreamCalls++ == 0) {
+                respond(
+                    body,
+                    HttpStatusCode.OK,
+                    headersOf(
+                        HttpHeaders.ContentType to listOf("video/mp4"),
+                        HttpHeaders.ContentLength to listOf((head.size + tail.size).toString()),
+                    ),
+                )
+            } else {
+                respond("ok", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType to listOf("video/mp4")))
+            }
+        })
+        val boundary = boundary(upstream) { now }
+        boundary.registerStreams(
+            listOf(
+                AddonStream(
+                    url = "https://video.test/big.mp4",
+                    headers = mapOf(HttpHeaders.Referrer to "https://provider.test/"),
+                ),
+            ),
+        )
+
+        val server = embeddedServer(ServerCIO, port = 0) { mediaRoutes(boundary) }
+        server.start(wait = false)
+        val port = server.engine.resolvedConnectors().first().port
+        val client = HttpClient(ClientCIO)
+        val headRead = CompletableDeferred<Unit>()
+        val writer = launch(Dispatchers.IO) {
+            body.writeFully(head)
+            body.flush()
+            headRead.await()
+            body.writeFully(tail)
+            body.flushAndClose()
+        }
+        try {
+            withTimeout(STREAMING_TIMEOUT_MILLIS) {
+                client.prepareGet("http://127.0.0.1:$port/play?url=https%3A%2F%2Fvideo.test%2Fbig.mp4")
+                    .execute { response ->
+                        val incoming = response.bodyAsChannel()
+                        assertContentEquals(head, incoming.readByteArray(head.size))
+
+                        // Still reading, and now well past the window the listing bought.
+                        now = 45 * 60 * 1_000L
+                        val second = HttpClient(ClientCIO) { followRedirects = false }
+                        try {
+                            assertEquals(
+                                HttpStatusCode.OK,
+                                second.get(
+                                    "http://127.0.0.1:$port/play?url=https%3A%2F%2Fvideo.test%2Fbig.mp4",
+                                ).status,
+                            )
+                        } finally {
+                            second.close()
+                        }
+
+                        headRead.complete(Unit)
+                        assertContentEquals(tail, incoming.readByteArray(tail.size))
+                    }
+            }
+            writer.join()
+        } finally {
+            headRead.complete(Unit)
+            client.close()
+            server.stop(0, 0)
+        }
+    }
+
+    private fun boundary(
+        client: HttpClient,
+        nowMillis: () -> Long = System::currentTimeMillis,
+    ) = MediaBoundary(
         httpClient = client,
         imageCacheDirectory = Files.createTempDirectory("cove-images"),
         publicUrlPolicy = AddonUrlPolicy { },
         allowLanStreamSources = { false },
+        nowMillis = nowMillis,
     )
 
     private fun io.ktor.server.application.Application.mediaRoutes(boundary: MediaBoundary) {

@@ -99,6 +99,10 @@ fun HomePage(
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
+    /** Plays one episode ignoring its resume point — the wide cards' "from beginning". */
+    onPlayFromStart: (Media, Int?, Int?) -> Unit,
+    /** Opens the source list for one episode rather than letting Watch resolve one. */
+    onChooseSource: (Media, Int?, Int?) -> Unit,
     onExplore: () -> Unit,
     onExploreCatalog: (AddonCatalogDescriptor) -> Unit,
     onOpenMyList: () -> Unit,
@@ -138,6 +142,20 @@ fun HomePage(
             controller.loadPersonal(layout)
             controller.loadCatalogs(layout)
         }
+    }
+
+    // Rebuilt only when the library moves under it: `actions` is itself remembered on the
+    // index, so a progress tick that leaves the library alone does not churn every card.
+    val cardMenu = remember(actions, index, onPlayFromStart, onChooseSource) {
+        WideCardMenuActions(
+            playFromStart = onPlayFromStart,
+            chooseSource = onChooseSource,
+            markWatched = actions::markWatched,
+            clearProgress = actions::clearProgress,
+            listCategory = { media -> index.categoryOf(media.id) },
+            setListCategory = actions::setListCategory,
+            removeFromList = actions::removeFromList,
+        )
     }
 
     val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
@@ -234,6 +252,7 @@ fun HomePage(
             },
             resolveCalendarMedia = { item -> index.mediaFor(item, catalog) },
             stillFor = controller::stillFor,
+            cardMenu = cardMenu,
             mediaCard = mediaCard,
             onOpenMedia = onOpenMedia,
             onPlayMedia = onPlayMedia,
@@ -300,6 +319,7 @@ private fun HomeReady(
     onToggleList: (Media) -> Unit,
     resolveCalendarMedia: (CalendarItem) -> Media?,
     stillFor: (ContinueRow) -> String?,
+    cardMenu: WideCardMenuActions,
     mediaCard: @Composable (Media, Modifier) -> Unit,
     onOpenMedia: (Media) -> Unit,
     onPlayMedia: (Media) -> Unit,
@@ -435,6 +455,7 @@ private fun HomeReady(
                             row = row,
                             onOpen = { onOpenMedia(row.media) },
                             onPlay = { onPlayMedia(row.media) },
+                            menu = cardMenu,
                             modifier = cardModifier,
                             stillUrl = stillFor(row),
                         )
@@ -454,10 +475,13 @@ private fun HomeReady(
                         BacklogCard(
                             row = row,
                             onOpen = { onOpenMedia(row.media) },
-                            // Deliberately the title rather than the dated episode: this is a
-                            // backlog, and the playback session resolves the next *unwatched*
-                            // episode, where the calendar item names the last one to air.
+                            // Deliberately the title rather than the episode the entry names:
+                            // both resolve to the next unwatched episode — the calendar item
+                            // is built from the head of that same pending list — and asking
+                            // the playback session keeps one answer rather than two that can
+                            // disagree once the cached snapshot is an hour old.
                             onPlay = { onPlayMedia(row.media) },
+                            menu = cardMenu,
                             modifier = cardModifier,
                         )
                     }

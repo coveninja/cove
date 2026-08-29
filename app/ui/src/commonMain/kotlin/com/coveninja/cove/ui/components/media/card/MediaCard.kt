@@ -27,6 +27,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -357,7 +358,7 @@ fun MediaCard(
                 MediaContextMenu(
                     expanded = menu.visible,
                     title = media.title,
-                    mediaType = media.type?.label ?: "Unknown",
+                    subtitle = media.type?.label ?: "Unknown",
                     rating = media.rating,
                     currentListCategory = myListCategory,
                     isWatched = isWatched,
@@ -376,19 +377,29 @@ private class MediaCardContextMenuState {
     var position by mutableStateOf(Offset.Zero)
 }
 
+/**
+ * The menu behind a secondary click or a long press, wherever one is offered.
+ *
+ * [leadingActions] is what lets a card add its own entries — Home's wide cards name a single
+ * episode and can act on it — without a second copy of the chrome, the header and the My List
+ * block. A caller supplying its own watched action turns [showWatchedAction] off rather than
+ * ending up with two, since the one here is about the whole title.
+ */
 @Composable
 internal fun MediaContextMenu(
     expanded: Boolean,
     title: String?,
-    mediaType: String,
+    subtitle: String,
     rating: Double?,
     currentListCategory: MyListCategory?,
     isWatched: Boolean,
     showMyListActions: Boolean = true,
+    showWatchedAction: Boolean = true,
     onDismissRequest: () -> Unit,
     onSetMyListCategory: (MyListCategory) -> Unit,
     onRemoveFromMyList: () -> Unit,
     onToggleWatched: () -> Unit,
+    leadingActions: @Composable ColumnScope.() -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
 
@@ -424,7 +435,7 @@ internal fun MediaContextMenu(
 
             Text(
                 text = buildString {
-                    append(mediaType)
+                    append(subtitle)
 
                     rating?.let {
                         append("  •  ★ ")
@@ -438,39 +449,31 @@ internal fun MediaContextMenu(
             )
         }
 
-        HorizontalDivider(
-            modifier = Modifier.padding(
-                horizontal = 8.dp,
-                vertical = 4.dp,
-            ),
-            color = colors.outlineVariant.copy(alpha = 0.55f),
-        )
+        MenuSectionDivider()
 
-        CMenuItem(
-            text = if (isWatched) {
-                "Mark as unwatched"
-            } else {
-                "Mark as watched"
-            },
-            iconName = if (isWatched) {
-                "lucide:eye-off"
-            } else {
-                "iconamoon:history"
-            },
-            onClick = {
-                onDismissRequest()
-                onToggleWatched()
-            },
-        )
+        leadingActions()
+
+        if (showWatchedAction) {
+            CMenuItem(
+                text = if (isWatched) {
+                    "Mark as unwatched"
+                } else {
+                    "Mark as watched"
+                },
+                iconName = if (isWatched) {
+                    "lucide:eye-off"
+                } else {
+                    "iconamoon:history"
+                },
+                onClick = {
+                    onDismissRequest()
+                    onToggleWatched()
+                },
+            )
+        }
 
         if (showMyListActions) {
-            HorizontalDivider(
-                modifier = Modifier.padding(
-                    horizontal = 8.dp,
-                    vertical = 4.dp,
-                ),
-                color = colors.outlineVariant.copy(alpha = 0.55f),
-            )
+            MenuSectionDivider()
 
             MyListCategory.entries.forEach { category ->
                 CMenuItem(
@@ -490,13 +493,7 @@ internal fun MediaContextMenu(
             }
 
             if (currentListCategory != null) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(
-                        horizontal = 8.dp,
-                        vertical = 4.dp,
-                    ),
-                    color = colors.outlineVariant.copy(alpha = 0.55f),
-                )
+                MenuSectionDivider()
 
                 CMenuItem(
                     text = "Remove from My List",
@@ -511,6 +508,15 @@ internal fun MediaContextMenu(
     }
 }
 
+
+/** The rule between two blocks of a context menu, so every menu spaces them alike. */
+@Composable
+internal fun MenuSectionDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+    )
+}
 
 /**
  * The library's opinion of a title, drawn over its poster: which list it is in, how far

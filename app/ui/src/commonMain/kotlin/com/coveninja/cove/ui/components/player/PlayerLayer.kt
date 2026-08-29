@@ -113,7 +113,11 @@ import com.coveninja.cove.ui.state.SleepTimerChoice
 import com.coveninja.cove.ui.state.armSleepTimer
 import com.coveninja.cove.ui.state.autoAdvanceAllowed
 import com.coveninja.cove.ui.state.sleepTimerElapsed
+import com.coveninja.cove.ui.state.sleepTimerWarningDue
 import com.coveninja.cove.ui.state.tickSleepTimer
+import com.coveninja.cove.ui.state.currentLocalHour
+import com.coveninja.cove.ui.state.watchReminderDue
+import com.coveninja.cove.ui.state.watchReminderMessage
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.platform.PlaybackBackHandler
 import kotlinx.coroutines.delay
@@ -331,7 +335,11 @@ fun PlayerLayer(
         while (true) {
             delay(1_000)
             if (status.paused) continue
-            sleepTimer = tickSleepTimer(sleepTimer, elapsedSeconds = 1)
+            val before = sleepTimer
+            sleepTimer = tickSleepTimer(before, elapsedSeconds = 1)
+            // Stopping without warning is the whole complaint about a timer somebody armed
+            // an hour ago and forgot: the first sign of it is the picture going away.
+            if (sleepTimerWarningDue(before, sleepTimer)) notify("Sleep timer — 1 minute left.")
             if (sleepTimerElapsed(sleepTimer)) {
                 host?.setPaused(true)
                 sleepTimer = SleepTimer.Off
@@ -340,6 +348,29 @@ fun PlayerLayer(
                 // recoverable, and waking to a home screen is not.
                 controlsVisible = true
                 return@LaunchedEffect
+            }
+        }
+    }
+
+    // The sitting is counted on the session rather than here, so it survives this layer being
+    // torn down between titles. Paused and stalled time is not watching time.
+    LaunchedEffect(settings?.watchReminderEnabled, settings?.watchReminderHours, phase) {
+        val hours = settings?.takeIf { it.watchReminderEnabled }?.watchReminderHours
+            ?: return@LaunchedEffect
+        if (phase !is PlaybackPhase.Playing) return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            if (status.paused || status.waitingForData) continue
+            session.tickWatchReminder(1)
+            if (watchReminderDue(session.watchReminder, hours)) {
+                notify(
+                    watchReminderMessage(
+                        watchedSeconds = session.watchReminder.watchedSeconds,
+                        localHour = currentLocalHour(),
+                        hint = "Sleep timer's in the More menu.",
+                    ),
+                )
+                session.noteWatchReminderShown(hours)
             }
         }
     }

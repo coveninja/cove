@@ -194,7 +194,7 @@ fun EpisodeCard(
             MediaContextMenu(
                 expanded = contextMenuVisible,
                 title = episode.title,
-                mediaType = "Season $seasonNumber  •  Episode ${episode.number}",
+                subtitle = "Season $seasonNumber  •  Episode ${episode.number}",
                 rating = episode.rating,
                 currentListCategory = null,
                 isWatched = watched,

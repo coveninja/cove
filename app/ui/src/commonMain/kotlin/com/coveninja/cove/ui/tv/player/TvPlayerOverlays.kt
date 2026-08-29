@@ -127,6 +127,40 @@ internal fun TvSkipHint(label: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * One transient line the player says in passing, and the only thing here that is not a
+ * request for a decision.
+ *
+ * Deliberately quiet and unfocusable: the sleep timer's warning and the watch reminder both
+ * arrive unasked-for, and anything that took focus would move the selection out from under a
+ * viewer holding the remote. [TvSkipHint] is the other shape a hint takes on this shell and is
+ * the opposite of this one — it is inviting a press, so it is drawn to be pressed.
+ */
+@Composable
+internal fun TvTransientNotice(label: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .background(
+                CoveColors.Neutral.SurfaceHighest.copy(alpha = 0.94f),
+                RoundedCornerShape(14.dp),
+            )
+            .padding(horizontal = 20.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconifyIcon(
+            icon = "lucide:moon",
+            tint = CoveColors.Neutral.Muted,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = CoveColors.Neutral.Text,
+        )
+    }
+}
+
+/**
  * What comes next, offered as the credits arrive.
  *
  * Shown whether or not autoplay is on, because it is the useful control either way: with it off
