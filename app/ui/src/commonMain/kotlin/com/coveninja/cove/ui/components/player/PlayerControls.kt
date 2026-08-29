@@ -350,6 +350,7 @@ fun PlayerControls(
                     onLockControls = onLockControls,
                     sleepTimer = sleepTimer,
                     onSetSleepTimer = onSetSleepTimer,
+                    canStopAfterEpisode = episodeBrowser != null,
                 )
 
                 if (episodeBrowser != null) {
@@ -398,6 +399,8 @@ private fun OverflowMenuButton(
     onLockControls: (() -> Unit)?,
     sleepTimer: SleepTimer,
     onSetSleepTimer: (SleepTimerChoice) -> Unit,
+    /** False for a film, which has no next episode to stop before. */
+    canStopAfterEpisode: Boolean,
 ) {
     Box {
         ControlButton(
@@ -470,19 +473,21 @@ private fun OverflowMenuButton(
                     onExpandedChange(false)
                 },
             )
-            CMenuItem(
-                text = "After this episode",
-                iconName = if (sleepTimer.choice == SleepTimerChoice.AfterThisEpisode) {
-                    "lucide:check"
-                } else {
-                    "lucide:list-end"
-                },
-                accent = sleepTimer.choice == SleepTimerChoice.AfterThisEpisode,
-                onClick = {
-                    onSetSleepTimer(SleepTimerChoice.AfterThisEpisode)
-                    onExpandedChange(false)
-                },
-            )
+            if (canStopAfterEpisode) {
+                CMenuItem(
+                    text = "After this episode",
+                    iconName = if (sleepTimer.choice == SleepTimerChoice.AfterThisEpisode) {
+                        "lucide:check"
+                    } else {
+                        "lucide:list-end"
+                    },
+                    accent = sleepTimer.choice == SleepTimerChoice.AfterThisEpisode,
+                    onClick = {
+                        onSetSleepTimer(SleepTimerChoice.AfterThisEpisode)
+                        onExpandedChange(false)
+                    },
+                )
+            }
             SLEEP_TIMER_MINUTES.forEach { minutes ->
                 val selected = (sleepTimer.choice as? SleepTimerChoice.After)?.minutes == minutes
                 CMenuItem(

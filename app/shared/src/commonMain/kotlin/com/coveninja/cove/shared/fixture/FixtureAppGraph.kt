@@ -1025,6 +1025,7 @@ private class FixturePlaybackRepository : PlaybackRepository {
         type: MediaType,
         season: Int?,
         episode: Int?,
+        refresh: Boolean,
     ): List<StreamSource> = listOf(
         StreamSource(
             name = "Fixture 1080p",

@@ -212,6 +212,7 @@ class CoveApi(
         type: MediaType,
         season: Int? = null,
         episode: Int? = null,
+        refresh: Boolean = false,
     ): List<StreamSource> =
         httpClient.get("${config.baseUrl}/api/streams") {
             applyAuthHeaders()
@@ -223,6 +224,9 @@ class CoveApi(
             parameter("type", type.wireName)
             season?.let { parameter("season", it) }
             episode?.let { parameter("episode", it) }
+            // Only ever sent when set, so a backend that predates the parameter sees
+            // exactly the request it saw before.
+            if (refresh) parameter("refresh", "1")
         }.requireSuccess().body()
 
     // Pure URL builder — no HTTP. mpv / the player module opens this directly.

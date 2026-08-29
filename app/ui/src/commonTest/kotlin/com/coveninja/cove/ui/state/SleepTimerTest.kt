@@ -108,4 +108,55 @@ class SleepTimerTest {
             autoAdvanceAllowed(autoPlay = false, timer = armSleepTimer(SleepTimerChoice.After(15))),
         )
     }
+
+    // Mutation check: comparing `now <= 60` without the `was > 60` half warns on every tick
+    // of the last minute, so the notice reappears sixty times before playback stops.
+    @Test
+    fun `a duration timer warns once as it passes a minute`() {
+        val before = SleepTimer(SleepTimerChoice.After(15), remainingSeconds = 61)
+        val after = tickSleepTimer(before, elapsedSeconds = 1)
+        assertTrue(sleepTimerWarningDue(before, after))
+        assertFalse(
+            sleepTimerWarningDue(after, tickSleepTimer(after, elapsedSeconds = 1)),
+            "already warned",
+        )
+    }
+
+    @Test
+    fun `a tick nowhere near the end does not warn`() {
+        val early = SleepTimer(SleepTimerChoice.After(30), remainingSeconds = 900)
+        assertFalse(sleepTimerWarningDue(early, tickSleepTimer(early, elapsedSeconds = 1)))
+    }
+
+    // Mutation check: allowing zero makes the warning arrive on the same tick that pauses
+    // playback, announcing something that has already happened.
+    @Test
+    fun `the tick that runs the timer out does not warn`() {
+        val last = SleepTimer(SleepTimerChoice.After(15), remainingSeconds = 61)
+        // A tick this long needs a clock that jumped — a laptop closed and reopened — but
+        // that is exactly where a warning about the coming minute would be describing the
+        // past. The ordinary one-second case cannot reach zero from above the minute at all.
+        val elapsed = tickSleepTimer(last, elapsedSeconds = 61)
+        assertTrue(sleepTimerElapsed(elapsed))
+        assertFalse(sleepTimerWarningDue(last, elapsed))
+    }
+
+    // Mutation check: dropping the choice test warns when the viewer disarms the timer with
+    // less than a minute left, which is the moment they have said they do not want it.
+    @Test
+    fun `only a duration timer warns`() {
+        val armed = SleepTimer(SleepTimerChoice.After(15), remainingSeconds = 61)
+        assertFalse(sleepTimerWarningDue(armed, SleepTimer.Off), "disarmed mid-minute")
+        // Hand-built, because nothing produces it: the choice decides, not a countdown left
+        // over beside it. sleepTimerElapsed reads the same field for the same reason.
+        assertFalse(
+            sleepTimerWarningDue(armed, SleepTimer(SleepTimerChoice.Off, remainingSeconds = 60)),
+            "a disarmed timer still carrying a number is still disarmed",
+        )
+        assertFalse(sleepTimerWarningDue(SleepTimer.Off, SleepTimer.Off))
+        assertFalse(
+            sleepTimerWarningDue(armed, armSleepTimer(SleepTimerChoice.AfterThisEpisode)),
+            "the episode choice has no countdown to warn about",
+        )
+    }
 }

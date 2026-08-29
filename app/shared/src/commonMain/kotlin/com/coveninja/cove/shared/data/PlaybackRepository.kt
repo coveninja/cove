@@ -19,12 +19,19 @@ interface PlaybackRepository {
     /**
      * season and episode are required when [type] is [MediaType.Tv] — the backend
      * builds a Stremio `imdb:season:episode` id and rejects the request without them.
+     *
+     * @param refresh ask the providers again rather than answering from the addon
+     *   listing cache. Reserved for a viewer who has explicitly asked to retry a stream
+     *   that stopped: a link an addon mints per request is dead in the cache too, and
+     *   the cached answer is exactly the one that just failed. Every other caller wants
+     *   the cache — this is one fan-out across every enabled provider.
      */
     suspend fun streams(
         tmdbId: Int,
         type: MediaType,
         season: Int? = null,
         episode: Int? = null,
+        refresh: Boolean = false,
     ): List<StreamSource>
 
     /**

@@ -3,6 +3,7 @@ package com.coveninja.cove.ui.tv.pages
 import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
 import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
 import com.coveninja.cove.ui.state.SUBTITLE_TEXT_COLORS
+import com.coveninja.cove.ui.state.WATCH_REMINDER_HOURS
 
 /**
  * Steps a setting on to its next value, wrapping at the end.
@@ -38,6 +39,12 @@ internal fun streamSelectionLabel(mode: String): String = when (mode) {
 
 /** Seconds a single left or right press moves. */
 internal val SeekStepChoices = listOf(5.0, 10.0, 15.0, 30.0)
+
+/** Watch-reminder intervals in hours, with 0 standing for off. */
+internal val WatchReminderSteps = listOf(0) + WATCH_REMINDER_HOURS
+
+internal fun watchReminderLabel(enabled: Boolean, hours: Int): String =
+    if (!enabled) "Off" else if (hours == 1) "Every hour" else "Every $hours hours"
 
 internal fun seekStepLabel(seconds: Double): String = "${seconds.toInt()} seconds"
 

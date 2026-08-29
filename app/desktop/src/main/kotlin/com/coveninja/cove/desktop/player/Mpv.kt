@@ -309,3 +309,29 @@ internal fun mpvLoadFileArgs(source: String): Array<String> =
  */
 internal fun mpvStartOption(startPositionSeconds: Double): String =
     if (startPositionSeconds > 0.0) startPositionSeconds.toLong().toString() else "0"
+
+/**
+ * Whether mpv's ytdl hook should be armed for [source].
+ *
+ * The hook exists for one thing here: the YouTube page behind a trailer, which mpv cannot
+ * open directly. It fires on load *failure*, so on any other URL it can only ever run at
+ * the moment a stream has already gone wrong — and then it shells out to yt-dlp against a
+ * URL yt-dlp has no extractor for, spends about a second failing, and reports
+ * "youtube-dl failed: unexpected error occurred" in place of the HTTP status that actually
+ * explains the problem. That reply was worse than useless in a bug report: it named YouTube
+ * for a stream that had nothing to do with it.
+ *
+ * Everything Cove plays goes through the backend's loopback host, so the test is simply
+ * whether the URL is ours. A local file is not a page either.
+ */
+internal fun ytdlEnabledFor(source: String): Boolean {
+    val lower = source.trim().lowercase()
+    if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
+    // Host-only, so any port the backend was given is covered — Android picks an ephemeral
+    // one, and the desktop's 6969 is not guaranteed either.
+    val host = lower.removePrefix("http://").removePrefix("https://")
+        .substringBefore('/')
+        .substringAfter('@')
+        .substringBefore(':')
+    return host != "127.0.0.1" && host != "localhost" && host != "[::1]"
+}
