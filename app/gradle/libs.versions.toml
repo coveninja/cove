@@ -1,6 +1,6 @@
 [versions]
 kotlin                = "2.4.10"
-android-gradle-plugin = "9.3.2"
+android-gradle-plugin = "9.4.0"
 compose-multiplatform = "1.12.0"
 compose-hot-reload    = "1.2.0"
 # Underlying material3 version bundled by CMP 1.11.1; declared here for
@@ -12,7 +12,7 @@ serialization-json    = "1.11.0"
 datetime              = "0.8.0"
 # Runtime dependency versions shared by the desktop and Android targets.
 ktor                  = "3.5.2"
-coil3                 = "3.5.0"
+coil3                 = "3.6.1"
 jna                   = "5.19.1"
 jogl                  = "2.6.0"
 sqldelight            = "2.3.2"
