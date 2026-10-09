@@ -47,8 +47,6 @@ Try another source manually, then a lower quality. If hardware decoding fails an
 
 For a torrent, record seeders, selected file, and whether buffering progresses. For a direct stream, record whether it fails before playback, during probing, or after a repeatable amount of time. Do not publish the complete stream URL when it contains a token.
 
-For washed-out video or gray letterbox bars on macOS, include the exact Cove build and a screenshot of a non-private test clip. Video can decode successfully while the renderer displays its colors incorrectly. Note whether switching hardware decoding changes the result; clearing your library is not needed to investigate this.
-
 ## Playback stutters or drops frames
 
 - Compare a lower resolution or bitrate from the same provider.
@@ -58,6 +56,8 @@ For washed-out video or gray letterbox bars on macOS, include the exact Cove bui
 - Use low-performance mode to reduce interface motion on constrained devices; it does not reduce the cost of software decoding.
 
 Report the GPU or device model, driver or Android version, source quality, decode mode, and whether audio remains smooth.
+
+For washed-out video or gray letterbox bars on macOS, include the exact Cove build and a screenshot of a non-private test clip. Video can decode successfully while the renderer displays its colors incorrectly. Note whether switching hardware decoding changes the result; clearing your library is not needed to investigate this.
 
 ## Subtitles are missing or out of sync
 
