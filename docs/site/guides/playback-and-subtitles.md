@@ -4,7 +4,21 @@ Cove uses native mpv playback on desktop and Android. Source discovery and playb
 
 ## Select a source
 
-Turn **Pick a source automatically** off to open the picker whenever multiple candidates exist. Automatic selection supports Balanced, Quality first, and Most seeded modes. The picker can show quality, size, provider, seeders, and other available attributes.
+Turn **Pick a source automatically** on to let **Watch** play the best eligible source. It remains off by default, so multiple candidates open the picker unless the source was already remembered for this film or episode. Automatic selection aims for your **Preferred resolution** (1080p by default) and then applies one of three modes:
+
+- **Balanced** weighs seeders against file size. Past a healthy swarm, more seeders matter little, so a 2 GB release with 85 seeders beats a 9 GB release with 90.
+- **Quality first** takes the largest healthy file at the preferred resolution.
+- **Most seeded** takes the largest swarm at the preferred resolution.
+
+A release at the preferred resolution wins unless it is barely seeded; otherwise Cove falls back to the closest resolution, lower before higher. Releases whose names point to another language, such as dubbed foreign releases, rank lower.
+
+Cove also reads release and file names. A name that carries the title ranks higher, whether it uses the English, original or a translated title, a small misspelling, or a common shortening such as initials ("HIMYM"). A translated title counts as the same title, and its language decides where it ranks, so a likely dub ranks below a release in your languages. A name Cove cannot place only ranks lower, because providers already look results up by the title itself. Only clear evidence keeps a source from playing automatically: a file named as a different episode, which could spoil the series, a torrent reporting zero seeders, or a cinema recording. A file naming a different year, often a remake, is ranked well down. These sources stay in the picker with an explanation, so you can still choose them.
+
+The picker lists sources by resolution, highest first, and opens on the source automatic selection would play, marked **Best**: scroll up for higher resolutions such as 4K, down for 720p and below.
+
+For the next episode of a series, the season pack that played the previous episode is preferred, which starts faster and keeps the same release.
+
+The picker can show quality, size, provider, seeders, and other available attributes; turn off **Show source details** to see release names only.
 
 Direct HTTP and torrent candidates can appear together. Torrent playback selects a playable video file and shows buffering or download progress while the native media boundary serves it to mpv.
 
@@ -12,7 +26,9 @@ Cove can probe candidates before showing them and prefetch likely sources or the
 
 ## Recover from a failed source
 
-A source failure can trigger one automatic reconnect at that playback position. If playback advances far enough after recovery, a later interruption receives a fresh recovery attempt. Repeated failure at the same offset stops and presents explicit actions such as Retry, Sources, Pick another, or Try next. Cove does not silently change provider, quality, audio, or subtitle tracks after playback starts.
+When Cove picked the source automatically and it fails before anything plays, such as a torrent with no reachable peers or an expired link, Cove moves to the next eligible source in the ranked list. Each source is tried once, and the failure is shown when no eligible source is left. A source you chose yourself is never replaced.
+
+A source failure during playback can trigger one automatic reconnect at that playback position. If playback advances far enough after recovery, a later interruption receives a fresh recovery attempt. Repeated failure at the same offset stops and presents explicit actions such as Retry, Sources, Pick another, or Try next. Cove does not change provider, quality, audio, or subtitle tracks after playback starts.
 
 Unexpected end-of-file and network loss are failures, not proof that the title completed. When a direct stream repeatedly fails, choose another candidate manually. When a torrent stalls, compare seed availability and try a smaller or better-seeded release.
 

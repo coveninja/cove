@@ -33,6 +33,10 @@ import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.model.Addon
 import com.coveninja.cove.shared.model.NuvioRepoSummary
 import com.coveninja.cove.shared.model.AppSettings
+import com.coveninja.cove.ui.state.withOnlyPreferredSubtitles
+import com.coveninja.cove.ui.state.offersOnlyPreferredSubtitles
+import com.coveninja.cove.ui.state.canonicalLanguage
+import com.coveninja.cove.ui.state.PreferredResolution
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.common.formatUpdateBytes
 import com.coveninja.cove.ui.state.CacheAgeChoices
@@ -251,6 +255,21 @@ private fun PlaybackRows(settings: AppSettings, editor: SettingsEditor) {
         onActivate = { editor.edit { copy(autoSelectStream = !autoSelectStream) } },
     )
     TvSettingRow(
+        label = "Preferred resolution",
+        detail = "What Cove aims for when it picks a source.",
+        value = PreferredResolution.from(settings.preferredResolution).label,
+        onActivate = {
+            editor.edit {
+                copy(
+                    preferredResolution = cycleOption(
+                        PreferredResolutionChoices,
+                        PreferredResolution.from(settings.preferredResolution).setting,
+                    ),
+                )
+            }
+        },
+    )
+    TvSettingRow(
         label = "Remember the source you picked",
         detail = "Resuming plays from the same source; a new episode leads with it.",
         value = onOff(settings.rememberStreamSource),
@@ -442,10 +461,19 @@ private fun SubtitleRows(settings: AppSettings, editor: SettingsEditor) {
                 // An empty order matches nothing in the list, and cycleOption answers that
                 // with the first entry — which is exactly where a viewer with no preference
                 // should land.
-                val next = cycleOption(LanguageChoices, current.firstOrNull().orEmpty())
+                val head = current.firstOrNull().orEmpty()
+                // "eng" stored by another client is English, not an unknown value to reset.
+                val next = cycleOption(LanguageChoices, canonicalLanguage(head) ?: head)
                 withSubtitleLanguages(listOf(next) + current.drop(1))
             }
         },
+    )
+    TvSettingRow(
+        label = "Only offer these languages",
+        detail = "Other subtitle languages wait behind \"Show all languages\" in the player.",
+        value = onOff(settings.offersOnlyPreferredSubtitles()),
+        highlighted = settings.offersOnlyPreferredSubtitles(),
+        onActivate = { editor.edit { withOnlyPreferredSubtitles(!offersOnlyPreferredSubtitles()) } },
     )
     TvSettingRow(
         label = "Preferred audio language",
@@ -455,7 +483,8 @@ private fun SubtitleRows(settings: AppSettings, editor: SettingsEditor) {
         onActivate = {
             editor.edit {
                 val current = orderedAudioLanguages()
-                val next = cycleOption(LanguageChoices, current.firstOrNull().orEmpty())
+                val head = current.firstOrNull().orEmpty()
+                val next = cycleOption(LanguageChoices, canonicalLanguage(head) ?: head)
                 withAudioLanguages(listOf(next) + current.drop(1))
             }
         },

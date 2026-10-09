@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.tv.pages
 
 import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
+import com.coveninja.cove.ui.state.PreferredResolution
 import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
 import com.coveninja.cove.ui.state.SUBTITLE_TEXT_COLORS
 import com.coveninja.cove.ui.state.WATCH_REMINDER_HOURS
@@ -27,6 +28,9 @@ internal fun <T> cycleOption(options: List<T>, current: T): T {
 
 /** How Cove ranks sources when it picks one itself. Wire values, shared with the phone. */
 internal val StreamSelectionModes = listOf("balanced", "quality", "seeders")
+
+/** Resolutions automatic selection can aim for, highest first. Wire values, shared with the phone. */
+internal val PreferredResolutionChoices = PreferredResolution.entries.map { it.setting }
 
 internal fun streamSelectionLabel(mode: String): String = when (mode) {
     "quality" -> "Quality first"

@@ -29,7 +29,7 @@ Open **Profile** and select a category to change Cove's behavior. Most changes a
 
 ## Sources
 
-**Pick a source automatically** lets Cove choose instead of opening the picker whenever multiple candidates exist. The selection preference can be **Balanced**, **Quality first**, or **Most seeded**. **Show source details** controls whether quality, size, and provider are shown in the picker.
+**Pick a source automatically** (off by default) lets Watch play the best eligible source instead of opening the picker whenever multiple candidates exist. **Preferred resolution** (4K, 1080p, 720p, or 480p; 1080p by default) is what automatic selection aims for. The selection preference can be **Balanced** (seeders weighed against file size), **Quality first**, or **Most seeded**. **Show source details** controls whether quality, size, and provider are shown in the picker. See [Playback and subtitles](playback-and-subtitles.md) for how sources are ranked and checked.
 
 Ahead-of-time controls trade bandwidth for startup speed:
 
@@ -43,6 +43,8 @@ Ahead-of-time controls trade bandwidth for startup speed:
 ## Subtitles and audio
 
 Choose whether subtitles start enabled and select preferred subtitle and audio languages. **Original** audio follows the title's original language rather than one fixed language code.
+
+Add-on subtitles in your subtitle languages are fetched first, so other languages do not crowd them out. Enable **Only offer these languages** to skip fetching add-on subtitles in other languages and fold other embedded tracks behind **Show all languages** in the player's subtitle menu. Filtering is off by default. The `C` key cycles through the same offered tracks.
 
 Subtitle size ranges from 50% to 200%. Position controls distance from the bottom of the picture, and background adds a shaded readability box. In-player track choices and subtitle delay adjustments apply to the current playback session.
 

@@ -15,6 +15,7 @@ const val AUDIO_LANGUAGE_ORIGINAL = "original"
  * source scores neutral rather than being pushed down.
  */
 data class AudioHints(
+    /** Two-letter codes, in the order the release mentions them. */
     val languages: List<String>,
     /** Marked dual-audio or multi, so the wanted language is probably in there. */
     val multi: Boolean,
@@ -25,139 +26,107 @@ data class AudioHints(
 internal fun StreamSource.audioHints(): AudioHints = parseAudioHints(describedText())
 
 internal fun parseAudioHints(text: String): AudioHints {
-    // Tokens only, so a language name inside another word cannot match, and
-    // three characters minimum.
-    //
-    // The length filter is defence in depth rather than load-bearing today: no
-    // entry in AUDIO_TOKENS is shorter than three characters, so removing it
-    // changes nothing on its own. It is what makes "never add two-letter codes"
-    // enforceable — "de", "it" and "en" are ordinary words in film titles, and a
-    // two-letter entry would start matching them the day someone adds one.
-    val tokens = text.lowercase().split(*TOKEN_SEPARATORS).filter { it.length >= 3 }
+    // Brazilian Portuguese is spelled with a hyphen that tokenising would split into two
+    // letters too short to read; join it first.
+    val tokens = text.lowercase()
+        .replace(PT_BR, "ptbr")
+        .split(*TOKEN_SEPARATORS)
+        .filter { it.isNotEmpty() }
     val languages = mutableListOf<String>()
     var multi = false
 
-    tokens.forEach { token ->
+    tokens.forEachIndexed { index, token ->
+        // Three characters minimum: "de", "it" and "en" are ordinary words in film titles,
+        // and a two-letter entry would start matching them the day someone adds one.
+        if (token.length < 3) return@forEachIndexed
         when {
-            token in MULTI_MARKERS -> multi = true
+            // "Multi Subs" and "MultiSub" describe subtitles, which say nothing about the audio.
+            token.startsWith("multisub") -> Unit
+            token == "multi" && tokens.getOrNull(index + 1)?.startsWith("sub") == true -> Unit
+            token in MULTI_MARKERS || MULTI_AUDIO.matches(token) -> multi = true
             else -> AUDIO_TOKENS[token]?.let { if (it !in languages) languages += it }
         }
     }
+    // Torrentio and its relatives append the release's languages as flags on a line of
+    // their own ("🇬🇧 / 🇮🇹"), which is the most reliable language signal there is.
+    flagLanguages(text).forEach { if (it !in languages) languages += it }
     return AudioHints(languages, multi)
 }
 
 /**
- * How well a source's audio matches what the viewer asked for.
+ * How well a source's audio matches what the viewer asked for, as a score adjustment.
  *
- * Positive prefers, negative demotes, zero is "no idea" — which an unmarked
- * release must score, since most releases say nothing and demoting them all
- * would rank by nothing but noise.
+ * [preferred] are two-letter codes in the viewer's order, with "original" already resolved.
+ * An unmarked release is neutral: most releases say nothing, and demoting all of them would
+ * rank by noise. A release that names only other languages is almost certainly a dub, and is
+ * pushed well down; one that names a wanted language alongside others is a dual-audio release
+ * whose default track may still be the other one, so it gives up a little.
  */
-internal fun audioScore(
-    hints: AudioHints,
-    preferredLanguage: String?,
-    originalLanguage: String?,
-): Int {
-    val wanted = when {
-        preferredLanguage == AUDIO_LANGUAGE_ORIGINAL -> originalLanguage?.lowercase()
-        else -> preferredLanguage?.lowercase()
-    }?.takeIf { it.isNotBlank() } ?: return 0
-
-    if (hints.isEmpty) return 0
+internal fun languageScore(hints: AudioHints, preferred: List<String>): Double {
+    if (preferred.isEmpty() || hints.languages.isEmpty()) return 0.0
+    val wanted = hints.languages.filter { it in preferred }
     return when {
-        wanted in hints.languages -> 2
-        hints.multi -> 1
-        // Named languages, none of them the one asked for: most likely a dub.
-        hints.languages.isNotEmpty() -> -2
-        else -> 0
+        wanted.size == hints.languages.size -> WANTED_LANGUAGE_BONUS
+        wanted.isNotEmpty() -> MIXED_LANGUAGE_PENALTY
+        hints.multi -> UNNAMED_MULTI_PENALTY
+        else -> DUB_PENALTY
     }
 }
 
-/**
- * What the viewer asked Cove to optimise for, from `AppSettings.streamSelectionMode`.
- *
- * The stored values are the strings the settings screen writes; anything
- * unrecognised falls back to [Balanced], which is also the stored default.
- */
-enum class StreamSelectionMode {
-    /** Best-seeded first, leaner file breaking ties. */
-    Balanced,
-
-    /** Biggest file first, which in practice tracks the highest bitrate. */
-    Quality,
-
-    /** Peer count above all else. */
-    Seeders,
-
-    ;
-
-    companion object {
-        fun from(value: String?): StreamSelectionMode = when (value?.lowercase()) {
-            "quality" -> Quality
-            "seeders" -> Seeders
-            else -> Balanced
+/** Two-letter codes from flag emoji, in order. */
+internal fun flagLanguages(text: String): List<String> {
+    val found = mutableListOf<String>()
+    var index = 0
+    while (index < text.length) {
+        val first = text.codePointAtOrNull(index)
+        if (first == null) {
+            index++
+            continue
+        }
+        val firstWidth = if (first > 0xFFFF) 2 else 1
+        val second = text.codePointAtOrNull(index + firstWidth)
+        if (first in REGIONAL_INDICATORS && second != null && second in REGIONAL_INDICATORS) {
+            val country = "${'A' + (first - REGIONAL_INDICATORS.first)}${'A' + (second - REGIONAL_INDICATORS.first)}"
+            FLAG_LANGUAGES[country]?.let { if (it !in found) found += it }
+            index += firstWidth * 2
+        } else {
+            index += firstWidth
         }
     }
+    return found
 }
 
-/**
- * Ranks candidates so the first row is the one most likely to be wanted.
- *
- * Matching audio and an already-cached debrid link lead in every mode: a viewer
- * who asked for original audio should not be handed a dub, and a cached link
- * plays instantly whatever the rest of the list looks like. [mode] decides only
- * what happens below that.
- */
-fun rankSources(
-    sources: List<StreamSource>,
-    preferredAudioLanguage: String? = null,
-    originalLanguage: String? = null,
-    mode: StreamSelectionMode = StreamSelectionMode.Balanced,
-): List<StreamSource> {
-    val base = compareByDescending<StreamSource> {
-        audioScore(it.audioHints(), preferredAudioLanguage, originalLanguage)
-    }.thenByDescending { it.cached }
-
-    return sources.sortedWith(
-        when (mode) {
-            StreamSelectionMode.Quality -> base.thenByDescending { it.sizeBytes }
-            StreamSelectionMode.Seeders ->
-                base.thenByDescending { it.swarmRank() }.thenByDescending { it.sizeBytes }
-            StreamSelectionMode.Balanced ->
-                base.thenByDescending { it.swarmRank() }.thenBy { it.balancedSizeKey() }
-        },
-    )
+/** A code point from UTF-16, joining a surrogate pair; common code has no String.codePointAt. */
+private fun String.codePointAtOrNull(index: Int): Int? {
+    if (index !in indices) return null
+    val high = this[index]
+    if (high.isHighSurrogate() && index + 1 < length) {
+        val low = this[index + 1]
+        if (low.isLowSurrogate()) {
+            return ((high.code - 0xD800) shl 10) + (low.code - 0xDC00) + 0x10000
+        }
+    }
+    return high.code
 }
 
-/**
- * Peer count for a torrent; a direct or debrid link has no swarm at all, so it
- * counts as just-healthy — ahead of a torrent nobody is seeding, behind one
- * plenty of people are.
- */
-private fun StreamSource.swarmRank(): Int = seederCount() ?: NEUTRAL_SWARM
+private const val WANTED_LANGUAGE_BONUS = 0.3
+private const val MIXED_LANGUAGE_PENALTY = -0.25
+private const val UNNAMED_MULTI_PENALTY = -1.0
+private const val DUB_PENALTY = -2.5
 
-/**
- * Balanced prefers the leaner file, but only where a swarm was actually weighed
- * against it. A source reporting no peer count keeps the bigger-is-better
- * preference of the other modes, since there is nothing to trade the size off
- * against — otherwise a list of debrid links would rank worst-quality first.
- *
- * An unknown size sorts last either way rather than winning by being zero.
- */
-private fun StreamSource.balancedSizeKey(): Long = when {
-    sizeBytes <= 0 -> Long.MAX_VALUE
-    seederCount() == null -> -sizeBytes
-    else -> sizeBytes
-}
+private val REGIONAL_INDICATORS = 0x1F1E6..0x1F1FF
 
-/** The [seederHealth] Healthy floor: what "no swarm to worry about" is worth. */
-private const val NEUTRAL_SWARM = 10
+private val PT_BR = Regex("pt[-_ ]?br")
 
 private val TOKEN_SEPARATORS = charArrayOf(
     ' ', '.', '-', '_', '+', '[', ']', '(', ')', '{', '}', '/', ',', '|', ':',
+    '\n', '\r', '\t', '*', '~', '!', ';', '"', '\'', '&', '#', '@', '<', '>', '=',
 )
 
-private val MULTI_MARKERS = setOf("dual", "multi", "multisubs", "dualaudio")
+private val MULTI_MARKERS = setOf("dual", "multi", "dualaudio", "multiaudio")
+
+/** "MULTi3", "Multi4" — a count of audio tracks. */
+private val MULTI_AUDIO = Regex("multi\\d{1,2}")
 
 /**
  * Three letters and up only. Release names use both ISO 639-2 codes and casual
@@ -171,16 +140,20 @@ private val AUDIO_TOKENS: Map<String, String> = mapOf(
     // subtitles, and reading them as French audio would demote exactly the
     // sources a viewer wanting original audio is after.
     "fre" to "fr", "fra" to "fr", "french" to "fr", "truefrench" to "fr",
+    "vff" to "fr", "vfq" to "fr", "vfi" to "fr", "vf2" to "fr",
     "ger" to "de", "deu" to "de", "german" to "de",
     "ita" to "it", "italian" to "it",
     "rus" to "ru", "russian" to "ru",
     "kor" to "ko", "korean" to "ko",
     "chi" to "zh", "zho" to "zh", "chinese" to "zh", "mandarin" to "zh",
-    "por" to "pt", "portuguese" to "pt", "brazilian" to "pt",
+    "por" to "pt", "portuguese" to "pt", "brazilian" to "pt", "ptbr" to "pt", "dublado" to "pt",
     "hin" to "hi", "hindi" to "hi",
+    "tam" to "ta", "tamil" to "ta",
+    "tel" to "te", "telugu" to "te",
     "ara" to "ar", "arabic" to "ar",
     "tur" to "tr", "turkish" to "tr",
-    "pol" to "pl", "polish" to "pl",
+    // A Polish "lektor" is a voice-over on top of the original, and it is what plays first.
+    "pol" to "pl", "polish" to "pl", "lektor" to "pl",
     "dut" to "nl", "nld" to "nl", "dutch" to "nl",
     "swe" to "sv", "swedish" to "sv",
     "dan" to "da", "danish" to "da",
@@ -190,4 +163,27 @@ private val AUDIO_TOKENS: Map<String, String> = mapOf(
     "tha" to "th", "thai" to "th",
     "vie" to "vi", "vietnamese" to "vi",
     "ind" to "id", "indonesian" to "id",
+    "cze" to "cs", "ces" to "cs", "czech" to "cs",
+    "hun" to "hu", "hungarian" to "hu",
+    "gre" to "el", "greek" to "el",
+    "heb" to "he", "hebrew" to "he",
+    "romanian" to "ro",
 )
+
+private val FLAG_LANGUAGES: Map<String, String> = buildMap {
+    listOf("GB", "US", "AU", "CA", "NZ", "IE").forEach { put(it, "en") }
+    listOf("ES", "MX", "AR", "CO", "CL", "PE", "VE").forEach { put(it, "es") }
+    listOf("PT", "BR").forEach { put(it, "pt") }
+    listOf("CN", "TW", "HK").forEach { put(it, "zh") }
+    listOf("SA", "AE", "EG").forEach { put(it, "ar") }
+    putAll(
+        mapOf(
+            "IT" to "it", "FR" to "fr", "DE" to "de", "AT" to "de", "RU" to "ru", "UA" to "uk",
+            "PL" to "pl", "IN" to "hi", "JP" to "ja", "KR" to "ko", "SE" to "sv", "NO" to "no",
+            "DK" to "da", "FI" to "fi", "NL" to "nl", "TR" to "tr", "GR" to "el", "CZ" to "cs",
+            "HU" to "hu", "RO" to "ro", "IL" to "he", "TH" to "th", "VN" to "vi", "ID" to "id",
+            "BG" to "bg", "RS" to "sr", "HR" to "hr", "SK" to "sk", "SI" to "sl", "LT" to "lt",
+            "LV" to "lv", "EE" to "et", "IR" to "fa", "PH" to "tl", "MY" to "ms",
+        ),
+    )
+}

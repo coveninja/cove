@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.components.menu.CMenuItem
 import com.coveninja.cove.ui.icons.IconifyIcon
+import com.coveninja.cove.ui.state.canonicalLanguage
 import com.coveninja.cove.ui.state.AUDIO_LANGUAGE_ORIGINAL
 import com.coveninja.cove.ui.state.LANGUAGES
 import com.coveninja.cove.ui.state.languageNativeName
@@ -76,7 +77,10 @@ internal fun SettingLanguageOrder(
         }
 
         val remaining = remember(languages, allowOriginal) {
-            LANGUAGES.filter { it.code !in languages }
+            // Compared as languages rather than strings: an "eng" written by another client is
+            // English already, and offering English again would add the same language twice.
+            val chosen = languages.map { canonicalLanguage(it) ?: it.trim().lowercase() }.toSet()
+            LANGUAGES.filter { it.code !in chosen }
                 .filter { allowOriginal || it.code != AUDIO_LANGUAGE_ORIGINAL }
         }
         if (remaining.isNotEmpty()) {

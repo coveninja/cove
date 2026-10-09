@@ -77,6 +77,12 @@ data class AddonStreamBehaviorHints(
 data class AddonStream(
     val name: String = "",
     val title: String = "",
+    /**
+     * Stremio's replacement for the deprecated [title]. Addons written against the current
+     * protocol send only this, and everything downstream reads [title], so the fetch copies
+     * it across when [title] is empty.
+     */
+    val description: String = "",
     val url: String = "",
     val infoHash: String = "",
     val addonName: String = "",

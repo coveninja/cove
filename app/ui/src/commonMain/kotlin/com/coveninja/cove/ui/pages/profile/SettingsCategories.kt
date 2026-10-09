@@ -7,6 +7,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.AppSettings
+import com.coveninja.cove.ui.state.withOnlyPreferredSubtitles
+import com.coveninja.cove.ui.state.offersOnlyPreferredSubtitles
+import com.coveninja.cove.ui.state.PreferredResolution
 import com.coveninja.cove.ui.state.LocalVideoPlayerHost
 import com.coveninja.cove.ui.state.SUBTITLE_BORDER_STYLES
 import com.coveninja.cove.ui.state.SUBTITLE_OUTLINE_COLORS
@@ -309,8 +312,19 @@ fun SettingsCategoryContent(
                         },
                         {
                             SettingChoice(
+                                title = "Preferred resolution",
+                                description = "What Cove aims for. A barely seeded release at it " +
+                                    "loses to a healthy one a step lower.",
+                                options = PreferredResolution.entries.map { it.setting to it.label },
+                                selected = PreferredResolution.from(settings.preferredResolution).setting,
+                                onSelect = { editor.edit { copy(preferredResolution = it) } },
+                            )
+                        },
+                        {
+                            SettingChoice(
                                 title = "Selection preference",
-                                description = "How Cove ranks sources when it picks for you.",
+                                description = "Balanced weighs seeders against file size, so a " +
+                                    "2 GB release with 85 seeders beats a 9 GB one with 90.",
                                 options = listOf(
                                     "balanced" to "Balanced",
                                     "quality" to "Quality first",
@@ -413,6 +427,17 @@ fun SettingsCategoryContent(
                                 // which is the one case subtitles are not wanted for.
                                 allowOriginal = false,
                                 onChange = { editor.edit { withSubtitleLanguages(it) } },
+                            )
+                        },
+                        {
+                            SettingToggle(
+                                title = "Only offer these languages",
+                                description = "Add-on subtitles in other languages are not fetched, " +
+                                    "and the player keeps the rest behind \"Show all languages\".",
+                                // What the player actually does, which needs a saved list as well as the
+                                // switch; turning it on saves the list shown above if none was saved yet.
+                                checked = settings.offersOnlyPreferredSubtitles(),
+                                onCheckedChange = { editor.edit { withOnlyPreferredSubtitles(it) } },
                             )
                         },
                         {

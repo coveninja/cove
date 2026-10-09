@@ -39,6 +39,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.data.TrackMemory
+import com.coveninja.cove.ui.state.orderedAudioLanguages
+import com.coveninja.cove.ui.state.canonicalLanguage
+import com.coveninja.cove.ui.state.offersOnlyPreferredSubtitles
+import com.coveninja.cove.ui.state.subtitlePreference
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.player.PlayerStatsOverlay
 import com.coveninja.cove.ui.components.player.SeekBurst
@@ -476,7 +481,7 @@ internal fun TvPlayerLayer(
             }
 
             is PlaybackPhase.Choosing -> TvSourcePicker(
-                sources = phase.sources,
+                ranked = phase.sources,
                 onChoose = session::choose,
                 onCancel = session::close,
             )
@@ -641,6 +646,11 @@ internal fun TvPlayerLayer(
                 onSubtitleAppearanceChange = settingsEditor?.let { editor ->
                     { appearance -> editor.edit { withSubtitleAppearance(appearance) } }
                 },
+                subtitleLanguages = subtitlePreference(settings, TrackMemory.None),
+                audioLanguages = settings?.orderedAudioLanguages().orEmpty()
+                    .mapNotNull(::canonicalLanguage)
+                    .distinct(),
+                onlyPreferredSubtitles = settings?.offersOnlyPreferredSubtitles() == true,
                 onSetSubtitleDelay = { host?.setSubtitleDelay(it) },
                 onSetAudioDelay = { host?.setAudioDelay(it) },
                 onSelectSpeed = { speed ->

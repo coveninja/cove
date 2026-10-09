@@ -48,7 +48,7 @@ internal val LANGUAGES: List<Language> = listOf(
     Language("fr", "French", "Français", listOf("fra", "fre")),
     Language("de", "German", "Deutsch", listOf("deu", "ger")),
     Language("it", "Italian", "Italiano", listOf("ita")),
-    Language("pt", "Portuguese", "Português", listOf("por")),
+    Language("pt", "Portuguese", "Português", listOf("por", "pob", "pb")),
     Language("ru", "Russian", "Русский", listOf("rus")),
     Language("ja", "Japanese", "日本語", listOf("jpn", "jp")),
     Language("ko", "Korean", "한국어", listOf("kor")),
@@ -60,7 +60,7 @@ internal val LANGUAGES: List<Language> = listOf(
     Language("nl", "Dutch", "Nederlands", listOf("nld", "dut")),
     Language("sv", "Swedish", "Svenska", listOf("swe")),
     Language("da", "Danish", "Dansk", listOf("dan")),
-    Language("no", "Norwegian", "Norsk", listOf("nor", "nob", "nno")),
+    Language("no", "Norwegian", "Norsk", listOf("nor", "nob", "nno", "nb", "nn")),
     Language("fi", "Finnish", "Suomi", listOf("fin")),
     Language("cs", "Czech", "Čeština", listOf("ces", "cze")),
     Language("el", "Greek", "Ελληνικά", listOf("ell", "gre")),
@@ -129,6 +129,14 @@ private val BY_CODE: Map<String, Language> = LANGUAGES.associateBy { it.code }
 private val ALL_CODES: Set<String> =
     LANGUAGES.flatMapTo(mutableSetOf()) { listOf(it.code) + it.aliases }
 
+/** Every code and alias in the table, to the code of the row it belongs to. */
+private val CANONICAL: Map<String, String> = buildMap {
+    LANGUAGES.filter { it.code != AUDIO_LANGUAGE_ORIGINAL }.forEach { language ->
+        put(language.code, language.code)
+        language.aliases.forEach { alias -> putIfAbsent(alias, language.code) }
+    }
+}
+
 /** Everything but [AUDIO_LANGUAGE_ORIGINAL], which is a rule rather than a language. */
 internal val SELECTABLE_LANGUAGES: List<Language> =
     LANGUAGES.filter { it.code != AUDIO_LANGUAGE_ORIGINAL }
@@ -148,7 +156,28 @@ internal val SELECTABLE_LANGUAGES: List<Language> =
 internal fun languageAliases(code: String): List<String> {
     val normalised = code.trim().lowercase()
     if (normalised.isEmpty()) return emptyList()
-    return (listOf(normalised) + BY_CODE[normalised]?.aliases.orEmpty()).distinct()
+    // A stored three-letter code ("eng", which older builds and other clients write) is the
+    // same language as its two-letter form, and has to expand to every tag a track can carry
+    // just as "en" does — otherwise an "eng" preference never matches a track tagged "en".
+    val language = canonicalLanguage(normalised)?.let(BY_CODE::get)
+    val forms = language?.let { listOf(it.code) + it.aliases }.orEmpty()
+    return (listOf(normalised) + forms).distinct()
+}
+
+/**
+ * The table's own two-letter code for any form a language arrives in, or null when the table
+ * does not know it.
+ *
+ * Tracks, addons and settings spell one language several ways — "en", "eng", "en-US",
+ * OpenSubtitles' "pob" for Brazilian Portuguese, "nb" for Bokmål — and everything that groups,
+ * filters or compares languages has to treat those as one, or English shows up as two menu
+ * sections and an "eng" preference never matches an "en" track. A region or script subtag is
+ * dropped: it never makes a different language for these purposes.
+ */
+internal fun canonicalLanguage(code: String?): String? {
+    val base = code?.trim()?.lowercase()?.replace('_', '-')?.substringBefore('-') ?: return null
+    if (base.isEmpty() || base == AUDIO_LANGUAGE_ORIGINAL) return null
+    return CANONICAL[base]
 }
 
 /**

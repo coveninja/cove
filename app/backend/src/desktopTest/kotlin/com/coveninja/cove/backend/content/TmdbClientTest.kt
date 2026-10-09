@@ -92,6 +92,42 @@ class TmdbClientTest {
         assertEquals("en", resolveAppLocale("", "fr-FR"))
     }
 
+    // Shaped like TMDB's answer: neutral aliases stay separate from translated titles,
+    // whose language is retained as a ranking hint rather than a reason for rejection.
+    @Test
+    fun `release names retain translations separately from neutral aliases`() = runTest {
+        var requested = ""
+        val client = testClient { url ->
+            requested = url
+            """{"name":"Attack on Titan","original_name":"進撃の巨人","first_air_date":"2013-04-07",
+               "original_language":"ja","origin_country":["JP"],
+               "alternative_titles":{"results":[
+                 {"iso_3166_1":"JP","title":"Shingeki no Kyojin","type":"Romaji"},
+                 {"iso_3166_1":"RU","title":"Ataka titanov","type":"Transliteration"},
+                 {"iso_3166_1":"US","title":"AoT","type":""},
+                 {"iso_3166_1":"US","title":"Attack on Titan: No Regrets","type":""},
+                 {"iso_3166_1":"IT","title":"L'attacco dei giganti","type":""}]},
+               "translations":{"translations":[
+                 {"iso_639_1":"it","data":{"name":"L'attacco dei giganti"}},
+                 {"iso_639_1":"sv","data":{"name":"Attack on Titan"}},
+                 {"iso_639_1":"de","data":{"name":""}}]}}"""
+        }
+
+        val names = TmdbClient(client, "key").releaseNames(1429, MediaType.Tv)
+
+        assertTrue("language=en-US" in requested)
+        assertEquals(
+            listOf("Attack on Titan", "進撃の巨人", "Shingeki no Kyojin", "Attack on Titan: No Regrets"),
+            names.titles,
+        )
+        assertEquals(2013, names.year)
+        assertEquals("ja", names.originalLanguage)
+        // Translations are kept with their language, apart from ones that repeat a known name.
+        assertEquals(mapOf("L'attacco dei giganti" to "it"), names.translatedTitles)
+        assertTrue("append_to_response=alternative_titles%2Ctranslations" in requested ||
+            "append_to_response=alternative_titles,translations" in requested)
+    }
+
     private fun testClient(response: (String) -> String) = HttpClient(MockEngine { request ->
         respond(
             content = response(request.url.toString()),
