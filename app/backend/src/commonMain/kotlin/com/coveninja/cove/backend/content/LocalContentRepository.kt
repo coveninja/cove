@@ -27,6 +27,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
+private const val DISCOVER_RETRY_FIRST_MILLIS = 5_000L
+private const val DISCOVER_RETRY_MAX_MILLIS = 60_000L
+
 class LocalContentRepository(
     private val catalog: MediaCatalog,
     private val scope: CoroutineScope,
@@ -161,6 +164,3 @@ class LocalContentRepository(
     override suspend fun episodes(id: Int, season: Int): List<TvEpisode> =
         catalog.episodes(id, season)
 }
-
-private const val DISCOVER_RETRY_FIRST_MILLIS = 5_000L
-private const val DISCOVER_RETRY_MAX_MILLIS = 60_000L

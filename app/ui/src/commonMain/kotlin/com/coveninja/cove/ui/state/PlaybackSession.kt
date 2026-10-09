@@ -641,6 +641,8 @@ class PlaybackSession(
     fun retry() {
         val current = request ?: return
         current.extra?.let { return openExtra(current.media, it) }
+        // Asked to look again, so look again: the listing cache may be holding the answer
+        // that failed, written while the network was down.
         open(current.media, current.season, current.episode, current.episodeTitle, refreshSources = true)
     }
 
