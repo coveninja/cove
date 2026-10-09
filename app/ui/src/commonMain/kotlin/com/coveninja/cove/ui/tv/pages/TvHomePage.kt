@@ -119,7 +119,9 @@ internal fun TvHomePage(
             graph.calendar.refresh(force = false)
         }
     }
-    LaunchedEffect(initialContentReady, layout) {
+    // Keyed on the feed having succeeded as well, so rails attempted during an outage are
+    // tried again once it recovers.
+    LaunchedEffect(initialContentReady, homeState is HomeState.Ready, layout) {
         if (initialContentReady) {
             withFrameNanos { }
             withFrameNanos { }

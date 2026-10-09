@@ -155,6 +155,14 @@ class ExploreController(
             loadEditorial(type, domainType, seed)
             if (loadedType != type) return@launch
             shelvesLoading = false
+            // Top rated and new releases both empty — at most the seed standing in for
+            // trending — means the catalog could not be reached. Not remembered as loaded, so the
+            // feed recovering, which changes the seed and calls this again, fetches the rails
+            // instead of finding them "done".
+            if (editorialShelves.size <= 1) {
+                loadedType = null
+                return@launch
+            }
 
             personalizing = true
             try {

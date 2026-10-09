@@ -206,7 +206,9 @@ class HomeController(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Left empty on purpose — see the class doc.
+                // Left empty on purpose — see the class doc — but not remembered as done, so the
+                // next pass (the feed recovering, a layout change) tries again.
+                personalSelectionUsed = null
             } finally {
                 personalizing = false
             }
@@ -300,10 +302,14 @@ class HomeController(
         catalogJob = scope.launch {
             try {
                 catalogRails = resolveCatalogs(layout)
+                // Nothing at all is either no catalogs, which costs nothing to ask again, or an
+                // outage, which is worth asking again.
+                if (catalogRails.isEmpty()) catalogSelectionUsed = null
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // Left empty on purpose — see the class doc.
+                // Left empty on purpose — see the class doc — but tried again next pass.
+                catalogSelectionUsed = null
             }
         }
     }

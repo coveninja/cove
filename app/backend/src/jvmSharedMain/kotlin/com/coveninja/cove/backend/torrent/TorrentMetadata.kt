@@ -88,6 +88,12 @@ internal suspend fun awaitMetadata(
     diagnostics: () -> String = { "" },
     pollMillis: Long = TORRENT_POLL_MILLIS,
     nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Whether "nobody found" can mean the swarm rather than the machine. While the network has
+     * just changed, or the DHT has no nodes to ask, zero peers says nothing about the torrent,
+     * and calling it dead would throw away a healthy source; the overall timeout still applies.
+     */
+    swarmVerdictReady: () -> Boolean = { true },
 ) {
     val started = nowMillis()
     var reportedAt = started
@@ -100,7 +106,7 @@ internal suspend fun awaitMetadata(
                 "timed out fetching torrent metadata after ${elapsed / 1_000}s with $peers peers",
             )
         }
-        if (elapsed >= DEAD_SWARM_MILLIS && peers == 0) {
+        if (elapsed >= DEAD_SWARM_MILLIS && peers == 0 && runCatching(swarmVerdictReady).getOrDefault(true)) {
             log("$hash: no peers at all after ${elapsed / 1_000}s — treating the source as dead")
             throw IllegalStateException(
                 "no peers found for this torrent after ${elapsed / 1_000}s — the source looks dead",

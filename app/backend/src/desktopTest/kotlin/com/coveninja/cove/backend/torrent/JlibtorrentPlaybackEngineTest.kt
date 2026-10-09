@@ -2,6 +2,7 @@ package com.coveninja.cove.backend.torrent
 
 import com.frostwire.jlibtorrent.SessionManager
 import com.frostwire.jlibtorrent.SessionParams
+import com.frostwire.jlibtorrent.SettingsPack
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -48,6 +49,23 @@ class JlibtorrentPlaybackEngineTest {
         assertFalse(paramsCreated)
     }
 
+    // The listen addresses have to be in place before the first socket opens; applied after
+    // start, the first DHT and tracker traffic races the rebind.
+    @Test
+    fun `network settings are installed before the session starts`() {
+        listOf("Linux", "Windows 11").forEach { osName ->
+            val manager = RecordingSessionManager()
+            val params = RecordingSessionParams()
+            val settings = SettingsPack()
+
+            startTorrentSession(manager, osName, settings) { params }
+
+            assertSame(settings, params.installedSettings, osName)
+            assertSame(params, manager.startedWith, osName)
+            assertEquals(0, manager.defaultStartCalls, osName)
+        }
+    }
+
     private class RecordingSessionManager : SessionManager(false) {
         var defaultStartCalls = 0
         var paramsStartCalls = 0
@@ -65,9 +83,14 @@ class JlibtorrentPlaybackEngineTest {
 
     private class RecordingSessionParams : SessionParams() {
         var posixSelections = 0
+        var installedSettings: SettingsPack? = null
 
         override fun setPosixDiskIO() {
             posixSelections += 1
+        }
+
+        override fun setSettings(settings: SettingsPack) {
+            installedSettings = settings
         }
     }
 }

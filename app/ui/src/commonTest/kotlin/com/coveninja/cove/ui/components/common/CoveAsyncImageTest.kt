@@ -8,11 +8,13 @@ import kotlin.test.assertTrue
 
 class CoveAsyncImageTest {
     @Test
-    fun `network images retry three times with backoff`() {
+    fun `network images retry with backoff long enough to outlast a reconnecting vpn`() {
         assertEquals(300L, imageRetryDelayMillis(0))
         assertEquals(1_000L, imageRetryDelayMillis(1))
         assertEquals(3_000L, imageRetryDelayMillis(2))
-        assertNull(imageRetryDelayMillis(3))
+        assertEquals(10_000L, imageRetryDelayMillis(3))
+        assertEquals(30_000L, imageRetryDelayMillis(4))
+        assertNull(imageRetryDelayMillis(5))
     }
 
     @Test
@@ -28,6 +30,8 @@ class CoveAsyncImageTest {
     fun `transport class names retry while decoding failures do not`() {
         assertTrue(imageFailureClassIsTransient("java.net.SocketTimeoutException"))
         assertTrue(imageFailureClassIsTransient("okio.IOException"))
+        assertTrue(imageFailureClassIsTransient("java.nio.channels.UnresolvedAddressException"))
+        assertTrue(imageFailureClassIsTransient("java.net.NoRouteToHostException"))
         assertFalse(imageFailureClassIsTransient("coil3.decode.DecodeException"))
         assertFalse(imageFailureClassIsTransient("java.lang.IllegalStateException"))
     }

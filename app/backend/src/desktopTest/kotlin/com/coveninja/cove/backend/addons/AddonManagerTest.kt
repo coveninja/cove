@@ -479,4 +479,72 @@ class AddonManagerTest {
             "now",
         )
     }
+
+    // A VPN reconnecting while the background prefetch ran used to leave "no sources" cached
+    // for minutes, and every retry was answered from that cache.
+    @Test
+    fun `a provider that could not be asked is reported, not cached as having nothing`() = runBlocking {
+        var reachable = false
+        var streamRequests = 0
+        val http = HttpClient(MockEngine { request ->
+            val body = when {
+                request.url.encodedPath.endsWith("/manifest.json") ->
+                    """{"id":"provider.one","name":"Provider One","resources":["stream"],"types":["movie","series"]}"""
+                "/stream/" in request.url.encodedPath -> {
+                    streamRequests++
+                    if (!reachable) throw java.io.IOException("Network is unreachable")
+                    """{"streams":[{"name":"1080p","infoHash":"abc"}]}"""
+                }
+                else -> error("unexpected URL ${request.url}")
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        })
+        val dir = Files.createTempDirectory("cove-addons")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val failures = mutableListOf<String>()
+            val manager = AddonManager(
+                store.database,
+                ActiveProfileSession(store.database),
+                http,
+                { "now" },
+                onProviderError = { addon, _ -> failures += addon.manifest.name },
+            )
+            manager.add("https://addon.test/manifest.json")
+
+            val outage = assertFailsWith<AddonsUnreachableException> { manager.streams(MediaType.Movie, "tt1") }
+            assertEquals(listOf("Provider One"), outage.addons)
+            assertEquals(listOf("Provider One"), failures)
+
+            reachable = true
+            assertEquals(1, manager.streams(MediaType.Movie, "tt1").size)
+            assertEquals(2, streamRequests, "the failure was answered from a cache")
+        }
+        http.close()
+    }
+
+    @Test
+    fun `one provider failing does not hide what the others found`() = runBlocking {
+        val http = HttpClient(MockEngine { request ->
+            val host = request.url.host
+            val body = when {
+                request.url.encodedPath.endsWith("/manifest.json") ->
+                    """{"id":"$host","name":"$host","resources":["stream"],"types":["movie"]}"""
+                "/stream/" in request.url.encodedPath && host == "down.test" -> throw java.io.IOException("timeout")
+                "/stream/" in request.url.encodedPath -> """{"streams":[{"name":"1080p","infoHash":"abc"}]}"""
+                else -> error("unexpected URL ${request.url}")
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        })
+        val dir = Files.createTempDirectory("cove-addons")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val manager = AddonManager(store.database, ActiveProfileSession(store.database), http, { "now" })
+            manager.add("https://up.test/manifest.json")
+            manager.add("https://down.test/manifest.json")
+
+            assertEquals(listOf("up.test"), manager.streams(MediaType.Movie, "tt1").map { it.addonName })
+        }
+        http.close()
+    }
 }

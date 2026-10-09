@@ -1,6 +1,7 @@
 package com.coveninja.cove.backend.playback
 
 import com.coveninja.cove.backend.addons.AddonManager
+import com.coveninja.cove.backend.addons.AddonsUnreachableException
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.TimestampData
 import com.coveninja.cove.backend.content.MediaCatalog
@@ -42,8 +43,16 @@ internal class AndroidPlaybackRepository(
         // Concurrently, as the desktop route already does (CoreRoutes "/streams"). Awaiting the
         // addon fan-out first meant Android paid its fifteen-second timeout and the Nuvio budget
         // end to end, for two sets of requests that share nothing.
+        var unreachable: AddonsUnreachableException? = null
         val (stremio, scraped) = coroutineScope {
-            val addonStreams = async { addons.streams(type, stremioId, refresh) }
+            val addonStreams = async {
+                try {
+                    addons.streams(type, stremioId, refresh)
+                } catch (error: AddonsUnreachableException) {
+                    unreachable = error
+                    emptyList()
+                }
+            }
             val scrapedStreams = async {
                 nuvio?.let { manager ->
                     val title = catalog.media(tmdbId, type)
@@ -60,7 +69,9 @@ internal class AndroidPlaybackRepository(
             }
             addonStreams.await() to scrapedStreams.await()
         }
-        return media.registerStreams(stremio + scraped).map(AddonStream::toShared)
+        val streams = stremio + scraped
+        if (streams.isEmpty()) unreachable?.let { throw it }
+        return media.registerStreams(streams).map(AddonStream::toShared)
     }
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String {
