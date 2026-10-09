@@ -57,6 +57,8 @@ For a torrent, record seeders, selected file, and whether buffering progresses. 
 
 Report the GPU or device model, driver or Android version, source quality, decode mode, and whether audio remains smooth.
 
+For washed-out video or gray letterbox bars on macOS, include the exact Cove build and a screenshot of a non-private test clip. Video can decode successfully while the renderer displays its colors incorrectly. Note whether switching hardware decoding changes the result; clearing your library is not needed to investigate this.
+
 ## Subtitles are missing or out of sync
 
 - Open the subtitle menu and confirm a track is selected.

@@ -160,8 +160,14 @@ external timestamps fill only the kinds the media did not supply. The shared
 session uses the same resolved segments for seek-bar marks, manual actions, and
 automatic skipping, preventing UI and playback policy from disagreeing.
 
-Desktop mpv stays in-process through JNA. The OpenGL path retains GPU rendering
-and hardware decoding; software rendering remains the controlled fallback.
+Desktop mpv stays in-process through JNA. The in-app player renders into one
+persistent software bitmap so Compose can draw controls over it on every desktop
+renderer. Decoding can still use the GPU through copy-back decoders, including
+VideoToolbox on macOS. The shared pixels use mpv `rgb0` and Skia `RGB_888X`: the
+unused byte must never be interpreted as alpha. Merely declaring an alpha-bearing
+bitmap opaque does not initialize that byte and produces washed-out video on
+Metal. The standalone `--play` probe uses OpenGL by default, with software rendering
+as its fallback or when `--software-renderer` is requested.
 Android uses its native libmpv surface host, a media-playback foreground service,
 picture-in-picture on touch devices, decoder capability probing, and its own
 jlibtorrent/media-boundary implementations. The shared UI sees both through the

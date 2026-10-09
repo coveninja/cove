@@ -17,19 +17,21 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.roundToInt
 
 /**
  * In-process libmpv player backed by mpv's software render API.
  *
- * Decoded frames land directly in a persistent Skia bitmap as bgr0 pixels.
+ * Decoded frames land directly in a persistent Skia bitmap as rgb0 pixels.
  * Compose draws that same allocation, so there is no frame-sized AWT image or
  * per-pixel conversion between mpv and the UI. No GPU interop or Swing embedding.
  */
 class MpvSoftwarePlayer internal constructor(
-    // Software *rendering*, not necessarily software decoding. auto-copy keeps the
-    // decode on the GPU and copies finished frames back to system memory, which is
-    // what this path needs and is far cheaper than decoding on the CPU. mpv falls
-    // back to software decode by itself when no copy-back decoder is available.
+    // Software *rendering*, not necessarily software decoding. A copy-back decoder
+    // keeps the decode on the GPU and copies finished frames back to system memory,
+    // which is what this path needs and is far cheaper than decoding on the CPU. mpv
+    // falls back to software decode by itself when none of them takes the file; see
+    // COPY_BACK_DECODERS for which.
     private val hardwareDecoding: Boolean = true,
     /**
      * Where mpv's ytdl hook should look for yt-dlp, `:`-separated (`;` on Windows).
@@ -47,6 +49,13 @@ class MpvSoftwarePlayer internal constructor(
      * install. Android has always set this; the desktop simply never did.
      */
     private val screenshotDirectory: String? = null,
+    /**
+     * Whether whatever draws the frames scales them on the GPU. When it does, a picture smaller
+     * than its surface is rendered at its own resolution and stretched the rest of the way
+     * there; see [softwareRenderSize]. When the window itself is drawn in software, that
+     * stretch would land on the UI thread instead, so mpv keeps rendering at the surface size.
+     */
+    private val upscaleOnGpu: Boolean = false,
     private val frameConsumer: (SoftwareVideoFrame) -> Unit,
 ) : DesktopPlayer {
     private val _snapshot = MutableStateFlow(PlayerSnapshot(renderBackend = "Software"))
@@ -58,6 +67,15 @@ class MpvSoftwarePlayer internal constructor(
     private val renderQueued  = AtomicBoolean(false)
     private val renderWidth   = AtomicInteger(1280)
     private val renderHeight  = AtomicInteger(720)
+    // What [renderWidth] and [renderHeight] are derived from: the surface as laid out, the
+    // picture's own display size once mpv knows it, and whether the display mode is plain Fit.
+    private val surfaceWidth  = AtomicInteger(1280)
+    private val surfaceHeight = AtomicInteger(720)
+    private val videoWidth    = AtomicInteger(0)
+    private val videoHeight   = AtomicInteger(0)
+    @Volatile private var plainFit = true
+    @Volatile private var copyBackDecoders = COPY_BACK_DECODERS
+    @Volatile private var ytdlAvailable = false
     private val frameSequence = AtomicLong(0)
     private val lastRenderNanos = AtomicLong(0)
 
@@ -113,22 +131,23 @@ class MpvSoftwarePlayer internal constructor(
             // the real reason under "youtube-dl failed: unexpected error occurred". [load]
             // sets this per file; see [ytdlEnabledFor]. Android turns the hook off outright
             // because it resolves pages itself before mpv sees them.
-            setOption(library, created, "ytdl", "yes")
+            //
+            // Optional, because the hook is a Lua script: a libmpv built without Lua has no
+            // ytdl option at all. The Flatpak's mpv is one, and requiring the option there
+            // failed every start, so nothing played — not only trailers.
+            ytdlAvailable = setOptionalOption(library, created, "ytdl", "yes")
             // All three are set before initialize because ytdl_hook reads them when
             // the script loads. The search path names the managed copy first and then
             // the names mpv would have tried anyway; the format string is there
             // because mpv's own default picks streams YouTube answers with 403, and
             // the raw options are there because the *client* yt-dlp asks by default
             // hands back streams that 403 whatever format is chosen.
-            ytdlSearchPath?.let { setOption(library, created, "script-opts", "ytdl_hook-ytdl_path=$it") }
-            ytdlFormat?.let { setOption(library, created, "ytdl-format", it) }
-            ytdlRawOptions?.let { setOption(library, created, "ytdl-raw-options", it) }
-            setOption(
-                library,
-                created,
-                "hwdec",
-                if (hardwareDecoding) "auto-copy" else "no",
-            )
+            if (ytdlAvailable) {
+                ytdlSearchPath?.let { setOption(library, created, "script-opts", "ytdl_hook-ytdl_path=$it") }
+                ytdlFormat?.let { setOption(library, created, "ytdl-format", it) }
+                ytdlRawOptions?.let { setOption(library, created, "ytdl-raw-options", it) }
+            }
+            configureHardwareDecoding(library, created)
             // Everything from here to network-timeout was on Android and not here, which is
             // the whole reason a desktop stream that dropped mid-file ended the session where
             // a phone's recovered. See RECONNECT_STREAM_OPTIONS for what the flags do and why
@@ -177,7 +196,8 @@ class MpvSoftwarePlayer internal constructor(
     override fun load(source: String, startPositionSeconds: Double) {
         _snapshot.value = _snapshot.value.copy(loadError = null)
         // Per file, and before loadfile, because the hook reads it when the load fails.
-        command("set", "ytdl", if (ytdlEnabledFor(source)) "yes" else "no")
+        // Not at all without the hook: the failed set would surface as a playback error.
+        if (ytdlAvailable) command("set", "ytdl", if (ytdlEnabledFor(source)) "yes" else "no")
         // start applies to the next file loaded, so it is set before loadfile
         // rather than passed to it — see mpvLoadFileArgs for why.
         command("set", "start", mpvStartOption(startPositionSeconds))
@@ -226,8 +246,13 @@ class MpvSoftwarePlayer internal constructor(
     }
 
     // set, not set-property: mpv accepts "no" for sid, which the typed property
-    // setters cannot express.
-    override fun setOption(name: String, value: String) = command("set", name, value)
+    // setters cannot express. The decoder list is swapped for whatever this libmpv
+    // accepted at start; see configureHardwareDecoding.
+    override fun setOption(name: String, value: String) = command(
+        "set",
+        name,
+        if (name == "hwdec" && value == COPY_BACK_DECODERS) copyBackDecoders else value,
+    )
 
     // Flags and title are positional. mpv's "auto" means don't select — the track is
     // offered and the slang applied before the load decides — while "select" switches
@@ -236,6 +261,8 @@ class MpvSoftwarePlayer internal constructor(
         command("sub-add", url, if (select) "select" else "auto", title, language)
 
     override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
+        plainFit = keepAspect && panscan == 0.0 && zoom == 0.0
+        updateRenderSize()
         command("set", "keepaspect", if (keepAspect) "yes" else "no")
         command("set", "panscan", panscan.toString())
         command("set", "video-zoom", zoom.toString())
@@ -253,8 +280,27 @@ class MpvSoftwarePlayer internal constructor(
         get() = renderWidth.get() to renderHeight.get()
 
     fun resize(width: Int, height: Int) {
-        val w = width.coerceIn(1, 8192)
-        val h = height.coerceIn(1, 8192)
+        surfaceWidth.set(width.coerceIn(1, 8192))
+        surfaceHeight.set(height.coerceIn(1, 8192))
+        updateRenderSize()
+    }
+
+    /** Visible for tests: what mpv reports as the picture's display size, as [pollState] does. */
+    internal fun videoSizeChanged(width: Int, height: Int) {
+        val widthChanged = videoWidth.getAndSet(width) != width
+        val heightChanged = videoHeight.getAndSet(height) != height
+        if (widthChanged || heightChanged) updateRenderSize()
+    }
+
+    @Synchronized
+    private fun updateRenderSize() {
+        val (w, h) = softwareRenderSize(
+            surfaceWidth = surfaceWidth.get(),
+            surfaceHeight = surfaceHeight.get(),
+            videoWidth = videoWidth.get(),
+            videoHeight = videoHeight.get(),
+            mayRenderSmaller = upscaleOnGpu && plainFit,
+        )
         // Both stores happen before the comparison on purpose. Folding them into
         // a single `||` short-circuits: when the width changes, the height is
         // never written, and mpv keeps rendering at the old height. That leaves it
@@ -369,8 +415,10 @@ class MpvSoftwarePlayer internal constructor(
             val event = MpvEvent(library.mpv_wait_event(target, 0.1))
             when (event.eventId) {
                 Mpv.EVENT_SHUTDOWN -> break
-                Mpv.EVENT_START_FILE ->
+                Mpv.EVENT_START_FILE -> {
+                    loggedDecoder = null
                     _snapshot.value = _snapshot.value.copy(fileLoaded = false)
+                }
 
                 Mpv.EVENT_FILE_LOADED ->
                     _snapshot.value = _snapshot.value.copy(fileLoaded = true)
@@ -434,6 +482,13 @@ class MpvSoftwarePlayer internal constructor(
             val forCache  = getFlag(library, target, "paused-for-cache") ?: false
             val hwdec    = if (idle) "" else getString(library, target, "hwdec-current").orEmpty()
             val chapters = if (idle) "" else getString(library, target, "chapter-list").orEmpty()
+            if (!idle) {
+                videoSizeChanged(
+                    width = getDouble(library, target, "dwidth")?.finiteOrNull()?.toInt() ?: 0,
+                    height = getDouble(library, target, "dheight")?.finiteOrNull()?.toInt() ?: 0,
+                )
+                logDecoder(codec, hwdec)
+            }
             // Absolute timestamp, so it is only meaningful against a live position.
             val cacheEnd = getDouble(library, target, "demuxer-cache-time").finiteOrNull()
                 ?: previous.cacheEndSeconds
@@ -457,8 +512,8 @@ class MpvSoftwarePlayer internal constructor(
                 muted           = muted,
                 title           = title,
                 videoCodec      = codec,
-                // Real now that the path asks for auto-copy: the decode can still be
-                // on the GPU even though the rendering is not.
+                // Real now that the path asks for copy-back decoding: the decode can
+                // still be on the GPU even though the rendering is not.
                 hwdecCurrent    = hwdec,
                 renderBackend   = "Software",
                 trackListJson   = tracks,
@@ -485,6 +540,25 @@ class MpvSoftwarePlayer internal constructor(
         } catch (error: Throwable) {
             _snapshot.value = _snapshot.value.copy(error = "State update failed: ${error.message}")
         }
+    }
+
+    @Volatile private var loggedDecoder: Pair<String, String>? = null
+
+    /**
+     * One line per change of decoder, for the log a bug report carries.
+     *
+     * The stats overlay shows the same thing, but only to someone looking at it while the film
+     * plays; "it stutters" arrives afterwards, with only the log, and whether the picture was
+     * decoded on the GPU is the first question to answer. mpv reports hwdec-current as "no" once
+     * it has settled on decoding in software, and nothing at all before it has decided.
+     */
+    private fun logDecoder(codec: String, hwdec: String) {
+        if (codec.isBlank() || hwdec.isBlank()) return
+        val decoder = codec to hwdec
+        if (decoder == loggedDecoder) return
+        loggedDecoder = decoder
+        val how = if (hwdec == "no") "in software" else "on the GPU ($hwdec)"
+        System.err.println("Cove mpv: decoding $codec $how, drawn at ${renderWidth.get()}x${renderHeight.get()}")
     }
 
     /**
@@ -553,8 +627,27 @@ class MpvSoftwarePlayer internal constructor(
         checkMpv(library, library.mpv_set_option_string(target, name, value), "set option $name")
     }
 
-    /** [setOption] for an option worth having but not worth refusing to start over. */
-    private fun setOptionalOption(library: MpvLibrary, target: Pointer, name: String, value: String) {
+    /**
+     * [COPY_BACK_DECODERS], or auto-copy on a libmpv too old to take a list of decoders
+     * (before 0.36). That is what Cove asked every libmpv for until the list, and still far
+     * better than decoding everything on the CPU.
+     */
+    private fun configureHardwareDecoding(library: MpvLibrary, target: Pointer) {
+        // Probe the accepted value even if decoding starts off: enabling it later uses this
+        // same fallback, without reconstructing the player.
+        if (library.mpv_set_option_string(target, "hwdec", COPY_BACK_DECODERS) < 0) {
+            System.err.println("Cove mpv: this libmpv takes no list of decoders; using auto-copy")
+            copyBackDecoders = "auto-copy"
+            setOption(library, target, "hwdec", copyBackDecoders)
+        }
+        if (!hardwareDecoding) setOption(library, target, "hwdec", "no")
+    }
+
+    /**
+     * [setOption] for an option worth having but not worth refusing to start over.
+     * Returns whether this libmpv took it.
+     */
+    private fun setOptionalOption(library: MpvLibrary, target: Pointer, name: String, value: String): Boolean {
         val result = library.mpv_set_option_string(target, name, value)
         if (result < 0) {
             System.err.println(
@@ -562,6 +655,7 @@ class MpvSoftwarePlayer internal constructor(
                     "continuing without it",
             )
         }
+        return result >= 0
     }
 
     private fun getFlag(library: MpvLibrary, target: Pointer, name: String): Boolean? {
@@ -582,10 +676,63 @@ class MpvSoftwarePlayer internal constructor(
     }
 }
 
+/**
+ * The copy-back hardware decoders Cove lets mpv use on this platform, in mpv's own order of
+ * preference — but without Vulkan.
+ *
+ * mpv 0.41's auto-copy tries vulkan-copy before anything else, and on an RTX 5070 Ti with
+ * NVIDIA's 615 driver that decodes H.264 wrong: 182 of 200 frames of a test clip came out
+ * smeared and blocky, against none from nvdec-copy, vaapi-copy or the CPU. HEVC decoded
+ * cleanly; H.264 is what a large share of WEB-DL releases still are. NVIDIA has the same report
+ * against its 610 driver on an RTX 5080 (developer forum thread 378828, "H.264 Vulkan Video
+ * decoder produces severe artifacts"); revisit once a driver fixes it. When none of these takes
+ * a file, mpv falls back to software decoding.
+ *
+ * Per platform because mpv logs every name in the list it was not built with, on every file.
+ */
+internal fun copyBackDecoders(osName: String): String = when {
+    osName.startsWith("Windows", ignoreCase = true) -> "d3d11va-copy,dxva2-copy,nvdec-copy"
+    osName.startsWith("Mac", ignoreCase = true) -> "videotoolbox-copy"
+    // Keep the non-Vulkan fallbacks for older NVIDIA and ARM/DRM devices as well.
+    else -> "nvdec-copy,vaapi-copy,vdpau-copy,drm-copy"
+}
+
+internal val COPY_BACK_DECODERS: String = copyBackDecoders(System.getProperty("os.name").orEmpty())
+
+/**
+ * The size mpv should render a [surfaceWidth]×[surfaceHeight] surface at.
+ *
+ * The surface's own size, unless the picture is smaller than the surface and [mayRenderSmaller]:
+ * then the same shape scaled down so the picture lands at about its own resolution, and the GPU
+ * stretches the result to fill the surface. mpv's software scaler is the costliest step of
+ * playback on this path — a 1080p film on a 2560×1600 panel took twice the CPU of the same film
+ * at 1920×1200, and on a 4K screen four times — and it was spent enlarging pixels that a GPU
+ * enlarges for nothing.
+ *
+ * Never below 1080 lines, or the surface's own height if that is less: subtitles are drawn into
+ * these same pixels, and text is what shows a stretch first.
+ */
+internal fun softwareRenderSize(
+    surfaceWidth: Int,
+    surfaceHeight: Int,
+    videoWidth: Int,
+    videoHeight: Int,
+    mayRenderSmaller: Boolean,
+): Pair<Int, Int> {
+    if (!mayRenderSmaller || videoWidth <= 0 || videoHeight <= 0) return surfaceWidth to surfaceHeight
+    val fit = minOf(surfaceWidth.toDouble() / videoWidth, surfaceHeight.toDouble() / videoHeight)
+    if (fit <= 1.0) return surfaceWidth to surfaceHeight
+    val scale = maxOf(1.0 / fit, MIN_RENDER_LINES.toDouble() / surfaceHeight).coerceAtMost(1.0)
+    return (surfaceWidth * scale).roundToInt().coerceAtLeast(1) to
+        (surfaceHeight * scale).roundToInt().coerceAtLeast(1)
+}
+
+private const val MIN_RENDER_LINES = 1080
+
 /** Owns every allocation referenced indirectly by mpv's software render params. */
 private class SoftwareRenderParameters : AutoCloseable {
     private val dimensions = Memory(2L * Int.SIZE_BYTES)
-    private val format = Memory(5).apply { setString(0, "bgr0") }
+    private val format = Memory(5).apply { setString(0, "rgb0") }
     private val stride = Memory(Native.SIZE_T_SIZE.toLong())
     private val params = renderParamArray(5).apply {
         this[0].type = Mpv.RENDER_PARAM_SW_SIZE

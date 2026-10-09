@@ -2,15 +2,10 @@ package com.coveninja.cove.ui.pages.explore
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -71,6 +66,8 @@ import com.coveninja.cove.ui.model.tmdbImageSize
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalMotionPolicy
+import com.coveninja.cove.ui.state.ambientMotionAllowed
+import com.coveninja.cove.ui.state.rememberBackdropPush
 import kotlin.math.roundToInt
 
 /**
@@ -106,10 +103,13 @@ fun ExploreSpotlight(
     val current = picks[index.coerceIn(picks.indices)]
 
     // Restarting the countdown belongs to a change of slide, not to a pause — split so
-    // that un-hovering carries on from where hovering stopped.
+    // that un-hovering carries on from where hovering stopped. Cove leaving the front pauses
+    // it the same way: the countdown bar animates every frame, for a rotation nobody is
+    // watching.
+    val rotating = ambientMotionAllowed()
     LaunchedEffect(index) { progress.snapTo(0f) }
-    LaunchedEffect(index, paused, picks.size) {
-        if (reducedMotion || paused || picks.size <= 1) return@LaunchedEffect
+    LaunchedEffect(index, paused, picks.size, rotating) {
+        if (!rotating || paused || picks.size <= 1) return@LaunchedEffect
         val remaining = ((1f - progress.value) * SPOTLIGHT_DWELL_MILLIS).roundToInt()
         if (remaining > 0) {
             progress.animateTo(1f, tween(remaining, easing = LinearEasing))
@@ -144,24 +144,7 @@ fun ExploreSpotlight(
 
                 // A very slow push keeps a still frame from reading as a stalled image
                 // while everything around it animates.
-                val zoom = if (reducedMotion) {
-                    1f
-                } else {
-                    val drift = rememberInfiniteTransition(label = "SpotlightDrift")
-                    val animatedZoom by drift.animateFloat(
-                        initialValue = 1f,
-                        targetValue = 1.08f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(
-                                durationMillis = 20_000,
-                                easing = FastOutSlowInEasing,
-                            ),
-                            repeatMode = RepeatMode.Reverse,
-                        ),
-                        label = "SpotlightZoom",
-                    )
-                    animatedZoom
-                }
+                val zoom = rememberBackdropPush(scaleTo = 1.08f, durationMillis = 20_000)
 
                 CoveAsyncImage(
                     model = tmdbImageSize(slide.backdropUrl, "w1280"),

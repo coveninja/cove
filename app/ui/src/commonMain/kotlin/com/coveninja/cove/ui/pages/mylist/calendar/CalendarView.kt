@@ -66,6 +66,8 @@ import com.coveninja.cove.ui.pages.common.PageEmptyState
 import com.coveninja.cove.ui.pages.common.ToolbarIconButton
 import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.state.LocalMotionPolicy
+import com.coveninja.cove.ui.state.driftAt
+import com.coveninja.cove.ui.state.rememberAmbientMillis
 import com.coveninja.cove.ui.pages.common.PageLayoutDefaults
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.YearMonth
@@ -160,20 +162,13 @@ fun CalendarMonthBar(
             }
         }
 
-        val spin = rememberInfiniteTransition(label = "CalendarRefreshSpin")
-        val angle by spin.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 900, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart,
-            ),
-            label = "CalendarRefreshAngle",
-        )
+        // Spun only while refreshing; composed regardless, the spin kept the calendar
+        // repainting every frame for as long as it was open.
+        val angle = if (refreshing) refreshSpinAngle() else 0f
 
         Box(
             modifier = Modifier.graphicsLayer {
-                rotationZ = if (refreshing) angle else 0f
+                rotationZ = angle
             },
         ) {
             ToolbarIconButton(
@@ -514,26 +509,39 @@ private fun CalendarRow(
     }
 }
 
-/** Filled and slowly pulsing when watchable now; a hollow ring when it is still coming. */
+@Composable
+private fun refreshSpinAngle(): Float {
+    val spin = rememberInfiniteTransition(label = "CalendarRefreshSpin")
+    val angle by spin.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "CalendarRefreshAngle",
+    )
+    return angle
+}
+
+/**
+ * Filled and breathing when watchable now; a hollow ring when it is still coming.
+ *
+ * A few breaths and then still, fully lit. The breath draws the eye when the calendar opens;
+ * kept up for as long as the calendar stayed open it repainted the whole window every frame,
+ * for two dots the heading above them already explains.
+ */
 @Composable
 private fun AvailabilityDot(available: Boolean) {
     val colors = MaterialTheme.colorScheme
-    val pulse = rememberInfiniteTransition(label = "CalendarDotPulse")
-    val alpha by pulse.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1_600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "CalendarDotAlpha",
-    )
 
     Box(
         modifier = Modifier.size(10.dp),
         contentAlignment = Alignment.Center,
     ) {
         if (available) {
+            val breath by rememberAmbientMillis(limitMillis = DOT_BREATHS * 2L * DOT_BREATH_LEG_MILLIS)
+            val alpha = 1f - 0.45f * driftAt(breath, legMillis = DOT_BREATH_LEG_MILLIS)
             Box(
                 modifier = Modifier
                     .size(9.dp)
@@ -559,3 +567,7 @@ private fun AvailabilityDot(available: Boolean) {
         }
     }
 }
+
+/** Out and back, each way; a whole breath is two legs and ends where it began, fully lit. */
+private const val DOT_BREATH_LEG_MILLIS = 1_600
+private const val DOT_BREATHS = 3

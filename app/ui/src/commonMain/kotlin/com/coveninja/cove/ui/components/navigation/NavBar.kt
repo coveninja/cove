@@ -512,6 +512,37 @@ private fun SearchNavContent(
     }
 }
 
+/**
+ * The outline that pulses while a dragged title is offered the list categories.
+ *
+ * Composed only in that mode. Created unconditionally, the pulse ran on every page for as long
+ * as the bar was on screen — which is always — and every one of its frames repainted the whole
+ * window whether or not anything was being dragged.
+ */
+@Composable
+private fun listCategoryPulseColor(): Color {
+    val pulseTransition = rememberInfiniteTransition(
+        label = "ListCategoryOutlinePulse",
+    )
+
+    val pulseProgress by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = 850,
+                easing = FastOutSlowInEasing,
+            ),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "ListCategoryOutlinePulseProgress",
+    )
+
+    return MaterialTheme.colorScheme.tertiary.copy(
+        alpha = 0.4f + (pulseProgress * 0.55f),
+    )
+}
+
 @Composable
 fun NavBar(
     selectedDestination: NavDestination,
@@ -588,23 +619,6 @@ fun NavBar(
 
     val navbarShape = RoundedCornerShape(percent = 50)
 
-    val pulseTransition = rememberInfiniteTransition(
-        label = "ListCategoryOutlinePulse",
-    )
-
-    val pulseProgress by pulseTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = 850,
-                easing = FastOutSlowInEasing,
-            ),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "ListCategoryOutlinePulseProgress",
-    )
-
     val regularBorderColor by animateColorAsState(
         targetValue = when {
             searchMode ->
@@ -620,13 +634,8 @@ fun NavBar(
         label = "NavbarRegularBorderColor",
     )
 
-    val pulsingBorderColor =
-        MaterialTheme.colorScheme.tertiary.copy(
-            alpha = 0.4f + (pulseProgress * 0.55f),
-        )
-
     val borderColor = if (listCategoryMode) {
-        pulsingBorderColor
+        listCategoryPulseColor()
     } else {
         regularBorderColor
     }

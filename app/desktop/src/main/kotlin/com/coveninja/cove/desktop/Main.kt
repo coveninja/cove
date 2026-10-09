@@ -7,6 +7,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +21,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.FrameWindowScope
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
@@ -54,6 +56,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
+import org.jetbrains.skiko.GraphicsApi
 
 fun main(args: Array<String>) {
     if (args.contentEquals(arrayOf(COVE_PLUGIN_WORKER_ARGUMENT))) {
@@ -175,6 +178,7 @@ fun main(args: Array<String>) {
                     // copy of the mark to keep in step.
                     icon = rememberVectorPainter(CoveLogoVector),
                 ) {
+                    ReportRenderApi(playerHost)
                     CoveTheme {
                         if (tvShell) {
                             CoveTvApp(
@@ -229,6 +233,33 @@ private fun StandalonePlayerWindow(
         }
     }
 }
+
+/**
+ * Logs which graphics API draws the window, and tells the player whether that is a GPU.
+ *
+ * Skiko falls back from the GPU to drawing in software without a word to the viewer — in a VM,
+ * over some remote desktops, on a driver it cannot use — and then every frame costs the UI
+ * thread many times as much. Which API it ended up on belongs in the log a bug report carries;
+ * whether it is a GPU decides who enlarges video, see [MpvVideoPlayerHost.gpuComposited].
+ */
+@Composable
+private fun FrameWindowScope.ReportRenderApi(playerHost: MpvVideoPlayerHost) {
+    LaunchedEffect(window) {
+        // Settled only once a frame has been drawn: Skiko picks an API when the window is
+        // shown and falls back from it there if it cannot make a context.
+        withFrameNanos { }
+        fun publish() {
+            val api = window.renderApi
+            playerHost.gpuComposited = api !in SOFTWARE_RENDER_APIS
+            System.err.println("Cove: interface drawn with $api")
+        }
+        publish()
+        window.onRenderApiChanged(::publish)
+    }
+}
+
+private val SOFTWARE_RENDER_APIS =
+    setOf(GraphicsApi.UNKNOWN, GraphicsApi.SOFTWARE_FAST, GraphicsApi.SOFTWARE_COMPAT)
 
 /**
  * Holds off the screensaver for as long as the player is actually playing.

@@ -69,11 +69,12 @@ internal fun ViewingClock(
 ) {
     val reveal = rememberChartReveal(byHourOfDay)
     // A highlight travelling slowly round the rim. It is the one thing on this page that
-    // never stops, which is what keeps the dial feeling like an instrument rather than a
-    // picture of one — at 11 seconds a lap it is barely perceptible until you watch it.
-    val sheen = rememberSweep(durationMillis = 11_000, label = "ClockSheen")
+    // never stops while Cove is in front, which is what keeps the dial feeling like an
+    // instrument rather than a picture of one — at 11 seconds a lap it is barely perceptible
+    // until you watch it.
+    val sheen = rememberSweep(durationMillis = 11_000)
     // The busiest hour breathes. Slow and shallow enough to read as emphasis, not motion.
-    val pulse = rememberDrift(durationMillis = 2_400, label = "ClockPulse")
+    val pulse = rememberDrift(durationMillis = 2_400)
 
     val accent = LocalInsightsAccent.current
     val quiet = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.13f)

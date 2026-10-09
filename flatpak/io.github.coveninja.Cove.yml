@@ -3,7 +3,7 @@ app-id: io.github.coveninja.Cove
 # Java SDK extension is needed. org.freedesktop.Platform provides glibc and the
 # essential system libs the JVM and libmpv need at runtime.
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: cove
 
@@ -39,9 +39,29 @@ modules:
         url: https://github.com/libass/libass.git
         tag: '0.17.3'
 
+  # nv-codec-headers: the API FFmpeg uses to reach NVIDIA's hardware decoder.
+  # Headers only, needed at build time and cleaned out of the bundle; the CUDA and
+  # NVDEC libraries themselves come at runtime from the org.freedesktop.Platform.GL.nvidia
+  # extension Flatpak installs to match the host driver. Without this, NVIDIA users
+  # decoded every film on the CPU. The 12.0 series loads against the widest range of
+  # drivers (520 and later) and is all NVDEC needs; FFmpeg 7.1 accepts it.
+  - name: nv-codec-headers
+    buildsystem: simple
+    build-commands:
+      - make PREFIX=/app install
+    cleanup:
+      - '*'
+    sources:
+      - type: git
+        url: https://github.com/FFmpeg/nv-codec-headers.git
+        tag: n12.0.16.1
+        commit: 451da99614412a7f9526ef301a5ee0c7a6f9ad76
+
   # ffmpeg: audio/video decoding for mpv.
   # Built with GPL so libass can be enabled.
   # no-autogen: ffmpeg ships its own ./configure (not autoconf-generated).
+  # ffnvcodec and nvdec are named rather than left to autodetection so a missing
+  # header fails the build instead of quietly shipping without NVIDIA decoding.
   - name: ffmpeg
     buildsystem: autotools
     no-autogen: true
@@ -54,6 +74,8 @@ modules:
       - --enable-gpl
       - --enable-version3
       - --enable-libass
+      - --enable-ffnvcodec
+      - --enable-nvdec
     build-options:
       no-debuginfo: true
     sources:
@@ -63,30 +85,48 @@ modules:
 
   # libplacebo: GPU shader / rendering library required by mpv >= 0.37.0.
   # Vulkan disabled to avoid pulling in glslang/SPIRV-Tools.
-  # -Dlibdir forces installation to /app/lib instead of /app/lib64; the
-  # flatpak-builder default PKG_CONFIG_PATH only includes /app/lib/pkgconfig
-  # so without this mpv (and later cmake) can't find the installed .pc file.
+  # No -Dlibdir here or on mpv: flatpak-builder already passes --libdir, which
+  # keeps the .pc files in /app/lib/pkgconfig, and the SDK's meson (since 24.08) refuses
+  # to be given both ("Got argument libdir as both -Dlibdir and --libdir").
   - name: libplacebo
     buildsystem: meson
     config-opts:
       - -Dvulkan=disabled
       - -Dtests=false
       - -Ddemos=false
-      - -Dlibdir=/app/lib
     sources:
       - type: git
         url: https://github.com/haasn/libplacebo.git
         tag: v7.349.0
 
+  # LuaJIT: gives mpv its Lua scripting, which is what the ytdl hook is. Without
+  # it mpv has no ytdl option and trailers on YouTube cannot play. Flathub's
+  # shared-modules recipe; only the library stays in the bundle.
+  - name: luajit
+    no-autogen: true
+    make-args:
+      - BUILDMODE=dynamic
+      - PREFIX=${FLATPAK_DEST}
+    make-install-args:
+      - PREFIX=${FLATPAK_DEST}
+    cleanup:
+      - /bin
+      - /include
+      - /lib/pkgconfig
+      - /share/man
+    sources:
+      - type: git
+        url: https://github.com/openresty/luajit2.git
+        tag: v2.1-20260724
+        commit: 982cd8323eafd8604a9e5f2a916aa50b9f67d9ed
+
   # mpv: video player library used by the Compose Desktop app (via JNA).
-  # Same libdir fix as libplacebo so mpv.pc lands in /app/lib/pkgconfig.
   - name: mpv
     buildsystem: meson
     config-opts:
       - -Dlibmpv=true
       - -Dbuild-date=false
       - -Dvapoursynth=disabled
-      - -Dlibdir=/app/lib
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git

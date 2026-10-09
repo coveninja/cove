@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
  * Full libmpv rendering cannot be unit-tested without a display and live mpv.
  * These tests cover: LC_NUMERIC category selection per OS, library candidate
  * ordering, and loadfile argument construction. SoftwareVideoSurfaceTest owns
- * the bgr0/Skia pixel contract.
+ * the rgb0/Skia pixel contract.
  *
  * Each test is mutation-verified — see comments inside each test.
  */
@@ -137,5 +137,17 @@ class MpvTest {
     fun `the ytdl hook stays on for the pages it exists for`() {
         assertTrue(ytdlEnabledFor("https://www.youtube.com/watch?v=abc"))
         assertTrue(ytdlEnabledFor("https://youtu.be/abc"))
+    }
+
+    // vulkan-copy decodes H.264 wrong on NVIDIA's 615 driver, and auto-copy is how mpv 0.41
+    // ends up choosing it; see COPY_BACK_DECODERS. Mutation: put auto-copy back and this fails.
+    @Test
+    fun `copy-back decoding never hands mpv Vulkan or its own auto choice`() {
+        for (os in listOf("Linux", "Windows 11", "Mac OS X", "FreeBSD")) {
+            val decoders = copyBackDecoders(os).split(',')
+            assertTrue(decoders.all { it.endsWith("-copy") }, "$os: $decoders")
+            assertFalse(decoders.any { it.startsWith("vulkan") || it.startsWith("auto") }, "$os: $decoders")
+        }
+        assertEquals("nvdec-copy,vaapi-copy,vdpau-copy,drm-copy", copyBackDecoders("Linux"))
     }
 }

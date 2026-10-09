@@ -2,11 +2,6 @@ package com.coveninja.cove.ui.components.insights
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.hoverable
@@ -29,6 +24,10 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.state.LocalMotionPolicy
+import com.coveninja.cove.ui.state.ambientMotionAllowed
+import com.coveninja.cove.ui.state.driftAt
+import com.coveninja.cove.ui.state.rememberAmbientMillis
+import com.coveninja.cove.ui.state.sweepAt
 import kotlin.math.min
 
 /**
@@ -110,39 +109,22 @@ internal fun rememberCountUp(target: Long, durationMillis: Int = 1_000): Long {
  *
  * Held at the midpoint under reduced motion rather than stopped at an end, so a page that
  * opts out of motion still gets the composition the effect was designed around instead of
- * its extreme.
+ * its extreme. Paused where it stands while Cove is not the focused window; see
+ * [ambientMotionAllowed].
  */
 @Composable
-internal fun rememberDrift(durationMillis: Int, label: String): Float {
+internal fun rememberDrift(durationMillis: Int): Float {
     if (LocalMotionPolicy.current.reducedMotion) return 0.5f
-    val transition = rememberInfiniteTransition(label = label)
-    val value by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "${label}Value",
-    )
-    return value
+    val elapsed by rememberAmbientMillis()
+    return driftAt(elapsed, durationMillis)
 }
 
 /** A continuously advancing 0f..1f, for anything that sweeps or rotates in one direction. */
 @Composable
-internal fun rememberSweep(durationMillis: Int, label: String): Float {
+internal fun rememberSweep(durationMillis: Int): Float {
     if (LocalMotionPolicy.current.reducedMotion) return 0f
-    val transition = rememberInfiniteTransition(label = label)
-    val value by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "${label}Value",
-    )
-    return value
+    val elapsed by rememberAmbientMillis()
+    return sweepAt(elapsed, durationMillis)
 }
 
 /**
