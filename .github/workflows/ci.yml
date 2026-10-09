@@ -69,6 +69,18 @@ jobs:
           :mobile:lintDebug
           :mobile:assembleDebug
           --no-daemon
+      # The console output is the whole account of a CI-only test failure; the reports carry
+      # the per-test stdout Gradle never forwards, which is where timing diagnostics land.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-linux
+          path: |
+            app/*/build/reports/tests
+            app/*/build/test-results
+          retention-days: 14
+          if-no-files-found: ignore
 
   macos:
     name: macOS native build and test
@@ -95,6 +107,18 @@ jobs:
           :desktop:test
           :desktop:createDistributable
           --no-daemon
+      # The console output is the whole account of a CI-only test failure; the reports carry
+      # the per-test stdout Gradle never forwards, which is where timing diagnostics land.
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-macos
+          path: |
+            app/*/build/reports/tests
+            app/*/build/test-results
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Verify application bundle
         run: |
           set -euo pipefail
