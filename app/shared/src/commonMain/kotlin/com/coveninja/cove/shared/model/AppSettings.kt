@@ -167,6 +167,11 @@ data class AppSettings(
      * its default neighbour when the order is resolved. See `orderHomeSections`.
      */
     val homeSectionOrder: List<String> = emptyList(),
+    /**
+     * How Explore opens: "shelves", "grid" or "list". Written only when the viewer picks one
+     * in Explore's toolbar, so a filter that opens the grid does not change it.
+     */
+    val exploreLayout: String = "shelves",
     /** Sections the viewer has taken off Home. Not the same as disabling a catalog. */
     val homeSectionsHidden: List<String> = emptyList(),
     /** How many addon catalog rails Home draws. Each one costs a metadata fan-out. */

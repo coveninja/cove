@@ -5,11 +5,33 @@ import com.coveninja.cove.shared.model.CatalogSort
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaType
 
-/** Which of the two ways Explore is arranged. */
-enum class ExploreLayout(val label: String, val icon: String) {
-    Shelves("Shelves", "lucide:gallery-horizontal-end"),
-    Grid("Grid", "lucide:layout-grid"),
+/** Which of the ways Explore is arranged. */
+enum class ExploreLayout(val label: String, val icon: String, val setting: String) {
+    Shelves("Shelves", "lucide:gallery-horizontal-end", "shelves"),
+    Grid("Grid", "lucide:layout-grid", "grid"),
+
+    /** The grid's titles as rows with the whole title and a description, for weighing up. */
+    Rows("List", "lucide:list", "list"),
+    ;
+
+    /** Grid and List are two looks at the same flat, filtered, endlessly paged browse. */
+    val browsing: Boolean get() = this != Shelves
+
+    companion object {
+        fun fromSetting(value: String?): ExploreLayout =
+            entries.firstOrNull { it.setting == value } ?: Shelves
+    }
 }
+
+/**
+ * Where an action that needs the flat browse — a narrowing filter, "See all", an addon
+ * catalog — takes the viewer: the browse they are already in, or the grid from the shelves.
+ */
+internal fun ExploreLayout.forBrowsing(): ExploreLayout = if (browsing) this else ExploreLayout.Grid
+
+/** Restoring a preference must not hide a catalog opened from Home's "See all" action. */
+internal fun restoredExploreLayout(saved: String, filters: ExploreFilters): ExploreLayout =
+    ExploreLayout.fromSetting(saved).let { if (filters.narrowed) it.forBrowsing() else it }
 
 /**
  * How the grid is ordered.

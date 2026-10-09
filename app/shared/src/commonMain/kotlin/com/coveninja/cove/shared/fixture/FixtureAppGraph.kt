@@ -52,7 +52,7 @@ private val fixtureMovies = listOf(
     Media(id = 12477,  title = "Grave of the Fireflies",   mediaType = MediaType.Movie, voteAverage = 8.5, popularity = 36.0, releaseDate = "1988-04-16", posterPath = "/k9tv1rXZbOhH7eiCk378x61kNQ1.jpg", genreIds = listOf(16, 18, 10752)),
     Media(id = 1891,   title = "The Empire Strikes Back",  mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 67.0, releaseDate = "1980-05-20", posterPath = "/7BuH8itoSrLExs2YZSsM01Qk2no.jpg", genreIds = listOf(12, 28, 878)),
     Media(id = 807,    title = "Se7en",                    mediaType = MediaType.Movie, voteAverage = 8.4, popularity = 76.0, releaseDate = "1995-09-22", posterPath = "/6yoghtyTpznpBik8EngEmJskVUO.jpg", genreIds = listOf(80, 9648, 53)),
-)
+).map(::withFixtureOverview)
 
 private val fixtureTv = listOf(
     Media(id = 1396,  name = "Breaking Bad",       mediaType = MediaType.Tv, voteAverage = 8.9, popularity = 97.0, firstAirDate = "2008-01-20", posterPath = "/ggFHVNu6YYI5L9pCfOacjizRGt.jpg", genreIds = listOf(18, 80)),
@@ -71,6 +71,19 @@ private val fixtureTv = listOf(
     Media(id = 85937, name = "Demon Slayer",       mediaType = MediaType.Tv, voteAverage = 8.6, popularity = 77.0, firstAirDate = "2019-04-06", posterPath = "/xUfRZu2mi8jH6SzQEJGP6tjBuYj.jpg", genreIds = listOf(16, 10759, 10765)),
     Media(id = 456,   name = "The Simpsons",       mediaType = MediaType.Tv, voteAverage = 8.0, popularity = 66.0, firstAirDate = "1989-12-17", posterPath = "/qcr9bBY6MVeLzriKCmJOv1562vJ.jpg", genreIds = listOf(16, 35, 10751)),
     Media(id = 63174, name = "Lucifer",            mediaType = MediaType.Tv, voteAverage = 8.5, popularity = 60.0, firstAirDate = "2016-01-25", posterPath = "/4EYPN5mVIhSp3zoHz1eMKcCm1Xg.jpg", genreIds = listOf(80, 10765)),
+).map(::withFixtureOverview)
+
+/**
+ * A synopsis of ordinary length for every fixture title. Lists, heroes and Explore's list
+ * layout clip descriptions at a few lines, and a corpus with none could not show whether that
+ * clipping works.
+ */
+private fun withFixtureOverview(media: Media): Media = media.copy(
+    overview = media.overview ?: (
+        "${media.displayTitle} is fixture content for developing Cove's interface without a " +
+            "running backend. This sentence stands in for a real synopsis, long enough to show " +
+            "how a description of ordinary length wraps, and where a layout cuts it short."
+        ),
 )
 
 // Dates are generated relative to the day the app runs, not hardcoded: My List sorts by

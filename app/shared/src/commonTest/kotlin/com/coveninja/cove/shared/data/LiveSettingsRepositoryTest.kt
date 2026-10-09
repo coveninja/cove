@@ -45,6 +45,7 @@ private val settingsJson = """
   "autoSelectStream": true,
   "rememberStreamSource": false,
   "streamSelectionMode": "best",
+  "exploreLayout": "list",
   "measuredBandwidthMbps": 100.0,
   "sourcePreference": "hdr",
   "subtitlesEnabled": true,
@@ -158,6 +159,7 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,   sent.autoSelectStream,     "autoSelectStream")
         assertEquals(false,  sent.rememberStreamSource, "rememberStreamSource")
         assertEquals("best", sent.streamSelectionMode,  "streamSelectionMode")
+        assertEquals("list", sent.exploreLayout,        "exploreLayout")
         assertEquals("fr",   sent.defaultSubtitleLang,  "defaultSubtitleLang")
         assertEquals("de",   sent.defaultAudioLang,     "defaultAudioLang")
         assertEquals(true,   sent.subtitlesEnabled,     "subtitlesEnabled")

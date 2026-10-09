@@ -242,18 +242,28 @@ class TmdbClient(
         personId: Int?,
         sort: CatalogSort,
         page: Int,
-    ): List<Media> = results("/discover/${type.wireName}") {
-        parameter("include_adult", false)
-        parameter("sort_by", sort.tmdbSortBy(type))
-        // The vote floor is what makes Rating usable at all: without it TMDB happily
-        // returns titles sitting at 10.0 on three votes ahead of anything recognisable.
-        // Every other order wants it too, to keep untouched entries out of the results.
-        parameter("vote_count.gte", sort.voteFloor(type))
-        parameter("page", page.coerceIn(1, TMDB_MAX_PAGE))
-        genreId?.let { parameter("with_genres", it) }
-        keywordId?.let { parameter("with_keywords", it) }
-        personId?.let { parameter("with_people", it) }
-    }.withType(type).filter { !it.posterPath.isNullOrBlank() }
+    ): List<Media> {
+        val path = "/discover/${type.wireName}"
+        val query: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {
+            parameter("include_adult", false)
+            parameter("sort_by", sort.tmdbSortBy(type))
+            // The vote floor is what makes Rating usable at all: without it TMDB happily
+            // returns titles sitting at 10.0 on three votes ahead of anything recognisable.
+            // Every other order wants it too, to keep untouched entries out of the results.
+            parameter("vote_count.gte", sort.voteFloor(type))
+            parameter("page", page.coerceIn(1, TMDB_MAX_PAGE))
+            genreId?.let { parameter("with_genres", it) }
+            keywordId?.let { parameter("with_keywords", it) }
+            personId?.let { parameter("with_people", it) }
+        }
+        val local = results(path, configure = query).withType(type)
+        // As discover() does: plenty of titles have no translated synopsis, and Explore's grid,
+        // rails and list layout would otherwise show them with no description at all.
+        val merged = if (appLocale() == "en") local else {
+            mergeMedia(local, results(path, "en-US", query).withType(type))
+        }
+        return merged.filter { !it.posterPath.isNullOrBlank() }
+    }
 
     /**
      * Adds the IMDB half to the interface's `tmdb:`-only default: TMDB can trade a `tt…`

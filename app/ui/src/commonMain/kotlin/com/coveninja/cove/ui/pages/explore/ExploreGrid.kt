@@ -68,6 +68,7 @@ fun ExploreGrid(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues? = null,
     header: (@Composable () -> Unit)? = null,
+    columns: GridCells = GridCells.Adaptive(PageLayoutDefaults.PosterGridMinWidth),
 ) {
     val reducedMotion = LocalMotionPolicy.current.reducedMotion
     val resolvedContentPadding = contentPadding ?: PaddingValues(
@@ -79,7 +80,7 @@ fun ExploreGrid(
     InfiniteScrollTrigger(state = state, itemCount = items.size, onLoadMore = onLoadMore)
 
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(PageLayoutDefaults.PosterGridMinWidth),
+        columns = columns,
         state = state,
         modifier = modifier.fillMaxWidth(),
         contentPadding = resolvedContentPadding,

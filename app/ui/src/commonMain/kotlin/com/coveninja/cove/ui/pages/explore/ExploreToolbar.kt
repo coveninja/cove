@@ -98,7 +98,7 @@ fun ExploreToolbar(
         icon = { it.icon },
         showLabels = false,
         onSelect = onLayoutChange,
-        modifier = Modifier.width(if (hasPointerHover) 80.dp else 96.dp),
+        modifier = Modifier.width(if (hasPointerHover) 120.dp else 144.dp),
     )
 
     @Composable

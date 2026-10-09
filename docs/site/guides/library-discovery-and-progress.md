@@ -6,6 +6,8 @@ Cove keeps discovery, your saved library, and playback history separate for each
 
 **Home** combines recommendations, trending titles, recently watched media, and rows supplied by enabled addon catalogs. **Explore** is for deliberate browsing by media type, genre, collection, or addon catalog. **Search** looks for films, series, and people.
 
+Explore has three layouts in its toolbar: **Shelves** (rows to scroll through), **Grid** (a poster wall), and **List**, which shows each title in full with its year, type, rating, genres, and a short description, for weighing up titles you do not recognise. Cove opens Explore in the layout you last chose.
+
 Opening a title shows its description, release information, cast, related titles, legal watch options where available, and seasons or episodes for a series. Opening a person shows their biography and filmography.
 
 Recommendations use the active profile's watch history, ratings, genres, keywords, people, and studios. Titles already watched, dismissed, or removed are excluded where appropriate. Change the recommendation strategy under **Profile → Content**; see the [settings reference](settings-reference.md).
