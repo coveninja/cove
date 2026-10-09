@@ -45,7 +45,6 @@ private val settingsJson = """
   "autoSelectStream": true,
   "rememberStreamSource": false,
   "streamSelectionMode": "best",
-  "exploreLayout": "list",
   "measuredBandwidthMbps": 100.0,
   "sourcePreference": "hdr",
   "subtitlesEnabled": true,
@@ -99,6 +98,7 @@ private val settingsJson = """
   "simklSyncEnabled": true,
   "autoSyncEnabled": false,
   "homeSectionOrder": ["trending", "hero", "continue"],
+  "exploreLayout": "list",
   "homeSectionsHidden": ["greeting"],
   "homeCatalogRows": 6,
   "homeContinueRows": 20,
@@ -159,7 +159,6 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,   sent.autoSelectStream,     "autoSelectStream")
         assertEquals(false,  sent.rememberStreamSource, "rememberStreamSource")
         assertEquals("best", sent.streamSelectionMode,  "streamSelectionMode")
-        assertEquals("list", sent.exploreLayout,        "exploreLayout")
         assertEquals("fr",   sent.defaultSubtitleLang,  "defaultSubtitleLang")
         assertEquals("de",   sent.defaultAudioLang,     "defaultAudioLang")
         assertEquals(true,   sent.subtitlesEnabled,     "subtitlesEnabled")
@@ -235,6 +234,7 @@ class LiveSettingsRepositoryTest {
             listOf("trending", "hero", "continue"), sent.homeSectionOrder, "homeSectionOrder",
         )
         assertEquals(listOf("greeting"), sent.homeSectionsHidden, "homeSectionsHidden")
+        assertEquals("list", sent.exploreLayout, "exploreLayout")
         // All three non-default, so each proves a stored count survived rather than being
         // re-derived from the Kotlin default.
         assertEquals(6,  sent.homeCatalogRows,   "homeCatalogRows")
