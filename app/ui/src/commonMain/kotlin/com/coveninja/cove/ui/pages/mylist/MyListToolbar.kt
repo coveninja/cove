@@ -23,7 +23,6 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
@@ -43,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,6 +53,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.components.media.MyListCategory
@@ -165,6 +167,8 @@ fun MyListToolbar(
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     val expanded = searchOpen || filters.query.isNotBlank()
+    var toolbarWidth by remember { mutableIntStateOf(0) }
+    val narrow = with(LocalDensity.current) { toolbarWidth.toDp() } < COMPACT_TOOLBAR_WIDTH
 
     val onQueryChange: (String) -> Unit = { onFiltersChange(filters.copy(query = it)) }
     val onExpandedChange: (Boolean) -> Unit = { open ->
@@ -207,9 +211,8 @@ fun MyListToolbar(
         onClick = { onExpandedChange(!expanded) },
     )
 
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val narrow = maxWidth < COMPACT_TOOLBAR_WIDTH
-
+    // As in Explore: do not dispose an active tooltip from a measurement subcomposition.
+    Box(modifier = modifier.fillMaxWidth().onSizeChanged { toolbarWidth = it.width }) {
         if (narrow) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
