@@ -13,6 +13,7 @@ import com.coveninja.cove.shared.model.Media
 import com.coveninja.cove.shared.model.MediaImage
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.PersonDetails
+import com.coveninja.cove.shared.model.ReleaseNames
 import com.coveninja.cove.shared.model.TvEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
@@ -25,6 +26,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class LocalContentRepository(
     private val catalog: MediaCatalog,
@@ -94,6 +97,23 @@ class LocalContentRepository(
 
     override suspend fun media(id: Int, type: MediaType): Media = catalog.media(id, type)
 
+    // Asked once per playback, and an episode run asks the same question for every episode.
+    private val releaseNameCache = LinkedHashMap<Pair<MediaType, Int>, ReleaseNames>()
+    private val releaseNameLock = Mutex()
+
+    override suspend fun releaseNames(id: Int, type: MediaType): ReleaseNames? {
+        val key = type to id
+        releaseNameLock.withLock { releaseNameCache[key] }?.let { return it }
+        val names = catalog.releaseNames(id, type) ?: return null
+        releaseNameLock.withLock {
+            releaseNameCache[key] = names
+            while (releaseNameCache.size > RELEASE_NAME_CACHE_SIZE) {
+                releaseNameCache.remove(releaseNameCache.keys.first())
+            }
+        }
+        return names
+    }
+
     override suspend fun artwork(media: Media): ContentArtwork {
         val type = requireNotNull(media.mediaType) { "Media type is required to load artwork" }
         return ContentArtwork(media, catalog.images(media.id, type))
@@ -145,3 +165,5 @@ class LocalContentRepository(
     override suspend fun episodes(id: Int, season: Int): List<TvEpisode> =
         catalog.episodes(id, season)
 }
+
+private const val RELEASE_NAME_CACHE_SIZE = 64

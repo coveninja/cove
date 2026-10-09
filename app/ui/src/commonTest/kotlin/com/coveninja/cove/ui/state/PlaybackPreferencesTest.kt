@@ -53,8 +53,16 @@ class PlaybackPreferencesTest {
     // logic error, and this test would not catch that either.
     @Test
     fun `a code with no table entry passes through unchanged`() {
-        assertEquals(listOf("eng"), languageAliases("eng"))
         assertEquals(listOf("mi"), languageAliases("mi"))
+    }
+
+    // A stored "eng" (older builds and other clients write it) must reach every tag a track
+    // can carry, or the preference never matches a track tagged "en".
+    @Test
+    fun `a three letter code expands to every form of its language`() {
+        assertEquals(listOf("eng", "en"), languageAliases("eng"))
+        assertEquals(listOf("swe", "sv"), languageAliases("swe"))
+        assertEquals(listOf("pob", "pt", "por", "pb"), languageAliases("pob"))
     }
 
     @Test

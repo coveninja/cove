@@ -37,6 +37,16 @@ class SourceMemoryMatchingTest {
     }
 
     @Test
+    fun `two files from the same torrent are not the same remembered release`() {
+        val pack = choice("Show.S01.1080p", hash = "a".repeat(40))
+        val first = pack.copy(source = pack.source.copy(fileIdx = 1))
+        val second = pack.copy(source = pack.source.copy(fileIdx = 2))
+        assertEquals(second, listOf(first, second).matchingRemembered(second.source.toSourceMemory()))
+        assertNull(listOf(first).matchingRemembered(second.source.toSourceMemory()))
+        assertFalse(first.source.identityKey() == second.source.identityKey())
+    }
+
+    @Test
     fun `a remembered release that is gone matches nothing`() {
         val listing = listOf(choice("Show.S02E04.2160p", hash = "b".repeat(40)))
 

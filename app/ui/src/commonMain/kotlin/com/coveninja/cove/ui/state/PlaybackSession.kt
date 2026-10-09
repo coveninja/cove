@@ -19,7 +19,9 @@ import com.coveninja.cove.shared.data.TrackMemory
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.MediaTimestamps
+import com.coveninja.cove.shared.model.ReleaseNames
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.SubtitleSource
 import com.coveninja.cove.shared.data.PluginPlaybackActivity
 import com.coveninja.cove.shared.data.PluginTransportCommand
 import com.coveninja.cove.shared.network.resolveTmdbImageUrl
@@ -34,11 +36,13 @@ import com.coveninja.cove.ui.model.toDomainType
 import com.coveninja.cove.ui.model.toUiEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -295,6 +299,30 @@ class PlaybackSession(
     private var resolvedCandidates: List<StreamChoice> = emptyList()
     private var failedSources = mutableSetOf<String>()
 
+    /** Kept with the candidates so a re-listing is ranked against the same names. */
+    private var currentReleaseNames: ReleaseNames? = null
+
+    /**
+     * The title and torrent that last started playing, so the next episode can prefer the
+     * same season pack. Survives `open`, which is exactly when it is needed.
+     */
+    private var lastTorrent: Pair<Int, String>? = null
+
+    /**
+     * Whether what is playing was picked by Cove rather than by the viewer. Only then does a
+     * source that fails to open step on to the next one by itself: a source the viewer chose
+     * by hand stays theirs, with the failure explained.
+     */
+    private var automaticSelection = false
+
+    /**
+     * Counts loads into the player. A subtitle fetch outlives the load that started it, and
+     * one that returns after the viewer — or a failover — has moved to another source must not
+     * add its tracks to that file too; that is how one episode ended up offering the same
+     * twelve subtitles three times over.
+     */
+    private var loadSerial = 0
+
     /** Files the viewer supplied for the current request, in the order they arrived. */
     private var userSubtitles: List<UserSubtitle> = emptyList()
 
@@ -325,6 +353,7 @@ class PlaybackSession(
         episodeTitle: String? = null,
         forcePicker: Boolean = false,
         fromStart: Boolean = false,
+        refreshSources: Boolean = false,
     ) {
         val domainType = media.type.toDomainType()
         if (domainType == null) {
@@ -349,6 +378,7 @@ class PlaybackSession(
         // the addons take.
         host.stop()
         resolvedCandidates = emptyList()
+        currentReleaseNames = null
         failedSources = mutableSetOf()
         // A file chosen for one episode is the wrong file for the next, and a wrong
         // subtitle is worse than none.
@@ -373,12 +403,23 @@ class PlaybackSession(
             if (token != generation) return@launch
             request = resolved
 
+            // Asked alongside the listing rather than after it, so checking release names
+            // costs no extra wait; a lookup that fails or dawdles only weakens that check.
+            val releaseNames = async {
+                runCatching {
+                    withTimeoutOrNull(RELEASE_NAMES_TIMEOUT_MILLIS) {
+                        graph.content.releaseNames(resolved.media.tmdbId, domainType)
+                    }
+                }.getOrNull()
+            }
+
             runCatching {
                 graph.playback.streams(
                     tmdbId = resolved.media.tmdbId,
                     type = domainType,
                     season = resolved.season,
                     episode = resolved.episode,
+                    refresh = refreshSources,
                 )
             }.onFailure { error ->
                 if (token != generation) return@launch
@@ -387,92 +428,41 @@ class PlaybackSession(
                 )
             }.onSuccess { candidates ->
                 if (token != generation) return@launch
-                val playable = candidates.filter {
-                    !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank()
-                }
-                // Audio preference decides ranking before size does: a viewer
-                // who asked for original audio should not be handed a dub just
-                // because the dub is a bigger file.
                 val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
-
-                val ranked = rankSources(
-                    sources = playable,
-                    // The most-wanted language only. Ranking is a hint drawn from a release
-                    // name, and a name that mentions the third choice says nothing useful
-                    // about whether the first is in there.
-                    preferredAudioLanguage = settings?.orderedAudioLanguages()?.firstOrNull(),
-                    originalLanguage = resolved.media.originalLanguage,
-                    mode = StreamSelectionMode.from(settings?.streamSelectionMode),
+                val names = releaseNames.await()
+                val ranked = rankedChoices(
+                    candidates = candidates,
+                    current = resolved,
+                    settings = settings,
+                    names = names,
+                    probe = settings?.probeStreams == true,
                 )
-
-                // Probing costs a round trip but happens while the viewer is
-                // already waiting, and it is far cheaper than picking a dead
-                // link and finding out after the eight seconds mpv needs to open
-                // one. Only direct URLs can be checked; torrents are left alone.
-                //
-                // After ranking rather than before, and subtracting rather than
-                // intersecting. A probe covers only a handful of candidates, so
-                // ranking first is what puts the one about to be auto-played
-                // inside that handful — checking an arbitrary slice left the
-                // chosen source unverified. And keeping only what the probe
-                // reached treated every candidate it had no room for as dead,
-                // which cut the list to the probe's budget and then, when that
-                // left nothing, handed back the rejects along with the rest.
-                val checked = if (settings?.probeStreams == true) {
-                    val probed = ranked.mapNotNull { it.url?.takeIf(String::isNotBlank) }
-                        .take(PlaybackRepository.MAX_PROBED_URLS)
-                    val dead = probed.toSet() - graph.playback.aliveUrls(probed)
-                    ranked.filter { it.url.isNullOrBlank() || it.url !in dead }
-                        // Never probe every candidate out of existence: if nothing
-                        // survived, the check is more likely wrong than the sources.
-                        // With the subtraction above this is now the rare case it was
-                        // meant to be, rather than the usual one.
-                        .ifEmpty { ranked }
-                } else {
-                    ranked
-                }
                 if (token != generation) return@onSuccess
 
-                // Keep the source-ranking order within each compatibility tier,
-                // but never put a software-only or impossible stream ahead of a
-                // source Android can hardware-decode (or whose codec is unknown).
-                val tiered = checked
-                    .map { source ->
-                        StreamChoice(
-                            source = source,
-                            compatibility = source.compatibilityWith(playerCodecCapabilities()),
-                        )
-                    }
-                    .sortedBy { choice -> choice.compatibility.selectionPriority() }
-
-                // What was played last time, if anything, and if the viewer wants it honoured.
                 val memory = rememberedSourceFor(resolved, settings)
                 if (token != generation) return@onSuccess
-                // The exact release of the exact episode: the viewer has already answered the
-                // picker's question for this file, so resuming it asks nothing — which is the
-                // whole point of remembering, and why this holds even with "pick a source
-                // automatically" off. A later episode has no such answer; there the memory only
-                // reorders, and autoSelectStream still decides whether to ask.
-                val exact = tiered.matchingRemembered(memory.exact)
-                val choices = tiered.promoteRemembered(memory.forTitle)
+                val exact = ranked.matchingRemembered(memory.exact)
+                val choices = ranked.promoteRemembered(memory.forTitle)
                 resolvedCandidates = choices
-                val automaticCandidates = choices.filter { it.compatibility.automaticallyEligible }
+                currentReleaseNames = names
+                val automaticCandidates = choices.filter { it.eligibleForAutomaticPlayback() }
                 when {
                     choices.isEmpty() -> phase = PlaybackPhase.Failed(
-                        "No sources found. A fresh profile has no provider addons — " +
-                            "add one in Settings before playing anything.",
+                        "No sources found for this title. If you have not added a provider " +
+                            "addon yet, add one in Settings.",
                     )
                     // An explicit "choose a source" always asks, even for one result:
                     // the point of that entry point is to see what is on offer.
                     forcePicker -> phase = PlaybackPhase.Choosing(choices)
-                    exact != null -> startPlayback(exact.source, token)
+                    exact != null -> startPlayback(exact.source, token, automatic = false)
                     // A lone compatible candidate is not a choice. A lone
                     // software-only or unsupported one must still be explained
-                    // in the picker rather than silently started.
+                    // in the picker rather than silently started, and so must a
+                    // lone release that is plainly something else.
                     automaticCandidates.size == 1 && choices.size == 1 ->
-                        startPlayback(automaticCandidates.single().source, token)
+                        startPlayback(automaticCandidates.single().source, token, automatic = true)
                     autoSelectStream() && automaticCandidates.isNotEmpty() ->
-                        startPlayback(automaticCandidates.first().source, token)
+                        startPlayback(automaticCandidates.first().source, token, automatic = true)
                     else -> phase = PlaybackPhase.Choosing(choices)
                 }
             }
@@ -551,6 +541,7 @@ class PlaybackSession(
                 url = url,
                 startPositionSeconds = 0.0,
                 token = token,
+                serial = ++loadSerial,
                 settings = settings,
                 showResumeNotice = false,
             )
@@ -613,7 +604,7 @@ class PlaybackSession(
     /** Called from the source picker, and to switch source mid-session. */
     fun choose(choice: StreamChoice) {
         if (!choice.compatibility.selectable) return
-        startPlayback(choice.source, generation)
+        startPlayback(choice.source, generation, automatic = false)
     }
 
     /**
@@ -630,16 +621,18 @@ class PlaybackSession(
         // resume reaches for, or the memory turns a single bad source into a permanent one.
         forgetSource(playing.source)
         val next = resolvedCandidates.firstOrNull {
-            it.compatibility.automaticallyEligible && it.source.identityKey() !in failedSources
+            it.eligibleForAutomaticPlayback() && it.source.identityKey() !in failedSources
         } ?: return false
-        startPlayback(next.source, generation)
+        startPlayback(next.source, generation, automatic = true)
         return true
     }
 
     fun retry() {
         val current = request ?: return
         current.extra?.let { return openExtra(current.media, it) }
-        open(current.media, current.season, current.episode, current.episodeTitle)
+        // Asked to look again, so look again: the listing cache may be holding the answer
+        // that failed, written while the network was down.
+        open(current.media, current.season, current.episode, current.episodeTitle, refreshSources = true)
     }
 
     /** Back to the source list from an active or starting playback. */
@@ -659,6 +652,61 @@ class PlaybackSession(
             episodeTitle = current.episodeTitle,
             forcePicker = true,
         )
+    }
+
+    /**
+     * Ranks a listing into the picker's order: what may play automatically first, best
+     * first, then everything else — kept rather than dropped, because a release ranking calls
+     * a mismatch may still be what the viewer wants, and choosing it stays theirs.
+     *
+     * Probing costs a round trip but happens while the viewer is already waiting, and it is
+     * far cheaper than picking a dead link and finding out after the eight seconds mpv needs
+     * to open one. Only direct URLs can be checked; torrents are left alone. After ranking
+     * rather than before, so the handful the probe covers are the ones about to be played,
+     * and subtracting rather than intersecting, so a candidate the probe had no room for is
+     * not treated as dead.
+     */
+    private suspend fun rankedChoices(
+        candidates: List<StreamSource>,
+        current: PlaybackRequest,
+        settings: AppSettings?,
+        names: ReleaseNames?,
+        probe: Boolean,
+    ): List<StreamChoice> {
+        val playable = candidates.filter { !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank() }
+        val originalLanguage = current.media.originalLanguage?.takeIf { it.isNotBlank() }
+            ?: names?.originalLanguage
+        val continuity = lastTorrent?.takeIf { (tmdbId, _) -> tmdbId == current.media.tmdbId }?.second
+        val ranked = rankSources(
+            sources = playable,
+            preferences = sourcePreferences(settings, originalLanguage).copy(continuityHash = continuity),
+            target = releaseTarget(current, names),
+        )
+        val checked = if (probe) {
+            val probed = ranked.mapNotNull { it.source.url?.takeIf(String::isNotBlank) }
+                .take(PlaybackRepository.MAX_PROBED_URLS)
+            val dead = probed.toSet() - graph.playback.aliveUrls(probed)
+            ranked.filter { it.source.url.isNullOrBlank() || it.source.url !in dead }
+                // Never probe every candidate out of existence: if nothing survived, the
+                // check is more likely wrong than the sources.
+                .ifEmpty { ranked }
+        } else {
+            ranked
+        }
+        // Keep the ranking order within each tier, but never put a software-only or
+        // impossible stream ahead of one the player can decode.
+        return checked
+            .map { ranked ->
+                StreamChoice(
+                    source = ranked.source,
+                    compatibility = ranked.source.compatibilityWith(playerCodecCapabilities()),
+                    assessment = ranked.assessment,
+                )
+            }
+            .sortedWith(
+                compareBy<StreamChoice> { if (it.eligibleForAutomaticPlayback()) 0 else 1 }
+                    .thenBy { it.compatibility.selectionPriority() },
+            )
     }
 
     // Settings may still be loading on a cold start; the default of "ask" is the
@@ -814,12 +862,13 @@ class PlaybackSession(
         }
     }
 
-    private fun startPlayback(source: StreamSource, token: Int) {
+    private fun startPlayback(source: StreamSource, token: Int, automatic: Boolean) {
         val current = request ?: return
         val player = host ?: return
 
         stopPlaybackMonitor()
         resetPlaybackRecovery()
+        automaticSelection = automatic
 
         val url = runCatching {
             graph.playback.playUrl(source, current.season, current.episode)
@@ -829,6 +878,7 @@ class PlaybackSession(
         }
 
         phase = PlaybackPhase.Playing(source, url)
+        source.infoHash?.takeIf { it.isNotBlank() }?.let { lastTorrent = current.media.tmdbId to it.lowercase() }
         // Recorded here rather than only from the picker, and deliberately: what this is for is
         // resuming the same file, and whether it was chosen by hand or by the ranking makes no
         // difference to that. A source that then fails to open is forgotten again by
@@ -849,6 +899,10 @@ class PlaybackSession(
             if (token == generation) timestamps = fetched
         }
 
+        // Taken now rather than inside the coroutine: two sources started in quick succession
+        // must load in the order they were asked for, whichever finishes looking up its resume
+        // point first.
+        val serial = ++loadSerial
         scope.launch {
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
             val resumeFrom = if (!startFromBeginning && settings?.rememberPosition != false) {
@@ -856,13 +910,14 @@ class PlaybackSession(
             } else {
                 0.0
             }
-            if (token != generation) return@launch
+            if (token != generation || serial != loadSerial) return@launch
             loadCurrentSource(
                 current = current,
                 player = player,
                 url = url,
                 startPositionSeconds = resumeFrom,
                 token = token,
+                serial = serial,
                 settings = settings,
                 showResumeNotice = true,
             )
@@ -881,9 +936,13 @@ class PlaybackSession(
         url: String,
         startPositionSeconds: Double,
         token: Int,
+        serial: Int,
         settings: AppSettings?,
         showResumeNotice: Boolean,
     ) {
+        // Every await below can be overtaken by another load; only the newest may touch mpv.
+        fun superseded() = token != generation || serial != loadSerial
+
         // An extra is a trailer, not the title: remembering that someone watched one with
         // German subtitles is not a fact about the film, and applying it would be worse.
         val memory = if (current.extra != null) {
@@ -892,7 +951,7 @@ class PlaybackSession(
             runCatching { graph.trackMemory.read(current.media.tmdbId) }
                 .getOrDefault(TrackMemory.None)
         }
-        if (token != generation) return
+        if (superseded()) return
 
         settings?.let {
             // An extra is not worth a details round trip merely to decide which
@@ -906,7 +965,7 @@ class PlaybackSession(
                 it.playbackPreferences(originalLanguage).withMemory(memory),
             )
         }
-        if (token != generation) return
+        if (superseded()) return
 
         // After the preferences, and only when it is not the default: setting a speed the
         // viewer never chose would make every title open at whatever the last one used.
@@ -935,7 +994,10 @@ class PlaybackSession(
             )
         }
 
-        if (current.extra != null || settings?.subtitlesEnabled == false) return
+        // Subtitles switched on for this title in the player outrank the global switch being
+        // off, exactly as they do for track selection in withMemory.
+        val rememberedOn = memory.subtitleLanguage.isNotBlank() && !memory.subtitlesOff
+        if (current.extra != null || (settings?.subtitlesEnabled == false && !rememberedOn)) return
         val domainType = current.media.type.toDomainType() ?: return
         val external = runCatching {
             graph.playback.subtitles(
@@ -945,10 +1007,14 @@ class PlaybackSession(
                 episode = current.episode,
             )
         }.getOrDefault(emptyList())
-        if (token != generation) return
+        if (superseded()) return
 
         val unnamedByLanguage = mutableMapOf<String, Int>()
-        external.take(MAX_EXTERNAL_SUBTITLES).forEach { subtitle ->
+        offeredSubtitles(
+            external = external,
+            preferred = subtitlePreference(settings, memory),
+            onlyPreferred = settings?.offersOnlyPreferredSubtitles() == true,
+        ).forEach { subtitle ->
             val title = subtitle.displayName ?: run {
                 val language = subtitle.lang
                     .trim()
@@ -1044,9 +1110,10 @@ class PlaybackSession(
         reconnecting = true
         recoveryFailed = false
         reloadJob?.cancel()
+        val serial = ++loadSerial
         reloadJob = scope.launch {
-            val url = refreshedUrl(current, playing.source, token) ?: playing.url
-            if (token != generation) return@launch
+            val url = refreshedUrl(current, playing.source, token, serial) ?: playing.url
+            if (token != generation || serial != loadSerial) return@launch
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
             loadCurrentSource(
                 current = current,
@@ -1054,6 +1121,7 @@ class PlaybackSession(
                 url = url,
                 startPositionSeconds = start.coerceAtLeast(0.0),
                 token = token,
+                serial = serial,
                 settings = settings,
                 showResumeNotice = false,
             )
@@ -1071,6 +1139,7 @@ class PlaybackSession(
         current: PlaybackRequest,
         source: StreamSource,
         token: Int,
+        serial: Int,
     ): String? {
         val domainType = current.media.type.toDomainType() ?: return null
         val candidates = runCatching {
@@ -1082,7 +1151,7 @@ class PlaybackSession(
                 refresh = true,
             )
         }.getOrNull() ?: return null
-        if (token != generation) return null
+        if (token != generation || serial != loadSerial) return null
 
         // Matched on the release rather than on position or address: the list is re-ranked
         // every time, and the viewer asked to retry this source rather than whatever now
@@ -1096,11 +1165,16 @@ class PlaybackSession(
         // second interruption reloads the URL that worked rather than the one that did not.
         // Filtered and ordered as open() does — a failover reads this, and it must not be
         // handed a software-only candidate ahead of one the player can decode.
-        resolvedCandidates = candidates
-            .filter { !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank() }
-            .map { StreamChoice(it, it.compatibilityWith(playerCodecCapabilities())) }
-            .sortedBy { choice -> choice.compatibility.selectionPriority() }
+        val ranked = rankedChoices(
+            candidates = candidates,
+            current = current,
+            settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings,
+            names = currentReleaseNames,
+            probe = false,
+        )
             .promoteRemembered(rememberedSourceFor(current, settingsNow()).forTitle)
+        if (token != generation || serial != loadSerial) return null
+        resolvedCandidates = ranked
         phase = PlaybackPhase.Playing(found, url)
         return url
     }
@@ -1112,6 +1186,7 @@ class PlaybackSession(
         reconnecting = true
         recoveryFailed = false
         reloadJob?.cancel()
+        val serial = ++loadSerial
         reloadJob = scope.launch {
             val settings = (graph.settings.settings.value as? SettingsState.Ready)?.settings
             loadCurrentSource(
@@ -1120,6 +1195,7 @@ class PlaybackSession(
                 url = playing.url,
                 startPositionSeconds = startPositionSeconds.coerceAtLeast(0.0),
                 token = token,
+                serial = serial,
                 settings = settings,
                 showResumeNotice = false,
             )
@@ -1174,6 +1250,14 @@ class PlaybackSession(
                     reconnecting && status.hasMedia -> {
                         reconnecting = false
                         recoveryFailed = false
+                    }
+                    // A source Cove picked that fails before anything opened — a dead swarm,
+                    // an expired link — is not repaired by reopening the same address. Walk on
+                    // down the ranked list; failedSources makes a run of bad candidates end
+                    // instead of cycling, and the failure panel stays for when nothing is left.
+                    automaticSelection && status.error != null && !status.hasMedia &&
+                        request?.extra == null -> {
+                        failoverToNextSource()
                     }
                 }
             }
@@ -1347,9 +1431,6 @@ class PlaybackSession(
     }
 
     private companion object {
-        // Addons can return dozens; each is a fetch and a track in the menu, and
-        // nobody scrolls past the first handful of a language.
-        const val MAX_EXTERNAL_SUBTITLES = 12
         const val PROGRESS_SAVE_INTERVAL_MILLIS = 10_000L
         const val COMPLETED_FRACTION = 0.9
     }
@@ -1461,13 +1542,119 @@ internal const val RETRY_RENEWAL_SECONDS = 30.0
 /** The ceiling whatever the progress: past here the viewer is told, and chooses. */
 internal const val MAX_AUTOMATIC_RETRIES = 3
 
+/** How long ranking waits for a title's release names before checking with what it has. */
+private const val RELEASE_NAMES_TIMEOUT_MILLIS = 4_000L
+
 internal fun pluginArtworkUrl(value: String?): String? = resolveTmdbImageUrl(value, "w500")
     ?.takeIf { it.length <= 300 && it.startsWith("https://image.tmdb.org/t/p/") }
+
+/**
+ * Which add-on subtitles go into the player, in order.
+ *
+ * Addons answer with dozens, each a fetch and a row in the menu, so only [MAX_EXTERNAL_SUBTITLES]
+ * are added. They used to be the first twelve in the addon's own order — which for one episode
+ * was Arabic, Dutch, Greek, Finnish, Serbian and Indonesian, and no Swedish at all. Wanted
+ * languages now go first, a few of each so one language cannot crowd out the next, and with
+ * [onlyPreferred] nothing else is added.
+ */
+internal fun offeredSubtitles(
+    external: List<SubtitleSource>,
+    preferred: List<String>,
+    onlyPreferred: Boolean,
+    limit: Int = MAX_EXTERNAL_SUBTITLES,
+): List<SubtitleSource> {
+    if (limit <= 0) return emptyList()
+    val unique = external.filter { it.url.isNotBlank() }.distinctBy { it.url }
+    val byLanguage = unique.groupBy { canonicalLanguage(it.lang) }
+    val languages = preferred.mapNotNull(::canonicalLanguage).distinct()
+    val chosen = LinkedHashSet<SubtitleSource>()
+    // Give every wanted language a slot before adding another variant of the same one.
+    repeat(SUBTITLES_PER_LANGUAGE) { index ->
+        languages.forEach { language ->
+            if (chosen.size < limit) byLanguage[language]?.getOrNull(index)?.let(chosen::add)
+        }
+    }
+    val rest = if (onlyPreferred) {
+        unique.filter { canonicalLanguage(it.lang) in languages }
+    } else {
+        unique
+    }
+    rest.forEach { if (chosen.size < limit) chosen.add(it) }
+    return chosen.take(limit)
+}
+
+/** Two-letter subtitle languages in order, a language remembered for this title first. */
+internal fun subtitlePreference(settings: AppSettings?, memory: TrackMemory): List<String> {
+    val ordered = listOf(memory.subtitleLanguage) + settings?.orderedSubtitleLanguages().orEmpty()
+    return ordered.mapNotNull(::canonicalLanguage).distinct()
+}
+
+/** Whether the player should offer only the chosen subtitle languages. */
+internal fun AppSettings.offersOnlyPreferredSubtitles(): Boolean =
+    subtitleLanguagesOnly && subtitleLanguages.any { canonicalLanguage(it) != null }
+
+/**
+ * Turns the language filter on or off. On needs a saved list, and a profile that never edited
+ * its languages has only the single default behind it, so that default is saved as the list.
+ */
+internal fun AppSettings.withOnlyPreferredSubtitles(enabled: Boolean): AppSettings {
+    val switched = copy(subtitleLanguagesOnly = enabled)
+    return if (enabled && subtitleLanguages.none { canonicalLanguage(it) != null }) {
+        switched.withSubtitleLanguages(orderedSubtitleLanguages())
+    } else {
+        switched
+    }
+}
+
+internal const val MAX_EXTERNAL_SUBTITLES = 12
+private const val SUBTITLES_PER_LANGUAGE = 4
+
+/**
+ * The settings that shape ranking, with audio languages reduced to two-letter codes and
+ * "original" resolved, since that is the form a release name's hints come in.
+ */
+internal fun sourcePreferences(settings: AppSettings?, originalLanguage: String?): SourcePreferences {
+    val languages = settings?.orderedAudioLanguages().orEmpty()
+        .mapNotNull { code ->
+            if (code.trim().lowercase() == AUDIO_LANGUAGE_ORIGINAL) {
+                canonicalLanguage(originalLanguage)
+            } else {
+                canonicalLanguage(code)
+            }
+        }
+        .distinct()
+    return SourcePreferences(
+        mode = StreamSelectionMode.from(settings?.streamSelectionMode),
+        resolution = PreferredResolution.from(settings?.preferredResolution),
+        audioLanguages = languages,
+    )
+}
+
+/**
+ * What a release has to be: the title under every name it is published as, and either the
+ * episode or, for a film, the year. A series is never held to a year, because its packs carry
+ * the show's first year rather than the episode's.
+ */
+internal fun releaseTarget(current: PlaybackRequest, names: ReleaseNames?): ReleaseTarget {
+    val media = current.media
+    val titles = (listOfNotNull(media.title, media.name) + names?.titles.orEmpty())
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinctBy(String::lowercase)
+    val isSeries = media.type == MediaType.Series
+    return ReleaseTarget(
+        titles = titles,
+        translatedTitles = names?.translatedTitles.orEmpty(),
+        year = if (isSeries) null else media.released?.take(4)?.toIntOrNull() ?: names?.year,
+        season = current.season.takeIf { isSeries },
+        episode = current.episode.takeIf { isSeries },
+    )
+}
 
 /** Identifies a candidate across retries; position in the list is not stable. */
 internal fun StreamSource.identityKey(): String =
     url?.takeIf { it.isNotBlank() }
-        ?: infoHash?.takeIf { it.isNotBlank() }
+        ?: torrentFileKey()
         ?: "${name.orEmpty()}|${title.orEmpty()}"
 
 /**
@@ -1484,5 +1671,11 @@ internal fun StreamSource.identityKey(): String =
  * what the viewer was looking at when they picked it.
  */
 internal fun StreamSource.releaseKey(): String =
-    infoHash?.takeIf { it.isNotBlank() }?.lowercase()
+    torrentFileKey()
         ?: "${addonName.orEmpty()}|${name.orEmpty()}|${title.orEmpty()}|$sizeBytes"
+
+/** A torrent can contain multiple candidates; remembering its hash alone can select another file. */
+private fun StreamSource.torrentFileKey(): String? =
+    infoHash?.takeIf { it.isNotBlank() }?.lowercase()?.let { hash ->
+        fileIdx?.let { "$hash#$it" } ?: hash
+    }

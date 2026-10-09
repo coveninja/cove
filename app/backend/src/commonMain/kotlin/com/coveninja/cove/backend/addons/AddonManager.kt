@@ -424,14 +424,16 @@ class AddonManager(
             "${addon.url}/stream/$stremioType/${stremioId.encodeURLPathPart()}.json",
         )
         return response.streams.map { stream ->
+            val title = stream.title.ifBlank { stream.description }
             stream.copy(
                 addonName = addon.manifest.name,
+                title = title,
                 sizeBytes = stream.sizeBytes.takeIf { it > 0 }
                     ?: stream.behaviorHints?.videoSize?.takeIf { it > 0 }
                     // Torrentio, the busiest provider there is, sets neither of
                     // the above and writes the size into the title instead.
                     // Without this the field is zero for most real answers.
-                    ?: humanSizeToBytes(stream.title).takeIf { it > 0 }
+                    ?: humanSizeToBytes(title).takeIf { it > 0 }
                     ?: 0,
             )
         }

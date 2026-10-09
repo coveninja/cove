@@ -72,6 +72,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.coveninja.cove.shared.data.TrackMemory
+import com.coveninja.cove.ui.state.orderedAudioLanguages
+import com.coveninja.cove.ui.state.canonicalLanguage
+import com.coveninja.cove.ui.state.offersOnlyPreferredSubtitles
+import com.coveninja.cove.ui.state.subtitlePreference
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.shared.model.LabelledSegment
 import com.coveninja.cove.shared.model.StreamSource
@@ -192,6 +197,11 @@ fun PlayerLayer(
     // stale copy and the second press would appear to do nothing at all.
     val settingsState by LocalAppGraph.current.settings.settings.collectAsState()
     val settings = (settingsState as? SettingsState.Ready)?.settings
+    // The viewer's languages as the track menus compare them: two-letter codes, in order.
+    val subtitleMenuLanguages = remember(settings) { subtitlePreference(settings, TrackMemory.None) }
+    val audioMenuLanguages = remember(settings) {
+        settings?.orderedAudioLanguages().orEmpty().mapNotNull(::canonicalLanguage).distinct()
+    }
     // Rebuilt whenever settings change, which is the point: the editor applies its transform to
     // the settings it was constructed with, so a stale one would make every press of a stepper
     // recompute from the same starting value.
@@ -440,8 +450,19 @@ fun PlayerLayer(
                     // The host clamps this clear of the final frame.
                     Key.MoveEnd -> onPlayer { host?.seek(status.durationSeconds) }
                     Key.C -> onPlayer {
+                        // The same tracks the menu offers: cycling through forty languages
+                        // to get from English to Swedish is the menu problem over again.
+                        val offered = if (settings?.offersOnlyPreferredSubtitles() == true) {
+                            filterTrackGroups(
+                                groupTracksByLanguage(status.subtitleTracks, subtitleMenuLanguages),
+                                subtitleMenuLanguages,
+                                status.selectedSubtitleId,
+                            ).groups.flatMap { it.tracks }
+                        } else {
+                            status.subtitleTracks
+                        }
                         val next = cycleTrack(
-                            status.subtitleTracks,
+                            offered,
                             status.selectedSubtitleId,
                             allowOff = true,
                         )
@@ -687,9 +708,10 @@ fun PlayerLayer(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     PanelEntrance {
                         StreamSourcePicker(
-                            sources = phase.sources,
+                            ranked = phase.sources,
                             onSelect = session::choose,
                             title = request.label,
+                            showDetails = settings?.showStreamDetails != false,
                         )
                     }
                     Box(modifier = Modifier.padding(top = 16.dp)) {
@@ -1108,6 +1130,9 @@ fun PlayerLayer(
                         onSubtitleAppearanceChange = settingsEditor?.let { editor ->
                             { appearance -> editor.edit { withSubtitleAppearance(appearance) } }
                         },
+                        subtitleLanguages = subtitleMenuLanguages,
+                        audioLanguages = audioMenuLanguages,
+                        onlyPreferredSubtitles = settings?.offersOnlyPreferredSubtitles() == true,
                         onSetAudioDelay = { host?.setAudioDelay(it) },
                         scaling = scaling,
                         onSelectScaling = {

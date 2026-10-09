@@ -29,8 +29,11 @@ import com.coveninja.cove.shared.network.WatchProgressRequest
 import com.coveninja.cove.ui.model.Media
 import com.coveninja.cove.ui.model.MediaSeason
 import com.coveninja.cove.ui.model.MediaVideo
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -117,6 +120,7 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
     var requestedEpisode: Int? = null
     var streamRequests = 0
     var refreshRequests = 0
+    var refreshGate: CompletableDeferred<Unit>? = null
 
     override suspend fun streams(
         tmdbId: Int,
@@ -127,6 +131,7 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
     ): List<StreamSource> {
         streamRequests++
         if (refresh) refreshRequests++
+        if (refresh) refreshGate?.let { gate -> withContext(NonCancellable) { gate.await() } }
         requestedSeason = season
         requestedEpisode = episode
         return sources
@@ -151,12 +156,18 @@ private class FakePlayback(var sources: List<StreamSource>) : PlaybackRepository
 
     override suspend fun torrentProgress(hash: String): TorrentProgress? = null
 
+    /** When set, a subtitle fetch waits for it — long enough for another load to overtake. */
+    var subtitleGate: CompletableDeferred<Unit>? = null
+
     override suspend fun subtitles(
         tmdbId: Int,
         type: DomainMediaType,
         season: Int?,
         episode: Int?,
-    ): List<SubtitleSource> = offeredSubtitles
+    ): List<SubtitleSource> {
+        subtitleGate?.await()
+        return offeredSubtitles
+    }
 
     override fun playUrl(source: StreamSource, season: Int?, episode: Int?): String =
         "http://127.0.0.1:6969/api/play?url=${source.url}"
@@ -407,7 +418,9 @@ private class Harness(
  * first ten-second delay.
  */
 private fun playbackTest(
-    settings: AppSettings = AppSettings(),
+    // Most of these tests are about what happens around the picker, so they ask; the ones
+    // about automatic selection say so.
+    settings: AppSettings = AppSettings(autoSelectStream = false),
     sources: List<StreamSource> = oneSource,
     capabilities: VideoCodecCapabilities = VideoCodecCapabilities(),
     body: suspend TestScope.(Harness) -> Unit,
@@ -1156,7 +1169,7 @@ class PlaybackSessionTest {
     // survives it.
     @Test
     fun `a probe that kills every source is not believed`() = playbackTest(
-        settings = AppSettings(probeStreams = true),
+        settings = AppSettings(autoSelectStream = false, probeStreams = true),
         sources = listOf(
             StreamSource(name = "A", url = "https://example.com/a.mkv"),
             StreamSource(name = "B", url = "https://example.com/b.mkv"),
@@ -1180,7 +1193,7 @@ class PlaybackSessionTest {
     // handed back the rejects too, which is how a dead link reached the player.
     @Test
     fun `only a source the probe actually rejected is dropped`() = playbackTest(
-        settings = AppSettings(probeStreams = true),
+        settings = AppSettings(autoSelectStream = false, probeStreams = true),
         sources = (1..12).map { StreamSource(name = "S$it", url = "https://example.com/$it.mkv") },
     ) { h ->
         h.playback.deadUrls = setOf("https://example.com/1.mkv")
@@ -1458,6 +1471,222 @@ class PlaybackSessionTest {
 
         assertEquals(false, h.host.webVideoInstallAllowed)
     }
+
+    // ── Automatic choice and its failsafes ─────────────────────────────────
+
+    @Test
+    fun `an automatically chosen source that fails to open steps on to the next`() = playbackTest(
+        settings = AppSettings(autoSelectStream = true),
+        sources = listOf(
+            StreamSource(name = "A", url = "https://example.com/a.mkv", sizeBytes = 300),
+            StreamSource(name = "B", url = "https://example.com/b.mkv", sizeBytes = 200),
+        ),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        val first = (h.session.phase as PlaybackPhase.Playing).source.name
+
+        h.host.reportError("loading failed")
+        runCurrent()
+
+        val second = (h.session.phase as PlaybackPhase.Playing).source.name
+        assertNotEquals(first, second)
+        assertEquals(2, h.host.loads.size)
+
+        // Nothing left to try: the failure stays on screen instead of cycling.
+        h.host.reportError("loading failed")
+        runCurrent()
+        assertEquals(2, h.host.loads.size)
+    }
+
+    @Test
+    fun `a source the viewer picked stays theirs when it fails to open`() = playbackTest(
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        val choosing = h.session.phase as PlaybackPhase.Choosing
+        h.session.choose(choosing.sources.last())
+        runCurrent()
+
+        h.host.reportError("loading failed")
+        runCurrent()
+
+        assertEquals(1, h.host.loads.size, "a manual choice was replaced without asking")
+    }
+
+    // A name the check cannot place is still, by the addon's own lookup, this title.
+    @Test
+    fun `a lone release with an unrecognised name still plays`() = playbackTest(
+        settings = AppSettings(autoSelectStream = true),
+        sources = listOf(
+            StreamSource(
+                name = "Torrentio\n1080p",
+                title = "El club de la lucha (1999) HDrip\n👤 40 💾 2 GB",
+                infoHash = "a".repeat(40),
+            ),
+        ),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+
+        assertTrue(h.session.phase is PlaybackPhase.Playing, "was: ${h.session.phase}")
+    }
+
+    // A file named as another episode could spoil the series, so it is offered, not played.
+    @Test
+    fun `a lone file named as a different episode is offered rather than played`() = playbackTest(
+        settings = AppSettings(autoSelectStream = true),
+        sources = listOf(
+            StreamSource(
+                name = "Torrentio\n1080p",
+                title = "Breaking.Bad.S03E10.1080p.WEB\n👤 40 💾 2 GB",
+                infoHash = "a".repeat(40),
+            ),
+        ),
+    ) { h ->
+        h.session.open(series(listOf(MediaSeason(1, "Season 1", episodeCount = 7))))
+        runCurrent()
+
+        assertTrue(h.session.phase is PlaybackPhase.Choosing, "was: ${h.session.phase}")
+        assertNull(h.host.loadedUrl)
+    }
+
+    @Test
+    fun `auto selection never starts a torrent reported with zero seeders`() = playbackTest(
+        settings = AppSettings(autoSelectStream = true),
+        sources = listOf(
+            StreamSource(
+                name = "Torrentio\n1080p",
+                title = "Fight.Club.1999.1080p.BluRay\n👤 0 💾 9 GB",
+                infoHash = "a".repeat(40),
+                sizeBytes = 9_000_000_000,
+            ),
+            StreamSource(
+                name = "Torrentio\n1080p",
+                title = "Fight.Club.1999.1080p.WEB\n👤 4 💾 2 GB",
+                infoHash = "b".repeat(40),
+                sizeBytes = 2_000_000_000,
+            ),
+        ),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+
+        val phase = h.session.phase
+        assertTrue(phase is PlaybackPhase.Playing, "was: $phase")
+        assertEquals("b".repeat(40), phase.source.infoHash)
+    }
+
+    // ── Subtitles ──────────────────────────────────────────────────────────
+
+    @Test
+    fun `subtitles fetched for one source are not added to the next one`() = playbackTest(
+        settings = AppSettings(autoSelectStream = false, subtitlesEnabled = true),
+        sources = twoSources,
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(SubtitleSource(id = "en", url = "https://subs.test/en.srt", lang = "eng"))
+        val gate = CompletableDeferred<Unit>()
+        h.playback.subtitleGate = gate
+
+        h.session.open(movie())
+        runCurrent()
+        val choosing = h.session.phase as PlaybackPhase.Choosing
+        h.session.choose(choosing.sources[0])
+        runCurrent()
+        h.session.choose(choosing.sources[1])
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(1, h.host.addedSubtitles.size, "was: ${h.host.addedSubtitles}")
+        assertEquals("https://example.com/b.mkv", h.host.loadedUrl?.substringAfter("url="))
+    }
+
+    @Test
+    fun `wanted subtitle languages are added first and only they when that is the setting`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("eng", "sv"), subtitleLanguagesOnly = true),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf("ara", "nld", "pob", "ell", "fin", "srp", "ind", "swe", "eng")
+            .mapIndexed { index, lang -> SubtitleSource(id = "$index", url = "https://subs.test/$index.srt", lang = lang) }
+
+        h.session.open(movie())
+        runCurrent()
+
+        assertEquals(listOf("eng", "swe"), h.host.addedSubtitles.map { it.language })
+    }
+
+    @Test
+    fun `without a language filter the wanted ones still make the cut first`() {
+        val subtitles = (1..20).map { SubtitleSource(id = "$it", url = "https://subs.test/ar$it.srt", lang = "ara") } +
+            SubtitleSource(id = "sv", url = "https://subs.test/sv.srt", lang = "swe")
+
+        val offered = offeredSubtitles(subtitles, preferred = listOf("en", "sv"), onlyPreferred = false)
+
+        assertEquals(MAX_EXTERNAL_SUBTITLES, offered.size)
+        assertEquals("swe", offered.first().lang)
+    }
+
+    @Test
+    fun `subtitle variants do not crowd out a fourth preferred language`() {
+        val languages = listOf("en", "sv", "de", "fr")
+        val subtitles = languages.flatMap { lang ->
+            (1..10).map { SubtitleSource(id = "$lang$it", url = "https://subs.test/$lang$it.srt", lang = lang) }
+        }
+        val offered = offeredSubtitles(subtitles, languages, onlyPreferred = true)
+        assertEquals(MAX_EXTERNAL_SUBTITLES, offered.size)
+        assertEquals(languages, offered.take(4).map { it.lang })
+        assertEquals(emptyList(), offeredSubtitles(subtitles, languages, onlyPreferred = true, limit = 0))
+    }
+
+    // The settings show the single default language as the list, so the switch must mean the
+    // same thing there: turning it on saves that default rather than silently doing nothing.
+    @Test
+    fun `turning the language filter on with no saved list saves the shown default`() {
+        val fresh = AppSettings()
+        assertFalse(fresh.offersOnlyPreferredSubtitles())
+
+        val on = fresh.withOnlyPreferredSubtitles(true)
+        assertTrue(on.offersOnlyPreferredSubtitles())
+        assertEquals(listOf("en"), on.subtitleLanguages)
+
+        assertFalse(on.withOnlyPreferredSubtitles(false).offersOnlyPreferredSubtitles())
+        assertFalse(AppSettings(subtitleLanguages = listOf("eng", "sv")).offersOnlyPreferredSubtitles())
+    }
+
+    // Adding ranking must not opt new profiles into automatic playback.
+    @Test
+    fun `a late source refresh cannot replace a newer manual choice`() = playbackTest(
+        settings = AppSettings(autoSelectStream = false),
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        val choices = (h.session.phase as PlaybackPhase.Choosing).sources
+        h.session.choose(choices.first())
+        runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        h.playback.refreshGate = gate
+        h.session.retryCurrentSource()
+        runCurrent()
+        h.session.choose(choices.last())
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(choices.last().source, (h.session.phase as PlaybackPhase.Playing).source)
+    }
+
+    @Test
+    fun `watch still asks by default when several sources are available`() = playbackTest(
+        settings = AppSettings(),
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+
+        assertTrue(h.session.phase is PlaybackPhase.Choosing, "was: ${h.session.phase}")
+    }
+
     // ── the remembered source ────────────────────────────────────────────────
 
     @Test

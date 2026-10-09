@@ -2,12 +2,15 @@ package com.coveninja.cove.ui.components.player
 
 import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.UNKNOWN_LANGUAGE
+import com.coveninja.cove.ui.state.canonicalLanguage
 import com.coveninja.cove.ui.state.languageName
 
 /** Tracks sharing a language, in the order the file lists them. */
 internal data class TrackGroup(
     val languageLabel: String,
     val tracks: List<MediaTrack>,
+    /** The language's two-letter code, or its raw tag when unrecognised; empty when unknown. */
+    val code: String = "",
 )
 
 /**
@@ -22,16 +25,52 @@ internal data class TrackGroup(
  * of what is currently selected: a menu that reorders itself between openings is
  * harder to use than one that is merely long.
  */
-internal fun groupTracksByLanguage(tracks: List<MediaTrack>): List<TrackGroup> =
+internal fun groupTracksByLanguage(
+    tracks: List<MediaTrack>,
+    /**
+     * The viewer's languages, two-letter codes in order. They lead the menu in that order —
+     * still independent of what is selected, so the menu keeps its shape between openings.
+     */
+    preferred: List<String> = emptyList(),
+): List<TrackGroup> =
     tracks
-        .groupBy { it.baseLanguage() }
-        .map { (code, grouped) -> TrackGroup(languageName(code), grouped) }
+        // Every spelling of a language is one group: "en", "eng" and "en-US" used to be three
+        // sections each headed "English", which also gave the television duplicate list keys.
+        .groupBy { it.languageCode() }
+        .map { (code, grouped) -> TrackGroup(languageName(code), grouped, code) }
         .sortedWith(
             compareBy(
+                { preferred.indexOf(it.code).let { index -> if (index < 0) Int.MAX_VALUE else index } },
                 { it.languageLabel == UNKNOWN_LANGUAGE },
                 { it.languageLabel.lowercase() },
             ),
         )
+
+/** What a filtered menu shows, and how many tracks it is keeping out of sight. */
+internal data class TrackMenu(val groups: List<TrackGroup>, val hiddenTracks: Int)
+
+/**
+ * Only the viewer's languages, for a menu that would otherwise bury them.
+ *
+ * A release can carry eighty subtitle tracks, and English and Swedish sat 29th and 37th among
+ * them. Kept regardless of language: the track that is selected, so the menu always shows what
+ * is on screen, and tracks with no language at all, which could be anything. With no
+ * preference there is nothing to filter by and everything is shown.
+ */
+internal fun filterTrackGroups(
+    groups: List<TrackGroup>,
+    preferred: List<String>,
+    selectedId: Int?,
+): TrackMenu {
+    if (preferred.isEmpty()) return TrackMenu(groups, 0)
+    val shown = groups.filter { group ->
+        group.code in preferred || group.code.isEmpty() || group.tracks.any { it.id == selectedId }
+    }
+    return TrackMenu(shown, groups.filter { it !in shown }.sumOf { it.tracks.size })
+}
+
+/** The track's language as one code whatever form it came in, or its raw base tag. */
+internal fun MediaTrack.languageCode(): String = canonicalLanguage(language) ?: baseLanguage()
 
 /**
  * The part before any region subtag, lowercased. `es-419` and `es-ES` are both

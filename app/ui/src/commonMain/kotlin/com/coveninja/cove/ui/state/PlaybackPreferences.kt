@@ -340,13 +340,16 @@ fun AppSettings.subtitleStyle(): SubtitleStyle = SubtitleStyle(
  * language string alone cannot tell apart, which is why [TrackMemory] carries a flag for it.
  */
 fun PlaybackPreferences.withMemory(memory: TrackMemory): PlaybackPreferences = copy(
+    // Ahead of the settings' order rather than instead of it: a title remembered in French
+    // that turns up without French should still fall back to the next language the viewer
+    // wants, not to whatever the file marks as default.
     audioLanguages = memory.audioLanguage
         .takeIf { it.isNotBlank() }
-        ?.let(::languageAliases)
+        ?.let { (languageAliases(it) + audioLanguages).distinct() }
         ?: audioLanguages,
     subtitleLanguages = memory.subtitleLanguage
         .takeIf { it.isNotBlank() }
-        ?.let(::languageAliases)
+        ?.let { (languageAliases(it) + subtitleLanguages).distinct() }
         ?: subtitleLanguages,
     subtitlesEnabled = when {
         memory.subtitlesOff -> false

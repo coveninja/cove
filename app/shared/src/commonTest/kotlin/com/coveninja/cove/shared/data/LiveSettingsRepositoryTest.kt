@@ -45,6 +45,7 @@ private val settingsJson = """
   "autoSelectStream": true,
   "rememberStreamSource": false,
   "streamSelectionMode": "best",
+  "preferredResolution": "720p",
   "measuredBandwidthMbps": 100.0,
   "sourcePreference": "hdr",
   "subtitlesEnabled": true,
@@ -55,6 +56,7 @@ private val settingsJson = """
   "subtitleBackground": false,
   "audioLanguages": ["ja", "en"],
   "subtitleLanguages": ["en", "es"],
+  "subtitleLanguagesOnly": true,
   "subtitleFont": "Atkinson Hyperlegible",
   "subtitleTextColor": "#FFFFF200",
   "subtitleOutlineColor": "#FF404040",
@@ -110,6 +112,16 @@ private val settingsJson = """
 
 class LiveSettingsRepositoryTest {
 
+    @Test
+    fun `new and legacy profiles keep source selection and subtitle filtering opt in`() {
+        val legacy = testJson.decodeFromString<AppSettings>("{}")
+        for (settings in listOf(AppSettings(), legacy)) {
+            assertFalse(settings.autoSelectStream)
+            assertFalse(settings.subtitleLanguagesOnly)
+            assertEquals("1080p", settings.preferredResolution)
+        }
+    }
+
     // This test would have caught a real data-loss bug: if update() serialized
     // only the changed field (or a fresh AppSettings()) instead of the full
     // object, every other setting would be zeroed on the backend side because
@@ -158,6 +170,8 @@ class LiveSettingsRepositoryTest {
         assertEquals(true,   sent.autoSelectStream,     "autoSelectStream")
         assertEquals(false,  sent.rememberStreamSource, "rememberStreamSource")
         assertEquals("best", sent.streamSelectionMode,  "streamSelectionMode")
+        assertEquals("720p", sent.preferredResolution,  "preferredResolution")
+        assertEquals(true,   sent.subtitleLanguagesOnly, "subtitleLanguagesOnly")
         assertEquals("fr",   sent.defaultSubtitleLang,  "defaultSubtitleLang")
         assertEquals("de",   sent.defaultAudioLang,     "defaultAudioLang")
         assertEquals(true,   sent.subtitlesEnabled,     "subtitlesEnabled")
