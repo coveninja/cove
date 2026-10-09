@@ -17,7 +17,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.asPaddingValues
@@ -46,7 +45,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.coveninja.cove.shared.data.AppGraph
@@ -214,12 +216,19 @@ fun CoveApp(
 ) {
     val performance by graph.device.performance.collectAsState()
     LaunchedEffect(graph.updates) { graph.updates.start() }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val resolvedPlacement = resolveNavBarPlacement(navBarPlacement, maxWidth)
+    // Apply measured viewport changes in the next composition, not in a measurement
+    // subcomposition: unpinning My List's toolbar can otherwise dispose a tooltip while
+    // Compose Desktop is measuring its popup. Seed from the host to avoid a zero-size first frame.
+    val windowInfo = LocalWindowInfo.current
+    var viewportSize by remember { mutableStateOf(windowInfo.containerSize) }
+    val viewportWidth = with(LocalDensity.current) { viewportSize.width.toDp() }
+    val viewportHeight = with(LocalDensity.current) { viewportSize.height.toDp() }
+    Box(modifier = Modifier.fillMaxSize().onSizeChanged { viewportSize = it }) {
+        val resolvedPlacement = resolveNavBarPlacement(navBarPlacement, viewportWidth)
         // Share one viewport classification across all layout decisions.
         val viewport = PageViewport(
-            width = maxWidth,
-            height = maxHeight,
+            width = viewportWidth,
+            height = viewportHeight,
             hasBottomNavigation = resolvedPlacement == NavBarPlacement.Bottom,
         )
         CompositionLocalProvider(
