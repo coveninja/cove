@@ -222,6 +222,14 @@ class LocalBackendRuntime private constructor(
                     tmdbApiKey = tmdbApiKey,
                     imdbLookup = { id -> runCatching { catalog.imdbId(id, com.coveninja.cove.shared.model.MediaType.Tv) }.getOrNull() },
                     urlPolicy = DesktopAddonUrlPolicy,
+                    // Said out loud: a provider that silently fails looks exactly like a title
+                    // nobody has a source for.
+                    onProviderError = { _, error ->
+                        System.err.println(
+                            // HTTP exception messages can include private addon URLs and keys.
+                            "Cove addons: provider request failed (${error::class.simpleName})",
+                        )
+                    },
                 )
                 val quality = QualityService(catalog, addons)
                 val deviceSettings = DeviceSettingsService(dataDirectory)

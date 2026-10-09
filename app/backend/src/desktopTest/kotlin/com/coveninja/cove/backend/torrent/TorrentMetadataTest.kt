@@ -83,4 +83,27 @@ class TorrentMetadataTest {
         // The wait says what it is waiting on rather than going quiet for 45 seconds.
         assertTrue(lines.any { it.contains("waiting for metadata") })
     }
+
+    // Right after an exit node or VPN is switched, nothing can be found until the session has
+    // rebound and the DHT has refilled; calling the torrent dead then threw away healthy sources.
+    @Test
+    fun `zero peers while the network is unsettled is not a dead swarm`() = runTest {
+        var clock = 0L
+
+        val failure = assertFailsWith<IllegalStateException> {
+            awaitMetadata(
+                hash = hash,
+                timeoutMillis = 45_000,
+                hasMetadata = { false },
+                peerCount = { 0 },
+                log = {},
+                pollMillis = 1,
+                nowMillis = { clock += 1_000; clock },
+                swarmVerdictReady = { false },
+            )
+        }
+
+        assertContains(failure.message.orEmpty(), "timed out fetching torrent metadata")
+        assertTrue(clock >= 45_000, "called dead at ${clock}ms while the network was unsettled")
+    }
 }

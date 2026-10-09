@@ -114,7 +114,15 @@ internal fun imageFailureClassIsTransient(className: String): Boolean {
         simple.contains("UnknownHost", ignoreCase = true) ||
         simple.contains("ConnectException", ignoreCase = true) ||
         simple.contains("SocketException", ignoreCase = true) ||
-        simple.contains("Dns", ignoreCase = true)
+        simple.contains("Dns", ignoreCase = true) ||
+        // What a network switch actually throws on the desktop client: a failed lookup is an
+        // UnresolvedAddressException, a vanished route a NoRouteToHostException, and neither
+        // name matched above, so those posters stayed blank until the card was rebuilt.
+        simple.contains("UnresolvedAddress", ignoreCase = true) ||
+        simple.contains("NoRouteToHost", ignoreCase = true) ||
+        simple.contains("PortUnreachable", ignoreCase = true) ||
+        simple.contains("ClosedChannel", ignoreCase = true) ||
+        simple == "EOFException"
 }
 
 private fun imageFailureLooksLikeDecode(className: String): Boolean {
@@ -142,5 +150,8 @@ internal fun imageRetryDelayMillis(failedAttempt: Int): Long? = when (failedAtte
     0 -> 300L
     1 -> 1_000L
     2 -> 3_000L
+    // Long enough to outlast a VPN or exit node reconnecting, which takes tens of seconds.
+    3 -> 10_000L
+    4 -> 30_000L
     else -> null
 }

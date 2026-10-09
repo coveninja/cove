@@ -60,6 +60,9 @@ import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
+import com.coveninja.cove.backend.addons.AddonsUnreachableException
+import java.io.IOException
+import java.nio.channels.UnresolvedAddressException
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.header
@@ -187,6 +190,25 @@ fun Application.configureCoreRoutes(
         }
         exception<RequestTooLargeException> { call, error ->
             call.respond(HttpStatusCode.PayloadTooLarge, ErrorResponse(error.message ?: "request body too large"))
+        }
+        // The network, not the request. A failed DNS lookup arrives as an IllegalArgumentException
+        // subclass and used to be answered "400 invalid request", which told the viewer nothing.
+        exception<AddonsUnreachableException> { call, error ->
+            call.respond(HttpStatusCode.ServiceUnavailable, ErrorResponse(error.message ?: "sources unreachable"))
+        }
+        exception<UnresolvedAddressException> { call, _ ->
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ErrorResponse("No connection: a server's name could not be looked up. Check your network or VPN."),
+            )
+        }
+        exception<IOException> { call, _ ->
+            // A player hanging up mid-stream lands here too, after the response has begun.
+            if (call.response.isCommitted) return@exception
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                ErrorResponse("Could not read from the source. Check your connection and try again."),
+            )
         }
     }
     install(SSE)
@@ -491,13 +513,21 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                         append(":$season:$episode")
                     }
                 }
+                var unreachable: AddonsUnreachableException? = null
                 val streams = coroutineScope {
                     val addonStreams = async {
-                        addons.streams(
-                            type,
-                            stremioId,
-                            refresh = call.request.queryParameters["refresh"] == "1",
-                        )
+                        // Held rather than thrown at once: Nuvio scrapers or plugins may still
+                        // have something to play while the addons are out of reach.
+                        try {
+                            addons.streams(
+                                type,
+                                stremioId,
+                                refresh = call.request.queryParameters["refresh"] == "1",
+                            )
+                        } catch (error: AddonsUnreachableException) {
+                            unreachable = error
+                            emptyList()
+                        }
                     }
                     val nuvioStreams = services.nuvio?.let { nuvio ->
                         async {
@@ -542,6 +572,7 @@ private fun Route.coreRoutes(services: CoreRouteServices, legacy: Boolean) {
                     }
                     addonStreams.await() + nuvioStreams?.await().orEmpty() + pluginStreams?.await().orEmpty()
                 }
+                if (streams.isEmpty()) unreachable?.let { throw it }
                 call.respond(services.media?.registerStreams(streams) ?: streams)
             }
             get("/subtitles") {

@@ -19,6 +19,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
@@ -238,29 +239,55 @@ class AddonManager(
             streamCache.entries.removeAll { it.value.expiresAt <= now }
             if (!refresh) streamCache[key]?.let { return it.streams }
         }
-        val result = coroutineScope {
         val providers = entries().filter { entry ->
             entry.enabled && entry.source == "stremio" &&
                 entry.kind == AddonKind.Provider && entry.manifest.hasResource("stream")
         }
-        providers.map { addon ->
-            async {
-                withTimeoutOrNull(ADDON_REQUEST_TIMEOUT_MS) {
-                    runCatching { fetchStreams(addon, type, stremioId) }.getOrElse { error ->
-                        onProviderError(addon, error)
-                        emptyList()
-                    }
-                }.orEmpty()
-            }
-        }.map { it.await() }.flatten()
+        val answers = coroutineScope {
+            providers.map { addon -> async { askForStreams(addon, type, stremioId) } }.map { it.await() }
         }
+        val result = answers.flatMap { it.streams }
+        val unreachable = answers.filter { it.failed }.map { it.addon.manifest.name }
+        // A provider that could not be asked is not a provider with nothing to offer. Treating it
+        // as one cached "no sources" for minutes — written by a background prefetch while a VPN
+        // was reconnecting, then handed back to every retry — so with nothing at all to show,
+        // the failure is reported and nothing is cached.
+        if (result.isEmpty() && unreachable.isNotEmpty()) throw AddonsUnreachableException(unreachable)
         streamCacheMutex.withLock {
             streamCache[key] = CachedAddonStreams(
                 result,
-                now + if (result.isEmpty()) EMPTY_STREAM_CACHE_MILLIS else STREAM_CACHE_MILLIS,
+                now + when {
+                    // Partial: what did answer is worth keeping briefly, but the missing provider
+                    // should be asked again soon rather than in a quarter of an hour.
+                    unreachable.isNotEmpty() -> PARTIAL_STREAM_CACHE_MILLIS
+                    result.isEmpty() -> EMPTY_STREAM_CACHE_MILLIS
+                    else -> STREAM_CACHE_MILLIS
+                },
             )
         }
         return result
+    }
+
+    private suspend fun askForStreams(
+        addon: AddonEntry,
+        type: MediaType,
+        stremioId: String,
+    ): ProviderAnswer {
+        val outcome = withTimeoutOrNull(ADDON_REQUEST_TIMEOUT_MS) {
+            runCatching { fetchStreams(addon, type, stremioId) }.onFailure {
+                if (it is CancellationException) throw it
+            }
+        }
+        val error = when {
+            outcome == null -> IllegalStateException("no answer within ${ADDON_REQUEST_TIMEOUT_MS / 1_000}s")
+            outcome.isFailure -> outcome.exceptionOrNull()
+            else -> null
+        }
+        if (error != null) {
+            onProviderError(addon, error)
+            return ProviderAnswer(addon, emptyList(), failed = true)
+        }
+        return ProviderAnswer(addon, outcome?.getOrNull().orEmpty(), failed = false)
     }
 
     suspend fun subtitles(type: MediaType, stremioId: String): List<AddonSubtitle> = coroutineScope {
@@ -615,8 +642,19 @@ class AddonManager(
 
 private data class CachedAddonStreams(val streams: List<AddonStream>, val expiresAt: Long)
 
+private class ProviderAnswer(val addon: AddonEntry, val streams: List<AddonStream>, val failed: Boolean)
+
+/**
+ * No streams were returned and at least one provider could not answer: a network outage,
+ * DNS failure, refused VPN exit or timeout is not a successful empty listing.
+ */
+class AddonsUnreachableException(val addons: List<String>) : RuntimeException(
+    "Couldn't reach ${addons.joinToString(", ")}. Check your connection or VPN and try again.",
+)
+
 private const val STREAM_CACHE_MILLIS = 15 * 60 * 1_000L
 private const val EMPTY_STREAM_CACHE_MILLIS = 2 * 60 * 1_000L
+private const val PARTIAL_STREAM_CACHE_MILLIS = 30 * 1_000L
 
 internal data class AddonSyncSnapshot(
     val entries: List<AddonEntry>,

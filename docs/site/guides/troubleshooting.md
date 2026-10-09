@@ -47,6 +47,14 @@ Try another source manually, then a lower quality. If hardware decoding fails an
 
 For a torrent, record seeders, selected file, and whether buffering progresses. For a direct stream, record whether it fails before playback, during probing, or after a repeatable amount of time. Do not publish the complete stream URL when it contains a token.
 
+## Switching a VPN or exit node
+
+On desktop, the torrent engine checks for changes to the system's public-internet route every few seconds and attempts to reconnect when it changes. A source that finds no peers right after a switch is not declared dead until the network has settled. Recovery still depends on the VPN, provider and peers; split-tunnel or destination-specific routes may not be detected. This is connection recovery, not a VPN kill switch. Use your VPN's own protection if traffic must never leave its tunnel.
+
+When no provider addon can be reached, for example because the network is down or a provider refuses your VPN's exit address, Cove says so and names the addons instead of reporting that no sources exist. Nothing from that failed attempt is cached, so **Try again** asks the providers again. Home and Explore retry by themselves after a failed start.
+
+If one addon keeps failing only while a VPN is on, its service may block that exit. Try another exit location or test with the VPN off.
+
 ## Playback stutters or drops frames
 
 - Compare a lower resolution or bitrate from the same provider.

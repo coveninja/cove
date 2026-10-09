@@ -35,7 +35,8 @@ internal class AndroidJlibtorrentPlaybackEngine(
     private val journal: TorrentCacheJournal? = null,
 ) : TorrentPlaybackEngine {
     private val startMutex = Mutex()
-    private val torrentMutex = Mutex()
+    /** One lock per torrent, so a dead source's metadata wait does not stall every other open. */
+    private val torrentLocks = ConcurrentHashMap<String, Mutex>()
     private var manager: SessionManager? = null
     private val torrents = ConcurrentHashMap<String, ManagedTorrent>()
     private val resources = ConcurrentHashMap<String, ManagedResource>()
@@ -59,7 +60,7 @@ internal class AndroidJlibtorrentPlaybackEngine(
         require(season == null || season >= 0) { "season must not be negative" }
         require(episode == null || episode > 0) { "episode must be positive" }
         val canonical = hash.lowercase()
-        val torrent = torrents[canonical] ?: torrentMutex.withLock {
+        val torrent = torrents[canonical] ?: torrentLocks.computeIfAbsent(canonical) { Mutex() }.withLock {
             torrents[canonical] ?: loadTorrent(canonical).also { torrents[canonical] = it }
         }
         val selected = selectTorrentFile(torrent.files, season, episode, fileIndex)
@@ -280,9 +281,22 @@ internal class AndroidJlibtorrentPlaybackEngine(
             }
             found
         }
+        // Not left to libtorrent's queue, which runs three downloads at a time and could hold the
+        // one being watched behind earlier sources.
+        runCatching {
+            handle.unsetFlags(TorrentFlags.AUTO_MANAGED)
+            handle.resume()
+        }
         // The metadata now arrives on the handle that is already talking to peers, rather than
         // on a throwaway one.
-        val info = cached ?: awaitTorrentMetadata(handle, hash, cachedMetadata)
+        val info = cached ?: try {
+            awaitTorrentMetadata(handle, hash, cachedMetadata)
+        } catch (failure: Throwable) {
+            // Not kept searching in the background, and never left to download a whole torrent
+            // nobody is watching should its metadata turn up later.
+            runCatching { session.remove(handle) }
+            throw failure
+        }
         val storage = info.files()
         val files = (0 until storage.numFiles()).map { index ->
             TorrentFile(index, storage.filePath(index), storage.fileSize(index))

@@ -421,6 +421,18 @@ private fun playbackTest(
 }
 
 class PlaybackSessionTest {
+    @Test
+    fun `trying again looks the sources up afresh`() = playbackTest(sources = emptyList()) { h ->
+        h.session.open(movie())
+        runCurrent()
+        assertTrue(h.session.phase is PlaybackPhase.Failed)
+
+        h.session.retry()
+        runCurrent()
+
+        assertEquals(1, h.playback.refreshRequests, "retry reused a listing that may have been cached during an outage")
+    }
+
 
     @Test
     fun `a series never watched starts at season one episode one`() = playbackTest { h ->

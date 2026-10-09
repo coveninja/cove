@@ -28,6 +28,8 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 
 class TmdbClient(
@@ -150,10 +152,23 @@ class TmdbClient(
 
     override suspend fun imdbId(id: Int, type: MediaType): String {
         require(id > 0) { "media id must be positive" }
+        val key = type to id
+        imdbIdLock.withLock { imdbIds[key] }?.let { return it }
         val result = request<TmdbExternalIds>("/${type.wireName}/$id/external_ids", "en-US")
-        return result.imdbId.takeIf(String::isNotBlank)
+        val imdbId = result.imdbId.takeIf(String::isNotBlank)
             ?: throw TmdbException("TMDB returned no IMDb id for /${type.wireName}/$id")
+        imdbIdLock.withLock {
+            imdbIds[key] = imdbId
+            while (imdbIds.size > IMDB_ID_CACHE_SIZE) imdbIds.remove(imdbIds.keys.first())
+        }
+        return imdbId
     }
+
+    // An IMDb id never changes, and every source listing, subtitle fetch and prefetch asks for
+    // it again. Remembered so a moment of failing DNS cannot fail a listing that only needed an
+    // answer already fetched minutes earlier.
+    private val imdbIds = LinkedHashMap<Pair<MediaType, Int>, String>()
+    private val imdbIdLock = Mutex()
 
     suspend fun keywordSuggestions(query: String): List<MediaKeyword> {
         require(query.isNotBlank()) { "keyword query is required" }
@@ -366,6 +381,8 @@ private data class TmdbExternalIds(
 
 @Serializable
 private data class TmdbGenres(val genres: List<MediaGenre> = emptyList())
+
+private const val IMDB_ID_CACHE_SIZE = 512
 
 @Serializable
 private data class TmdbFind(

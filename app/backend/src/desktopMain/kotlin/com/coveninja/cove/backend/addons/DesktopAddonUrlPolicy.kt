@@ -2,10 +2,14 @@ package com.coveninja.cove.backend.addons
 
 import java.net.InetAddress
 import java.net.URI
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 val DesktopAddonUrlPolicy = AddonUrlPolicy { raw ->
     BasicAddonUrlPolicy.validate(raw)
-    validateResolvedPublicUrl(raw)
+    // A DNS lookup blocks its thread, and Home and Explore load addon catalog rows from the UI
+    // dispatcher: with DNS stalling while a VPN reconnects, the whole window froze with it.
+    withContext(Dispatchers.IO) { validateResolvedPublicUrl(raw) }
 }
 
 internal fun validateResolvedPublicUrl(raw: String) {
