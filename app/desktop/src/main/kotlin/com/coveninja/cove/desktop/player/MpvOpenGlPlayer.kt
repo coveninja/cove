@@ -81,8 +81,11 @@ class MpvOpenGlPlayer(
             setOption(library, created, "keep-open", "yes")
             setOption(library, created, "volume-max", MAX_VOLUME.toInt().toString())
             // As in MpvSoftwarePlayer: libmpv defaults this off, and without it
-            // --play cannot be handed a page URL.
-            setOption(library, created, "ytdl", "yes")
+            // --play cannot be handed a page URL. A libmpv without Lua has no such
+            // option, and that must not stop an ordinary file from playing.
+            if (library.mpv_set_option_string(created, "ytdl", "yes") < 0) {
+                System.err.println("Cove mpv: this libmpv has no ytdl hook; page URLs will not open")
+            }
             // OpenGL path: enable hardware decode. mpv will fall back to software
             // automatically if the GPU driver does not support the codec.
             setOption(library, created, "hwdec",     "auto-safe")

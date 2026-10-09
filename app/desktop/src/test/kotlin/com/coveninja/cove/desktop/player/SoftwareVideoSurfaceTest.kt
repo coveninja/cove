@@ -8,18 +8,20 @@ import kotlin.test.assertTrue
 class SoftwareVideoSurfaceTest {
 
     @Test
-    fun `mpv bgr0 pixels are visible to Skia without a conversion image`() {
+    fun `mpv rgb0 padding never becomes transparency or changes colors`() {
         SoftwareVideoSurface().use { surface ->
-            surface.render(width = 2, height = 1) { pixels, stride ->
-                assertTrue(stride >= 2 * Int.SIZE_BYTES)
-                // bgr0 bytes for #123456. OPAQUE makes Skia supply the alpha.
-                pixels.setByte(0, 0x56.toByte())
-                pixels.setByte(1, 0x34.toByte())
-                pixels.setByte(2, 0x12.toByte())
-                pixels.setByte(3, 0)
-            }
+            for (padding in listOf(0, 0x55, 0xff)) {
+                surface.render(width = 2, height = 1) { pixels, stride ->
+                    assertTrue(stride >= 2 * Int.SIZE_BYTES)
+                    // mpv does not define the fourth byte. Every possible alpha
+                    // interpretation must still produce the same opaque colors.
+                    pixels.write(0, byteArrayOf(0x12, 0x34, 0x56, padding.toByte()), 0, 4)
+                    pixels.write(4, byteArrayOf(0, 0, 0, padding.toByte()), 0, 4)
+                }
 
-            assertEquals(0x123456, surface.colorAt(0, 0) and 0x00ffffff)
+                assertEquals(0xff123456.toInt(), surface.colorAt(0, 0), "padding=$padding")
+                assertEquals(0xff000000.toInt(), surface.colorAt(1, 0), "black padding=$padding")
+            }
         }
     }
 

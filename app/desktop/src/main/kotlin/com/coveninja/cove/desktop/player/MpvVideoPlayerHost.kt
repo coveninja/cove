@@ -8,6 +8,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import com.coveninja.cove.shared.network.CoveJson
@@ -73,6 +74,14 @@ class MpvVideoPlayerHost(
 
     private val _status = MutableStateFlow(PlaybackStatus())
     override val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
+
+    /**
+     * Whether the window is drawn on the GPU, which decides who enlarges a picture smaller than
+     * its surface: the GPU when this is true, mpv's software scaler otherwise. Set by the window
+     * once it knows; read when a session's player is created.
+     */
+    @Volatile
+    var gpuComposited: Boolean = false
 
     private val _nowPlaying = MutableStateFlow<NowPlaying?>(null)
     override val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
@@ -390,7 +399,7 @@ class MpvVideoPlayerHost(
      * error would all sit behind an opaque black rectangle. The software render
      * target keeps one compositor in charge of the entire window. mpv now writes
      * directly into one persistent Skia bitmap, avoiding the former AWT and
-     * per-pixel Compose conversions; decoding stays on the GPU via hwdec=auto-copy.
+     * per-pixel Compose conversions; decoding stays on the GPU via copy-back hwdec.
      *
      * The OpenGL path is still the right choice for --play, which is a bare
      * window with nothing drawn on top; see StandalonePlayerWindow.
@@ -426,6 +435,7 @@ class MpvVideoPlayerHost(
             frame?.draw(
                 scope = this,
                 destination = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                upscaling = if (gpuComposited) FilterQuality.High else FilterQuality.Low,
             )
         }
     }
@@ -439,6 +449,7 @@ class MpvVideoPlayerHost(
     @Synchronized
     private fun obtainPlayer(): MpvSoftwarePlayer = owned ?: MpvSoftwarePlayer(
         hardwareDecoding = !softwareDecoding,
+        upscaleOnGpu = gpuComposited,
         ytdlSearchPath = ytDlp?.let { ytdlSearchPath(it.managedPath, System.getProperty("os.name").orEmpty()) },
         ytdlFormat = ytDlp?.let { YTDL_FORMAT },
         ytdlRawOptions = ytDlp?.let { ytdlRawOptions(firstOnPath(JS_RUNTIMES)) },
@@ -548,10 +559,11 @@ private fun DesktopPlayer.applyPreferences(preferences: PlaybackPreferences) {
     setOption("sid", if (preferences.subtitlesEnabled) "auto" else "no")
     setOption("mute", if (preferences.startMuted) "yes" else "no")
     applySubtitleStyle(preferences.subtitleStyle)
-    // auto-copy, not auto: this path reads finished frames back into system memory
-    // for Compose to draw, and a decoder that keeps its output on the GPU has nothing
-    // to hand over. mpv falls back to software on its own where copy-back is missing.
-    setOption("hwdec", if (preferences.hardwareDecoding) "auto-copy" else "no")
+    // Copy-back decoders, not auto: this path reads finished frames back into system
+    // memory for Compose to draw, and a decoder that keeps its output on the GPU has
+    // nothing to hand over. mpv falls back to software on its own where none of them
+    // takes the file. See COPY_BACK_DECODERS for why the list is spelled out.
+    setOption("hwdec", if (preferences.hardwareDecoding) COPY_BACK_DECODERS else "no")
 
     // Empty is mpv's own auto-safe, and it has to be spelled out rather than skipped:
     // this is a long-lived handle, so leaving the option alone would keep whatever the

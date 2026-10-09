@@ -382,7 +382,7 @@ internal fun RankedBars(
     val reveal = rememberChartReveal(bars)
     // A slow highlight travelling along the top bar. Only the leader gets it — it marks
     // first place without a badge, and on every bar it would just be noise.
-    val sheen = rememberSweep(durationMillis = 2_600, label = "RankedSheen")
+    val sheen = rememberSweep(durationMillis = 2_600)
 
     val summary = "Ranked: " + bars.joinToString(", ") { it.name } + "."
 

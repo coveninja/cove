@@ -1,12 +1,7 @@
 package com.coveninja.cove.ui.pages.mylist
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -52,8 +47,9 @@ import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.components.common.CoveAsyncImage
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.model.tmdbImageSize
-import com.coveninja.cove.ui.state.LocalMotionPolicy
 import com.coveninja.cove.ui.platform.hasPointerHover
+import com.coveninja.cove.ui.state.LocalMotionPolicy
+import com.coveninja.cove.ui.state.rememberBackdropPush
 import kotlin.math.roundToInt
 
 /**
@@ -91,23 +87,9 @@ fun MyListHero(
             },
             label = "MyListHeroBackdrop",
         ) { image ->
-            // A slow drift keeps a still frame from reading as a broken image while the
+            // A slow push keeps a still frame from reading as a broken image while the
             // rest of the page animates around it.
-            val scale = if (reducedMotion) {
-                1f
-            } else {
-                val drift = rememberInfiniteTransition(label = "MyListHeroDrift")
-                val animatedScale by drift.animateFloat(
-                    initialValue = 1f,
-                    targetValue = 1.06f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(durationMillis = 22_000, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse,
-                    ),
-                    label = "MyListHeroScale",
-                )
-                animatedScale
-            }
+            val scale = rememberBackdropPush(scaleTo = 1.06f, durationMillis = 22_000)
 
             CoveAsyncImage(
                 model = tmdbImageSize(image, "w1280"),

@@ -105,6 +105,21 @@ internal fun controlsLayout(width: Dp, pointerHover: Boolean): ControlsLayout = 
 /** Chapter divisions: a hairline, because there can be dozens on a feature film. */
 private val CHAPTER_MARK_WIDTH = 2.dp
 
+/** The read-ahead shimmer's sweep, 0..1 every 1.6 s. */
+@Composable
+private fun bufferShimmer(): Float {
+    val shimmerTransition = rememberInfiniteTransition(label = "BufferShimmer")
+    val shimmer by shimmerTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+        ),
+        label = "BufferShimmerSweep",
+    )
+    return shimmer
+}
+
 /**
  * A highlight travelling along the buffered stretch, positioned by [sweep] (0..1).
  *
@@ -652,17 +667,11 @@ private fun SegmentedSeekBar(
         }
         val playedSeconds = shown * durationSeconds
 
-        // Animate only while the cache is growing.
+        // Animate only while the cache is growing. The transition itself is only composed
+        // then too: running whenever the bar was on screen, it repainted the window at the
+        // display's refresh rate for as long as a paused film sat with its controls up.
         val filling = buffering
-        val shimmerTransition = rememberInfiniteTransition(label = "BufferShimmer")
-        val shimmer by shimmerTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1600, easing = LinearEasing),
-            ),
-            label = "BufferShimmerSweep",
-        )
+        val shimmer = if (filling) bufferShimmer() else 0f
 
         if (chunks.isEmpty()) {
             Box(

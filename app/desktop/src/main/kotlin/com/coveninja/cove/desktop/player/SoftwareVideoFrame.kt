@@ -1,5 +1,6 @@
 package com.coveninja.cove.desktop.player
 
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -27,18 +28,19 @@ internal data class SoftwareVideoFrame(
     val size: IntSize
         get() = surface.contentSize
 
-    fun draw(scope: DrawScope, destination: IntSize) {
-        surface.draw(scope, destination)
+    fun draw(scope: DrawScope, destination: IntSize, upscaling: FilterQuality = FilterQuality.Low) {
+        surface.draw(scope, destination, upscaling)
     }
 }
 
 /**
  * Skia-owned pixels shared by libmpv's software renderer and Compose.
  *
- * mpv's `bgr0` bytes are exactly Skia's little-endian BGRA layout when the
- * bitmap is declared opaque. Rendering straight into this memory removes the
- * old frame-sized direct-buffer -> BufferedImage copy and Compose's second,
- * per-pixel BufferedImage -> Skia conversion.
+ * mpv's `rgb0` bytes match Skia's RGB_888X layout: three color bytes and an
+ * unused byte. That last byte is unspecified by mpv, so the color type must
+ * ignore it. BGRA_8888 with OPAQUE only promises that alpha is already 255;
+ * it does not supply alpha, and Metal blends the garbage byte into the window.
+ * RGB_888X keeps frames opaque without a per-pixel conversion or another copy.
  *
  * Both native writes and Compose reads hold [monitor]. That keeps a single
  * bounded allocation safe: mpv cannot overwrite pixels while Skia is drawing
@@ -90,7 +92,13 @@ internal class SoftwareVideoSurface : AutoCloseable {
         }
     }
 
-    fun draw(scope: DrawScope, destination: IntSize) {
+    /**
+     * [upscaling] applies only when the frame is smaller than [destination], which is how a
+     * picture rendered at its own resolution reaches a larger surface. At the same size there
+     * is nothing to filter, and a frame momentarily out of step with a resize is not worth more
+     * than the cheapest filter.
+     */
+    fun draw(scope: DrawScope, destination: IntSize, upscaling: FilterQuality = FilterQuality.Low) {
         if (destination.width <= 0 || destination.height <= 0) return
         synchronized(monitor) {
             val current = image ?: return
@@ -102,6 +110,11 @@ internal class SoftwareVideoSurface : AutoCloseable {
                     srcSize = IntSize(width, height),
                     dstOffset = IntOffset.Zero,
                     dstSize = destination,
+                    filterQuality = if (width < destination.width && height < destination.height) {
+                        upscaling
+                    } else {
+                        FilterQuality.Low
+                    },
                 )
             }
         }
@@ -136,7 +149,7 @@ internal class SoftwareVideoSurface : AutoCloseable {
         val info = ImageInfo(
             nextWidth,
             nextHeight,
-            ColorType.BGRA_8888,
+            ColorType.RGB_888X,
             ColorAlphaType.OPAQUE,
             ColorSpace.sRGB,
         )

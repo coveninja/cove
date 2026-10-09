@@ -111,7 +111,7 @@ jobs:
           scripts/apt-install.sh libmpv-dev flatpak flatpak-builder
           sudo flatpak remote-add --system --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y --noninteractive flathub \
-            org.freedesktop.Sdk//24.08 org.freedesktop.Platform//24.08
+            org.freedesktop.Sdk//25.08 org.freedesktop.Platform//25.08
       - name: Build Compose Desktop distributable
         env:
           UPDATE_PUBLIC_KEYS: ${{ needs.update-key.outputs.public_keys }}

@@ -54,7 +54,7 @@ internal fun PosterWall(
     }
     if (usable.isEmpty()) return
 
-    val drift = rememberDrift(durationMillis = 42_000, label = "PosterWall")
+    val drift = rememberDrift(durationMillis = 42_000)
 
     BoxWithConstraints(modifier = modifier.clipToBounds()) {
         // One tile of travel plus one of overhang, so the drift never exposes the end of
