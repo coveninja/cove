@@ -1,0 +1,24 @@
+-- Remembers which source was played for a title, so resuming from the continue-watching row
+-- opens the release the viewer already chose instead of resolving and ranking from scratch.
+-- Purely local, like track_memory: there is no upstream counterpart, so it is deliberately
+-- absent from PROFILE_CHILD_TABLES and from the sync participants.
+CREATE TABLE source_memory (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    tmdb_id INTEGER NOT NULL,
+    -- -1 for a film, and for the per-title row a later episode of a series reads. A season
+    -- and episode of their own make the exact row, which is the one allowed to skip the
+    -- picker: it names the very file that was played, where the title row names only a
+    -- provider and a quality to prefer.
+    season INTEGER NOT NULL,
+    episode INTEGER NOT NULL,
+    -- What identifies the release across two listings. Not a URL: several providers mint a
+    -- playback link per request, so the address is the one part guaranteed to be stale by the
+    -- time this is read, and matching on it would quietly find nothing every time.
+    release_key TEXT NOT NULL,
+    addon_name TEXT NOT NULL DEFAULT '',
+    quality TEXT NOT NULL DEFAULT '',
+    -- Only to say in the picker which row was the last one used.
+    display_name TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (profile_id, tmdb_id, season, episode)
+);

@@ -31,6 +31,8 @@ class AppGraph(
     val storage: StorageRepository = UnavailableStorageRepository,
     /** Per-title track choices. Device-local, like [device] and [storage], and never synced. */
     val trackMemory: TrackMemoryRepository = UnavailableTrackMemoryRepository,
+    /** Which source each title was last played from. Device-local for the same reasons. */
+    val sourceMemory: SourceMemoryRepository = UnavailableSourceMemoryRepository,
     val plugins: PluginRepository = UnavailablePluginRepository,
     /**
      * True when every repository above is a canned fixture rather than a live backend.

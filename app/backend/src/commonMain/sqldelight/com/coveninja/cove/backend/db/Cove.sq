@@ -267,6 +267,25 @@ CREATE TABLE track_memory (
     PRIMARY KEY (profile_id, tmdb_id)
 );
 
+-- Which source was played for a title, so resuming opens the release the viewer chose rather
+-- than whatever now ranks first. Keyed per episode, with season and episode of -1 holding the
+-- per-title answer a later episode of a series reads. Device-local — it describes what played
+-- well on this connection, and a 4K remux chosen on a desktop is not advice for a phone.
+CREATE TABLE source_memory (
+    profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    tmdb_id INTEGER NOT NULL,
+    season INTEGER NOT NULL,
+    episode INTEGER NOT NULL,
+    -- The release rather than its address: a provider that mints a playback link per request
+    -- answers the next listing with a different URL for the same file.
+    release_key TEXT NOT NULL,
+    addon_name TEXT NOT NULL DEFAULT '',
+    quality TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (profile_id, tmdb_id, season, episode)
+);
+
 selectMigrationMetadata:
 SELECT value FROM migration_metadata WHERE key = ?;
 
@@ -636,3 +655,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?);
 
 deleteTrackMemory:
 DELETE FROM track_memory WHERE profile_id = ? AND tmdb_id = ?;
+
+selectSourceMemory:
+SELECT * FROM source_memory
+WHERE profile_id = ? AND tmdb_id = ? AND season = ? AND episode = ?;
+
+upsertSourceMemory:
+INSERT OR REPLACE INTO source_memory(
+    profile_id, tmdb_id, season, episode, release_key, addon_name, quality, display_name, updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteSourceMemory:
+DELETE FROM source_memory
+WHERE profile_id = ? AND tmdb_id = ? AND season = ? AND episode = ?;

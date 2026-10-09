@@ -14,6 +14,7 @@ import com.coveninja.cove.shared.data.AppGraph
 import com.coveninja.cove.shared.data.LibraryState
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.data.SourceMemory
 import com.coveninja.cove.shared.data.TrackMemory
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
@@ -40,6 +41,23 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.Instant
+
+/**
+ * The two answers the source memory can give about one request.
+ *
+ * [exact] names the release this very episode was played from, and is the only one allowed to
+ * skip the picker. [forTitle] is the last release played for the title at all, which for the
+ * next episode of a series is a provider and a quality worth leading with rather than a file
+ * that exists.
+ */
+private data class RememberedSource(
+    val exact: SourceMemory,
+    val forTitle: SourceMemory,
+) {
+    companion object {
+        val None = RememberedSource(SourceMemory.None, SourceMemory.None)
+    }
+}
 
 /** What is being played: a movie, one episode of a series, or an extra. */
 data class PlaybackRequest(
@@ -264,6 +282,14 @@ class PlaybackSession(
     /** Where the last automatic reconnect resumed from; the yardstick for [automaticRetryAllowed]. */
     private var lastRecoveryPositionSeconds = 0.0
 
+    /**
+     * Whether this source has already been given its one re-listing after a failed reload.
+     *
+     * Spent once per source rather than once per interruption, because the fan-out it costs
+     * is the reason the automatic reconnect does not re-list in the first place.
+     */
+    private var urlRefreshAttempted = false
+
     // Kept so a source that dies can be stepped over without resolving again.
     // Named apart from the lambda parameter it would otherwise shadow.
     private var resolvedCandidates: List<StreamChoice> = emptyList()
@@ -410,7 +436,7 @@ class PlaybackSession(
                 // Keep the source-ranking order within each compatibility tier,
                 // but never put a software-only or impossible stream ahead of a
                 // source Android can hardware-decode (or whose codec is unknown).
-                val choices = checked
+                val tiered = checked
                     .map { source ->
                         StreamChoice(
                             source = source,
@@ -418,6 +444,17 @@ class PlaybackSession(
                         )
                     }
                     .sortedBy { choice -> choice.compatibility.selectionPriority() }
+
+                // What was played last time, if anything, and if the viewer wants it honoured.
+                val memory = rememberedSourceFor(resolved, settings)
+                if (token != generation) return@onSuccess
+                // The exact release of the exact episode: the viewer has already answered the
+                // picker's question for this file, so resuming it asks nothing — which is the
+                // whole point of remembering, and why this holds even with "pick a source
+                // automatically" off. A later episode has no such answer; there the memory only
+                // reorders, and autoSelectStream still decides whether to ask.
+                val exact = tiered.matchingRemembered(memory.exact)
+                val choices = tiered.promoteRemembered(memory.forTitle)
                 resolvedCandidates = choices
                 val automaticCandidates = choices.filter { it.compatibility.automaticallyEligible }
                 when {
@@ -428,6 +465,7 @@ class PlaybackSession(
                     // An explicit "choose a source" always asks, even for one result:
                     // the point of that entry point is to see what is on offer.
                     forcePicker -> phase = PlaybackPhase.Choosing(choices)
+                    exact != null -> startPlayback(exact.source, token)
                     // A lone compatible candidate is not a choice. A lone
                     // software-only or unsupported one must still be explained
                     // in the picker rather than silently started.
@@ -588,6 +626,9 @@ class PlaybackSession(
     fun failoverToNextSource(): Boolean {
         val playing = phase as? PlaybackPhase.Playing ?: return false
         failedSources += playing.source.identityKey()
+        // Before anything else: a release that would not open must not be the one the next
+        // resume reaches for, or the memory turns a single bad source into a permanent one.
+        forgetSource(playing.source)
         val next = resolvedCandidates.firstOrNull {
             it.compatibility.automaticallyEligible && it.source.identityKey() !in failedSources
         } ?: return false
@@ -651,6 +692,77 @@ class PlaybackSession(
 
     fun rememberSpeed(speed: Double) {
         updateMemory { it.copy(speed = speed) }
+    }
+
+    private fun settingsNow(): AppSettings? =
+        (graph.settings.settings.value as? SettingsState.Ready)?.settings
+
+    /** Off means the memory is neither read nor written — see AppSettings.rememberStreamSource. */
+    private fun rememberStreamSource(): Boolean = settingsNow()?.rememberStreamSource != false
+
+    /**
+     * What was last played for this request: the exact episode, and the title as a whole.
+     *
+     * A film has only one row, so the two are the same answer and it is read once.
+     */
+    private suspend fun rememberedSourceFor(
+        current: PlaybackRequest,
+        settings: AppSettings?,
+    ): RememberedSource {
+        if (current.extra != null) return RememberedSource.None
+        if (settings?.rememberStreamSource == false) return RememberedSource.None
+        val exact = runCatching {
+            graph.sourceMemory.read(current.media.tmdbId, current.season, current.episode)
+        }.getOrDefault(SourceMemory.None)
+        val forTitle = if (current.season == null && current.episode == null) {
+            exact
+        } else {
+            runCatching { graph.sourceMemory.read(current.media.tmdbId, null, null) }
+                .getOrDefault(SourceMemory.None)
+        }
+        return RememberedSource(exact = exact, forTitle = forTitle)
+    }
+
+    private fun rememberSource(current: PlaybackRequest, source: StreamSource) {
+        if (current.extra != null) return
+        if (!rememberStreamSource()) return
+        val memory = source.toSourceMemory()
+        if (memory.isEmpty) return
+        scope.launch {
+            runCatching {
+                graph.sourceMemory.write(current.media.tmdbId, current.season, current.episode, memory)
+                // The title-wide row is what the *next* episode reads. A film is already that
+                // row, so writing it twice would only repeat the same statement.
+                if (current.season != null || current.episode != null) {
+                    graph.sourceMemory.write(current.media.tmdbId, null, null, memory)
+                }
+            }
+        }
+    }
+
+    /**
+     * Forgets a remembered source, but only if it is the one being forgotten about.
+     *
+     * The guard matters: a failover steps through several candidates, and clearing the row for
+     * each of them would throw away the choice that is about to be recorded by whichever one
+     * finally plays.
+     */
+    private fun forgetSource(source: StreamSource) {
+        val current = request ?: return
+        if (current.extra != null) return
+        val key = source.releaseKey()
+        scope.launch {
+            runCatching {
+                if (graph.sourceMemory.read(current.media.tmdbId, current.season, current.episode)
+                        .releaseKey == key
+                ) {
+                    graph.sourceMemory.forget(current.media.tmdbId, current.season, current.episode)
+                }
+                if (graph.sourceMemory.read(current.media.tmdbId, null, null).releaseKey == key) {
+                    graph.sourceMemory.forget(current.media.tmdbId, null, null)
+                }
+            }
+        }
     }
 
     private fun updateMemory(change: (TrackMemory) -> TrackMemory) {
@@ -717,6 +829,11 @@ class PlaybackSession(
         }
 
         phase = PlaybackPhase.Playing(source, url)
+        // Recorded here rather than only from the picker, and deliberately: what this is for is
+        // resuming the same file, and whether it was chosen by hand or by the ranking makes no
+        // difference to that. A source that then fails to open is forgotten again by
+        // [failoverToNextSource], so the memory ends up holding whatever actually played.
+        rememberSource(current, source)
 
         // The picker opens on whatever is playing, and is free to be pointed
         // elsewhere afterwards without disturbing playback.
@@ -897,12 +1014,24 @@ class PlaybackSession(
      * this source in it, leaves the button no worse than it was.
      */
     fun retryCurrentSource() {
+        val position = host?.status?.value?.positionSeconds?.takeIf { it.isFinite() && it >= 0.0 }
+            ?: interruptionPositionSeconds
+        relistAndReload(position)
+    }
+
+    /**
+     * Re-lists the sources and reloads this release from [startPositionSeconds].
+     *
+     * Separate from [retryCurrentSource] because the automatic path knows where playback
+     * actually stopped and the button does not: a load that failed leaves the player reporting
+     * whatever position it was told to open at, which is close enough for a viewer pressing
+     * retry and not something to infer when the real figure is in hand.
+     */
+    private fun relistAndReload(startPositionSeconds: Double) {
         val current = request ?: return
         val playing = phase as? PlaybackPhase.Playing ?: return
         val player = host ?: return
-        val start = player.status.value.positionSeconds
-            .takeIf { it.isFinite() && it >= 0.0 }
-            ?: interruptionPositionSeconds
+        val start = startPositionSeconds.coerceAtLeast(0.0)
 
         // An extra has no source list behind it, so there is nothing to resolve — and
         // resolving one would replace the trailer with the film, as in reopenSources().
@@ -971,6 +1100,7 @@ class PlaybackSession(
             .filter { !it.url.isNullOrBlank() || !it.infoHash.isNullOrBlank() }
             .map { StreamChoice(it, it.compatibilityWith(playerCodecCapabilities())) }
             .sortedBy { choice -> choice.compatibility.selectionPriority() }
+            .promoteRemembered(rememberedSourceFor(current, settingsNow()).forTitle)
         phase = PlaybackPhase.Playing(found, url)
         return url
     }
@@ -1025,8 +1155,21 @@ class PlaybackSession(
                         }
                     }
                     reconnecting && status.error != null -> {
-                        reconnecting = false
-                        recoveryFailed = true
+                        // The reload failed on the same URL, which for a provider that mints
+                        // a playback link per request is the expected outcome: that address
+                        // is dead for good and no number of reloads will revive it. So the
+                        // last automatic act is the one the manual retry button does —
+                        // re-list, and reload whatever address this release has now. Once
+                        // per source; after that the viewer is told and chooses.
+                        if (!urlRefreshAttempted && request?.extra == null &&
+                            phase is PlaybackPhase.Playing
+                        ) {
+                            urlRefreshAttempted = true
+                            relistAndReload(interruptionPositionSeconds)
+                        } else {
+                            reconnecting = false
+                            recoveryFailed = true
+                        }
                     }
                     reconnecting && status.hasMedia -> {
                         reconnecting = false
@@ -1050,6 +1193,7 @@ class PlaybackSession(
         automaticRetriesUsed = 0
         interruptionPositionSeconds = 0.0
         lastRecoveryPositionSeconds = 0.0
+        urlRefreshAttempted = false
         reconnecting = false
         recoveryFailed = false
     }

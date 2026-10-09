@@ -55,6 +55,7 @@ import com.coveninja.cove.ui.state.PlaybackPhase
 import com.coveninja.cove.ui.state.PlaybackPresentation
 import com.coveninja.cove.ui.state.PlaybackSession
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.STREAM_STOPPED_EARLY_MESSAGE
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -162,7 +163,7 @@ fun InlineVideoPlayer(
                         message = "Reconnecting…",
                     )
                     status.interrupted || session.recoveryFailed -> InlineFailure(
-                        message = "The stream stopped before the end.",
+                        message = STREAM_STOPPED_EARLY_MESSAGE,
                         onRetry = session::retryCurrentSource,
                         onOpenInBrowser = request.extra?.url?.let { url ->
                             { runCatching { uriHandler.openUri(url) }.let { } }

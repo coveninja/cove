@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.state
 
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.describedText
 
 /** Settings value meaning "whatever the title was made in". */
 const val AUDIO_LANGUAGE_ORIGINAL = "original"
@@ -21,7 +22,7 @@ data class AudioHints(
     val isEmpty: Boolean get() = languages.isEmpty() && !multi
 }
 
-internal fun StreamSource.audioHints(): AudioHints = parseAudioHints("${name.orEmpty()} ${title.orEmpty()}")
+internal fun StreamSource.audioHints(): AudioHints = parseAudioHints(describedText())
 
 internal fun parseAudioHints(text: String): AudioHints {
     // Tokens only, so a language name inside another word cannot match, and

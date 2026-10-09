@@ -251,6 +251,13 @@ private fun PlaybackRows(settings: AppSettings, editor: SettingsEditor) {
         onActivate = { editor.edit { copy(autoSelectStream = !autoSelectStream) } },
     )
     TvSettingRow(
+        label = "Remember the source you picked",
+        detail = "Resuming plays from the same source; a new episode leads with it.",
+        value = onOff(settings.rememberStreamSource),
+        highlighted = settings.rememberStreamSource,
+        onActivate = { editor.edit { copy(rememberStreamSource = !rememberStreamSource) } },
+    )
+    TvSettingRow(
         label = "Selection preference",
         detail = "How sources are ranked when Cove picks for you.",
         value = streamSelectionLabel(settings.streamSelectionMode),

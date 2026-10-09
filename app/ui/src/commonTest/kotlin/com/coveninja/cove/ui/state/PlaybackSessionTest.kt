@@ -14,6 +14,7 @@ import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.shared.data.SettingsRepository
 import com.coveninja.cove.shared.data.SettingsState
 import com.coveninja.cove.shared.fixture.FixtureAppGraph
+import com.coveninja.cove.shared.fixture.FixtureSourceMemoryRepository
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
@@ -380,6 +381,7 @@ private class Harness(
 ) {
     val library = FakeLibrary()
     val playback = FakePlayback(sources)
+    val sourceMemory = FixtureSourceMemoryRepository()
     val host = FakeHost()
         .also { it.videoCodecCapabilities = capabilities }
     // The addon repository plays no part in playback resolution; the fixture one
@@ -390,6 +392,7 @@ private class Harness(
         FakeSettings(settings),
         playback,
         FixtureAppGraph().addons,
+        sourceMemory = sourceMemory,
     )
     val scope = CoroutineScope(StandardTestDispatcher(scheduler))
     val session by lazy { PlaybackSession(graph, scope, host) }
@@ -914,12 +917,24 @@ class PlaybackSessionTest {
             runCurrent()
             assertTrue(h.session.reconnecting)
 
+            // The reload failed on the URL it already had, which for a provider that mints a
+            // playback link per request is the expected outcome rather than a dead source. One
+            // re-listing is spent before the viewer is told — the same thing the retry button
+            // does, and the only thing that can produce a working address.
+            h.host.reportError("The selected stream could not be opened.")
+            runCurrent()
+            assertTrue(h.session.reconnecting)
+            assertEquals(3, h.host.loads.size)
+            assertEquals(400.0, h.host.loads.last().second)
+
+            // And then it stops. The budget is one per source, so a provider that is simply
+            // down cannot turn into a listing loop.
             h.host.reportError("The selected stream could not be opened.")
             runCurrent()
 
             assertTrue(!h.session.reconnecting)
             assertTrue(h.session.recoveryFailed)
-            assertEquals(2, h.host.loads.size)
+            assertEquals(3, h.host.loads.size)
         }
 
     @Test
@@ -1443,4 +1458,151 @@ class PlaybackSessionTest {
 
         assertEquals(false, h.host.webVideoInstallAllowed)
     }
+    // ── the remembered source ────────────────────────────────────────────────
+
+    @Test
+    fun `resuming plays the remembered source without asking`() = playbackTest(
+        // Asking is the default, and the memory is what overrides it: the viewer answered this
+        // question for this film the first time they played it.
+        settings = AppSettings(autoSelectStream = false),
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        val offered = (h.session.phase as PlaybackPhase.Choosing).sources
+        h.session.choose(offered.last())
+        runCurrent()
+        h.session.close()
+        runCurrent()
+
+        h.session.open(movie())
+        runCurrent()
+
+        // Fails if the memory is not consulted, or is consulted and ignored: the picker opens
+        // again and the viewer answers the same question every time they resume.
+        val playing = h.session.phase as PlaybackPhase.Playing
+        assertEquals("B", playing.source.name)
+    }
+
+    @Test
+    fun `a remembered source that is no longer offered falls back to the picker`() = playbackTest(
+        settings = AppSettings(autoSelectStream = false),
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.last())
+        runCurrent()
+        h.session.close()
+        runCurrent()
+
+        // The provider stopped listing it, which happens constantly. Two of them, because a
+        // lone candidate is never a choice whatever the memory says.
+        h.playback.sources = listOf(
+            StreamSource(name = "C", url = "https://example.com/c.mkv"),
+            StreamSource(name = "D", url = "https://example.com/d.mkv"),
+        )
+        h.session.open(movie())
+        runCurrent()
+
+        // Fails if a near-match is started instead: the point of the exact row is that it names
+        // the file, and without it the viewer gets the choice back rather than a surprise.
+        assertTrue(h.session.phase is PlaybackPhase.Choosing)
+    }
+
+    @Test
+    fun `an explicit choose-a-source always asks even with a memory`() = playbackTest(
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.last())
+        runCurrent()
+
+        h.session.reopenSources()
+        runCurrent()
+
+        // Fails if the memory outranks forcePicker: the one entry point whose whole purpose is
+        // to see what is on offer would stop working the moment anything had been played.
+        assertTrue(h.session.phase is PlaybackPhase.Choosing)
+    }
+
+    @Test
+    fun `the memory can be turned off`() = playbackTest(
+        settings = AppSettings(autoSelectStream = false, rememberStreamSource = false),
+        sources = twoSources,
+    ) { h ->
+        // Something was remembered before the setting was turned off, which is the case the
+        // read guard is for: a stored answer has to stop applying, not keep applying quietly.
+        h.sourceMemory.write(550, null, null, twoSources.last().toSourceMemory())
+
+        h.session.open(movie())
+        runCurrent()
+
+        // Fails if the setting is honoured only where the memory is written: the stored release
+        // would still be started without asking, and turning the setting off would look like it
+        // had done nothing at all.
+        assertTrue(h.session.phase is PlaybackPhase.Choosing)
+
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.first())
+        runCurrent()
+
+        // And nothing is recorded while it is off, so what is already stored is all there is.
+        // Fails if the write guard is dropped: this would read back as the source just played.
+        assertEquals("B", h.sourceMemory.read(550, null, null).displayName)
+    }
+
+    @Test
+    fun `a source that fails to play is not the one the next resume reaches for`() = playbackTest(
+        settings = AppSettings(autoSelectStream = false),
+        sources = twoSources,
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.last())
+        runCurrent()
+        // The source opened and then would not play, which is what the failover is for.
+        h.session.failoverToNextSource()
+        runCurrent()
+        // The one that does play is the one remembered, so a resume lands on it rather than on
+        // the release that just failed.
+        assertEquals("A", h.sourceMemory.read(550, null, null).displayName)
+
+        // And when that one fails too there is nothing left to step to, so the memory must end
+        // up empty rather than holding a release that is known not to play. Fails without the
+        // forget: every later resume would start that release again without asking, and the
+        // picker the viewer needs is exactly what the memory is suppressing.
+        assertFalse(h.session.failoverToNextSource())
+        runCurrent()
+
+        assertTrue(h.sourceMemory.read(550, null, null).isEmpty)
+    }
+
+    @Test
+    fun `the next episode leads with the provider the last one used`() = playbackTest(
+        settings = AppSettings(autoSelectStream = false),
+        sources = listOf(
+            StreamSource(name = "Elsewhere 1080p", addonName = "Elsewhere", url = "https://example.com/e.mkv"),
+            StreamSource(name = "Provider 1080p", addonName = "Provider", url = "https://example.com/p.mkv"),
+        ),
+    ) { h ->
+        val show = series(listOf(MediaSeason(1, "Season 1", episodeCount = 7)))
+        h.session.open(show, season = 1, episode = 1)
+        runCurrent()
+        h.session.choose((h.session.phase as PlaybackPhase.Choosing).sources.last())
+        runCurrent()
+        h.session.close()
+        runCurrent()
+
+        h.session.open(show, season = 1, episode = 2)
+        runCurrent()
+
+        // A different episode is a different file, so the picker still opens — but it opens on
+        // the provider that worked. Fails if the title-wide row is never written, which is the
+        // only thing a later episode has to go on.
+        val offered = (h.session.phase as PlaybackPhase.Choosing).sources
+        assertEquals("Provider", offered.first().source.addonName)
+        assertTrue(offered.first().remembered)
+    }
+
 }

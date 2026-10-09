@@ -30,6 +30,7 @@ class DesktopDatabaseMigrationTest {
             driver.execute(null, "DROP TABLE external_id_map", 0)
             driver.execute(null, "DROP TABLE profile_removals", 0)
             driver.execute(null, "DROP TABLE track_memory", 0)
+            driver.execute(null, "DROP TABLE source_memory", 0)
             driver.execute(null, "PRAGMA user_version = 3", 0)
             driver.execute(
                 null,
@@ -67,6 +68,7 @@ class DesktopDatabaseMigrationTest {
             // Migrating from 11 also runs everything after it, so every table a later
             // migration creates has to go here too — 12's, and each one added after it.
             driver.execute(null, "DROP TABLE track_memory", 0)
+            driver.execute(null, "DROP TABLE source_memory", 0)
             driver.execute(
                 null,
                 "CREATE TABLE trakt_sessions (" +

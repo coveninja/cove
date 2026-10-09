@@ -43,6 +43,7 @@ private val settingsJson = """
   "rememberPosition": false,
   "defaultProvider": "nuvio",
   "autoSelectStream": true,
+  "rememberStreamSource": false,
   "streamSelectionMode": "best",
   "measuredBandwidthMbps": 100.0,
   "sourcePreference": "hdr",
@@ -155,6 +156,7 @@ class LiveSettingsRepositoryTest {
         assertEquals(false,  sent.rememberPosition,     "rememberPosition")
         assertEquals("nuvio",sent.defaultProvider,      "defaultProvider")
         assertEquals(true,   sent.autoSelectStream,     "autoSelectStream")
+        assertEquals(false,  sent.rememberStreamSource, "rememberStreamSource")
         assertEquals("best", sent.streamSelectionMode,  "streamSelectionMode")
         assertEquals("fr",   sent.defaultSubtitleLang,  "defaultSubtitleLang")
         assertEquals("de",   sent.defaultAudioLang,     "defaultAudioLang")

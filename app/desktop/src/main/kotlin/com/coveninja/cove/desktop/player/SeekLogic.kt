@@ -1,6 +1,7 @@
 package com.coveninja.cove.desktop.player
 
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.STREAM_STOPPED_EARLY_MESSAGE
 import kotlin.math.abs
 
 /**
@@ -70,10 +71,32 @@ internal fun applyPendingSeek(
         // still is, and reporting "finished" against a playhead the viewer has already
         // moved elsewhere would put the replay icon and the up-next card on screen
         // during an ordinary seek backwards out of the credits.
-        live.copy(positionSeconds = pendingSeconds, endReached = false),
+        //
+        // interrupted goes with it, and for the stronger reason: the session acts on that
+        // one. A terminal status belonging to a playhead the viewer has already left would
+        // tear the stream down and reload it. The classifier normally withholds the verdict
+        // while a seek is outstanding (see seekStillResolving), so this is the second line
+        // of defence rather than the first — but it is the one that covers a verdict reached
+        // before the seek was issued and published after it.
+        live.copy(
+            positionSeconds = pendingSeconds,
+            endReached = false,
+            interrupted = false,
+            statusMessage = live.statusMessage.takeUnless { it == STREAM_STOPPED_EARLY_MESSAGE }
+                ?: "",
+        ),
         pendingSeconds,
     )
 }
+
+/**
+ * A clock that cannot go backwards, for measuring how long a seek has been outstanding.
+ *
+ * Wall-clock time would do it wrong in the one case that matters: an NTP correction landing
+ * mid-film would make an outstanding seek look hours old and bring back exactly the false
+ * interruption the grace window exists to prevent.
+ */
+internal fun monotonicMillis(): Long = System.nanoTime() / 1_000_000
 
 /**
  * Keeps a track delay inside a range that can still be undone by hand.

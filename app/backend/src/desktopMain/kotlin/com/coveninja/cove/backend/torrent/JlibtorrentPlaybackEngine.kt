@@ -33,8 +33,9 @@ class JlibtorrentPlaybackEngine(
     private val lifecycle: TorrentCacheLifecycle,
     private val metadataTimeoutSeconds: Int = 45,
     /**
-     * How long a read waits for the pieces under it. **Must stay below the player's own network
-     * timeout**, which on Android is set explicitly in `AndroidMpvVideoPlayerHost`.
+     * The ceiling on how long a read waits for the pieces under it. **Must stay below the
+     * player's own network timeout**, which on Android is set explicitly in
+     * `AndroidMpvVideoPlayerHost`.
      *
      * Every one of these waits happens after the 206 has gone out, so mpv is already blocked on
      * a read while it runs. At the old two minutes the player's timeout always expired first:
@@ -43,6 +44,9 @@ class JlibtorrentPlaybackEngine(
      * nobody was served by and no log anywhere accounted for. Losing the race deliberately is
      * worth more than winning it silently, because the loss is one the session can see and
      * reconnect from.
+     *
+     * A download that has stopped dead gives up well inside this, on PIECE_STALL_MILLIS; this
+     * bounds the other case, where pieces keep arriving but never the one being read.
      */
     private val pieceTimeoutMillis: Long = 60_000,
     /**
@@ -86,17 +90,26 @@ class JlibtorrentPlaybackEngine(
             torrents[canonical] ?: loadTorrent(canonical).also { torrents[canonical] = it }
         }
         val selected = selectTorrentFile(torrent.files, season, episode, fileIndex)
-        torrent.handle.prioritizeFiles(
-            Priority.array(Priority.IGNORE, torrent.info.numFiles()).also {
-                it[selected.index] = Priority.NORMAL
-            },
-        )
-        // A player reads a file front to back; libtorrent's default picker fetches
-        // whatever is rarest in the swarm. Left alone it spends the opening minutes
-        // collecting pieces from the middle of the episode while the first megabyte
-        // — the only one anybody is waiting for — arrives whenever it happens to.
-        // Sequential order is what turns this from a download into a stream.
-        torrent.handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        // Once per selection, not once per range request. Setting file priorities makes
+        // libtorrent recompute the priority of every piece from them, which discards
+        // everything the scheduler has asked for — so doing this on each request, and mpv
+        // opens one on every seek, wiped both the parked download window and the read-ahead
+        // and sent the engine back to fetching the file from its beginning. Nothing failed;
+        // the window simply stopped bounding anything after the viewer's first seek.
+        val prioritiesReset = torrent.prioritizedFile.getAndSet(selected.index) != selected.index
+        if (prioritiesReset) {
+            torrent.handle.prioritizeFiles(
+                Priority.array(Priority.IGNORE, torrent.info.numFiles()).also {
+                    it[selected.index] = Priority.NORMAL
+                },
+            )
+            // A player reads a file front to back; libtorrent's default picker fetches
+            // whatever is rarest in the swarm. Left alone it spends the opening minutes
+            // collecting pieces from the middle of the episode while the first megabyte
+            // — the only one anybody is waiting for — arrives whenever it happens to.
+            // Sequential order is what turns this from a download into a stream.
+            torrent.handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        }
         val path = torrent.saveDirectory.resolve(selected.path).normalize()
         require(path.startsWith(torrent.saveDirectory)) { "torrent file escaped download directory" }
         val id = "$canonical:${selected.index}"
@@ -107,10 +120,10 @@ class JlibtorrentPlaybackEngine(
             ManagedResource(torrent, selected, path, scheduler(torrent, selected))
         }
         // File priority alone means the whole file, which is what kept downloading the rest of an
-        // episode after the viewer quit five minutes in. Everything past the opening window is
-        // parked once, by whichever reader gets here first, and raised again as the reader
-        // advances — so the download follows the player instead of outrunning it.
-        managed.scheduler.prepareForRead()
+        // episode after the viewer quit five minutes in. Everything past the window is parked and
+        // released again as the reader moves — so the download follows the player instead of
+        // outrunning it.
+        managed.scheduler.prepareForRead(prioritiesReset)
         log("$canonical: serving file ${selected.index} (${selected.size} bytes) ${selected.path}")
         TorrentResource(id, path.fileName.toString(), selected.size, contentType(path.fileName.toString()))
     }
@@ -142,13 +155,16 @@ class JlibtorrentPlaybackEngine(
         // Kept as a local session guard as well as the cross-component lifecycle lease. The
         // latter spans Ktor's delayed producer and the eventual filesystem deletion.
         managed.torrent.readers.incrementAndGet()
+        // One claim on the swarm's urgency per served range, given back when this response
+        // ends — including when it ends because the viewer seeked and mpv dropped it.
+        val reader = managed.scheduler.beginRead()
         try {
             // libtorrent allocates sparsely: until it flushes the first piece covering
             // this file, nothing exists on disk — not the file, not even the directory
             // holding it. Opening before that wait throws FileNotFoundException for
             // every freshly added torrent, and because respondBytesWriter has already
             // sent the 206 by then, the player sees a stream that dies at byte zero.
-            managed.scheduler.awaitPieces(cursor, cursor, pieceTimeoutMillis)
+            reader.awaitPieces(cursor, cursor, pieceTimeoutMillis)
             awaitTorrentFile(managed.path, pieceTimeoutMillis)
             RandomAccessFile(managed.path.toFile(), "r").use { input ->
                 while (cursor <= endInclusive) {
@@ -162,7 +178,7 @@ class JlibtorrentPlaybackEngine(
                         min(endInclusive, managed.scheduler.pieceEndOffset(cursor)),
                         cursor + buffer.size - 1,
                     )
-                    managed.scheduler.awaitPieces(cursor, chunkEnd, pieceTimeoutMillis)
+                    reader.awaitPieces(cursor, chunkEnd, pieceTimeoutMillis)
                     input.seek(cursor)
                     var remaining = (chunkEnd - cursor + 1).toInt()
                     while (remaining > 0) {
@@ -175,6 +191,7 @@ class JlibtorrentPlaybackEngine(
                 }
             }
         } finally {
+            reader.close()
             managed.torrent.readers.decrementAndGet()
         }
     }
@@ -384,6 +401,16 @@ class JlibtorrentPlaybackEngine(
     ) {
         /** How many responses are being written from this torrent right now. */
         val readers = AtomicInteger(0)
+
+        /**
+         * The file whose priorities are installed on the handle; -1 before the first open.
+         *
+         * One per torrent rather than per file, because file priorities are a property of the
+         * torrent: switching to another episode inside the same pack re-installs them, which
+         * resets the pieces of the one being served too. Only a torrent serving two files at
+         * once notices, and that reader recovers as its next chunk re-asks for its pieces.
+         */
+        val prioritizedFile = AtomicInteger(-1)
     }
 
     private data class ManagedResource(

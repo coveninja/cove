@@ -3,7 +3,11 @@ package com.coveninja.cove.backend.playback
 import com.coveninja.cove.backend.backendScope
 import com.coveninja.cove.backend.addons.AddonStream
 import com.coveninja.cove.backend.addons.AddonUrlPolicy
+import com.coveninja.cove.backend.http.FORWARDED_MEDIA_HEADERS
+import com.coveninja.cove.backend.http.copyProxiedBody
+import com.coveninja.cove.backend.http.logMediaWrite
 import com.coveninja.cove.backend.http.logTruncatedMediaBody
+import com.coveninja.cove.backend.http.proxiedRangeResponse
 import com.coveninja.cove.backend.http.looksLikePlayableContentType
 import com.coveninja.cove.backend.http.mediaStreamTimeouts
 import com.coveninja.cove.shared.data.PlaybackRepository
@@ -33,21 +37,18 @@ import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.request.header
 import io.ktor.server.response.header
-import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.copyTo
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -162,6 +163,7 @@ internal class AndroidPlaybackMediaHost private constructor(
         })
     }
 
+    /** Proxied whether or not the stream carries headers — see MediaBoundary.playDirect. */
     override suspend fun playDirect(call: io.ktor.server.application.ApplicationCall, url: String) {
         requireHttpUrl(url)
         val registered = streams.lookup(url)
@@ -169,14 +171,10 @@ internal class AndroidPlaybackMediaHost private constructor(
                 "unknown stream url; list streams first",
                 status = HttpStatusCode.Forbidden,
             )
-        if (registered.headers.isEmpty()) {
-            call.response.header(HttpHeaders.Location, url)
-            call.respond(HttpStatusCode.TemporaryRedirect)
-            return
-        }
 
+        val requestedRange = call.request.header(HttpHeaders.Range)
         val requestHeaders = registered.headers.toMutableMap().also { headers ->
-            call.request.header(HttpHeaders.Range)?.let { headers[HttpHeaders.Range] = it }
+            requestedRange?.let { headers[HttpHeaders.Range] = it }
         }
         // Held for the length of the read, not the length of the listing that produced it.
         // A film served as one uninterrupted request never comes back through lookup, so
@@ -188,9 +186,16 @@ internal class AndroidPlaybackMediaHost private constructor(
                 val contentType = upstream.headers[HttpHeaders.ContentType]
                     ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
                     ?: ContentType.Application.OctetStream
-                for (name in FORWARDED_RESPONSE_HEADERS) {
+                val answer = proxiedRangeResponse(
+                    requestedRange = requestedRange,
+                    upstreamStatus = upstream.status,
+                    upstreamContentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+                    upstreamContentRange = upstream.headers[HttpHeaders.ContentRange],
+                )
+                for (name in FORWARDED_MEDIA_HEADERS) {
                     upstream.headers[name]?.let { call.response.header(name, it) }
                 }
+                answer.contentRange?.let { call.response.header(HttpHeaders.ContentRange, it) }
                 // The response producer does not necessarily run inside respondBytesWriter — under
                 // some engines it is invoked later, once the engine is ready to write the body — and
                 // the upstream body dies with this block. So the block waits for the copy either way:
@@ -200,11 +205,22 @@ internal class AndroidPlaybackMediaHost private constructor(
                 val copied = CompletableDeferred<Unit>()
                 call.respondBytesWriter(
                     contentType = contentType,
-                    status = upstream.status,
-                    contentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+                    status = answer.status,
+                    contentLength = answer.contentLength,
                 ) {
                     try {
-                        upstream.bodyAsChannel().copyTo(this)
+                        logMediaWrite(
+                            source = "url=$url",
+                            requestedRange = requestedRange,
+                            answered = answer.answered,
+                            playerHungUp = { isClosedForWrite },
+                        ) {
+                            copyProxiedBody(
+                                source = upstream.bodyAsChannel(),
+                                skipBytes = answer.skipBytes,
+                                limitBytes = answer.contentLength,
+                            )
+                        }
                         copied.complete(Unit)
                     } catch (failure: Throwable) {
                         logTruncatedMediaBody(url, failure, isClosedForWrite)
@@ -261,23 +277,14 @@ internal class AndroidPlaybackMediaHost private constructor(
             // provider ("No SLF4J providers were found" at startup), so by default the one
             // account of what went wrong is discarded. That is the difference between a torrent
             // bug that can be read off a log and one that can only be guessed at.
-            try {
+            logMediaWrite(
+                source = "torrent=$hash file=${resource.id.substringAfterLast(':')}",
+                requestedRange = call.request.header(HttpHeaders.Range),
+                answered = "${if (range.partial) 206 else 200} " +
+                    "bytes ${range.start}-${range.endInclusive}/${resource.length}",
+                playerHungUp = { isClosedForWrite },
+            ) {
                 torrentEngine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
-            } catch (cancellation: CancellationException) {
-                throw cancellation // the viewer closing the player is not a fault
-            } catch (failure: Throwable) {
-                // Every seek ends one response and opens another with a fresh Range, so the
-                // player dropping a connection mid-write is the ordinary case rather than a
-                // fault, and a line per seek would bury the failures worth reading. Ask the
-                // channel instead of matching exception types: a hangup surfaces as any of
-                // ClosedWriteChannelException, ClosedByteChannelException or a plain IOException
-                // carrying "Broken pipe", and a list of those would quietly rot.
-                if (isClosedForWrite) throw failure
-                System.err.println(
-                    "Cove torrent: stream failed for $hash after the response started — " +
-                        "${failure::class.simpleName}: ${failure.message}",
-                )
-                throw failure
             }
         }
     }
@@ -418,12 +425,6 @@ internal class AndroidPlaybackMediaHost private constructor(
         private const val MAX_IMAGE_BYTES = 25 * 1024 * 1024
         private const val SPEED_TEST_BYTES = 25 * 1024 * 1024
         private val SENSITIVE_REDIRECT_HEADERS = setOf("authorization", "cookie", "proxy-authorization")
-        private val FORWARDED_RESPONSE_HEADERS = listOf(
-            HttpHeaders.AcceptRanges,
-            HttpHeaders.ContentRange,
-            HttpHeaders.ETag,
-            HttpHeaders.LastModified,
-        )
 
         fun start(
             httpClient: HttpClient,

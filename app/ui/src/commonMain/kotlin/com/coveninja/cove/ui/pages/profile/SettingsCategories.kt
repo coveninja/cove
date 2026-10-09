@@ -299,6 +299,15 @@ fun SettingsCategoryContent(
                             )
                         },
                         {
+                            SettingToggle(
+                                title = "Remember the source you picked",
+                                description = "Resuming something plays it from the same source " +
+                                    "again, and a new episode leads with the one that worked.",
+                                checked = settings.rememberStreamSource,
+                                onCheckedChange = { editor.edit { copy(rememberStreamSource = it) } },
+                            )
+                        },
+                        {
                             SettingChoice(
                                 title = "Selection preference",
                                 description = "How Cove ranks sources when it picks for you.",

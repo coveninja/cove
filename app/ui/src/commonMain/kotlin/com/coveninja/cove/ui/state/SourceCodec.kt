@@ -1,6 +1,7 @@
 package com.coveninja.cove.ui.state
 
 import com.coveninja.cove.shared.model.StreamSource
+import com.coveninja.cove.shared.model.describedText
 
 /** How confidently the platform can decode a video codec or profile. */
 enum class VideoDecoderSupport {
@@ -50,6 +51,14 @@ data class StreamCompatibility(
 data class StreamChoice(
     val source: StreamSource,
     val compatibility: StreamCompatibility,
+    /**
+     * The source this title was last played from, as far as the memory can tell.
+     *
+     * Carried on the choice rather than worked out by the picker because the session is what
+     * knows: by the time the list is drawn, the memory has already decided whether this row is
+     * the exact release or merely the same provider at the same quality.
+     */
+    val remembered: Boolean = false,
 )
 
 internal fun StreamCompatibility.selectionPriority(): Int = when (support) {
@@ -68,7 +77,10 @@ private val bareDolbyVisionPattern = Regex("(?:^|[. _-])dv(?:$|[. _-])", RegexOp
 private val dolbyVisionContextPattern = Regex("\\b(?:2160p?|4k|uhd|hdr)\\b", RegexOption.IGNORE_CASE)
 
 fun StreamSource.codecMetadata(): StreamCodecMetadata {
-    val text = "${name.orEmpty()} ${title.orEmpty()}"
+    // The file name counts as part of the release name, and for a provider whose display line
+    // is only "1080p ⚙️ Provider" it is the half that names the codec. Judging compatibility
+    // without it means offering an AV1 encode to a device that cannot decode one.
+    val text = describedText()
     val codec = when {
         av1Pattern.containsMatchIn(text) -> StreamVideoCodec.Av1
         vp9Pattern.containsMatchIn(text) -> StreamVideoCodec.Vp9

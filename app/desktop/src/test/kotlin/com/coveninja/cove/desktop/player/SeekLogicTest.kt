@@ -1,8 +1,10 @@
 package com.coveninja.cove.desktop.player
 
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.STREAM_STOPPED_EARLY_MESSAGE
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -146,6 +148,36 @@ class SeekLogicTest {
 
         assertTrue(!resolved.status.endReached)
         assertEquals(120.0, resolved.status.positionSeconds)
+    }
+
+    // An interruption belongs to the same discarded playhead as endReached does, and the
+    // session acts on this one: it saves progress and reloads the stream. Fails if only
+    // endReached is cleared, which is what reloaded a perfectly good stream — and, twice
+    // inside the retry window, ended the session on a banner — every time somebody seeked
+    // back out of the credits.
+    @Test
+    fun `seeking away from the end takes back an interruption and its sentence`() {
+        val interrupted = playing(3599.0, ended = true).copy(
+            interrupted = true,
+            statusMessage = STREAM_STOPPED_EARLY_MESSAGE,
+        )
+
+        val resolved = applyPendingSeek(interrupted, pendingSeconds = 120.0)
+
+        assertFalse(resolved.status.interrupted)
+        assertEquals("", resolved.status.statusMessage)
+    }
+
+    // Only that one sentence is taken back. Fails if the message is cleared unconditionally,
+    // which would wipe the yt-dlp provisioning notice the host publishes through the same field.
+    @Test
+    fun `an unrelated status message survives a pending seek`() {
+        val resolved = applyPendingSeek(
+            playing(3599.0).copy(statusMessage = "Updating yt-dlp…"),
+            pendingSeconds = 120.0,
+        )
+
+        assertEquals("Updating yt-dlp…", resolved.status.statusMessage)
     }
 
     // ── relative seeks accumulate ────────────────────────────────────────────

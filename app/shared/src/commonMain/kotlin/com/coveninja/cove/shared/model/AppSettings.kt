@@ -41,6 +41,16 @@ data class AppSettings(
     val rememberVolume: Boolean = true,
     val defaultProvider: String = "",
     val autoSelectStream: Boolean = false,
+    /**
+     * Open what you last watched from the source you last watched it from.
+     *
+     * On by default, and it overrides [autoSelectStream] for an episode that has already been
+     * played: a viewer who picked a release for this episode has answered the picker's question
+     * already, and asking again on every resume is the thing this exists to stop. A later
+     * episode of the same series is a different file, so there the memory only promotes the
+     * provider and quality that worked and [autoSelectStream] still decides whether to ask.
+     */
+    val rememberStreamSource: Boolean = true,
     val streamSelectionMode: String = "balanced",
     val measuredBandwidthMbps: Double = 0.0,
     val sourcePreference: String = "",

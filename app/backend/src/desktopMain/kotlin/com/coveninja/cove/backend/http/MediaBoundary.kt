@@ -21,7 +21,6 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
-import io.ktor.utils.io.copyTo
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
 import java.nio.file.Files
@@ -38,7 +37,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -79,18 +77,27 @@ class MediaBoundary(
         return accepted
     }
 
+    /**
+     * Proxies a direct stream, header-bearing or not.
+     *
+     * The not-bearing case used to answer a 307 straight to the provider's URL, which is
+     * most addon streams, and the saving was real: mpv read from the CDN and nothing was
+     * copied through loopback. What it cost was everything about that read. A desktop log
+     * from a film seventy minutes in says `[ffmpeg] https: Will reconnect at 0`, and that is
+     * the whole of what was knowable — the reconnect, the rewind to byte zero, and whether
+     * the CDN even honours ranges all happened where we could neither see nor influence
+     * them. Proxying puts a response we control in front of the player: a range we asked for
+     * and labelled honestly (see [proxiedRangeResponse]), an upstream failure that becomes
+     * our retry rather than ffmpeg's rewind, and one line in the log per request.
+     */
     override suspend fun playDirect(call: ApplicationCall, url: String) {
         requireHttpUrl(url)
         val registered = streams.lookup(url)
             ?: return call.respond(HttpStatusCode.Forbidden, mapOf("error" to "unknown stream url; list streams first"))
-        if (registered.headers.isEmpty()) {
-            call.response.header(HttpHeaders.Location, url)
-            call.respond(HttpStatusCode.TemporaryRedirect)
-            return
-        }
 
+        val requestedRange = call.request.headers[HttpHeaders.Range]
         val requestHeaders = registered.headers.toMutableMap().also { headers ->
-            call.request.headers[HttpHeaders.Range]?.let { headers[HttpHeaders.Range] = it }
+            requestedRange?.let { headers[HttpHeaders.Range] = it }
         }
         // Held for the length of the read, not the length of the listing that produced it.
         // A film served as one uninterrupted request never comes back through lookup, so
@@ -102,15 +109,16 @@ class MediaBoundary(
                 val contentType = upstream.headers[HttpHeaders.ContentType]
                     ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
                     ?: ContentType.Application.OctetStream
-                val forwarded = listOf(
-                    HttpHeaders.AcceptRanges,
-                    HttpHeaders.ContentRange,
-                    HttpHeaders.ETag,
-                    HttpHeaders.LastModified,
+                val answer = proxiedRangeResponse(
+                    requestedRange = requestedRange,
+                    upstreamStatus = upstream.status,
+                    upstreamContentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+                    upstreamContentRange = upstream.headers[HttpHeaders.ContentRange],
                 )
-                for (name in forwarded) {
+                for (name in FORWARDED_MEDIA_HEADERS) {
                     upstream.headers[name]?.let { call.response.header(name, it) }
                 }
+                answer.contentRange?.let { call.response.header(HttpHeaders.ContentRange, it) }
                 // The response producer does not necessarily run inside respondBytesWriter — under
                 // some engines it is invoked later, once the engine is ready to write the body — and
                 // the upstream body dies with this block. So the block waits for the copy either way:
@@ -120,11 +128,22 @@ class MediaBoundary(
                 val copied = CompletableDeferred<Unit>()
                 call.respondBytesWriter(
                     contentType = contentType,
-                    status = upstream.status,
-                    contentLength = upstream.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
+                    status = answer.status,
+                    contentLength = answer.contentLength,
                 ) {
                     try {
-                        upstream.bodyAsChannel().copyTo(this)
+                        logMediaWrite(
+                            source = "url=$url",
+                            requestedRange = requestedRange,
+                            answered = answer.answered,
+                            playerHungUp = { isClosedForWrite },
+                        ) {
+                            copyProxiedBody(
+                                source = upstream.bodyAsChannel(),
+                                skipBytes = answer.skipBytes,
+                                limitBytes = answer.contentLength,
+                            )
+                        }
                         copied.complete(Unit)
                     } catch (failure: Throwable) {
                         logTruncatedMediaBody(url, failure, isClosedForWrite)
@@ -182,23 +201,14 @@ class MediaBoundary(
             // 206 is already on the wire. Ktor reports a producer failure to its own logger
             // rather than to the caller, so without this the connection simply dies and the
             // sentence the viewer sees is the only trace left.
-            try {
+            logMediaWrite(
+                source = "torrent=$hash file=${resource.id.substringAfterLast(':')}",
+                requestedRange = call.request.headers[HttpHeaders.Range],
+                answered = "${if (range.partial) 206 else 200} " +
+                    "bytes ${range.start}-${range.endInclusive}/${resource.length}",
+                playerHungUp = { isClosedForWrite },
+            ) {
                 engine.stream(hash, season, episode, fileIndex, range.start, range.endInclusive, this)
-            } catch (cancellation: CancellationException) {
-                throw cancellation // the viewer closing the player is not a fault
-            } catch (failure: Throwable) {
-                // Every seek ends one response and opens another with a fresh Range, so the
-                // player dropping a connection mid-write is the ordinary case rather than a
-                // fault, and a line per seek would bury the failures worth reading. Ask the
-                // channel instead of matching exception types: a hangup surfaces as any of
-                // ClosedWriteChannelException, ClosedByteChannelException or a plain IOException
-                // carrying "Broken pipe", and a list of those would quietly rot.
-                if (isClosedForWrite) throw failure
-                System.err.println(
-                    "Cove torrent: stream failed for $hash after the response started — " +
-                        "${failure::class.simpleName}: ${failure.message}",
-                )
-                throw failure
             }
         }
     }

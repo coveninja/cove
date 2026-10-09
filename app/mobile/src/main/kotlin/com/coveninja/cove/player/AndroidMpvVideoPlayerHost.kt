@@ -9,6 +9,7 @@ import android.media.MediaCodecList
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -28,7 +29,9 @@ import com.coveninja.cove.ui.state.VideoCodecCapabilities
 import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.VideoScaling
+import com.coveninja.cove.ui.state.STREAM_STOPPED_EARLY_MESSAGE
 import com.coveninja.cove.ui.state.classifyPlaybackTermination
+import com.coveninja.cove.ui.state.seekStillResolving
 import com.coveninja.cove.ui.state.parseMpvTrackList
 import com.coveninja.cove.ui.state.withTracks
 import com.yausername.youtubedl_android.YoutubeDL
@@ -112,6 +115,13 @@ class AndroidMpvVideoPlayerHost(
     private var pendingVolume: Double? = null
     private var pendingScaling: VideoScaling = VideoScaling.Fit
     private var pendingSeekSeconds: Double? = null
+
+    /**
+     * When that target was asked for, on the monotonic clock, so an EOF arriving while the
+     * seek is still resolving can be told from one arriving long after it should have
+     * landed. See [seekStillResolving].
+     */
+    private var pendingSeekAtMillis = 0L
     /** Position before mpv's latest time-pos update, used to detect an EOF jump. */
     private var previousPositionSeconds = 0.0
     private var trackListJson = ""
@@ -193,6 +203,7 @@ class AndroidMpvVideoPlayerHost(
         // that end-of-file must not be read as this load failing.
         fileOpening = false
         pendingSeekSeconds = null
+        pendingSeekAtMillis = 0L
         previousPositionSeconds = startPositionSeconds.coerceAtLeast(0.0)
         pendingLoad = PendingLoad(url, startPositionSeconds.coerceAtLeast(0.0), headers)
         _status.value = PlaybackStatus(
@@ -220,6 +231,7 @@ class AndroidMpvVideoPlayerHost(
             else -> seconds.coerceAtLeast(0.0)
         }
         pendingSeekSeconds = target
+        pendingSeekAtMillis = SystemClock.uptimeMillis()
         // A deliberate seek is trustworthy. If the viewer explicitly seeks near
         // the end, the following EOF must not look like a synthetic jump there.
         previousPositionSeconds = target
@@ -652,6 +664,10 @@ class AndroidMpvVideoPlayerHost(
                 stoppedByUser = stoppedByUser,
                 fileLoaded = fileLoaded,
                 previousPositionSeconds = previousPositionSeconds,
+                seekUnsettled = seekStillResolving(
+                    pendingSeekSeconds = pendingSeekSeconds,
+                    millisSinceSeekIssued = SystemClock.uptimeMillis() - pendingSeekAtMillis,
+                ),
             )
             else -> current
         }
@@ -1177,12 +1193,21 @@ internal const val YTDLP_STALE_AGE_DAYS = 30L
 /** Old enough that YouTube has almost certainly outrun it; wait for the new one. */
 internal const val YTDLP_UNUSABLE_AGE_DAYS = 90L
 
-/** Interprets Android's observed eof-reached flag without promoting stop() to EOF. */
+/**
+ * Interprets Android's observed eof-reached flag without promoting stop() to EOF.
+ *
+ * [seekUnsettled] is passed through rather than decided here so the clock stays at the call
+ * site: this is the pure half, and its whole point is that it can be asked the same question
+ * twice in a test. See [seekStillResolving] for why a seek in flight withholds the verdict —
+ * this host is where it mattered most, because the position it classifies *is* the requested
+ * target until mpv reports having reached it.
+ */
 internal fun PlaybackStatus.withMpvEof(
     reached: Boolean,
     stoppedByUser: Boolean,
     fileLoaded: Boolean,
     previousPositionSeconds: Double,
+    seekUnsettled: Boolean = false,
 ): PlaybackStatus {
     if (!reached || stoppedByUser || !fileLoaded) {
         return copy(endReached = false, interrupted = false)
@@ -1191,13 +1216,14 @@ internal fun PlaybackStatus.withMpvEof(
         positionSeconds = positionSeconds,
         previousPositionSeconds = previousPositionSeconds,
         durationSeconds = durationSeconds,
+        seekUnsettled = seekUnsettled,
     )
     return copy(
         positionSeconds = termination.positionSeconds,
         endReached = termination.ended,
         interrupted = termination.interrupted,
         statusMessage = if (termination.interrupted) {
-            "The stream stopped before the end."
+            STREAM_STOPPED_EARLY_MESSAGE
         } else {
             statusMessage
         },

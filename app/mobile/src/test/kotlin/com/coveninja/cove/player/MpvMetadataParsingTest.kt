@@ -189,6 +189,30 @@ class MpvMetadataParsingTest {
         assertFalse(status.interrupted)
     }
 
+    // The host publishes a requested seek target as the position immediately, so this is the
+    // state an eof-reached event finds while the seek is in flight: a mid-file position that
+    // is the viewer's intent rather than where mpv is. Fails if the flag is not passed on —
+    // which made every eof arriving after a seek an interruption, and every one of those a
+    // stream the session tore down and reloaded.
+    @Test
+    fun `an eof during a requested seek is neither completion nor interruption`() {
+        val status = PlaybackStatus(
+            hasMedia = true,
+            positionSeconds = 120.0,
+            durationSeconds = 1000.0,
+        ).withMpvEof(
+            reached = true,
+            stoppedByUser = false,
+            fileLoaded = true,
+            previousPositionSeconds = 120.0,
+            seekUnsettled = true,
+        )
+
+        assertFalse(status.endReached)
+        assertFalse(status.interrupted)
+        assertEquals(120.0, status.positionSeconds)
+    }
+
     @Test
     fun `early eof becomes an interruption at the last real position`() {
         val status = PlaybackStatus(

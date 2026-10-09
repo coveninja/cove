@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.coveninja.cove.shared.model.StreamBehaviorHints
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.CoveTheme
 import com.coveninja.cove.ui.components.player.StreamSourcePicker
@@ -46,6 +47,30 @@ class StreamSourcePickerUiTest {
 
         compose.onNodeWithText("Software").assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(software, selected) }
+    }
+
+    @Test
+    fun aFileNameTheTitleDoesNotCarryGetsItsOwnLine() {
+        val pack = StreamChoice(
+            source = StreamSource(
+                name = "Pack",
+                // A season pack, which is the case the file name exists for: the title names
+                // the release and only behaviorHints names the episode being offered.
+                title = "Show Season 2 · 1080p\n👤 48 💾 21.4 GB ⚙️ Example",
+                infoHash = "a".repeat(40),
+                fileIdx = 3,
+                behaviorHints = StreamBehaviorHints(filename = "Show.S02E04.1080p.WEB-DL.mkv"),
+            ),
+            compatibility = StreamCompatibility(codecLabel = null, support = VideoDecoderSupport.Hardware),
+        )
+        compose.setContent {
+            CoveTheme {
+                StreamSourcePicker(sources = listOf(pack), onSelect = {})
+            }
+        }
+
+        compose.onNodeWithText("Show Season 2 · 1080p").assertExists()
+        compose.onNodeWithText("Show.S02E04.1080p.WEB-DL.mkv").assertExists()
     }
 
     private fun choice(

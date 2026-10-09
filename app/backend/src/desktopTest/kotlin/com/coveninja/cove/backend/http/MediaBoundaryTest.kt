@@ -40,6 +40,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -50,19 +51,68 @@ import kotlinx.coroutines.withTimeout
 
 class MediaBoundaryTest {
     @Test
-    fun `only registered direct streams redirect`() = runBlocking {
-        val boundary = boundary(HttpClient(MockEngine { error("upstream should not be called") }))
+    fun `a stream with no headers of its own is proxied rather than redirected`() = runBlocking {
+        var upstreamCalls = 0
+        val upstream = HttpClient(MockEngine {
+            upstreamCalls++
+            respond(
+                content = "frames",
+                headers = headersOf(
+                    HttpHeaders.ContentType to listOf("video/x-matroska"),
+                    HttpHeaders.ContentLength to listOf("6"),
+                ),
+            )
+        })
+        val boundary = boundary(upstream)
         boundary.registerStreams(listOf(AddonStream(url = "https://video.test/movie.mkv")))
 
         testApplication {
             application { mediaRoutes(boundary) }
             val noRedirectClient = createClient { followRedirects = false }
             val known = noRedirectClient.get("/play?url=https%3A%2F%2Fvideo.test%2Fmovie.mkv")
-            assertEquals(HttpStatusCode.TemporaryRedirect, known.status)
-            assertEquals("https://video.test/movie.mkv", known.headers[HttpHeaders.Location])
+            // This used to answer 307 with the provider's own address, which handed the player
+            // a stream we could neither observe nor retry — and left ffmpeg's view of whether
+            // the source is seekable to the source. Fails if the redirect comes back.
+            assertEquals(HttpStatusCode.OK, known.status)
+            assertEquals("frames", known.bodyAsText())
+            assertNull(known.headers[HttpHeaders.Location])
 
             val unknown = noRedirectClient.get("/play?url=https%3A%2F%2Fvideo.test%2Funknown.mkv")
             assertEquals(HttpStatusCode.Forbidden, unknown.status)
+        }
+        // One call for the registered stream, none for the unregistered one: the registry is
+        // still what decides whether the proxy fetches anything at all.
+        assertEquals(1, upstreamCalls)
+    }
+
+    @Test
+    fun `an upstream that ignores a range is answered as a range anyway`() = runBlocking {
+        val whole = "0123456789"
+        val upstream = HttpClient(MockEngine {
+            // Several providers answer a Range request with the whole file and a 200. ffmpeg
+            // reads that as a stream rather than a file: seeking stops working and any
+            // reconnect re-requests from byte zero.
+            respond(
+                content = whole,
+                status = HttpStatusCode.OK,
+                headers = headersOf(
+                    HttpHeaders.ContentType to listOf("video/mp4"),
+                    HttpHeaders.ContentLength to listOf(whole.length.toString()),
+                ),
+            )
+        })
+        val boundary = boundary(upstream)
+        boundary.registerStreams(listOf(AddonStream(url = "https://video.test/movie.mp4")))
+
+        testApplication {
+            application { mediaRoutes(boundary) }
+            val response = client.get("/play?url=https%3A%2F%2Fvideo.test%2Fmovie.mp4") {
+                headers.append(HttpHeaders.Range, "bytes=4-7")
+            }
+
+            assertEquals(HttpStatusCode.PartialContent, response.status)
+            assertEquals("bytes 4-7/10", response.headers[HttpHeaders.ContentRange])
+            assertEquals("4567", response.bodyAsText())
         }
     }
 
@@ -393,7 +443,7 @@ class MediaBoundaryTest {
     @Test
     fun `a stream that is being played keeps its registration past the idle window`() = runBlocking {
         var now = 0L
-        val boundary = boundary(HttpClient(MockEngine { error("upstream should not be called") }), { now })
+        val boundary = boundary(playableUpstream(), { now })
         boundary.registerStreams(listOf(AddonStream(url = "https://video.test/movie.mkv")))
         val play = "/play?url=https%3A%2F%2Fvideo.test%2Fmovie.mkv"
 
@@ -404,20 +454,20 @@ class MediaBoundaryTest {
             // Twenty minutes in: a mid-stream reconnect, which on an addon stream is an
             // ordinary event rather than a failure — ffmpeg re-opens the URL on any read error.
             now = 20 * 60 * 1_000L
-            assertEquals(HttpStatusCode.TemporaryRedirect, client.get(play).status)
+            assertEquals(HttpStatusCode.OK, client.get(play).status)
 
             // Forty minutes in. Measured from the listing this is long past the window, which
             // is where a film longer than half an hour used to die on a 403 of our own — and
             // why retrying it could never work, since only a fresh listing re-registered it.
             now = 40 * 60 * 1_000L
-            assertEquals(HttpStatusCode.TemporaryRedirect, client.get(play).status)
+            assertEquals(HttpStatusCode.OK, client.get(play).status)
         }
     }
 
     @Test
     fun `a stream nobody played is forgotten once its window lapses`() = runBlocking {
         var now = 0L
-        val boundary = boundary(HttpClient(MockEngine { error("upstream should not be called") }), { now })
+        val boundary = boundary(playableUpstream(), { now })
         boundary.registerStreams(listOf(AddonStream(url = "https://video.test/movie.mkv")))
 
         testApplication {
@@ -515,6 +565,23 @@ class MediaBoundaryTest {
             server.stop(0, 0)
         }
     }
+
+    /**
+     * An upstream that serves a short body, for the tests that only care who answered.
+     *
+     * Every direct stream is proxied now, so a `/play` the registry accepts really does fetch
+     * from the provider — an engine that throws would make an expiry test fail for the wrong
+     * reason.
+     */
+    private fun playableUpstream() = HttpClient(MockEngine {
+        respond(
+            content = "frames",
+            headers = headersOf(
+                HttpHeaders.ContentType to listOf("video/x-matroska"),
+                HttpHeaders.ContentLength to listOf("6"),
+            ),
+        )
+    })
 
     private fun boundary(
         client: HttpClient,

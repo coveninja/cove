@@ -137,6 +137,7 @@ class AndroidBackendRuntime private constructor(
         // the storage screen is if anything more load-bearing here than on the desktop.
         storage = storage,
         trackMemory = stores.repositories.trackMemory,
+        sourceMemory = stores.repositories.sourceMemory,
         onClose = ::close,
     )
 

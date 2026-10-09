@@ -14,6 +14,7 @@ class LocalRepositoryGraph internal constructor(
     val library: LocalLibraryRepository,
     val settings: LocalSettingsRepository,
     val trackMemory: LocalTrackMemoryRepository,
+    val sourceMemory: LocalSourceMemoryRepository,
     val progressEvents: ProgressEventBus,
 )
 
@@ -32,6 +33,7 @@ fun createLocalRepositoryGraph(
         library = LocalLibraryRepository(database, session, scope, newId, now, progressEvents),
         settings = LocalSettingsRepository(database, session, scope, now, newRemoteToken),
         trackMemory = LocalTrackMemoryRepository(database, session, now),
+        sourceMemory = LocalSourceMemoryRepository(database, session, now),
         progressEvents = progressEvents,
     )
 }

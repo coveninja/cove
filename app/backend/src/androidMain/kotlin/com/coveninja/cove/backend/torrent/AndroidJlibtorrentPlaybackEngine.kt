@@ -63,16 +63,24 @@ internal class AndroidJlibtorrentPlaybackEngine(
             torrents[canonical] ?: loadTorrent(canonical).also { torrents[canonical] = it }
         }
         val selected = selectTorrentFile(torrent.files, season, episode, fileIndex)
-        torrent.handle.prioritizeFiles(
-            Priority.array(Priority.IGNORE, torrent.info.numFiles()).also {
-                it[selected.index] = Priority.NORMAL
-            },
-        )
-        // Set on the handle rather than only at add time. The magnet path passes the flag to
-        // download(), but a torrent whose metadata was cached — the second episode of a series,
-        // and every resume — is added without it, so on those plays libtorrent picked whatever
-        // was rarest in the swarm and the reader waited on pieces from the middle of the file.
-        torrent.handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        // Once per selection, not once per range request: setting file priorities makes
+        // libtorrent recompute every piece's priority from them, discarding the parked
+        // download window and the read-ahead the scheduler had just issued. See the desktop
+        // engine, which had the same bug for the same reason.
+        val prioritiesReset = torrent.prioritizedFile.getAndSet(selected.index) != selected.index
+        if (prioritiesReset) {
+            torrent.handle.prioritizeFiles(
+                Priority.array(Priority.IGNORE, torrent.info.numFiles()).also {
+                    it[selected.index] = Priority.NORMAL
+                },
+            )
+            // Set on the handle rather than only at add time. The magnet path passes the flag to
+            // download(), but a torrent whose metadata was cached — the second episode of a
+            // series, and every resume — is added without it, so on those plays libtorrent picked
+            // whatever was rarest in the swarm and the reader waited on pieces from the middle of
+            // the file.
+            torrent.handle.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        }
         val path = torrent.saveDirectory.resolve(selected.path).normalize()
         require(path.startsWith(torrent.saveDirectory)) { "torrent file escaped download directory" }
         val id = "$canonical:${selected.index}"
@@ -81,7 +89,7 @@ internal class AndroidJlibtorrentPlaybackEngine(
         val managed = resources.computeIfAbsent(id) {
             ManagedResource(torrent, selected, path, scheduler(torrent, selected))
         }
-        managed.scheduler.prepareForRead()
+        managed.scheduler.prepareForRead(prioritiesReset)
         TorrentResource(id, path.fileName.toString(), selected.size, contentType(path.fileName.toString()))
     }
 
@@ -110,13 +118,16 @@ internal class AndroidJlibtorrentPlaybackEngine(
         // Kept as a local session guard as well as the cross-component lifecycle lease. The
         // latter spans Ktor's delayed producer and the eventual filesystem deletion.
         managed.torrent.readers.incrementAndGet()
+        // One claim on the swarm's urgency per served range, given back when this response
+        // ends — including when it ends because the viewer seeked and mpv dropped it.
+        val reader = managed.scheduler.beginRead()
         try {
             // libtorrent allocates sparsely: until it flushes the first piece covering
             // this file, nothing exists on disk — not the file, not even the directory
             // holding it. Opening before that wait throws FileNotFoundException for
             // every freshly added torrent, and because respondBytesWriter has already
             // sent the 206 by then, the player sees a stream that dies at byte zero.
-            managed.scheduler.awaitPieces(cursor, cursor, pieceTimeoutMillis)
+            reader.awaitPieces(cursor, cursor, pieceTimeoutMillis)
             awaitTorrentFile(managed.path, pieceTimeoutMillis)
             RandomAccessFile(managed.path.toFile(), "r").use { input ->
                 while (cursor <= endInclusive) {
@@ -129,7 +140,7 @@ internal class AndroidJlibtorrentPlaybackEngine(
                         min(endInclusive, managed.scheduler.pieceEndOffset(cursor)),
                         cursor + buffer.size - 1,
                     )
-                    managed.scheduler.awaitPieces(cursor, chunkEnd, pieceTimeoutMillis)
+                    reader.awaitPieces(cursor, chunkEnd, pieceTimeoutMillis)
                     input.seek(cursor)
                     var remaining = (chunkEnd - cursor + 1).toInt()
                     while (remaining > 0) {
@@ -142,6 +153,7 @@ internal class AndroidJlibtorrentPlaybackEngine(
                 }
             }
         } finally {
+            reader.close()
             managed.torrent.readers.decrementAndGet()
         }
     }
@@ -293,6 +305,16 @@ internal class AndroidJlibtorrentPlaybackEngine(
         val hash: String,
     ) {
         val readers = AtomicInteger(0)
+
+        /**
+         * The file whose priorities are installed on the handle; -1 before the first open.
+         *
+         * One per torrent rather than per file, because file priorities are a property of the
+         * torrent: switching to another episode inside the same pack re-installs them, which
+         * resets the pieces of the one being served too. Only a torrent serving two files at
+         * once notices, and that reader recovers as its next chunk re-asks for its pieces.
+         */
+        val prioritizedFile = AtomicInteger(-1)
     }
 
     private data class ManagedResource(

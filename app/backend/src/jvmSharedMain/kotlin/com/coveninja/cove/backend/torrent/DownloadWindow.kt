@@ -99,3 +99,75 @@ fun downloadWindow(
     val ahead = ((fileOffset + cursor + aheadBytes) / pieceLength).toInt()
     return PieceRange(first = first, last = ahead.coerceIn(first, file.last))
 }
+
+/** Pieces to raise and pieces to park when the download window moves. */
+data class WindowTransition(val raise: List<Int>, val park: List<Int>)
+
+/**
+ * The difference between two download windows, as the two sets of pieces to act on.
+ *
+ * Both halves matter and only one of them used to happen. The old code tracked the furthest
+ * piece the window had ever reached and raised anything past it, which is right while a reader
+ * advances and wrong the moment it jumps: a seek forward left the pieces in between parked for
+ * ever, and a seek *back* raised nothing at all, because the new window was behind the high
+ * water mark — so after one backward seek the only pieces ever asked for were the chunk under
+ * the cursor and its read-ahead, however much the viewer had allowed the download to run to.
+ *
+ * Parking what has fallen out is the other half of the same accounting: the window exists to
+ * keep the download next to the player, and a window that only ever grew was no window at all
+ * by the end of an episode.
+ *
+ * [exempt] is never parked — the container index at the end of the file, which the demuxer
+ * needs whatever the allowance.
+ */
+fun windowTransition(
+    previous: PieceRange?,
+    next: PieceRange,
+    exempt: PieceRange? = null,
+): WindowTransition {
+    val raise = (next.first..next.last).filter { previous == null || it !in previous }
+    val park = if (previous == null) {
+        emptyList()
+    } else {
+        (previous.first..previous.last).filter { it !in next && (exempt == null || it !in exempt) }
+    }
+    return WindowTransition(raise = raise, park = park)
+}
+
+/** What a reader waiting on pieces should do next. */
+enum class PieceWaitVerdict { Wait, GiveUpStalled, GiveUpTimedOut }
+
+/**
+ * Whether to keep waiting for the pieces under a read, and if not, which way it failed.
+ *
+ * A flat deadline answered the wrong question. Every one of these waits happens after the 206
+ * has gone out, so giving up truncates the response and the viewer is told the stream stopped
+ * before the end — and a seek into a cold region of a working swarm hit that deadline routinely,
+ * because the piece it needs is the one piece the swarm has not got round to. Meanwhile a source
+ * with no peers at all sat there for the whole minute before saying so.
+ *
+ * So the clock that matters is the one since anything last arrived: a download that is moving
+ * keeps its ceiling, and one that is not fails fast enough for the session to fail over to
+ * another source while the viewer is still waiting. The ceiling stays because mpv has its own
+ * network timeout behind this one, and losing that race deliberately is what keeps the
+ * explanation ours.
+ */
+fun pieceWaitVerdict(
+    elapsedMillis: Long,
+    millisSinceProgress: Long,
+    ceilingMillis: Long,
+    stalledMillis: Long = PIECE_STALL_MILLIS,
+): PieceWaitVerdict = when {
+    millisSinceProgress >= stalledMillis -> PieceWaitVerdict.GiveUpStalled
+    elapsedMillis >= ceilingMillis -> PieceWaitVerdict.GiveUpTimedOut
+    else -> PieceWaitVerdict.Wait
+}
+
+/**
+ * How long nothing at all may arrive before a read gives up.
+ *
+ * Short enough that the failover to another source happens while the viewer is still watching
+ * the spinner, long enough to cover a tracker announce and a round of handshakes on a swarm
+ * that is merely slow to start.
+ */
+const val PIECE_STALL_MILLIS = 15_000L

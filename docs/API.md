@@ -155,6 +155,13 @@ registers playable URLs and torrent hashes with the media boundary. A later
 `GET /play` can serve only a registered direct URL or hash. Registrations are
 bounded and expire; clients should not persist them as durable media URLs.
 
+`GET /play` proxies a direct stream rather than redirecting to it, whether or not the
+provider asked for request headers. A range the upstream honours is forwarded as it came;
+one it ignores — a `200` carrying the whole file — is answered as a `206` from the
+requested offset, because ffmpeg treats a length-only response as a non-seekable stream
+and then cannot seek at all. Clients should expect `Accept-Ranges`, `Content-Range` and
+`Content-Length` to describe what they actually receive.
+
 `POST /streams/probe` validates a candidate batch. Torrent playback accepts
 optional `season`, `episode`, and `fileIdx` selectors. `/progress` is a snapshot;
 `/progress/stream` emits an SSE update approximately every two seconds.

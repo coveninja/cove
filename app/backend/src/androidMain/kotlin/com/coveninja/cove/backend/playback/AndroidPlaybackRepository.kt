@@ -8,6 +8,7 @@ import com.coveninja.cove.backend.nuvio.NuvioManager
 import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.model.MediaTimestamps
 import com.coveninja.cove.shared.model.MediaType
+import com.coveninja.cove.shared.model.StreamBehaviorHints
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.shared.model.SubtitleSource
 import com.coveninja.cove.shared.model.TimestampSegment
@@ -116,6 +117,12 @@ private fun AddonStream.toShared() = StreamSource(
     sizeBytes = sizeBytes.takeIf { it > 0 } ?: behaviorHints?.videoSize ?: 0,
     fileIdx = fileIdx,
     cached = cached,
+    // Carried across rather than dropped: the desktop decodes this straight off the wire, so
+    // leaving it out here is the kind of divergence where a phone silently shows less than a
+    // desktop does for the same provider.
+    behaviorHints = behaviorHints?.filename
+        ?.takeIf { it.isNotBlank() }
+        ?.let { StreamBehaviorHints(filename = it) },
 )
 
 private fun TimestampData.toShared() = MediaTimestamps(

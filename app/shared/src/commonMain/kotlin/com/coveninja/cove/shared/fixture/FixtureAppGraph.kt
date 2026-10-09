@@ -1042,6 +1042,20 @@ private class FixturePlaybackRepository : PlaybackRepository {
             addonName = "Fixtures",
             sizeBytes = 1_900_000_000,
         ),
+        // The shape a real provider usually has: a display line with the size and the seeders
+        // in it, and the file itself named only in behaviorHints. Without one of these in the
+        // fixtures the picker's file-name row cannot be seen under `make hot`.
+        StreamSource(
+            name = "Fixture 2160p",
+            title = "Fixture Season Pack · 2160p HDR\n👤 214 💾 61.4 GB ⚙️ Fixtures",
+            infoHash = "1".repeat(40),
+            addonName = "Fixtures",
+            fileIdx = 3,
+            sizeBytes = 8_100_000_000,
+            behaviorHints = StreamBehaviorHints(
+                filename = "Fixture.S01E04.2160p.WEB-DL.DV.HDR.DDP5.1.x265-FIXTURE.mkv",
+            ),
+        ),
     )
 
     // A plausible intro so the seek bar's segments are visible without a backend.
@@ -1455,6 +1469,7 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
     device    = FixtureDeviceRepository(),
     storage   = FixtureStorageRepository(),
     trackMemory = FixtureTrackMemoryRepository(),
+    sourceMemory = FixtureSourceMemoryRepository(),
     fixtures  = true,
 )
 
@@ -1464,6 +1479,24 @@ fun FixtureAppGraph(): AppGraph = AppGraph(
  * In-memory rather than canned: an empty memory is what a fresh profile genuinely has, and
  * seeding one would make a fixtures run open the player with a track nobody picked.
  */
+class FixtureSourceMemoryRepository : SourceMemoryRepository {
+    private val remembered = mutableMapOf<String, SourceMemory>()
+
+    override suspend fun read(tmdbId: Int, season: Int?, episode: Int?): SourceMemory =
+        remembered[key(tmdbId, season, episode)] ?: SourceMemory.None
+
+    override suspend fun write(tmdbId: Int, season: Int?, episode: Int?, memory: SourceMemory) {
+        if (memory.isEmpty) forget(tmdbId, season, episode)
+        else remembered[key(tmdbId, season, episode)] = memory
+    }
+
+    override suspend fun forget(tmdbId: Int, season: Int?, episode: Int?) {
+        remembered.remove(key(tmdbId, season, episode))
+    }
+
+    private fun key(tmdbId: Int, season: Int?, episode: Int?) = "$tmdbId:$season:$episode"
+}
+
 class FixtureTrackMemoryRepository : TrackMemoryRepository {
     private val remembered = mutableMapOf<Int, TrackMemory>()
 

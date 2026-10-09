@@ -188,18 +188,74 @@ fun playbackReachedNaturalEnd(positionSeconds: Double, durationSeconds: Double):
 }
 
 /**
+ * What the viewer is told when playback stopped short of the end.
+ *
+ * Shared because both hosts write it and [applyPendingSeek]'s equivalent has to recognise
+ * it to take it back: a sentence duplicated as a literal in three files is one that gets
+ * cleared in two of them.
+ */
+const val STREAM_STOPPED_EARLY_MESSAGE = "The stream stopped before the end."
+
+/**
+ * How long after a requested seek an EOF is read as that seek still resolving.
+ *
+ * Long enough to cover a demuxer re-opening the stream at a new offset over loopback and a
+ * torrent behind it, short enough that a seek into a genuinely dead region still reaches
+ * the reconnect while the viewer is still looking at the player.
+ */
+const val SEEK_TERMINAL_GRACE_MILLIS = 6_000L
+
+/**
+ * Whether an EOF arriving now belongs to a seek that has not landed yet.
+ *
+ * Both hosts publish a requested seek target immediately — the position poll is 200 ms
+ * behind, and relative seeks are computed from what was published — so for a moment the
+ * position the UI holds is the viewer's intent while mpv is still wherever it was. If mpv
+ * is parked at the end there (the ordinary case of seeking back out of the credits, or of a
+ * seek the conflating channel has not dispatched yet), classifying that EOF compares the
+ * end of the file against the seek target and concludes the stream died mid-file: the
+ * session then reloads it, and a second one inside the retry renewal window ends the
+ * session on a banner. Deferring the verdict until the seek settles costs nothing, because
+ * a seek that really did kill the stream still reports it once the grace lapses.
+ *
+ * A negative elapsed time means the clock moved under us, which counts as just-issued: the
+ * conservative branch is the one that waits for better evidence.
+ */
+fun seekStillResolving(pendingSeekSeconds: Double?, millisSinceSeekIssued: Long): Boolean =
+    pendingSeekSeconds != null && millisSinceSeekIssued < SEEK_TERMINAL_GRACE_MILLIS
+
+/**
  * Classifies one EOF observation using the position immediately before it.
  *
  * Natural playback reports several positions inside the end tolerance. A broken
  * input can instead make keep-open park at the duration in one update; requiring
  * both samples to be near the end distinguishes that jump and preserves the last
  * position the viewer actually reached.
+ *
+ * [seekUnsettled] withholds the verdict entirely — neither ended nor interrupted, which is
+ * "not yet" rather than "fine" — because neither position means what it usually does while
+ * a requested seek is in flight. See [seekStillResolving].
  */
 fun classifyPlaybackTermination(
     positionSeconds: Double,
     previousPositionSeconds: Double,
     durationSeconds: Double,
+    seekUnsettled: Boolean = false,
 ): PlaybackTermination {
+    if (seekUnsettled) {
+        return PlaybackTermination(
+            ended = false,
+            interrupted = false,
+            // Held, not reset: the hosts write this back over the published position, and
+            // the one they have is the seek target the viewer is waiting on.
+            positionSeconds = when {
+                positionSeconds.isFinite() && positionSeconds >= 0.0 -> positionSeconds
+                previousPositionSeconds.isFinite() && previousPositionSeconds >= 0.0 ->
+                    previousPositionSeconds
+                else -> 0.0
+            },
+        )
+    }
     val currentAtEnd = playbackReachedNaturalEnd(positionSeconds, durationSeconds)
     val previousAtEnd = playbackReachedNaturalEnd(previousPositionSeconds, durationSeconds)
     if (currentAtEnd && previousAtEnd) {
@@ -270,10 +326,21 @@ const val MAX_VOLUME = 130.0
  * have answered a second request perfectly well. Addon streams drop mid-file often enough
  * that this is ordinary rather than exceptional.
  *
- * `reconnect_streamed` is included because a response without a length is not seekable as
- * far as ffmpeg is concerned, and those are exactly the streams that most need retrying.
- * `reconnect_at_eof` is deliberately absent: it treats a clean end-of-file as an error too,
- * and the natural end is what decides whether the next episode plays. `reconnect_delay_max`
+ * `reconnect_streamed` is deliberately **not** here, and that absence is the whole of
+ * "seeking ends the stream early". ffmpeg logs a reconnect as
+ * `Will reconnect at %lu in %d second(s)`, where the number is the offset it is about to
+ * re-request, and in http.c that offset is `h->is_streamed ? 0 : s->off` — the streamed
+ * branch rewinds to **byte zero**. A desktop log from a film seventy minutes in reads
+ * `Will reconnect at 0`, so an idle socket the CDN had closed took the viewer back to the
+ * beginning; mpv, whose demuxer was still mid-file, reported EOF instead, and the session
+ * called that an interrupted stream. The flag was added for responses carrying no length,
+ * which ffmpeg treats as unseekable — but for exactly those the rewind is the behaviour,
+ * not the recovery, and PlaybackSession's own reload resumes from the saved position
+ * instead. Asking for it also tells ffmpeg to treat the input as a stream, so a seek past
+ * mpv's demuxer cache can no longer be served by a byte range at all.
+ *
+ * `reconnect_at_eof` is likewise absent: it treats a clean end-of-file as an error too, and
+ * the natural end is what decides whether the next episode plays. `reconnect_delay_max`
  * bounds the retries, so a genuinely dead upstream still gives up rather than looping.
  *
  * Lives here because both hosts need the identical string and neither module can see the
@@ -281,7 +348,7 @@ const val MAX_VOLUME = 130.0
  * of divergence a shared constant is for.
  */
 const val RECONNECT_STREAM_OPTIONS =
-    "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=10"
+    "reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=10"
 
 /** The default for a host that never reports one, shared so each does not allocate its own. */
 private val NO_MEDIA_PLAYING: StateFlow<NowPlaying?> = MutableStateFlow(null)

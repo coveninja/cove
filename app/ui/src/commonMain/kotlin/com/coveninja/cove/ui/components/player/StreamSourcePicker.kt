@@ -47,6 +47,9 @@ import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.state.SeederHealth
 import com.coveninja.cove.ui.state.StreamChoice
 import com.coveninja.cove.ui.state.StreamCompatibility
+import com.coveninja.cove.ui.state.displayLabel
+import com.coveninja.cove.ui.state.distinctFileName
+import com.coveninja.cove.ui.state.qualityLabel
 import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.audioHints
 import com.coveninja.cove.ui.state.seederCount
@@ -210,13 +213,15 @@ private fun SourceRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
                 Text(
                     text = source.displayLabel(),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
-                    maxLines = 1,
+                    // Two lines, because a release name is where the answer usually is and one
+                    // line of it ends in an ellipsis on every row of a 660.dp sheet.
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                     color = if (enabled) {
@@ -225,7 +230,24 @@ private fun SourceRow(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
-                if (recommended) BestMatchTag()
+                // One tag, not two: a row that is both the last one used and the best match is
+                // better described by the reason the viewer recognises.
+                if (choice.remembered) LastUsedTag() else if (recommended) BestMatchTag()
+            }
+
+            // Only when it says something the line above does not. Most providers put the file
+            // name in the title and repeating it would cost two lines per row for nothing; the
+            // ones that do not are exactly the ones where it answers which episode, which dub
+            // or whose encode is on offer.
+            source.distinctFileName()?.let { fileName ->
+                Text(
+                    text = fileName,
+                    modifier = Modifier.padding(top = 3.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
             Row(
@@ -424,6 +446,31 @@ private fun BestMatchTag() {
     }
 }
 
+/**
+ * Marks the source this title was last played from.
+ *
+ * Worth a tag of its own because it is the one piece of provenance the list cannot otherwise
+ * show: everything else in a row describes the file, while this says "you chose this before".
+ */
+@Composable
+private fun LastUsedTag() {
+    Box(
+        modifier = Modifier
+            .background(
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                RoundedCornerShape(6.dp),
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text = "LAST USED",
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
 @Composable
 private fun CachedChip() {
     Box(
@@ -472,35 +519,6 @@ private fun StreamCompatibility.warningLabel(): String? = when (support) {
     VideoDecoderSupport.SoftwareOnly -> "Software decoding only · playback may stutter"
     VideoDecoderSupport.Unsupported -> "Unsupported video codec on this device"
     else -> null
-}
-
-// ── Source presentation ──────────────────────────────────────────────────────
-
-/**
- * Providers put the resolution in whichever of name/title suits them, usually
- * alongside the release name. Pulling it out gives the row something scannable
- * to lead with; unknown is fine and falls back to a generic icon.
- */
-internal fun StreamSource.qualityLabel(): String? {
-    val haystack = "${name.orEmpty()} ${title.orEmpty()}".lowercase()
-    return when {
-        "2160" in haystack || "4k" in haystack || "uhd" in haystack -> "4K"
-        "1440" in haystack -> "1440p"
-        "1080" in haystack -> "1080p"
-        "720" in haystack -> "720p"
-        "480" in haystack -> "480p"
-        else -> null
-    }
-}
-
-/** The first non-blank line of whichever field carries the release name. */
-internal fun StreamSource.displayLabel(): String {
-    val candidate = title?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() }
-    return candidate
-        ?.lineSequence()
-        ?.map(String::trim)
-        ?.firstOrNull { it.isNotEmpty() }
-        ?: "Unnamed source"
 }
 
 /**

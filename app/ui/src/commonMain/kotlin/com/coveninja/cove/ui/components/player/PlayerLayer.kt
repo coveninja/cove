@@ -84,6 +84,8 @@ import com.coveninja.cove.ui.platform.hasPointerHover
 import com.coveninja.cove.ui.platform.hideCursorWhen
 import com.coveninja.cove.ui.platform.rememberScreenBrightness
 import com.coveninja.cove.ui.platform.subtitleFileDropTarget
+import com.coveninja.cove.ui.state.STREAM_STOPPED_EARLY_MESSAGE
+import com.coveninja.cove.ui.state.qualityLabel
 import com.coveninja.cove.ui.state.SUBTITLE_FILE_EXTENSIONS
 import com.coveninja.cove.ui.state.subtitleFileName
 import com.coveninja.cove.ui.state.subtitleFilesAmong
@@ -906,7 +908,7 @@ fun PlayerLayer(
 
                 if ((status.interrupted || session.recoveryFailed) && !session.reconnecting) {
                     PlaybackInterruptionBanner(
-                        message = "The stream stopped before the end.",
+                        message = STREAM_STOPPED_EARLY_MESSAGE,
                         onRetry = session::retryCurrentSource,
                         onPickSource = (session::reopenSources).takeUnless { request.extra != null },
                         onClose = session::close,

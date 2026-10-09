@@ -138,4 +138,108 @@ class DownloadWindowTest {
             downloadWindow(fileOffset, fileSize, pieceLength, fileSize + 5_000, 1_000, numPieces),
         )
     }
+
+    // ── windowTransition ─────────────────────────────────────────────────────
+
+    @Test
+    fun `a first window raises its own pieces and parks nothing`() {
+        val window = downloadWindow(fileOffset, fileSize, pieceLength, 0, 3_000, numPieces)
+
+        val transition = windowTransition(previous = null, next = window)
+
+        // Fails if the no-previous case is treated as an empty range, which would raise
+        // nothing at all and leave the opening pieces at whatever libtorrent last set.
+        assertEquals(listOf(10, 11, 12, 13), transition.raise)
+        assertEquals(emptyList(), transition.park)
+    }
+
+    @Test
+    fun `advancing raises only the new ground and parks what is behind`() {
+        val before = downloadWindow(fileOffset, fileSize, pieceLength, 0, 3_000, numPieces)
+        val after = downloadWindow(fileOffset, fileSize, pieceLength, 5_000, 3_000, numPieces)
+
+        val transition = windowTransition(previous = before, next = after)
+
+        // 10..13 becomes 15..18. Fails if the overlap is re-issued (harmless but pointless) or
+        // if the pieces left behind are not parked, which is the whole of what bounds the
+        // download: a window that only ever grew was no window at all by the end of an episode.
+        assertEquals(listOf(15, 16, 17, 18), transition.raise)
+        assertEquals(listOf(10, 11, 12, 13), transition.park)
+    }
+
+    @Test
+    fun `an overlapping move touches only the two ends`() {
+        val before = downloadWindow(fileOffset, fileSize, pieceLength, 0, 3_000, numPieces)
+        val after = downloadWindow(fileOffset, fileSize, pieceLength, 1_500, 3_000, numPieces)
+
+        val transition = windowTransition(previous = before, next = after)
+
+        // 10..13 becomes 11..14. Both halves are differences rather than whole ranges: fails if
+        // raise is the new window outright, which re-issues a priority per piece per chunk read
+        // for no change, and fails if park is the old window outright, which would park pieces
+        // the reader is about to need — the one thing the window must never do.
+        assertEquals(listOf(14), transition.raise)
+        assertEquals(listOf(10), transition.park)
+    }
+
+    @Test
+    fun `seeking backwards raises the ground in front of the new cursor`() {
+        val ahead = downloadWindow(fileOffset, fileSize, pieceLength, 15_000, 3_000, numPieces)
+        val back = downloadWindow(fileOffset, fileSize, pieceLength, 2_000, 3_000, numPieces)
+
+        val transition = windowTransition(previous = ahead, next = back)
+
+        // The case the old high-water mark could not express: everything here is behind the
+        // furthest the window had reached, so it raised nothing and the only pieces ever asked
+        // for after one backward seek were the chunk under the cursor and its read-ahead.
+        assertEquals(listOf(12, 13, 14, 15), transition.raise)
+        assertEquals(listOf(25, 26, 27, 28), transition.park)
+    }
+
+    @Test
+    fun `the container index is never parked`() {
+        val before = downloadWindow(fileOffset, fileSize, pieceLength, 0, 3_000, numPieces)
+        val after = downloadWindow(fileOffset, fileSize, pieceLength, 9_000, 3_000, numPieces)
+
+        val transition = windowTransition(previous = before, next = after, exempt = PieceRange(11, 12))
+
+        // Fails without the exemption: the demuxer cannot open the file without the index at
+        // its end, so parking those pieces because the reader moved past them means the next
+        // load waits on bytes nothing is fetching.
+        assertEquals(listOf(10, 13), transition.park)
+    }
+
+    // ── pieceWaitVerdict ─────────────────────────────────────────────────────
+
+    @Test
+    fun `a wait with data still arriving keeps its ceiling`() {
+        // Fails if the stall clock is measured from the start of the wait rather than from the
+        // last thing that arrived: a seek into a cold region of a working swarm would then be
+        // abandoned after fifteen seconds, mid-response, and read as a dead stream.
+        assertEquals(
+            PieceWaitVerdict.Wait,
+            pieceWaitVerdict(elapsedMillis = 40_000, millisSinceProgress = 400, ceilingMillis = 60_000),
+        )
+    }
+
+    @Test
+    fun `a swarm that has gone quiet gives up well inside the ceiling`() {
+        // Fails if only the ceiling is checked: a source with no peers at all held the response
+        // open for the full minute before anyone could fail over to another one.
+        assertEquals(
+            PieceWaitVerdict.GiveUpStalled,
+            pieceWaitVerdict(elapsedMillis = 16_000, millisSinceProgress = PIECE_STALL_MILLIS, ceilingMillis = 60_000),
+        )
+    }
+
+    @Test
+    fun `pieces that never arrive still lose to the ceiling`() {
+        // mpv has its own network timeout behind this one, and losing that race deliberately is
+        // what keeps the explanation ours. Fails if the ceiling is dropped in favour of the
+        // stall clock alone, which a trickle of unrelated pieces would keep resetting for ever.
+        assertEquals(
+            PieceWaitVerdict.GiveUpTimedOut,
+            pieceWaitVerdict(elapsedMillis = 60_000, millisSinceProgress = 100, ceilingMillis = 60_000),
+        )
+    }
 }

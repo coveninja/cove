@@ -18,12 +18,14 @@ import com.coveninja.cove.ui.state.MediaTrack
 import com.coveninja.cove.ui.state.NowPlaying
 import com.coveninja.cove.ui.state.PlaybackPreferences
 import com.coveninja.cove.ui.state.PlaybackStatus
+import com.coveninja.cove.ui.state.STREAM_STOPPED_EARLY_MESSAGE
 import com.coveninja.cove.ui.state.SubtitleStyle
 import com.coveninja.cove.ui.state.TrackKind
 import com.coveninja.cove.ui.state.parseMpvTrackList
 import com.coveninja.cove.ui.state.VideoScaling
 import com.coveninja.cove.ui.state.VideoPlayerHost
 import com.coveninja.cove.ui.state.classifyPlaybackTermination
+import com.coveninja.cove.ui.state.seekStillResolving
 import java.nio.file.Files
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
@@ -126,6 +128,14 @@ class MpvVideoPlayerHost(
     private var pendingSeekSeconds: Double? = null
 
     /**
+     * When that target was asked for, on a monotonic clock, so an EOF arriving while the
+     * seek is still resolving can be told from one arriving long after it should have
+     * landed. See [seekStillResolving].
+     */
+    @Volatile
+    private var pendingSeekAtMillis: Long = 0L
+
+    /**
      * Conflated on purpose: a burst of targets collapses to its newest member, so a
      * dragged scrubber or a held arrow key costs mpv one exact seek per window rather
      * than one per event. See SEEK_COMMAND_INTERVAL_MILLIS.
@@ -150,6 +160,7 @@ class MpvVideoPlayerHost(
         // The new file starts wherever it starts; a target aimed at the old one would
         // otherwise survive and drag the playhead there.
         pendingSeekSeconds = null
+        pendingSeekAtMillis = 0L
         currentMediaOpened = false
         _status.value = _status.value.copy(
             hasMedia = false,
@@ -178,6 +189,7 @@ class MpvVideoPlayerHost(
             // below would overtake the seek and be swallowed by the end all over again.
             val target = clampSeekTarget(0.0, _status.value.durationSeconds)
             pendingSeekSeconds = target
+            pendingSeekAtMillis = monotonicMillis()
             _status.value = _status.value.copy(positionSeconds = target, endReached = false)
             active?.seek(target)
         }
@@ -193,6 +205,7 @@ class MpvVideoPlayerHost(
     override fun seek(seconds: Double) {
         val target = clampSeekTarget(seconds, _status.value.durationSeconds)
         pendingSeekSeconds = target
+        pendingSeekAtMillis = monotonicMillis()
         // Echoed immediately, exactly as setVolume does below: the poll is 200 ms
         // away, and a bar that ignores the input for that long reads as a dropped one.
         _status.value = _status.value.copy(positionSeconds = target, endReached = false)
@@ -461,13 +474,17 @@ class MpvVideoPlayerHost(
                             positionSeconds = raw.positionSeconds,
                             previousPositionSeconds = previous.positionSeconds,
                             durationSeconds = raw.durationSeconds,
+                            seekUnsettled = seekStillResolving(
+                                pendingSeekSeconds = pendingSeekSeconds,
+                                millisSinceSeekIssued = monotonicMillis() - pendingSeekAtMillis,
+                            ),
                         )
                         raw.copy(
                             positionSeconds = termination.positionSeconds,
                             endReached = termination.ended,
                             interrupted = termination.interrupted,
                             statusMessage = if (termination.interrupted) {
-                                "The stream stopped before the end."
+                                STREAM_STOPPED_EARLY_MESSAGE
                             } else {
                                 raw.statusMessage
                             },
@@ -500,6 +517,7 @@ class MpvVideoPlayerHost(
         mirrorJob = null
         player = null
         pendingSeekSeconds = null
+        pendingSeekAtMillis = 0L
         currentMediaOpened = false
         _status.value = PlaybackStatus()
     }

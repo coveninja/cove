@@ -28,6 +28,7 @@ import com.coveninja.cove.backend.store.LocalLibraryRepository
 import com.coveninja.cove.backend.store.LocalProfileRepository
 import com.coveninja.cove.backend.store.LocalRepositoryGraph
 import com.coveninja.cove.backend.store.LocalSettingsRepository
+import com.coveninja.cove.backend.store.LocalSourceMemoryRepository
 import com.coveninja.cove.backend.store.LocalTrackMemoryRepository
 import com.coveninja.cove.backend.store.ProgressEventBus
 import com.coveninja.cove.backend.store.createLocalRepositoryGraph
@@ -54,6 +55,7 @@ class LocalStoreGraph private constructor(
     val library: LocalLibraryRepository get() = repositories.library
     val settings: LocalSettingsRepository get() = repositories.settings
     val trackMemory: LocalTrackMemoryRepository get() = repositories.trackMemory
+    val sourceMemory: LocalSourceMemoryRepository get() = repositories.sourceMemory
     val progressEvents: ProgressEventBus get() = repositories.progressEvents
     internal val databaseHandle get() = database.database
     fun exportLegacyFallback() = exporter.export()

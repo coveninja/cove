@@ -33,10 +33,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.CoveColors
-import com.coveninja.cove.ui.components.player.displayLabel
 import com.coveninja.cove.ui.components.player.formatBytes
-import com.coveninja.cove.ui.components.player.qualityLabel
 import com.coveninja.cove.ui.state.StreamChoice
+import com.coveninja.cove.ui.state.displayLabel
+import com.coveninja.cove.ui.state.distinctFileName
+import com.coveninja.cove.ui.state.qualityLabel
 import com.coveninja.cove.ui.state.VideoDecoderSupport
 import com.coveninja.cove.ui.state.seederCount
 import com.coveninja.cove.ui.tv.TvTheme
@@ -213,6 +214,19 @@ private fun TvSourceRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // One line here, where the desktop allows two: a row on a television is read from
+            // the sofa and already carries the larger type, so the useful end of a long name
+            // is better served by the row above staying scannable.
+            source.distinctFileName()?.let { fileName ->
+                Text(
+                    text = fileName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
             Text(
                 text = sourceDetail(choice),
                 style = MaterialTheme.typography.labelMedium,
@@ -227,6 +241,9 @@ private fun TvSourceRow(
 
 /** The line under a source's name: where it came from, how big it is, how healthy. */
 private fun sourceDetail(choice: StreamChoice): String = buildList {
+    // First, because on a remote the reason to press this row is that it is the one that
+    // worked last night — and a television row has only this one line to say so in.
+    if (choice.remembered) add("Last used")
     choice.source.addonName?.takeIf { it.isNotBlank() }?.let(::add)
     if (choice.source.cached) add("Cached")
     choice.source.sizeBytes.takeIf { it > 0 }?.let { add(formatBytes(it)) }
