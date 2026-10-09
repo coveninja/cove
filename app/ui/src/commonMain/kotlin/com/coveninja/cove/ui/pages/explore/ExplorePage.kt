@@ -1,5 +1,10 @@
 package com.coveninja.cove.ui.pages.explore
 
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.runtime.collectAsState
+import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.ui.state.rememberSettingsEditor
+import com.coveninja.cove.ui.state.LocalAppGraph
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -95,8 +100,11 @@ class ExplorePageState internal constructor(
             type = if (catalog.type == "series") MediaType.Series else MediaType.Movie,
             catalog = catalog,
         )
-        layout = ExploreLayout.Grid
+        layout = layout.forBrowsing()
     }
+
+    /** Last applied preference; a different profile or synced preference can change it. */
+    internal var restoredLayout: String? = null
 }
 
 @Composable
@@ -139,6 +147,19 @@ fun ExplorePage(
     val filters = pageState.filters
     val layout = pageState.layout
 
+    // The layout the viewer last chose themselves, so someone who prefers the list does not
+    // have to switch to it every time Explore opens.
+    val graph = LocalAppGraph.current
+    val settingsState by graph.settings.settings.collectAsState()
+    val settings = (settingsState as? SettingsState.Ready)?.settings
+    val settingsEditor = settings?.let { rememberSettingsEditor(it) }
+    LaunchedEffect(settings?.exploreLayout) {
+        if (settings != null && settings.exploreLayout != pageState.restoredLayout) {
+            pageState.restoredLayout = settings.exploreLayout
+            pageState.layout = restoredExploreLayout(settings.exploreLayout, pageState.filters)
+        }
+    }
+
     val seed = remember(exploreState) {
         (exploreState as? ExploreState.Ready)
             ?.let { it.movies + it.tv }
@@ -149,17 +170,17 @@ fun ExplorePage(
     LaunchedEffect(filters.type, seed) { controller.loadShelves(filters.type, seed) }
 
     // Load grid data only while the grid is visible.
-    LaunchedEffect(filters.catalogKey, layout) {
-        if (layout == ExploreLayout.Grid) controller.setGridFilters(filters)
+    LaunchedEffect(filters.catalogKey, layout.browsing) {
+        if (layout.browsing) controller.setGridFilters(filters)
     }
 
-    // Narrowing filters open the grid; format changes only re-shelve rails.
+    // Narrowing filters open the browse; format changes only re-shelve rails.
     val onFiltersChange: (ExploreFilters) -> Unit = { next ->
         if (next.catalogKey != filters.catalogKey && next.type == filters.type) {
-            pageState.layout = ExploreLayout.Grid
+            pageState.layout = pageState.layout.forBrowsing()
         }
         if (next.query != filters.query && next.query.isNotBlank()) {
-            pageState.layout = ExploreLayout.Grid
+            pageState.layout = pageState.layout.forBrowsing()
         }
         pageState.filters = next
     }
@@ -178,7 +199,7 @@ fun ExplorePage(
     }
 
     fun surpriseMe() {
-        val pool = if (layout == ExploreLayout.Grid) visibleGrid else shelfMedia
+        val pool = if (layout.browsing) visibleGrid else shelfMedia
         pool.randomOrNullStable()?.let(onOpenMedia)
     }
 
@@ -193,6 +214,9 @@ fun ExplorePage(
                     pageState.filters = filters.copy(catalog = null)
                 }
                 pageState.layout = next
+                if (settings != null && settings.exploreLayout != next.setting) {
+                    settingsEditor?.edit { copy(exploreLayout = next.setting) }
+                }
             },
             onSurpriseMe = ::surpriseMe,
             modifier = Modifier.padding(
@@ -255,7 +279,7 @@ fun ExplorePage(
                                 catalog = null,
                             )
                         }
-                        pageState.layout = ExploreLayout.Grid
+                        pageState.layout = pageState.layout.forBrowsing()
                     },
                     mediaCard = mediaCard,
                     toolbar = toolbar,
@@ -264,7 +288,7 @@ fun ExplorePage(
                     railStates = pageState.railStates,
                 )
 
-                ExploreLayout.Grid -> GridLayout(
+                ExploreLayout.Grid, ExploreLayout.Rows -> GridLayout(
                     controller = controller,
                     filters = filters,
                     visible = visibleGrid,
@@ -275,7 +299,26 @@ fun ExplorePage(
                         )
                     },
                     onExitCatalog = ::leaveCatalog,
-                    mediaCard = mediaCard,
+                    mediaCard = if (current == ExploreLayout.Rows) {
+                        { media, itemModifier ->
+                            ExploreListRow(
+                                media = media,
+                                inList = index.categoryOf(media.id) != null,
+                                onOpen = { onOpenMedia(media) },
+                                onToggleList = {
+                                    if (index.categoryOf(media.id) != null) {
+                                        actions.removeFromList(media)
+                                    } else {
+                                        actions.setListCategory(media, MyListCategory.WatchLater)
+                                    }
+                                },
+                                modifier = itemModifier,
+                            )
+                        }
+                    } else {
+                        mediaCard
+                    },
+                    rows = current == ExploreLayout.Rows,
                     toolbar = toolbar,
                     navBarPlacement = navBarPlacement,
                     gridState = pageState.gridState,
@@ -403,6 +446,8 @@ private fun GridLayout(
     onClearFilters: () -> Unit,
     onExitCatalog: () -> Unit,
     mediaCard: @Composable (Media, Modifier) -> Unit,
+    /** Titles as wide rows with their description, rather than as posters. */
+    rows: Boolean,
     toolbar: @Composable () -> Unit,
     navBarPlacement: NavBarPlacement,
     gridState: LazyGridState,
@@ -508,6 +553,7 @@ private fun GridLayout(
                     onLoadMore = controller::loadNextPage,
                     onRetry = controller::retry,
                     mediaCard = mediaCard,
+                    columns = if (rows) GridCells.Adaptive(ListRowMinWidth) else GridCells.Adaptive(PageLayoutDefaults.PosterGridMinWidth),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -553,3 +599,6 @@ private fun <T> List<T>.randomOrNullStable(): T? =
 
 /** How many titles the hero rotates through before repeating. */
 private const val SPOTLIGHT_SLIDES = 5
+
+/** One column of rows on a phone, two or three across a desktop window. */
+private val ListRowMinWidth = 380.dp

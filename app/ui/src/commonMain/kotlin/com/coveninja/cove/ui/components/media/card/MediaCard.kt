@@ -99,6 +99,9 @@ fun MediaCard(
     onDragEnd: () -> Unit = {},
     onDragCancel: () -> Unit = {},
 ) {
+    // Series carry their title in `name`, not `title`. Reading `title` alone left every series
+    // card without a title on hover, in its menu and in drags, and read out as "null poster".
+    val displayTitle = media.title?.takeIf { it.isNotBlank() } ?: media.name
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered = if (hasPointerHover) {
         interactionSource.collectIsHoveredAsState().value
@@ -188,7 +191,7 @@ fun MediaCard(
             .onGloballyPositioned { coordinates ->
                 cardCoordinates = coordinates
             }
-            .pointerInput(media.posterUrl, media.title, media.type?.label, media.rating) {
+            .pointerInput(media.posterUrl, displayTitle, media.type?.label, media.rating) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { localPosition ->
                         val coordinates = cardCoordinates ?: return@detectDragGesturesAfterLongPress
@@ -218,7 +221,7 @@ fun MediaCard(
                         val dragPayload = MediaDragPayload(
                             mediaId = media.id,
                             posterUrl = media.posterUrl,
-                            title = media.title,
+                            title = displayTitle,
                             mediaType = media.type?.label ?: "Unknown",
                             rating = media.rating,
                             sourceSize = sourceSize,
@@ -267,7 +270,7 @@ fun MediaCard(
     ) {
         CoveAsyncImage(
             model = media.posterUrl,
-            contentDescription = "${media.title} poster",
+            contentDescription = "${displayTitle ?: "Untitled"} poster",
             modifier = posterModifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
         )
@@ -302,7 +305,7 @@ fun MediaCard(
                         ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    media.title?.let {
+                    displayTitle?.let {
                         Text(
                             text = it,
                             color = Color.White,
@@ -357,7 +360,7 @@ fun MediaCard(
             ) {
                 MediaContextMenu(
                     expanded = menu.visible,
-                    title = media.title,
+                    title = displayTitle,
                     subtitle = media.type?.label ?: "Unknown",
                     rating = media.rating,
                     currentListCategory = myListCategory,

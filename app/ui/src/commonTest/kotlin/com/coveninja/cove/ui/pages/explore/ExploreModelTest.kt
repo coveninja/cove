@@ -12,6 +12,13 @@ import kotlin.test.assertTrue
 
 class ExploreModelTest {
 
+    @Test
+    fun `restoring a layout keeps a narrowed browse visible`() {
+        assertEquals(ExploreLayout.Shelves, restoredExploreLayout("shelves", ExploreFilters()))
+        assertEquals(ExploreLayout.Grid, restoredExploreLayout("shelves", ExploreFilters(query = "Film")))
+        assertEquals(ExploreLayout.Rows, restoredExploreLayout("list", ExploreFilters(genreId = 18)))
+    }
+
     /**
      * A title as the catalog actually delivers one: TMDB fills `title` for films and
      * `name` for series, never both. A helper that populated both would quietly make any
@@ -338,4 +345,21 @@ class ExploreModelTest {
         assertEquals(listOf("trending", "addon"), kept.map(ExploreShelf::id))
     }
 
+
+    @Test
+    fun `a stored layout is read back, and anything unknown opens the shelves`() {
+        assertEquals(ExploreLayout.Rows, ExploreLayout.fromSetting("list"))
+        assertEquals(ExploreLayout.Grid, ExploreLayout.fromSetting("grid"))
+        assertEquals(ExploreLayout.Shelves, ExploreLayout.fromSetting(null))
+        assertEquals(ExploreLayout.Shelves, ExploreLayout.fromSetting("carousel"))
+    }
+
+    // A filter or "See all" from the shelves opens the grid, but a viewer browsing as a list
+    // stays in the list rather than being thrown back to posters.
+    @Test
+    fun `narrowing keeps the list and opens the grid only from the shelves`() {
+        assertEquals(ExploreLayout.Grid, ExploreLayout.Shelves.forBrowsing())
+        assertEquals(ExploreLayout.Grid, ExploreLayout.Grid.forBrowsing())
+        assertEquals(ExploreLayout.Rows, ExploreLayout.Rows.forBrowsing())
+    }
 }

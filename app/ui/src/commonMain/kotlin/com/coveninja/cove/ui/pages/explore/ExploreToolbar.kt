@@ -14,7 +14,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -33,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -42,6 +42,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.MediaGenre
 import com.coveninja.cove.ui.model.MediaType
@@ -70,6 +72,8 @@ fun ExploreToolbar(
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     val expanded = searchOpen || filters.query.isNotBlank()
+    var toolbarWidth by remember { mutableIntStateOf(0) }
+    val narrow = with(LocalDensity.current) { toolbarWidth.toDp() } < COMPACT_TOOLBAR_WIDTH
 
     @Composable
     fun typeSwitch(switchModifier: Modifier) = SegmentedControl(
@@ -98,7 +102,7 @@ fun ExploreToolbar(
         icon = { it.icon },
         showLabels = false,
         onSelect = onLayoutChange,
-        modifier = Modifier.width(if (hasPointerHover) 80.dp else 96.dp),
+        modifier = Modifier.width(if (hasPointerHover) 120.dp else 144.dp),
     )
 
     @Composable
@@ -116,9 +120,10 @@ fun ExploreToolbar(
     )
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val narrow = maxWidth < COMPACT_TOOLBAR_WIDTH
-
+        // Switch branches in composition after measuring, not in a BoxWithConstraints
+        // subcomposition. Disposing an open tooltip during scene measurement leaves Compose
+        // 1.12's copied owner list pointing at a disposed popup and crashes on pointer exit.
+        Box(modifier = Modifier.fillMaxWidth().onSizeChanged { toolbarWidth = it.width }) {
             if (narrow) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     typeSwitch(Modifier.fillMaxWidth())
