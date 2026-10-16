@@ -73,7 +73,7 @@ jobs:
       # the per-test stdout Gradle never forwards, which is where timing diagnostics land.
       - name: Upload test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-linux
           path: |
@@ -111,7 +111,7 @@ jobs:
       # the per-test stdout Gradle never forwards, which is where timing diagnostics land.
       - name: Upload test reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports-macos
           path: |
