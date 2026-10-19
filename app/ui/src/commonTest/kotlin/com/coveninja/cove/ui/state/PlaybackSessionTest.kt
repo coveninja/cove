@@ -13,8 +13,12 @@ import com.coveninja.cove.shared.data.PlaybackRepository
 import com.coveninja.cove.shared.data.SearchState
 import com.coveninja.cove.shared.data.SettingsRepository
 import com.coveninja.cove.shared.data.SettingsState
+import com.coveninja.cove.shared.data.TrackMemory
+import com.coveninja.cove.shared.data.TrackMemoryRepository
+import com.coveninja.cove.shared.data.UnavailableTrackMemoryRepository
 import com.coveninja.cove.shared.fixture.FixtureAppGraph
 import com.coveninja.cove.shared.fixture.FixtureSourceMemoryRepository
+import com.coveninja.cove.shared.fixture.FixtureTrackMemoryRepository
 import com.coveninja.cove.shared.model.AppSettings
 import com.coveninja.cove.shared.model.LibraryEntry
 import com.coveninja.cove.shared.model.LibraryStatus
@@ -227,7 +231,10 @@ private class FakeHost : VideoPlayerHost {
 
     /** What the player would report once mpv has taken a sub-add. */
     fun reportSubtitleTracks(vararg tracks: MediaTrack) {
-        _status.value = _status.value.copy(subtitleTracks = tracks.toList())
+        _status.value = _status.value.copy(
+            subtitleTracks = tracks.toList(),
+            selectedSubtitleId = tracks.firstOrNull { it.selected }?.id,
+        )
     }
 
     fun reportError(message: String) {
@@ -268,9 +275,27 @@ private class FakeHost : VideoPlayerHost {
     override fun addSubtitle(url: String, title: String, language: String, select: Boolean) {
         addedSubtitles += AddedSubtitle(url, title, language, select)
     }
+
+    /** Refused the first time they are offered, as mpv refuses a sub-add while a file starts. */
+    val refuseOnce = mutableSetOf<String>()
+
+    override suspend fun offerSubtitle(url: String, title: String, language: String): Boolean {
+        addSubtitle(url, title, language)
+        return !refuseOnce.remove(url)
+    }
     override fun selectAudioTrack(id: Int) = Unit
     var selectedSubtitleId: Int? = null
-    override fun selectSubtitleTrack(id: Int?) { selectedSubtitleId = id }
+    val subtitleSelections = mutableListOf<Int?>()
+
+    /** Reported back the way mpv's track list does, so the session sees its own choice. */
+    override fun selectSubtitleTrack(id: Int?) {
+        selectedSubtitleId = id
+        subtitleSelections += id
+        _status.value = _status.value.copy(
+            subtitleTracks = _status.value.subtitleTracks.map { it.copy(selected = it.id == id) },
+            selectedSubtitleId = id,
+        )
+    }
     override fun stepChapter(delta: Int) = Unit
     override fun stepFrame(delta: Int) = Unit
     override fun setSubtitleDelay(seconds: Double) = Unit
@@ -309,6 +334,26 @@ private fun subtitleTrack(id: Int, title: String) = MediaTrack(
     title = title,
     language = null,
     selected = false,
+)
+
+/** A subtitle track as mpv lists one; add-on tracks are [external]. */
+private fun sub(
+    id: Int,
+    language: String?,
+    external: Boolean = false,
+    forced: Boolean = false,
+    default: Boolean = false,
+    selected: Boolean = false,
+    title: String = "",
+) = MediaTrack(
+    id = id,
+    kind = TrackKind.Subtitle,
+    title = title,
+    language = language,
+    selected = selected,
+    isDefault = default,
+    forced = forced,
+    external = external,
 )
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -389,6 +434,7 @@ private class Harness(
     settings: AppSettings,
     sources: List<StreamSource>,
     capabilities: VideoCodecCapabilities,
+    trackMemory: TrackMemoryRepository,
 ) {
     val library = FakeLibrary()
     val playback = FakePlayback(sources)
@@ -403,6 +449,7 @@ private class Harness(
         FakeSettings(settings),
         playback,
         FixtureAppGraph().addons,
+        trackMemory = trackMemory,
         sourceMemory = sourceMemory,
     )
     val scope = CoroutineScope(StandardTestDispatcher(scheduler))
@@ -423,9 +470,10 @@ private fun playbackTest(
     settings: AppSettings = AppSettings(autoSelectStream = false),
     sources: List<StreamSource> = oneSource,
     capabilities: VideoCodecCapabilities = VideoCodecCapabilities(),
+    trackMemory: TrackMemoryRepository = UnavailableTrackMemoryRepository,
     body: suspend TestScope.(Harness) -> Unit,
 ) = runTest {
-    val harness = Harness(testScheduler, settings, sources, capabilities)
+    val harness = Harness(testScheduler, settings, sources, capabilities, trackMemory)
     try {
         body(harness)
     } finally {
@@ -536,6 +584,8 @@ class PlaybackSessionTest {
 
         h.session.open(movie())
         runCurrent()
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
 
         assertEquals(
             listOf("Subtitle 1", "Signs & Songs", "Subtitle 2", "Subtitle 1"),
@@ -554,6 +604,8 @@ class PlaybackSessionTest {
             SubtitleSource(id = "1", url = "https://subs.test/en.srt", lang = "en"),
         )
         h.session.open(movie())
+        runCurrent()
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
         runCurrent()
 
         assertTrue(h.session.addUserSubtitle("/home/a/Movie.2024.en.srt"))
@@ -1598,6 +1650,8 @@ class PlaybackSessionTest {
         runCurrent()
         gate.complete(Unit)
         runCurrent()
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
 
         assertEquals(1, h.host.addedSubtitles.size, "was: ${h.host.addedSubtitles}")
         assertEquals("https://example.com/b.mkv", h.host.loadedUrl?.substringAfter("url="))
@@ -1611,6 +1665,8 @@ class PlaybackSessionTest {
             .mapIndexed { index, lang -> SubtitleSource(id = "$index", url = "https://subs.test/$index.srt", lang = lang) }
 
         h.session.open(movie())
+        runCurrent()
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
         runCurrent()
 
         assertEquals(listOf("eng", "swe"), h.host.addedSubtitles.map { it.language })
@@ -1637,6 +1693,230 @@ class PlaybackSessionTest {
         assertEquals(MAX_EXTERNAL_SUBTITLES, offered.size)
         assertEquals(languages, offered.take(4).map { it.lang })
         assertEquals(emptyList(), offeredSubtitles(subtitles, languages, onlyPreferred = true, limit = 0))
+    }
+
+    // mpv refuses a sub-add in the moment a load begins, and one that lands while the file is
+    // still opening takes part in mpv's own choice of subtitle instead of Cove's.
+    @Test
+    fun `add-on subtitles wait for the file to open`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("en")),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(SubtitleSource(id = "1", url = "https://subs.test/en.srt", lang = "eng"))
+
+        h.session.open(movie())
+        runCurrent()
+        assertEquals(emptyList(), h.host.addedSubtitles, "added while the file was opening")
+
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+        assertEquals(listOf("https://subs.test/en.srt"), h.host.addedSubtitles.map(AddedSubtitle::url))
+    }
+
+    // Shawshank's only Swedish subtitle is the last of thirty-nine: refused once and never
+    // offered again, Swedish would be missing for the whole film.
+    @Test
+    fun `a subtitle the player refused is offered again once the file is open`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("sv")),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(SubtitleSource(id = "19573745118", url = "https://subs.test/sv.srt", lang = "swe"))
+        h.host.refuseOnce += "https://subs.test/sv.srt"
+        h.session.open(movie())
+        runCurrent()
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+        assertEquals(1, h.host.addedSubtitles.size)
+
+        advanceTimeBy(1_001)
+        runCurrent()
+        assertEquals(
+            listOf("https://subs.test/sv.srt", "https://subs.test/sv.srt"),
+            h.host.addedSubtitles.map(AddedSubtitle::url),
+        )
+        assertEquals(listOf("Subtitle 1", "Subtitle 1"), h.host.addedSubtitles.map(AddedSubtitle::title))
+    }
+
+    // The reported case: a file carrying everything but the viewer's languages, opened with the
+    // Spanish track it marks as default, and English and Swedish added afterwards by an addon —
+    // which mpv never selects, because it only chooses while the file opens.
+    @Test
+    fun `the viewer's add-on subtitle replaces the file's default in another language`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("eng", "sv")),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(
+            SubtitleSource(id = "1", url = "https://subs.test/sv.srt", lang = "swe"),
+            SubtitleSource(id = "2", url = "https://subs.test/en.srt", lang = "eng"),
+        )
+        h.session.open(movie())
+        runCurrent()
+        h.host.reportSubtitleTracks(sub(1, "spa", default = true, selected = true), sub(2, "fre"))
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+        assertEquals(listOf("eng", "swe"), h.host.addedSubtitles.map { it.language })
+        assertEquals(emptyList(), h.host.subtitleSelections, "nothing wanted has arrived yet")
+
+        // mpv takes the sub-adds one at a time; the first in the viewer's order is chosen.
+        h.host.reportSubtitleTracks(
+            sub(1, "spa", default = true, selected = true),
+            sub(2, "fre"),
+            sub(3, "eng", external = true),
+        )
+        runCurrent()
+        assertEquals(3, h.host.selectedSubtitleId)
+
+        h.host.reportSubtitleTracks(
+            sub(1, "spa", default = true),
+            sub(2, "fre"),
+            sub(3, "eng", external = true, selected = true),
+            sub(4, "swe", external = true),
+        )
+        runCurrent()
+        assertEquals(listOf<Int?>(3), h.host.subtitleSelections)
+    }
+
+    @Test
+    fun `a later language in the file is replaced by an earlier one from an addon`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("en", "sv")),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(SubtitleSource(id = "1", url = "https://subs.test/en.srt", lang = "eng"))
+        h.session.open(movie())
+        runCurrent()
+        h.host.reportSubtitleTracks(sub(1, "swe", selected = true))
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+        assertEquals(emptyList(), h.host.subtitleSelections, "Swedish is wanted, so it stands until English is in")
+
+        h.host.reportSubtitleTracks(sub(1, "swe", selected = true), sub(2, "eng", external = true))
+        runCurrent()
+        assertEquals(listOf<Int?>(2), h.host.subtitleSelections)
+    }
+
+    // mpv's subs-fallback-forced takes the forced English track when the audio is English too,
+    // and that track holds only the lines spoken in some other language.
+    @Test
+    fun `the full subtitle is chosen over a forced one in the same language`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("en")),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        h.host.reportSubtitleTracks(sub(1, "eng", forced = true, selected = true), sub(2, "eng"))
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+
+        assertEquals(listOf<Int?>(2), h.host.subtitleSelections)
+    }
+
+    @Test
+    fun `a subtitle the viewer chose is not taken back when add-on ones arrive`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("en")),
+    ) { h ->
+        h.playback.offeredSubtitles = listOf(SubtitleSource(id = "1", url = "https://subs.test/en.srt", lang = "eng"))
+        h.session.open(movie())
+        runCurrent()
+        h.host.reportSubtitleTracks(sub(1, "fre"))
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+
+        // French, from the menu, before the English one is in.
+        h.host.selectSubtitleTrack(1)
+        h.session.rememberSubtitleChoice(language = "fre", off = false)
+        runCurrent()
+        h.host.reportSubtitleTracks(sub(1, "fre", selected = true), sub(2, "eng", external = true))
+        runCurrent()
+
+        assertEquals(1, h.host.selectedSubtitleId)
+        assertEquals(listOf<Int?>(1), h.host.subtitleSelections)
+    }
+
+    @Test
+    fun `subtitles switched off for the title stay off`() = FixtureTrackMemoryRepository().let { memory ->
+        playbackTest(
+            settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("en")),
+            trackMemory = memory,
+        ) { h ->
+            memory.write(550, TrackMemory(subtitlesOff = true))
+            h.playback.offeredSubtitles = listOf(SubtitleSource(id = "1", url = "https://subs.test/en.srt", lang = "eng"))
+            h.session.open(movie())
+            runCurrent()
+            h.host.reportPlayback(position = 0.0, duration = 7000.0)
+            runCurrent()
+            h.host.reportSubtitleTracks(sub(1, "eng", external = true))
+            runCurrent()
+
+            // Still offered, for the viewer to turn back on.
+            assertEquals(1, h.host.addedSubtitles.size)
+            assertEquals(emptyList(), h.host.subtitleSelections)
+        }
+    }
+
+    @Test
+    fun `limited to the viewer's languages, the file's default in another one is switched off`() = playbackTest(
+        settings = AppSettings(subtitlesEnabled = true, subtitleLanguages = listOf("en", "sv"), subtitleLanguagesOnly = true),
+    ) { h ->
+        h.session.open(movie())
+        runCurrent()
+        h.host.reportSubtitleTracks(sub(1, "spa", default = true, selected = true), sub(2, null))
+        h.host.reportPlayback(position = 0.0, duration = 7000.0)
+        runCurrent()
+
+        assertEquals(listOf<Int?>(null), h.host.subtitleSelections)
+    }
+
+    @Test
+    fun `the viewer's order decides between the file's subtitle and an add-on one`() {
+        val tracks = listOf(sub(1, "swe", selected = true), sub(2, "eng", external = true))
+
+        assertEquals(SubtitlePick.Select(2), pickSubtitle(tracks, 1, listOf("en", "sv"), onlyPreferred = false))
+        assertEquals(SubtitlePick.Keep, pickSubtitle(tracks, 1, listOf("sv", "en"), onlyPreferred = false))
+    }
+
+    // An add-on subtitle was timed against some release; the file's own against this one.
+    @Test
+    fun `within a language the file's own subtitle comes before an add-on one`() {
+        val tracks = listOf(sub(1, "eng", external = true, selected = true), sub(2, "en"))
+
+        assertEquals(SubtitlePick.Select(2), pickSubtitle(tracks, 1, listOf("en"), onlyPreferred = false))
+    }
+
+    @Test
+    fun `a forced subtitle comes after every full one`() {
+        val forced = listOf(sub(1, "eng", forced = true, selected = true), sub(2, "swe", external = true))
+        assertEquals(SubtitlePick.Select(2), pickSubtitle(forced, 1, listOf("en", "sv"), onlyPreferred = false))
+
+        // Known by its title too, where the release did not set the flag.
+        val titled = listOf(sub(1, "eng", title = "English (Forced)"), sub(2, "eng", title = "English"))
+        assertEquals(SubtitlePick.Select(2), pickSubtitle(titled, null, listOf("en"), onlyPreferred = false))
+
+        // And still better than nothing when it is all the viewer's language has.
+        val only = listOf(sub(1, "eng", forced = true), sub(2, "spa"))
+        assertEquals(SubtitlePick.Select(1), pickSubtitle(only, null, listOf("en"), onlyPreferred = false))
+    }
+
+    @Test
+    fun `among equal tracks the selection stands, then the file's default`() {
+        val tracks = listOf(sub(1, "eng", title = "Signs"), sub(2, "eng", default = true), sub(3, "eng"))
+
+        assertEquals(SubtitlePick.Keep, pickSubtitle(tracks, 3, listOf("en"), onlyPreferred = false))
+        assertEquals(SubtitlePick.Select(2), pickSubtitle(tracks, null, listOf("en"), onlyPreferred = false))
+    }
+
+    @Test
+    fun `without the viewer's languages the player's choice stands unless they are all that is wanted`() {
+        val tracks = listOf(sub(1, "spa", default = true, selected = true), sub(2, null))
+
+        assertEquals(SubtitlePick.Keep, pickSubtitle(tracks, 1, listOf("en"), onlyPreferred = false))
+        assertEquals(SubtitlePick.Select(null), pickSubtitle(tracks, 1, listOf("en"), onlyPreferred = true))
+        // A track in no stated language could be in any, the viewer's included.
+        assertEquals(SubtitlePick.Keep, pickSubtitle(tracks, 2, listOf("en"), onlyPreferred = true))
+        assertEquals(SubtitlePick.Keep, pickSubtitle(emptyList(), null, listOf("en"), onlyPreferred = true))
+        assertEquals(SubtitlePick.Keep, pickSubtitle(tracks, 1, emptyList(), onlyPreferred = false))
+    }
+
+    @Test
+    fun `languages sent as names or OpenSubtitles ids are still the viewer's`() {
+        val tracks = listOf(sub(1, "Swedish", external = true), sub(2, "spl", external = true))
+
+        assertEquals(SubtitlePick.Select(1), pickSubtitle(tracks, null, listOf("sv"), onlyPreferred = false))
+        assertEquals(SubtitlePick.Select(2), pickSubtitle(tracks, null, listOf("es"), onlyPreferred = false))
     }
 
     // The settings show the single default language as the list, so the switch must mean the

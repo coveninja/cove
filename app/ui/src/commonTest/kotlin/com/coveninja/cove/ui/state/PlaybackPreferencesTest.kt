@@ -62,7 +62,7 @@ class PlaybackPreferencesTest {
     fun `a three letter code expands to every form of its language`() {
         assertEquals(listOf("eng", "en"), languageAliases("eng"))
         assertEquals(listOf("swe", "sv"), languageAliases("swe"))
-        assertEquals(listOf("pob", "pt", "por", "pb"), languageAliases("pob"))
+        assertEquals(listOf("pob", "pt", "por", "pb", "pom"), languageAliases("pob"))
     }
 
     @Test

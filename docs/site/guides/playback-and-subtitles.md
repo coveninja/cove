@@ -28,7 +28,7 @@ Cove can probe candidates before showing them and prefetch likely sources or the
 
 When Cove picked the source automatically and it fails before anything plays, such as a torrent with no reachable peers or an expired link, Cove moves to the next eligible source in the ranked list. Each source is tried once, and the failure is shown when no eligible source is left. A source you chose yourself is never replaced.
 
-A source failure during playback can trigger one automatic reconnect at that playback position. If playback advances far enough after recovery, a later interruption receives a fresh recovery attempt. Repeated failure at the same offset stops and presents explicit actions such as Retry, Sources, Pick another, or Try next. Cove does not change provider, quality, audio, or subtitle tracks after playback starts.
+A source failure during playback can trigger one automatic reconnect at that playback position. If playback advances far enough after recovery, a later interruption receives a fresh recovery attempt. Repeated failure at the same offset stops and presents explicit actions such as Retry, Sources, Pick another, or Try next. Cove does not change provider, quality, or audio after playback starts, and a subtitle you pick yourself is never replaced.
 
 Unexpected end-of-file and network loss are failures, not proof that the title completed. When a direct stream repeatedly fails, choose another candidate manually. When a torrent stalls, compare seed availability and try a smaller or better-seeded release.
 
@@ -66,6 +66,8 @@ Android touch controls use the on-screen chrome and surface gestures. Android TV
 ## Audio and subtitles
 
 Use the track menus to choose embedded or addon audio and subtitle tracks. Tracks are grouped by language where metadata allows it; opaque provider identifiers receive readable generated labels.
+
+With subtitles on, Cove selects a subtitle in the first of your subtitle languages that is available, whether the file carries it or a subtitle add-on supplies it. Add-on subtitles are added once the video opens and can take a moment to arrive, so the selection can change at the start of playback until you pick a track yourself. A full subtitle is preferred over a forced one, which only covers foreign dialogue, and the file's own subtitle over an add-on's in the same language. If a subtitle cannot be downloaded, Cove tries it once more and keeps playing either way.
 
 Desktop can load a local subtitle file from the subtitle menu. You can also drag a supported subtitle file over the playing video and drop it when the **Drop a subtitle file to use it** target appears. Local file loading is not offered on platforms without a compatible file chooser or desktop drop target.
 

@@ -44,15 +44,17 @@ internal data class Language(
 internal val LANGUAGES: List<Language> = listOf(
     Language(AUDIO_LANGUAGE_ORIGINAL, "Original", "Original"),
     Language("en", "English", "English", listOf("eng")),
-    Language("es", "Spanish", "Español", listOf("spa")),
+    // spl and spn are OpenSubtitles' own ids for its Latin American and European lists, and
+    // are what its addon sends as the language of those subtitles.
+    Language("es", "Spanish", "Español", listOf("spa", "spl", "spn")),
     Language("fr", "French", "Français", listOf("fra", "fre")),
     Language("de", "German", "Deutsch", listOf("deu", "ger")),
     Language("it", "Italian", "Italiano", listOf("ita")),
-    Language("pt", "Portuguese", "Português", listOf("por", "pob", "pb")),
+    Language("pt", "Portuguese", "Português", listOf("por", "pob", "pb", "pom")),
     Language("ru", "Russian", "Русский", listOf("rus")),
     Language("ja", "Japanese", "日本語", listOf("jpn", "jp")),
     Language("ko", "Korean", "한국어", listOf("kor")),
-    Language("zh", "Chinese", "中文", listOf("zho", "chi", "cmn", "yue")),
+    Language("zh", "Chinese", "中文", listOf("zho", "chi", "cmn", "yue", "zht", "zhe")),
     Language("ar", "Arabic", "العربية", listOf("ara")),
     Language("hi", "Hindi", "हिन्दी", listOf("hin")),
     Language("tr", "Turkish", "Türkçe", listOf("tur")),
@@ -92,7 +94,7 @@ internal val LANGUAGES: List<Language> = listOf(
     Language("sk", "Slovak", "Slovenčina", listOf("slk", "slo")),
     Language("sl", "Slovenian", "Slovenščina", listOf("slv")),
     Language("hr", "Croatian", "Hrvatski", listOf("hrv")),
-    Language("sr", "Serbian", "Српски", listOf("srp")),
+    Language("sr", "Serbian", "Српски", listOf("srp", "scc")),
     Language("bs", "Bosnian", "Bosanski", listOf("bos")),
     Language("mk", "Macedonian", "Македонски", listOf("mkd", "mac")),
     Language("sq", "Albanian", "Shqip", listOf("sqi", "alb")),
@@ -142,6 +144,20 @@ internal val SELECTABLE_LANGUAGES: List<Language> =
     LANGUAGES.filter { it.code != AUDIO_LANGUAGE_ORIGINAL }
 
 /**
+ * Every language's English and native name, lowercased, to its code.
+ *
+ * Stremio asks addons for an ISO 639-2 code but shows whatever text arrives instead, so some
+ * subtitle addons send "Swedish" or "Svenska". Unrecognised, those were a language of their own:
+ * filtered out of a menu limited to the viewer's languages, and never picked for them.
+ */
+private val BY_NAME: Map<String, String> = buildMap {
+    SELECTABLE_LANGUAGES.forEach { language ->
+        putIfAbsent(language.englishName.lowercase(), language.code)
+        putIfAbsent(language.nativeName.lowercase(), language.code)
+    }
+}
+
+/**
  * Every code a track might carry for one language, most specific first.
  *
  * TMDB reports a language as ISO 639-1 — "ja", "de" — and media files tag their tracks with
@@ -172,12 +188,15 @@ internal fun languageAliases(code: String): List<String> {
  * OpenSubtitles' "pob" for Brazilian Portuguese, "nb" for Bokmål — and everything that groups,
  * filters or compares languages has to treat those as one, or English shows up as two menu
  * sections and an "eng" preference never matches an "en" track. A region or script subtag is
- * dropped: it never makes a different language for these purposes.
+ * dropped: it never makes a different language for these purposes. So is a qualifier on a
+ * language written out as a name, as in "English (SDH)" or "Spanish - Latin America".
  */
 internal fun canonicalLanguage(code: String?): String? {
-    val base = code?.trim()?.lowercase()?.replace('_', '-')?.substringBefore('-') ?: return null
+    val tag = code?.trim()?.lowercase()?.replace('_', '-') ?: return null
+    val base = tag.substringBefore('-').trim()
     if (base.isEmpty() || base == AUDIO_LANGUAGE_ORIGINAL) return null
-    return CANONICAL[base]
+    val unqualified = base.substringBefore('(').trim()
+    return CANONICAL[base] ?: CANONICAL[unqualified] ?: BY_NAME[unqualified]
 }
 
 /**

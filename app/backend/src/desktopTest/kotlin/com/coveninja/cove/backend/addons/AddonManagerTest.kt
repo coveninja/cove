@@ -121,6 +121,46 @@ class AddonManagerTest {
         http.close()
     }
 
+    // One refused request used to cost every subtitle the addon had, for the whole film.
+    @Test
+    fun `a subtitle listing that fails once is asked for again`() = runBlocking {
+        var subtitleRequests = 0
+        val json = headersOf(HttpHeaders.ContentType, "application/json")
+        val http = HttpClient(MockEngine { request ->
+            when {
+                request.url.encodedPath.endsWith("/manifest.json") -> respond(
+                    """{"id":"subs.one","name":"Subs One","resources":["subtitles"],"types":["movie","series"]}""",
+                    HttpStatusCode.OK,
+                    json,
+                )
+                "/subtitles/movie/" in request.url.encodedPath -> {
+                    subtitleRequests++
+                    if (subtitleRequests == 1) {
+                        respond("busy", HttpStatusCode.ServiceUnavailable)
+                    } else {
+                        respond("""{"subtitles":[{"id":"1","url":"https://subs.test/1.srt","lang":"swe"}]}""", HttpStatusCode.OK, json)
+                    }
+                }
+                else -> error("unexpected URL ${request.url}")
+            }
+        })
+        val dir = Files.createTempDirectory("cove-addons-subtitles")
+        DesktopDatabase.inMemory().use { store ->
+            LegacyMigration(store.database, dir) { "primary" }.importIfNeeded()
+            val manager = AddonManager(
+                store.database,
+                ActiveProfileSession(store.database),
+                http,
+                { "now" },
+            )
+            assertEquals(AddonKind.Subtitle, manager.add("https://addon.test/manifest.json").kind)
+
+            assertEquals(listOf("swe"), manager.subtitles(MediaType.Movie, "tt123").map { it.lang })
+            assertEquals(2, subtitleRequests)
+        }
+        http.close()
+    }
+
     // Official integrations are gated on the same enabled flag, so they have to be
     // switchable. setEnabled used to carry a copy of remove()'s source guard —
     // message and all — which turned every built-in toggle into an HTTP 400.

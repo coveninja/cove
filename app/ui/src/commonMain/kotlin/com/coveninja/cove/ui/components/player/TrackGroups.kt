@@ -69,12 +69,31 @@ internal fun filterTrackGroups(
     return TrackMenu(shown, groups.filter { it !in shown }.sumOf { it.tracks.size })
 }
 
+/**
+ * The tracks a subtitle menu offers, in its order, for cycling through without opening it.
+ * Cycling through forty languages to get from English to Swedish is the menu problem over again.
+ */
+internal fun cyclableTracks(
+    tracks: List<MediaTrack>,
+    preferred: List<String>,
+    selectedId: Int?,
+    onlyPreferred: Boolean,
+): List<MediaTrack> {
+    if (!onlyPreferred) return tracks
+    return filterTrackGroups(groupTracksByLanguage(tracks, preferred), preferred, selectedId)
+        .groups
+        .flatMap(TrackGroup::tracks)
+}
+
 /** The track's language as one code whatever form it came in, or its raw base tag. */
 internal fun MediaTrack.languageCode(): String = canonicalLanguage(language) ?: baseLanguage()
 
 /**
  * The part before any region subtag, lowercased. `es-419` and `es-ES` are both
  * Spanish; keeping them apart would defeat the grouping.
+ *
+ * Matroska writes "und" for a track nobody tagged, which is no language at all rather than one
+ * called UND: it belongs with the unknown tracks a language filter keeps, since it could be any.
  */
 internal fun MediaTrack.baseLanguage(): String =
     language
@@ -82,6 +101,7 @@ internal fun MediaTrack.baseLanguage(): String =
         ?.takeIf { it.isNotEmpty() }
         ?.substringBefore('-')
         ?.lowercase()
+        ?.takeUnless { it == "und" }
         .orEmpty()
 
 /**

@@ -8,6 +8,7 @@ import com.sun.jna.Pointer
 import com.sun.jna.StringArray
 import com.sun.jna.ptr.PointerByReference
 import java.lang.ref.Reference
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -229,11 +230,15 @@ class MpvSoftwarePlayer internal constructor(
     // setters cannot express.
     override fun setOption(name: String, value: String) = command("set", name, value)
 
-    // Flags and title are positional. mpv's "auto" means don't select — the track is
-    // offered and the slang applied before the load decides — while "select" switches
+    // Flags and title are positional. mpv's "auto" adds the track without selecting it —
+    // the session chooses among the subtitles once they are in — while "select" switches
     // to it at once, which is only ever right for a file the viewer chose themselves.
+    //
+    // A subtitle that cannot be fetched is not a stream that cannot be played, so that
+    // failure is logged rather than reported: as the player's error it put up the
+    // dead-source banner, and moved an automatically chosen source on to the next one.
     override fun addSubtitle(url: String, title: String, language: String, select: Boolean) =
-        command("sub-add", url, if (select) "select" else "auto", title, language)
+        runCommand(arrayOf("sub-add", url, if (select) "select" else "auto", title, language), report = false)
 
     override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
         command("set", "keepaspect", if (keepAspect) "yes" else "no")
@@ -501,7 +506,12 @@ class MpvSoftwarePlayer internal constructor(
      * this file fences its own allocations for the same reason.
      */
     override fun command(vararg args: String) {
-        submitCommand(args.firstOrNull() ?: "command") { library, target ->
+        runCommand(args, report = true)
+    }
+
+    /** [command], with [report] false for a command whose failure is not the player's. */
+    private fun runCommand(args: Array<out String>, report: Boolean): CompletableFuture<Boolean> =
+        submitCommand(args.firstOrNull() ?: "command", report) { library, target ->
             val arguments = StringArray(args)
             try {
                 library.mpv_command(target, arguments)
@@ -509,16 +519,33 @@ class MpvSoftwarePlayer internal constructor(
                 Reference.reachabilityFence(arguments)
             }
         }
-    }
 
-    /** Runs [call] on the command thread and records a failing result on the snapshot. */
-    private fun submitCommand(operation: String, call: (MpvLibrary, Pointer) -> Int) {
-        if (closing.get()) return
+    /**
+     * Runs [call] on the command thread, completing with whether it succeeded. A failing
+     * result is recorded on the snapshot, or only logged when [report] is false.
+     */
+    private fun submitCommand(
+        operation: String,
+        report: Boolean = true,
+        call: (MpvLibrary, Pointer) -> Int,
+    ): CompletableFuture<Boolean> {
+        val done = CompletableFuture<Boolean>()
+        if (closing.get()) return done.apply { complete(false) }
         commandExecutor.execute {
-            val target = handle.get() ?: return@execute
-            val result = call(Mpv.library(), target)
-            if (result < 0) recordError(result, operation)
+            try {
+                val target = handle.get() ?: return@execute
+                val result = call(Mpv.library(), target)
+                when {
+                    result >= 0 -> Unit
+                    report -> recordError(result, operation)
+                    else -> System.err.println("Cove mpv: $operation failed: ${Mpv.library().mpv_error_string(result)}")
+                }
+                done.complete(result >= 0)
+            } finally {
+                done.complete(false)
+            }
         }
+        return done
     }
 
     private fun recordError(code: Int, operation: String) {

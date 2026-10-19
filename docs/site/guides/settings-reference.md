@@ -44,7 +44,7 @@ Ahead-of-time controls trade bandwidth for startup speed:
 
 Choose whether subtitles start enabled and select preferred subtitle and audio languages. **Original** audio follows the title's original language rather than one fixed language code.
 
-Add-on subtitles in your subtitle languages are fetched first, so other languages do not crowd them out. Enable **Only offer these languages** to skip fetching add-on subtitles in other languages and fold other embedded tracks behind **Show all languages** in the player's subtitle menu. Filtering is off by default. The `C` key cycles through the same offered tracks.
+Add-on subtitles in your subtitle languages are fetched first, so other languages do not crowd them out, and the first of your languages that is available is selected when subtitles start enabled. Enable **Only offer these languages** to skip fetching add-on subtitles in other languages, fold other embedded tracks behind **Show all languages** in the player's subtitle menu, and keep a file's default subtitle in another language from being turned on. Filtering is off by default. The `C` key cycles through the same offered tracks.
 
 Subtitle size ranges from 50% to 200%. Position controls distance from the bottom of the picture, and background adds a shaded readability box. In-player track choices and subtitle delay adjustments apply to the current playback session.
 

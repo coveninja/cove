@@ -37,9 +37,11 @@ import com.coveninja.cove.ui.model.toUiEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -325,6 +327,12 @@ class PlaybackSession(
 
     /** Files the viewer supplied for the current request, in the order they arrived. */
     private var userSubtitles: List<UserSubtitle> = emptyList()
+
+    /**
+     * The [loadSerial] of the load during which the viewer last chose a subtitle themselves.
+     * From then on that load's subtitle is theirs, and Cove stops choosing one for them.
+     */
+    private var subtitleChosenDuringLoad = -1
 
     /**
      * Set by `open(fromStart = true)`, and spent by the first position actually recorded.
@@ -730,6 +738,7 @@ class PlaybackSession(
     }
 
     fun rememberSubtitleChoice(language: String?, off: Boolean) {
+        subtitleChosenDuringLoad = loadSerial
         updateMemory {
             it.copy(
                 subtitleLanguage = if (off) "" else language?.trim().orEmpty(),
@@ -928,7 +937,8 @@ class PlaybackSession(
      * Reloads the selected URL without resolving or ranking sources again.
      *
      * Preferences go on before loadfile because mpv chooses tracks while opening;
-     * external subtitles go on afterwards because replacing the file removes them.
+     * add-on subtitles go on once the file has opened, because replacing the file removes
+     * them, and the subtitle is then chosen here rather than left to mpv's opening choice.
      */
     private suspend fun loadCurrentSource(
         current: PlaybackRequest,
@@ -1009,26 +1019,98 @@ class PlaybackSession(
         }.getOrDefault(emptyList())
         if (superseded()) return
 
+        val preferred = subtitlePreference(settings, memory)
+        val onlyPreferred = settings?.offersOnlyPreferredSubtitles() == true
+        val offered = offeredSubtitles(external, preferred, onlyPreferred)
+
+        // Not while the file is still opening. mpv refuses a sub-add in the moment a load
+        // begins, and one that lands mid-load takes part in mpv's own choice, which prefers any
+        // add-on track over the file's own whatever its language.
+        player.status.first { it.hasMedia || superseded() }
+        if (superseded()) return
+
+        // Settings still loading means no order to apply; switched off for this title, or a
+        // file the viewer supplied, means the subtitle is already decided.
+        val choosing = settings != null && !memory.subtitlesOff && userSubtitles.isEmpty()
+        coroutineScope {
+            if (choosing) launch { selectWantedSubtitle(player, preferred, onlyPreferred, serial, ::superseded) }
+            addSubtitles(player, offered, ::superseded)
+        }
+    }
+
+    /**
+     * Hands the add-on subtitles to the player in order, then those it refused once more when
+     * the file is open again.
+     *
+     * A refusal costs a language for the whole film when it is the only subtitle in it. mpv
+     * refuses one sent in the moment a file starts — which a source switched while the last
+     * one's subtitles were still downloading runs into — and one its server failed to send.
+     */
+    private suspend fun addSubtitles(
+        player: VideoPlayerHost,
+        subtitles: List<SubtitleSource>,
+        superseded: () -> Boolean,
+    ) {
         val unnamedByLanguage = mutableMapOf<String, Int>()
-        offeredSubtitles(
-            external = external,
-            preferred = subtitlePreference(settings, memory),
-            onlyPreferred = settings?.offersOnlyPreferredSubtitles() == true,
-        ).forEach { subtitle ->
-            val title = subtitle.displayName ?: run {
-                val language = subtitle.lang
-                    .trim()
-                    .substringBefore('-')
-                    .lowercase()
-                val ordinal = unnamedByLanguage.getOrDefault(language, 0) + 1
-                unnamedByLanguage[language] = ordinal
-                "Subtitle $ordinal"
-            }
-            player.addSubtitle(
-                url = subtitle.url,
-                title = title,
-                language = subtitle.lang,
+        val titled = subtitles.map { subtitle ->
+            subtitle to (
+                subtitle.displayName ?: run {
+                    val language = subtitle.lang
+                        .trim()
+                        .substringBefore('-')
+                        .lowercase()
+                    val ordinal = unnamedByLanguage.getOrDefault(language, 0) + 1
+                    unnamedByLanguage[language] = ordinal
+                    "Subtitle $ordinal"
+                }
             )
+        }
+        val refused = titled.filter { (subtitle, title) ->
+            !superseded() && player.offerSubtitle(subtitle.url, title, subtitle.lang) == false
+        }
+        if (refused.isEmpty() || superseded()) return
+        delay(SUBTITLE_RETRY_DELAY_MILLIS)
+        player.status.first { it.hasMedia || superseded() }
+        refused.forEach { (subtitle, title) ->
+            if (!superseded()) player.offerSubtitle(subtitle.url, title, subtitle.lang)
+        }
+    }
+
+    /**
+     * Selects the subtitle the viewer's languages ask for, and keeps to it while the add-on
+     * subtitles arrive.
+     *
+     * mpv chooses once, while the file opens, from the tracks the file carries. It never looks
+     * again for a subtitle added later, so a film without the viewer's language inside it
+     * played with that language sitting unselected in the menu, or with a Spanish track the
+     * file marked as default. Left to itself it also prefers a forced track — a few lines of
+     * foreign dialogue — over the full one whenever the audio is in the same language.
+     *
+     * Ends when the viewer chooses a subtitle themselves, when another load replaces this one,
+     * or once the add-on subtitles have had [SUBTITLE_SELECTION_MILLIS] to arrive.
+     */
+    private suspend fun selectWantedSubtitle(
+        player: VideoPlayerHost,
+        preferred: List<String>,
+        onlyPreferred: Boolean,
+        serial: Int,
+        superseded: () -> Boolean,
+    ) {
+        var requested: SubtitlePick? = null
+        withTimeoutOrNull(SUBTITLE_SELECTION_MILLIS) {
+            player.status.first { status ->
+                if (superseded() || subtitleChosenDuringLoad == serial) return@first true
+                when (val pick = pickSubtitle(status.subtitleTracks, status.selectedSubtitleId, preferred, onlyPreferred)) {
+                    SubtitlePick.Keep -> requested = null
+                    is SubtitlePick.Select -> {
+                        // The player reports the switch a poll later; asking again meanwhile
+                        // would only queue the same command behind the subtitle downloads.
+                        if (pick != requested) player.selectSubtitleTrack(pick.id)
+                        requested = pick
+                    }
+                }
+                false
+            }
         }
     }
 
@@ -1048,6 +1130,7 @@ class PlaybackSession(
             title = subtitleFileName(path),
             language = subtitleFileLanguage(path),
         )
+        subtitleChosenDuringLoad = loadSerial
         // Dropped twice — which is the natural response to a drop that appeared to do
         // nothing — must not list the same file twice. mpv has it already; this only
         // has to switch back to it.
@@ -1608,6 +1691,59 @@ internal fun AppSettings.withOnlyPreferredSubtitles(enabled: Boolean): AppSettin
 
 internal const val MAX_EXTERNAL_SUBTITLES = 12
 private const val SUBTITLES_PER_LANGUAGE = 4
+
+/** What [pickSubtitle] wants done with the player's subtitle selection. */
+internal sealed interface SubtitlePick {
+    /** The selection already answers the viewer's languages, or nothing would answer better. */
+    data object Keep : SubtitlePick
+
+    /** Switch to this track, or switch subtitles off when [id] is null. */
+    data class Select(val id: Int?) : SubtitlePick
+}
+
+/**
+ * The subtitle the viewer's languages call for among the tracks the player has.
+ *
+ * Their order decides, except that a forced track — only the lines spoken in another
+ * language — comes after every full one: someone who turned subtitles on means to read the
+ * film. Within a language the file's own track comes before an add-on one, since it was timed
+ * against this very release. Among equals, the selection already made stands, then the track
+ * the file marks as default.
+ *
+ * With none of the viewer's languages present the player's own choice stays, unless subtitles
+ * are limited to those languages and that choice is in another one.
+ */
+internal fun pickSubtitle(
+    tracks: List<MediaTrack>,
+    selectedId: Int?,
+    preferred: List<String>,
+    onlyPreferred: Boolean,
+): SubtitlePick {
+    val selected = tracks.firstOrNull { it.id == selectedId }
+    val wanted = tracks.filter { canonicalLanguage(it.language) in preferred }
+    if (wanted.isEmpty()) {
+        val elsewhere = onlyPreferred && selected != null && canonicalLanguage(selected.language) != null
+        return if (elsewhere) SubtitlePick.Select(null) else SubtitlePick.Keep
+    }
+    val order = compareBy<MediaTrack>(
+        { it.forced || it.title.contains("forced", ignoreCase = true) },
+        { preferred.indexOf(canonicalLanguage(it.language)) },
+        { it.external },
+    )
+    val best = wanted.minWith(order)
+    if (selected != null && selected in wanted && order.compare(selected, best) == 0) return SubtitlePick.Keep
+    val choice = wanted.filter { order.compare(it, best) == 0 }.minWith(compareBy({ !it.isDefault }, { it.id }))
+    return SubtitlePick.Select(choice.id)
+}
+
+/**
+ * How long a load keeps choosing its subtitle while add-on ones arrive. The player fetches them
+ * one at a time, and a slow subtitle server holds up every one behind it.
+ */
+private const val SUBTITLE_SELECTION_MILLIS = 120_000L
+
+/** Long enough for a file that had only just started when a subtitle was refused to open. */
+private const val SUBTITLE_RETRY_DELAY_MILLIS = 1_000L
 
 /**
  * The settings that shape ranking, with audio languages reduced to two-letter codes and

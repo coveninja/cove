@@ -432,8 +432,8 @@ fun SettingsCategoryContent(
                         {
                             SettingToggle(
                                 title = "Only offer these languages",
-                                description = "Add-on subtitles in other languages are not fetched, " +
-                                    "and the player keeps the rest behind \"Show all languages\".",
+                                description = "Other languages are not fetched from add-ons or turned on " +
+                                    "by themselves, and the player keeps the rest behind \"Show all languages\".",
                                 // What the player actually does, which needs a saved list as well as the
                                 // switch; turning it on saves the list shown above if none was saved yet.
                                 checked = settings.offersOnlyPreferredSubtitles(),

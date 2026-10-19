@@ -49,6 +49,7 @@ import com.coveninja.cove.ui.components.player.PlayerStatsOverlay
 import com.coveninja.cove.ui.components.player.SeekBurst
 import com.coveninja.cove.ui.components.player.SeekFeedback
 import com.coveninja.cove.ui.components.player.accumulateSeekFeedback
+import com.coveninja.cove.ui.components.player.cyclableTracks
 import com.coveninja.cove.ui.components.player.SEEK_FEEDBACK_WINDOW_MILLIS
 import com.coveninja.cove.ui.state.LocalAppGraph
 import com.coveninja.cove.ui.state.rememberSettingsEditor
@@ -571,8 +572,21 @@ internal fun TvPlayerLayer(
                 onTogglePause = { host?.togglePause() },
                 onSeek = jump,
                 onCycleSubtitles = {
-                    host?.selectSubtitleTrack(
-                        nextTrack(status.subtitleTracks, status.selectedSubtitleId),
+                    val next = nextTrack(
+                        cyclableTracks(
+                            status.subtitleTracks,
+                            subtitlePreference(settings, TrackMemory.None),
+                            status.selectedSubtitleId,
+                            onlyPreferred = settings?.offersOnlyPreferredSubtitles() == true,
+                        ),
+                        status.selectedSubtitleId,
+                    )
+                    host?.selectSubtitleTrack(next)
+                    // A choice like one made in the panel, so it is remembered and Cove stops
+                    // choosing the subtitle for the viewer.
+                    session.rememberSubtitleChoice(
+                        language = status.subtitleTracks.firstOrNull { it.id == next }?.language,
+                        off = next == null,
                     )
                 },
                 onCycleAudio = {

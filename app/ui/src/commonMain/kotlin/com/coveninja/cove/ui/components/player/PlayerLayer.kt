@@ -450,17 +450,12 @@ fun PlayerLayer(
                     // The host clamps this clear of the final frame.
                     Key.MoveEnd -> onPlayer { host?.seek(status.durationSeconds) }
                     Key.C -> onPlayer {
-                        // The same tracks the menu offers: cycling through forty languages
-                        // to get from English to Swedish is the menu problem over again.
-                        val offered = if (settings?.offersOnlyPreferredSubtitles() == true) {
-                            filterTrackGroups(
-                                groupTracksByLanguage(status.subtitleTracks, subtitleMenuLanguages),
-                                subtitleMenuLanguages,
-                                status.selectedSubtitleId,
-                            ).groups.flatMap { it.tracks }
-                        } else {
-                            status.subtitleTracks
-                        }
+                        val offered = cyclableTracks(
+                            status.subtitleTracks,
+                            subtitleMenuLanguages,
+                            status.selectedSubtitleId,
+                            onlyPreferred = settings?.offersOnlyPreferredSubtitles() == true,
+                        )
                         val next = cycleTrack(
                             offered,
                             status.selectedSubtitleId,
