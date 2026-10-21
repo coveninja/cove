@@ -229,6 +229,11 @@ host and Android provides its native surface host. Android keeps the host in the
 application process, with a media foreground service and picture-in-picture, so
 playback survives activity recreation and backgrounding.
 
+Desktop's in-app software renderer publishes completed Skia buffers through a
+short front/back-buffer swap. Never hold the drawing lock across
+`mpv_render_context_render`: that call waits for the video presentation time,
+which would stall Compose even when decoding and downloading keep up.
+
 ### Add an addon
 
 Built-in metadata integrations are seeded, but no third-party stream provider is,
