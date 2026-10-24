@@ -21,8 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * In-process libmpv player backed by mpv's software render API.
  *
- * Decoded frames land directly in reusable Skia back buffers as bgr0 pixels.
- * Compose draws the completed front buffer, so there is no frame-sized AWT image or
+ * Decoded frames land directly in a persistent Skia bitmap as bgr0 pixels.
+ * Compose draws that same allocation, so there is no frame-sized AWT image or
  * per-pixel conversion between mpv and the UI. No GPU interop or Swing embedding.
  */
 class MpvSoftwarePlayer internal constructor(

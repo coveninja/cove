@@ -389,7 +389,7 @@ class MpvVideoPlayerHost(
      * paints over the whole scene, so the controls, the buffering spinner and any
      * error would all sit behind an opaque black rectangle. The software render
      * target keeps one compositor in charge of the entire window. mpv now writes
-     * directly into reusable Skia buffers, avoiding the former AWT and
+     * directly into one persistent Skia bitmap, avoiding the former AWT and
      * per-pixel Compose conversions; decoding stays on the GPU via hwdec=auto-copy.
      *
      * The OpenGL path is still the right choice for --play, which is a bare
