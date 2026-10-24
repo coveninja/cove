@@ -154,6 +154,15 @@ platform media host and served from jlibtorrent while progress remains
 observable. Each platform engine chooses the requested or largest playable
 video file and owns cleanup on runtime close.
 
+Automatic source selection lives in the shared UI state (`SourceRanking.kt`). It
+scores candidates on preferred resolution, swarm health, size, language and the
+release name, which is checked against the title's localized, English, original
+and alternative names (`ContentRepository.releaseNames`) and the episode or year.
+Name checks only rank: a name the matcher cannot place costs a little, a
+different year more. Only positive evidence blocks automatic playback: a file
+named as a different episode, a known-dead torrent or a cinema recording; those
+stay in the picker.
+
 Playback segments use four semantic kinds: intro, recap, credits, and preview.
 Recognized embedded media chapters win for their matching kind; compatible
 external timestamps fill only the kinds the media did not supply. The shared

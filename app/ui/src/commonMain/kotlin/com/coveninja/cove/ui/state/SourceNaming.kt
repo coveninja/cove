@@ -1,7 +1,6 @@
 package com.coveninja.cove.ui.state
 
 import com.coveninja.cove.shared.model.StreamSource
-import com.coveninja.cove.shared.model.describedText
 import com.coveninja.cove.shared.model.fileName
 
 /**
@@ -19,17 +18,7 @@ import com.coveninja.cove.shared.model.fileName
  * alongside the release name. Pulling it out gives the row something scannable
  * to lead with; unknown is fine and falls back to a generic icon.
  */
-internal fun StreamSource.qualityLabel(): String? {
-    val haystack = describedText().lowercase()
-    return when {
-        "2160" in haystack || "4k" in haystack || "uhd" in haystack -> "4K"
-        "1440" in haystack -> "1440p"
-        "1080" in haystack -> "1080p"
-        "720" in haystack -> "720p"
-        "480" in haystack -> "480p"
-        else -> null
-    }
-}
+internal fun StreamSource.qualityLabel(): String? = resolutionTier().label
 
 /**
  * The file name, unless the row's own heading already amounts to it.

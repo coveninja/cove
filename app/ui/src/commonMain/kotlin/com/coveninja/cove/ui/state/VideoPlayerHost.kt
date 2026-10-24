@@ -480,10 +480,21 @@ interface VideoPlayerHost {
      * Adds an external subtitle; it then appears in [PlaybackStatus.subtitleTracks].
      *
      * [select] switches to it at once. That is what a file the viewer supplied means,
-     * and what a fetched one must not do: mpv's own select/auto distinction, where
-     * auto leaves the choice to the language preferences applied before the load.
+     * and what a fetched one must not do: mpv's own select/auto distinction. An auto
+     * track is not selected by anything but the session, which chooses among the
+     * subtitles by the viewer's languages once they are in.
      */
     fun addSubtitle(url: String, title: String, language: String, select: Boolean = false)
+
+    /**
+     * Adds a fetched subtitle as [addSubtitle] does, and waits for the player's answer: true
+     * once it has the track, false when it refused it. mpv refuses one sent in the moment a
+     * file starts, and one it cannot fetch. Null from a host that cannot tell.
+     */
+    suspend fun offerSubtitle(url: String, title: String, language: String): Boolean? {
+        addSubtitle(url, title, language)
+        return null
+    }
 
     /** Null switches subtitles off. */
     fun selectSubtitleTrack(id: Int?)

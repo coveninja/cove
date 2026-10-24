@@ -29,7 +29,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -39,6 +41,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.coveninja.cove.ui.CoveColors
+import com.coveninja.cove.ui.components.player.filterTrackGroups
+import com.coveninja.cove.ui.components.player.TrackMenu
 import com.coveninja.cove.ui.components.player.SPEED_STEPS
 import com.coveninja.cove.ui.components.player.badges
 import com.coveninja.cove.ui.components.player.detailLabel
@@ -124,6 +128,11 @@ internal fun TvPlayerPanel(
      */
     subtitleAppearance: SubtitleAppearance? = null,
     onSubtitleAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
+    /** The viewer's subtitle and audio languages, two-letter codes in order; they lead their lists. */
+    subtitleLanguages: List<String> = emptyList(),
+    audioLanguages: List<String> = emptyList(),
+    /** Keep other subtitle languages behind a "Show all languages" row. */
+    onlyPreferredSubtitles: Boolean = false,
     onSetAudioDelay: (Double) -> Unit,
     onSelectSpeed: (Double) -> Unit,
     onSetScaling: (VideoScaling) -> Unit,
@@ -136,6 +145,8 @@ internal fun TvPlayerPanel(
     modifier: Modifier = Modifier,
 ) {
     val dimens = TvTheme.dimens
+    // Folded again whenever another page opens: seeing every language is a look round, not a setting.
+    var showAllSubtitleLanguages by remember(page) { mutableStateOf(false) }
     // A scroll position per page: they are different lists, and carrying one page's offset
     // into the next opens it halfway down.
     val listState = remember(page) { LazyListState() }
@@ -211,6 +222,9 @@ internal fun TvPlayerPanel(
                         onSetDelay = onSetSubtitleDelay,
                         appearance = subtitleAppearance,
                         onAppearanceChange = onSubtitleAppearanceChange,
+                        preferredLanguages = subtitleLanguages,
+                        onlyPreferred = onlyPreferredSubtitles && !showAllSubtitleLanguages,
+                        onShowAll = { showAllSubtitleLanguages = true },
                     )
 
                     TvPanelPage.Audio -> trackRows(
@@ -222,6 +236,7 @@ internal fun TvPlayerPanel(
                         firstRowFocus = firstRowFocus,
                         onSelect = { id -> id?.let(onSelectAudio) },
                         onSetDelay = onSetAudioDelay,
+                        preferredLanguages = audioLanguages,
                     )
 
                     TvPanelPage.Chapters -> chapterRows(
@@ -466,7 +481,12 @@ private fun LazyListScope.trackRows(
     /** Subtitles only; the audio page passes neither. */
     appearance: SubtitleAppearance? = null,
     onAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
+    preferredLanguages: List<String> = emptyList(),
+    onlyPreferred: Boolean = false,
+    onShowAll: () -> Unit = {},
 ) {
+    val groups = groupTracksByLanguage(tracks, preferredLanguages)
+    val menu = if (onlyPreferred) filterTrackGroups(groups, preferredLanguages, selectedId) else TrackMenu(groups, 0)
     item(key = "delay") {
         TvPanelStepper(
             label = delayLabel,
@@ -574,8 +594,9 @@ private fun LazyListScope.trackRows(
         }
     }
 
-    groupTracksByLanguage(tracks).forEach { group ->
-        item(key = "group-${group.languageLabel}") {
+    menu.groups.forEach { group ->
+        // Keyed by code, which is unique per group; two groups could share a display name.
+        item(key = "group-${group.code}") {
             Text(
                 text = group.languageLabel,
                 style = MaterialTheme.typography.labelMedium,
@@ -594,11 +615,21 @@ private fun LazyListScope.trackRows(
                 highlighted = selected,
                 onActivate = { onSelect(track.id) },
                 // Where nothing can be switched off, the first track is the page's first stop.
-                modifier = if (!offEntry && track === tracks.firstOrNull()) {
+                modifier = if (!offEntry && track === menu.groups.firstOrNull()?.tracks?.firstOrNull()) {
                     Modifier.focusRequester(firstRowFocus)
                 } else {
                     Modifier
                 },
+            )
+        }
+    }
+    if (menu.hiddenTracks > 0) {
+        item(key = "show-all-languages") {
+            TvSettingRow(
+                label = "Show all languages",
+                detail = "${menu.hiddenTracks} more in other languages",
+                value = "",
+                onActivate = onShowAll,
             )
         }
     }

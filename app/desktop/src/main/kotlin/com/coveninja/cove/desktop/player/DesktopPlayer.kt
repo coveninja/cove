@@ -1,5 +1,6 @@
 package com.coveninja.cove.desktop.player
 
+import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.flow.StateFlow
 
 interface DesktopPlayer : AutoCloseable {
@@ -27,9 +28,12 @@ interface DesktopPlayer : AutoCloseable {
 
     /**
      * Loads an external subtitle file or URL alongside the current media.
-     * [select] switches to it immediately; otherwise mpv's own track selection decides.
+     * [select] switches to it immediately; otherwise it is only added, and the session
+     * chooses the subtitle — mpv's own choice is made once, while the file opens.
+     *
+     * Completes with whether mpv took it. Never completes if the player closes first.
      */
-    fun addSubtitle(url: String, title: String, language: String, select: Boolean)
+    fun addSubtitle(url: String, title: String, language: String, select: Boolean): CompletableFuture<Boolean>
 
     /**
      * mpv's keepaspect/panscan/video-zoom, which crop and scale properly rather

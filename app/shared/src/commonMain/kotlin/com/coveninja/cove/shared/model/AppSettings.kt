@@ -52,6 +52,12 @@ data class AppSettings(
      */
     val rememberStreamSource: Boolean = true,
     val streamSelectionMode: String = "balanced",
+    /**
+     * The resolution automatic selection aims for: "2160p", "1080p", "720p" or "480p". A
+     * release at it wins unless it is barely seeded; otherwise the closest fallback does,
+     * lower before higher. 1080p by default, which is what most screens and most lines suit.
+     */
+    val preferredResolution: String = "1080p",
     val measuredBandwidthMbps: Double = 0.0,
     val sourcePreference: String = "",
     val subtitlesEnabled: Boolean = false,
@@ -72,6 +78,12 @@ data class AppSettings(
      */
     val audioLanguages: List<String> = emptyList(),
     val subtitleLanguages: List<String> = emptyList(),
+    /**
+     * Offer only [subtitleLanguages] in the player: add-on subtitles in other languages are
+     * not fetched, and embedded ones fold away behind "Show all languages". Applies only once
+     * a list has been chosen, so a profile that never picked languages still sees everything.
+     */
+    val subtitleLanguagesOnly: Boolean = false,
     val subtitleSize: Double = 100.0,
     val subtitlePosition: Double = 8.0,
     val subtitleBackground: Boolean = true,

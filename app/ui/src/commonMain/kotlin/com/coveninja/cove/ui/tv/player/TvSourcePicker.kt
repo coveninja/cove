@@ -1,5 +1,8 @@
 package com.coveninja.cove.ui.tv.player
 
+import com.coveninja.cove.ui.state.bestForPicker
+import com.coveninja.cove.ui.state.byResolution
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -34,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.CoveColors
 import com.coveninja.cove.ui.components.player.formatBytes
+import com.coveninja.cove.ui.state.ReleaseMatch
 import com.coveninja.cove.ui.state.StreamChoice
 import com.coveninja.cove.ui.state.displayLabel
 import com.coveninja.cove.ui.state.distinctFileName
@@ -58,12 +62,19 @@ import com.coveninja.cove.ui.tv.focus.tvFocusTarget
  */
 @Composable
 internal fun TvSourcePicker(
-    sources: List<StreamChoice>,
+    ranked: List<StreamChoice>,
     onChoose: (StreamChoice) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val dimens = TvTheme.dimens
+    // Highest resolution first, focus starting on what Watch would play: up for 4K, down for
+    // the lower resolutions, as on the other shells.
+    val sources = remember(ranked) { ranked.byResolution() }
+    val focusIndex = remember(ranked, sources) {
+        ranked.bestForPicker()?.let { best -> sources.indexOfFirst { it === best } }?.takeIf { it >= 0 } ?: 0
+    }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (focusIndex - 1).coerceAtLeast(0))
     val firstFocus = remember { FocusRequester() }
     FocusOnAppear(firstFocus, enabled = sources.isNotEmpty())
 
@@ -95,6 +106,7 @@ internal fun TvSourcePicker(
             )
 
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 18.dp)
@@ -109,7 +121,7 @@ internal fun TvSourcePicker(
                     TvSourceRow(
                         choice = choice,
                         onClick = { onChoose(choice) },
-                        modifier = if (index == 0) {
+                        modifier = if (index == focusIndex) {
                             Modifier.focusRequester(firstFocus)
                         } else {
                             Modifier
@@ -253,6 +265,13 @@ private fun sourceDetail(choice: StreamChoice): String = buildList {
         VideoDecoderSupport.SoftwareOnly -> add("Software decode")
         VideoDecoderSupport.Unsupported -> add("Not supported here")
         else -> Unit
+    }
+    // Why automatic selection passed it over, as the pointer picker says too.
+    when {
+        choice.assessment.deadSwarm -> add("Nobody seeding")
+        choice.assessment.match == ReleaseMatch.WrongEpisode -> add("Different episode")
+        choice.assessment.match == ReleaseMatch.WrongYear -> add("Different year")
+        choice.assessment.theatricalCopy -> add("Cinema recording")
     }
 }.joinToString("  ·  ")
 

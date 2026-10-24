@@ -6,6 +6,7 @@ import com.coveninja.cove.shared.model.MediaImages
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
 import com.coveninja.cove.shared.model.PersonDetails
+import com.coveninja.cove.shared.model.ReleaseNames
 import com.coveninja.cove.shared.model.TvEpisode
 import kotlinx.coroutines.flow.StateFlow
 
@@ -66,4 +67,11 @@ interface ContentRepository {
     suspend fun details(media: Media): ContentDetails
     suspend fun person(id: Int): PersonDetails
     suspend fun episodes(id: Int, season: Int): List<TvEpisode>
+
+    /**
+     * The names releases of this title are published under, for checking a stream before it
+     * is played automatically. Null when the host cannot say, which leaves that check to the
+     * title already on screen.
+     */
+    suspend fun releaseNames(id: Int, type: MediaType): ReleaseNames? = null
 }

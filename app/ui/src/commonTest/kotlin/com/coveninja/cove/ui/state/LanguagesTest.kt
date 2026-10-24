@@ -132,6 +132,33 @@ class LanguagesTest {
         assertNull(knownLanguageTag("signs"))
     }
 
+    // OpenSubtitles' addon labels its Latin American Spanish, traditional and bilingual Chinese
+    // and so on with the site's own ids rather than ISO codes, and those subtitles are as much
+    // the viewer's language as any other.
+    @Test
+    fun `OpenSubtitles' own language ids are the languages they name`() {
+        assertEquals("es", canonicalLanguage("spl"))
+        assertEquals("es", canonicalLanguage("spn"))
+        assertEquals("pt", canonicalLanguage("pob"))
+        assertEquals("pt", canonicalLanguage("pom"))
+        assertEquals("zh", canonicalLanguage("zht"))
+        assertEquals("zh", canonicalLanguage("zhe"))
+        assertEquals("sr", canonicalLanguage("scc"))
+    }
+
+    // Stremio shows whatever an addon sends when it is not a code, and some send the name.
+    @Test
+    fun `a language written out by name is that language`() {
+        assertEquals("sv", canonicalLanguage("Swedish"))
+        assertEquals("sv", canonicalLanguage("svenska"))
+        assertEquals("en", canonicalLanguage("English (SDH)"))
+        assertEquals("en", canonicalLanguage("eng (forced)"))
+        assertEquals("es", canonicalLanguage("Spanish - Latin America"))
+        assertEquals("pt", canonicalLanguage("Português (Brasil)"))
+        assertNull(canonicalLanguage("Klingon"))
+        assertNull(canonicalLanguage("Original"))
+    }
+
     // A region subtag is worth keeping — pt-BR and pt-PT are different enough to show — and
     // only the part before it has to name a language.
     @Test

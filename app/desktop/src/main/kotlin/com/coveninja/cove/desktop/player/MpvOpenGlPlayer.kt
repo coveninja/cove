@@ -6,6 +6,7 @@ import com.sun.jna.Pointer
 import com.sun.jna.StringArray
 import com.sun.jna.ptr.PointerByReference
 import java.lang.ref.Reference
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -156,11 +157,15 @@ class MpvOpenGlPlayer(
     // setters cannot express.
     override fun setOption(name: String, value: String) = command("set", name, value)
 
-    // Flags and title are positional. mpv's "auto" means don't select — the track is
-    // offered and the slang applied before the load decides — while "select" switches
+    // Flags and title are positional. mpv's "auto" adds the track without selecting it —
+    // the session chooses among the subtitles once they are in — while "select" switches
     // to it at once, which is only ever right for a file the viewer chose themselves.
+    //
+    // A subtitle that cannot be fetched is not a stream that cannot be played, so that
+    // failure is logged rather than reported: as the player's error it put up the
+    // dead-source banner, and moved an automatically chosen source on to the next one.
     override fun addSubtitle(url: String, title: String, language: String, select: Boolean) =
-        command("sub-add", url, if (select) "select" else "auto", title, language)
+        runCommand(arrayOf("sub-add", url, if (select) "select" else "auto", title, language), report = false)
 
     override fun setScaling(keepAspect: Boolean, panscan: Double, zoom: Double) {
         command("set", "keepaspect", if (keepAspect) "yes" else "no")
@@ -452,7 +457,12 @@ class MpvOpenGlPlayer(
      * argument array does to a seek.
      */
     override fun command(vararg args: String) {
-        submitCommand(args.firstOrNull() ?: "command") { library, target ->
+        runCommand(args, report = true)
+    }
+
+    /** [command], with [report] false for a command whose failure is not the player's. */
+    private fun runCommand(args: Array<out String>, report: Boolean): CompletableFuture<Boolean> =
+        submitCommand(args.firstOrNull() ?: "command", report) { library, target ->
             val arguments = StringArray(args)
             try {
                 library.mpv_command(target, arguments)
@@ -460,7 +470,6 @@ class MpvOpenGlPlayer(
                 Reference.reachabilityFence(arguments)
             }
         }
-    }
 
     private fun loadNow(source: String, startPositionSeconds: Double) {
         // start applies to the next file loaded, so it is set before loadfile
@@ -469,17 +478,30 @@ class MpvOpenGlPlayer(
         command(*mpvLoadFileArgs(source))
     }
 
-    private fun submitCommand(op: String, call: (MpvLibrary, Pointer) -> Int) {
-        if (closing.get()) return
+    private fun submitCommand(
+        op: String,
+        report: Boolean = true,
+        call: (MpvLibrary, Pointer) -> Int,
+    ): CompletableFuture<Boolean> {
+        val done = CompletableFuture<Boolean>()
+        if (closing.get()) return done.apply { complete(false) }
         commandExecutor.execute {
-            val target = handle.get() ?: return@execute
-            val result = call(Mpv.library(), target)
-            if (result < 0) {
-                _snapshot.value = _snapshot.value.copy(
-                    error = "$op: ${Mpv.library().mpv_error_string(result)}",
-                )
+            try {
+                val target = handle.get() ?: return@execute
+                val result = call(Mpv.library(), target)
+                when {
+                    result >= 0 -> Unit
+                    report -> _snapshot.value = _snapshot.value.copy(
+                        error = "$op: ${Mpv.library().mpv_error_string(result)}",
+                    )
+                    else -> System.err.println("Cove mpv: $op failed: ${Mpv.library().mpv_error_string(result)}")
+                }
+                done.complete(result >= 0)
+            } finally {
+                done.complete(false)
             }
         }
+        return done
     }
 
     private fun setOption(library: MpvLibrary, target: Pointer, name: String, value: String) {

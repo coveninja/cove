@@ -26,11 +26,24 @@ private val SEEDER_PATTERNS = listOf(
     // 👤 / 👥 immediately followed by the count. What Torrentio, Comet and
     // AIOStreams emit, and unambiguous enough to try first.
     Regex("(?:👤|👥)\\s*([\\d,]+)"),
-    // "Seeders: 109", "seeds 109".
-    Regex("(?i)\\bseed(?:er)?s?\\s*[:=]?\\s*([\\d,]+)"),
+    // "Seeders: 109", "seeds 109". Plural only: a singular "Seed" is a word in titles, and
+    // "The Bad Seed 2018" is not a torrent with two thousand peers.
+    Regex("(?i)\\bseed(?:er)?s\\s*[:=]?\\s*([\\d,]+)"),
     // "109 seeders".
-    Regex("(?i)\\b([\\d,]+)\\s*seed(?:er)?s?\\b"),
+    Regex("(?i)\\b([\\d,]+)\\s*seed(?:er)?s\\b"),
 )
+
+/**
+ * Whether an automatic choice can already prove that this torrent will not start.
+ *
+ * A zero written by the provider is different from no peer count at all: the latter is
+ * unknown and remains eligible. A direct URL wins even when the same source also carries an
+ * info hash, because it may be a cached debrid copy whose torrent swarm no longer matters.
+ */
+internal fun StreamSource.isKnownDeadTorrent(): Boolean =
+    url.isNullOrBlank() &&
+        !infoHash.isNullOrBlank() &&
+        seederCount()?.let { it <= 0 } == true
 
 /**
  * How a peer count reads at a glance.

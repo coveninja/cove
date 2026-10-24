@@ -179,4 +179,74 @@ class TrackGroupsTest {
     fun `an ordinary track carries no badges`() {
         assertEquals(emptyList(), track(1, "en", "Full").badges())
     }
+
+    // The log that prompted this: addon tracks tagged "eng", embedded ones "en", shown as two
+    // sections both headed English.
+    @Test
+    fun `every spelling of a language is one group`() {
+        val groups = groupTracksByLanguage(
+            listOf(track(1, "eng"), track(2, "en"), track(3, "en-US"), track(4, "pob"), track(5, "pt-BR")),
+        )
+
+        assertEquals(listOf("English", "Portuguese"), groups.map { it.languageLabel })
+        assertEquals(listOf(1, 2, 3), groups.first().tracks.map { it.id })
+    }
+
+    @Test
+    fun `the viewer's languages lead the menu in their order`() {
+        val groups = groupTracksByLanguage(
+            listOf(track(1, "ara"), track(2, "sv"), track(3, "nld"), track(4, "eng")),
+            preferred = listOf("en", "sv"),
+        )
+
+        assertEquals(listOf("English", "Swedish", "Arabic", "Dutch"), groups.map { it.languageLabel })
+    }
+
+    @Test
+    fun `a filtered menu keeps the wanted languages, the selected track and unlabelled tracks`() {
+        val groups = groupTracksByLanguage(
+            listOf(track(1, "ara"), track(2, "swe"), track(3, "fin"), track(4, null), track(5, "ell"), track(6, "ara")),
+            preferred = listOf("en", "sv"),
+        )
+
+        val menu = filterTrackGroups(groups, preferred = listOf("en", "sv"), selectedId = 3)
+
+        assertEquals(listOf("Swedish", "Finnish", "Unknown"), menu.groups.map { it.languageLabel })
+        assertEquals(3, menu.hiddenTracks)
+    }
+
+    @Test
+    fun `with no preference nothing is hidden`() {
+        val groups = groupTracksByLanguage(listOf(track(1, "ara"), track(2, "fin")))
+
+        assertEquals(0, filterTrackGroups(groups, preferred = emptyList(), selectedId = null).hiddenTracks)
+    }
+
+    // "und" is how a file says nobody tagged the track: it could be the viewer's language, so
+    // it stays in a filtered menu with the other unknowns instead of vanishing as "UND".
+    @Test
+    fun `an undetermined track is an unknown one`() {
+        val groups = groupTracksByLanguage(listOf(track(1, "und"), track(2, null), track(3, "ara")))
+        val menu = filterTrackGroups(groups, preferred = listOf("sv"), selectedId = null)
+
+        assertEquals(listOf("Unknown"), menu.groups.map { it.languageLabel })
+        assertEquals(listOf(1, 2), menu.groups.single().tracks.map { it.id })
+    }
+
+    @Test
+    fun `an add-on that names its languages files them under those languages`() {
+        val groups = groupTracksByLanguage(listOf(track(1, "Swedish"), track(2, "swe"), track(3, "English (SDH)")))
+
+        assertEquals(listOf("English", "Swedish"), groups.map { it.languageLabel })
+        assertEquals(listOf(1, 2), groups.last().tracks.map { it.id })
+    }
+
+    @Test
+    fun `cycling goes through what the menu offers`() {
+        val tracks = listOf(track(1, "ara"), track(2, "swe"), track(3, "eng"), track(4, "fin"))
+
+        assertEquals(listOf(3, 2), cyclableTracks(tracks, listOf("en", "sv"), selectedId = null, onlyPreferred = true).map { it.id })
+        assertEquals(listOf(3, 2, 4), cyclableTracks(tracks, listOf("en", "sv"), selectedId = 4, onlyPreferred = true).map { it.id })
+        assertEquals(tracks, cyclableTracks(tracks, listOf("en", "sv"), selectedId = null, onlyPreferred = false))
+    }
 }

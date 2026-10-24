@@ -18,8 +18,10 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -35,6 +37,7 @@ import kotlin.time.Clock
 
 private const val MAX_ADDON_RESPONSE_CHARS = 20 * 1024 * 1024
 private const val ADDON_REQUEST_TIMEOUT_MS = 15_000L
+private const val SUBTITLE_RETRY_DELAY_MS = 1_000L
 
 class AddonManager(
     private val database: CoveDatabase,
@@ -270,7 +273,15 @@ class AddonManager(
         }.map { addon ->
             async {
                 withTimeoutOrNull(ADDON_REQUEST_TIMEOUT_MS) {
-                    runCatching { fetchSubtitles(addon, type, stremioId) }.getOrDefault(emptyList())
+                    // Asked twice before giving up: one refused request otherwise costs every
+                    // subtitle this addon has for the whole of what is being watched.
+                    runCatching { fetchSubtitles(addon, type, stremioId) }
+                        .recoverCatching { error ->
+                            if (error is CancellationException) throw error
+                            delay(SUBTITLE_RETRY_DELAY_MS)
+                            fetchSubtitles(addon, type, stremioId)
+                        }
+                        .getOrDefault(emptyList())
                 }.orEmpty()
             }
         }.map { it.await() }.flatten()
@@ -424,14 +435,16 @@ class AddonManager(
             "${addon.url}/stream/$stremioType/${stremioId.encodeURLPathPart()}.json",
         )
         return response.streams.map { stream ->
+            val title = stream.title.ifBlank { stream.description }
             stream.copy(
                 addonName = addon.manifest.name,
+                title = title,
                 sizeBytes = stream.sizeBytes.takeIf { it > 0 }
                     ?: stream.behaviorHints?.videoSize?.takeIf { it > 0 }
                     // Torrentio, the busiest provider there is, sets neither of
                     // the above and writes the size into the title instead.
                     // Without this the field is zero for most real answers.
-                    ?: humanSizeToBytes(stream.title).takeIf { it > 0 }
+                    ?: humanSizeToBytes(title).takeIf { it > 0 }
                     ?: 0,
             )
         }

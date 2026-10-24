@@ -11,6 +11,7 @@ import com.coveninja.cove.shared.model.MediaImages
 import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideos
 import com.coveninja.cove.shared.model.PersonDetails
+import com.coveninja.cove.shared.model.ReleaseNames
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.network.SearchResultsDto
@@ -38,6 +39,14 @@ interface MediaCatalog {
      * default returns null for the implementations that cannot look an external id up.
      */
     suspend fun findByImdbId(imdbId: String, type: MediaType): Media? = null
+
+    /**
+     * The English, original and alternative titles releases of this title are named after,
+     * plus its year — what automatic source selection checks a release name against. The
+     * default returns null for catalogs that cannot say, which leaves the check to the
+     * title already in hand.
+     */
+    suspend fun releaseNames(id: Int, type: MediaType): ReleaseNames? = null
 
     /**
      * One person plus their combined filmography, which is what the person sheet is

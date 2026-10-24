@@ -160,6 +160,11 @@ fun PlayerControls(
      */
     subtitleAppearance: SubtitleAppearance? = null,
     onSubtitleAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
+    /** The viewer's subtitle and audio languages, two-letter codes in order; they lead their menus. */
+    subtitleLanguages: List<String> = emptyList(),
+    audioLanguages: List<String> = emptyList(),
+    /** Keep other subtitle languages folded away behind "Show all languages". */
+    onlyPreferredSubtitles: Boolean = false,
     onSetAudioDelay: (Double) -> Unit,
     scaling: VideoScaling,
     onSelectScaling: (VideoScaling) -> Unit,
@@ -290,6 +295,8 @@ fun PlayerControls(
                         onLoadFile = onLoadSubtitleFile,
                         appearance = subtitleAppearance,
                         onAppearanceChange = onSubtitleAppearanceChange,
+                        preferredLanguages = subtitleLanguages,
+                        onlyPreferred = onlyPreferredSubtitles,
                     )
                 }
                 if (status.audioTracks.size > 1) {
@@ -297,6 +304,7 @@ fun PlayerControls(
                         icon = "lucide:audio-lines",
                         label = "Audio track",
                         tracks = status.audioTracks,
+                        preferredLanguages = audioLanguages,
                         selectedId = status.selectedAudioId,
                         allowOff = false,
                         expanded = openMenu == PlayerMenu.Audio,
@@ -1022,8 +1030,19 @@ private fun TrackMenuButton(
      */
     appearance: SubtitleAppearance? = null,
     onAppearanceChange: ((SubtitleAppearance) -> Unit)? = null,
+    /** Languages to lead the menu with, two-letter codes in order. */
+    preferredLanguages: List<String> = emptyList(),
+    /** Show only [preferredLanguages] until the viewer asks for the rest. */
+    onlyPreferred: Boolean = false,
 ) {
-    val groups = remember(tracks) { groupTracksByLanguage(tracks) }
+    val groups = remember(tracks, preferredLanguages) { groupTracksByLanguage(tracks, preferredLanguages) }
+    // Folded again every time the menu opens: showing everything is a look round, not a setting.
+    var showAll by remember(expanded) { mutableStateOf(false) }
+    val menu = if (onlyPreferred && !showAll) {
+        filterTrackGroups(groups, preferredLanguages, selectedId)
+    } else {
+        TrackMenu(groups, 0)
+    }
 
     Box {
         ControlButton(
@@ -1050,7 +1069,7 @@ private fun TrackMenuButton(
                     },
                 )
             }
-            groups.forEach { group ->
+            menu.groups.forEach { group ->
                 MenuSectionHeader(group.languageLabel)
                 group.tracks.forEach { track ->
                     CMenuItem(
@@ -1068,6 +1087,13 @@ private fun TrackMenuButton(
                         },
                     )
                 }
+            }
+            if (menu.hiddenTracks > 0) {
+                CMenuItem(
+                    text = "Show all languages (${menu.hiddenTracks} more)",
+                    iconName = "lucide:languages",
+                    onClick = { showAll = true },
+                )
             }
             onLoadFile?.let { loadFile ->
                 MenuSectionHeader("Your own")

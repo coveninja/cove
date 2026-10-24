@@ -50,7 +50,7 @@ Yes. Provider configuration is profile-scoped unless the primary profile enables
 
 ## How does Cove choose a source?
 
-You can choose manually or enable automatic selection using Balanced, Quality first, or Most seeded ordering. Cove does not silently switch to another source after playback starts. See [Playback and subtitles](playback-and-subtitles.md).
+You can choose manually or enable automatic selection. Automatic selection aims for your preferred resolution and uses Balanced, Quality first, or Most seeded ordering. It never starts a file named as a different episode, a torrent nobody seeds, or a cinema recording, and it ranks names it cannot match to the title lower. If an automatically chosen source fails before it plays, Cove tries the next one. Cove does not switch sources after playback starts. See [Playback and subtitles](playback-and-subtitles.md).
 
 ## Can I load my own subtitle file?
 

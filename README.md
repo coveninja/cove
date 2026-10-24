@@ -88,8 +88,9 @@
 
 - Native, hardware-accelerated mpv playback on desktop and Android.
 - Direct HTTP and torrent playback with subtitles and live buffering progress.
-- Automatic stream selection by quality, size, reliability, or measured
-  connection speed, plus full manual sorting and filtering.
+- Automatic stream selection that aims for your preferred resolution, weighs
+  seeders against file size, and checks release names against the title before
+  playing, plus a manual source picker.
 - Configurable intro, recap, and credits skipping, with progress saved as you watch.
 
 ### Sources and extensions

@@ -51,6 +51,8 @@ data class StreamCompatibility(
 data class StreamChoice(
     val source: StreamSource,
     val compatibility: StreamCompatibility,
+    /** What ranking concluded about the release; neutral for a choice built without ranking. */
+    val assessment: SourceAssessment = SourceAssessment(),
     /**
      * The source this title was last played from, as far as the memory can tell.
      *
@@ -60,6 +62,17 @@ data class StreamChoice(
      */
     val remembered: Boolean = false,
 )
+
+/**
+ * Whether Cove may start this choice without asking: the player can decode it, its release
+ * does not name a different episode, a cinema recording or a swarm nobody seeds. The one check
+ * shared by the automatic pick, a lone result, failover and the picker's "best" badge, so they
+ * can never disagree about which source that is.
+ */
+internal fun StreamChoice.eligibleForAutomaticPlayback(): Boolean =
+    compatibility.automaticallyEligible &&
+        assessment.automaticallyPlayable &&
+        !source.isKnownDeadTorrent()
 
 internal fun StreamCompatibility.selectionPriority(): Int = when (support) {
     VideoDecoderSupport.Hardware, VideoDecoderSupport.Unknown -> 0

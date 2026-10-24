@@ -16,6 +16,7 @@ import com.coveninja.cove.shared.model.MediaType
 import com.coveninja.cove.shared.model.MediaVideo
 import com.coveninja.cove.shared.model.MediaVideos
 import com.coveninja.cove.shared.model.PersonDetails
+import com.coveninja.cove.shared.model.ReleaseNames
 import com.coveninja.cove.shared.model.TvEpisode
 import com.coveninja.cove.shared.model.TvSeason
 import com.coveninja.cove.shared.network.SearchResultsDto
@@ -280,6 +281,56 @@ class TmdbClient(
         return runCatching { media(id, type) }.getOrNull()
     }
 
+    /**
+     * One English request with alternative titles and translations appended. Original and
+     * English-market names are neutral aliases; translated names retain their language so
+     * ranking can use it as a hint when the release does not state its audio languages.
+     * A translated name still identifies the same title and is never grounds for rejection.
+     */
+    override suspend fun releaseNames(id: Int, type: MediaType): ReleaseNames {
+        require(id > 0) { "media id must be positive" }
+        val found = request<TmdbReleaseNames>("/${type.wireName}/$id", "en-US") {
+            parameter("append_to_response", "alternative_titles,translations")
+        }
+        val origin = found.originCountry.map(String::uppercase).toSet()
+        val alternatives = (found.alternativeTitles.titles + found.alternativeTitles.results)
+            .filter { alternative ->
+                val country = alternative.countryCode.uppercase()
+                // A romanization of the title's own original ("Shingeki no Kyojin") is how
+                // releases of it are named. Foreign translations are kept separately below,
+                // where their language remains available rather than becoming a neutral alias.
+                country in RELEASE_NAME_COUNTRIES || (alternative.isRomanization() && country in origin)
+            }
+            .map { it.title }
+            // Initialisms ("BB", "BrBa") would match stray tokens in unrelated release names.
+            .filter { title -> title.count(Char::isLetterOrDigit) > MIN_ALTERNATIVE_TITLE_LENGTH }
+        val titles = (listOf(found.title, found.name, found.originalTitle, found.originalName) + alternatives)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinctBy(String::lowercase)
+        val year = (found.releaseDate.ifBlank { found.firstAirDate })
+            .take(4)
+            .toIntOrNull()
+        val known = titles.map(String::lowercase).toSet()
+        val translated = found.translations.translations
+            .mapNotNull { translation ->
+                val title = translation.data.title.ifBlank { translation.data.name }.trim()
+                title.takeIf { it.isNotEmpty() && it.lowercase() !in known }
+                    ?.let { it to translation.language.lowercase() }
+            }
+            .filter { (title, language) ->
+                language.isNotBlank() && title.count(Char::isLetterOrDigit) > MIN_ALTERNATIVE_TITLE_LENGTH
+            }
+            .distinctBy { (title, _) -> title.lowercase() }
+            .toMap()
+        return ReleaseNames(
+            titles = titles,
+            year = year,
+            originalLanguage = found.originalLanguage.takeIf(String::isNotBlank),
+            translatedTitles = translated,
+        )
+    }
+
     private suspend fun search(query: String, type: MediaType): List<Media> {
         val path = "/search/${type.wireName}"
         val local = results(path) { parameter("query", query) }.withType(type)
@@ -366,6 +417,57 @@ private data class TmdbExternalIds(
 
 @Serializable
 private data class TmdbGenres(val genres: List<MediaGenre> = emptyList())
+
+@Serializable
+private data class TmdbReleaseNames(
+    val title: String = "",
+    val name: String = "",
+    @kotlinx.serialization.SerialName("original_title") val originalTitle: String = "",
+    @kotlinx.serialization.SerialName("original_name") val originalName: String = "",
+    @kotlinx.serialization.SerialName("release_date") val releaseDate: String = "",
+    @kotlinx.serialization.SerialName("first_air_date") val firstAirDate: String = "",
+    @kotlinx.serialization.SerialName("original_language") val originalLanguage: String = "",
+    @kotlinx.serialization.SerialName("origin_country") val originCountry: List<String> = emptyList(),
+    @kotlinx.serialization.SerialName("alternative_titles")
+    val alternativeTitles: TmdbAlternativeTitles = TmdbAlternativeTitles(),
+    val translations: TmdbTranslations = TmdbTranslations(),
+)
+
+@Serializable
+private data class TmdbTranslations(val translations: List<TmdbTranslation> = emptyList())
+
+/** One language's version of the title: films fill `title`, series `name`. */
+@Serializable
+private data class TmdbTranslation(
+    @kotlinx.serialization.SerialName("iso_639_1") val language: String = "",
+    val data: TmdbTranslationData = TmdbTranslationData(),
+)
+
+@Serializable
+private data class TmdbTranslationData(val title: String = "", val name: String = "")
+
+/** Films list these under `titles`, series under `results`; the entries are the same shape. */
+@Serializable
+private data class TmdbAlternativeTitles(
+    val titles: List<TmdbAlternativeTitle> = emptyList(),
+    val results: List<TmdbAlternativeTitle> = emptyList(),
+)
+
+@Serializable
+private data class TmdbAlternativeTitle(
+    @kotlinx.serialization.SerialName("iso_3166_1") val countryCode: String = "",
+    val title: String = "",
+    val type: String = "",
+) {
+    fun isRomanization(): Boolean = type.lowercase().let { kind ->
+        "romaji" in kind || "roman" in kind || "translit" in kind
+    }
+}
+
+private const val MIN_ALTERNATIVE_TITLE_LENGTH = 4
+
+/** Markets whose alternative titles are English, which is how most releases are named. */
+private val RELEASE_NAME_COUNTRIES = setOf("US", "GB", "CA", "AU", "NZ", "IE")
 
 @Serializable
 private data class TmdbFind(

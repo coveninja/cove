@@ -40,8 +40,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
@@ -281,6 +283,13 @@ class MpvVideoPlayerHost(
 
     override fun addSubtitle(url: String, title: String, language: String, select: Boolean) {
         player?.addSubtitle(url, title, language, select)
+    }
+
+    // Bounded because a handle closed with the add still queued never answers it. mpv's own
+    // network timeout is a minute, so an answer can legitimately take most of one.
+    override suspend fun offerSubtitle(url: String, title: String, language: String): Boolean? {
+        val answer = player?.addSubtitle(url, title, language, select = false) ?: return false
+        return withTimeoutOrNull(SUBTITLE_ANSWER_TIMEOUT_MILLIS) { answer.await() }
     }
 
     override fun selectAudioTrack(id: Int) {
@@ -681,6 +690,8 @@ private val STREAM_EXTRACTORS = listOf(
     "yt-dlp.exe",
     "youtube-dl.exe",
 )
+
+private const val SUBTITLE_ANSWER_TIMEOUT_MILLIS = 90_000L
 
 private fun PlayerSnapshot.toPlaybackStatus(): PlaybackStatus {
     val tracks = parseMpvTrackList(trackListJson)

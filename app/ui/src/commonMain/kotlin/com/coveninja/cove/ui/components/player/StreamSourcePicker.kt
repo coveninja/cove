@@ -1,5 +1,10 @@
 package com.coveninja.cove.ui.components.player
 
+import com.coveninja.cove.ui.state.bestForPicker
+import com.coveninja.cove.ui.state.byResolution
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -46,6 +51,10 @@ import com.coveninja.cove.shared.model.StreamSource
 import com.coveninja.cove.ui.icons.IconifyIcon
 import com.coveninja.cove.ui.state.SeederHealth
 import com.coveninja.cove.ui.state.StreamChoice
+import com.coveninja.cove.ui.state.ReleaseMatch
+import com.coveninja.cove.ui.state.SourceAssessment
+import com.coveninja.cove.ui.state.eligibleForAutomaticPlayback
+import com.coveninja.cove.ui.state.resolutionTier
 import com.coveninja.cove.ui.state.StreamCompatibility
 import com.coveninja.cove.ui.state.displayLabel
 import com.coveninja.cove.ui.state.distinctFileName
@@ -57,20 +66,36 @@ import com.coveninja.cove.ui.state.seederHealth
 import kotlinx.coroutines.delay
 
 /**
- * Shown when the viewer needs to choose. Rows arrive ranked within their codec
- * compatibility tier; the first automatically eligible row is recommended.
+ * Shown when the viewer needs to choose. Rows are listed by resolution, highest first, and
+ * ranked within each; the list opens on the recommended row — what Watch would play — so
+ * higher resolutions are a scroll up and lower ones a scroll down.
  */
 @Composable
 fun StreamSourcePicker(
-    sources: List<StreamChoice>,
+    ranked: List<StreamChoice>,
     onSelect: (StreamChoice) -> Unit,
     modifier: Modifier = Modifier,
     title: String? = null,
+    /** `AppSettings.showStreamDetails`: quality, size, peers and provider on each row. */
+    showDetails: Boolean = true,
 ) {
+    val sources = remember(ranked) { ranked.byResolution() }
     // Rows animate in once each. LazyColumn disposes what scrolls away, so
     // without this the entrance would replay every time a row came back.
     val entered = remember(sources) { mutableSetOf<String>() }
-    val recommendedIndex = sources.indexOfFirst { it.compatibility.automaticallyEligible }
+    // The same check the automatic pick uses, so "best" is always what Watch would have played.
+    val recommendedIndex = remember(ranked, sources) {
+        ranked.bestForPicker()?.let { best -> sources.indexOfFirst { it === best } } ?: -1
+    }
+    val listState = rememberLazyListState()
+    val peek = with(LocalDensity.current) { RECOMMENDED_PEEK.toPx() }
+    LaunchedEffect(sources, recommendedIndex) {
+        if (recommendedIndex > 0) {
+            listState.scrollToItem(recommendedIndex)
+            // A sliver of the row above stays in view, so it is plain there is more up there.
+            listState.scrollBy(-peek)
+        }
+    }
 
     Surface(
         modifier = modifier.widthIn(max = 660.dp),
@@ -103,7 +128,7 @@ fun StreamSourcePicker(
                     )
                     Text(
                         text = title?.takeIf { it.isNotBlank() }
-                            ?: "${sources.size} found, best first",
+                            ?: "${sources.size} found, by resolution",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
@@ -114,6 +139,7 @@ fun StreamSourcePicker(
 
             val rowKeys = remember(sources) { sources.rowKeys() }
             LazyColumn(
+                state = listState,
                 modifier = Modifier.padding(top = 16.dp).heightIn(max = 400.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -128,6 +154,7 @@ fun StreamSourcePicker(
                     SourceRow(
                         choice = choice,
                         recommended = index == recommendedIndex,
+                        showDetails = showDetails,
                         animateIn = animateIn,
                         // Capped, so a fifty-source list does not cascade for
                         // two seconds before the last row lands.
@@ -144,6 +171,7 @@ fun StreamSourcePicker(
 private fun SourceRow(
     choice: StreamChoice,
     recommended: Boolean,
+    showDetails: Boolean,
     animateIn: Boolean,
     entranceDelayMillis: Long,
     onClick: () -> Unit,
@@ -208,7 +236,7 @@ private fun SourceRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        QualityBadge(source.qualityLabel(), highlighted = enabled && (hovered || recommended))
+        if (showDetails) QualityBadge(source.qualityLabel(), highlighted = enabled && (hovered || recommended))
 
         Column(modifier = Modifier.weight(1f)) {
             Row(
@@ -250,7 +278,7 @@ private fun SourceRow(
                 )
             }
 
-            Row(
+            if (showDetails || source.cached) Row(
                 modifier = Modifier.padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -259,15 +287,17 @@ private fun SourceRow(
                 // press play — everything else only describes the file — so it
                 // stays a chip while the rest collapse into one quiet line.
                 if (source.cached) CachedChip()
-                Text(
-                    text = source.qualifiers(compatibility),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (showDetails) {
+                    Text(
+                        text = source.qualifiers(compatibility),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            compatibility.warningLabel()?.let { warning ->
+            (compatibility.warningLabel() ?: choice.assessment.warningLabel())?.let { warning ->
                 Text(
                     text = warning,
                     modifier = Modifier.padding(top = 5.dp),
@@ -282,7 +312,7 @@ private fun SourceRow(
         // The two numbers a choice actually turns on, in a fixed lane so they
         // line up down the list and can be compared by scanning one column
         // rather than by reading every row.
-        StatLane(source = source, enabled = enabled)
+        if (showDetails) StatLane(source = source, enabled = enabled)
 
         if (enabled) {
             PlayAffordance(filled = playFilled, colors = colors)
@@ -521,6 +551,15 @@ private fun StreamCompatibility.warningLabel(): String? = when (support) {
     else -> null
 }
 
+/** Why ranking passed this one over; it can still be chosen. */
+private fun SourceAssessment.warningLabel(): String? = when {
+    deadSwarm -> "Nobody is seeding this torrent"
+    match == ReleaseMatch.WrongEpisode -> "Named as a different episode"
+    match == ReleaseMatch.WrongYear -> "Named with a different year · may be another film"
+    theatricalCopy -> "Cinema recording"
+    else -> null
+}
+
 /**
  * Row keys that stay unique when two addons offer the same release.
  *
@@ -560,3 +599,6 @@ internal fun formatBytes(bytes: Long): String {
     val rounded = (value * 10).toLong() / 10.0
     return if (unit == 0) "$bytes B" else "$rounded ${units[unit]}"
 }
+
+/** How much of the row above the recommended one stays visible when the picker opens. */
+private val RECOMMENDED_PEEK = 30.dp

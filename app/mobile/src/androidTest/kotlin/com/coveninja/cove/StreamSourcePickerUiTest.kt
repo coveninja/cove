@@ -29,7 +29,7 @@ class StreamSourcePickerUiTest {
         compose.setContent {
             CoveTheme {
                 StreamSourcePicker(
-                    sources = listOf(hardware, software, unsupported),
+                    ranked = listOf(hardware, software, unsupported),
                     onSelect = { selected = it },
                 )
             }
