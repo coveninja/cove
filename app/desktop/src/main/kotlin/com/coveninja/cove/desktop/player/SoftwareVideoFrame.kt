@@ -14,10 +14,10 @@ import org.jetbrains.skia.ColorType
 import org.jetbrains.skia.ImageInfo
 
 /**
- * A new-frame notification for the one persistent software-render target.
+ * A new-frame notification for the persistent software-render surfaces.
  *
  * [sequence] deliberately makes every notification distinct even though the
- * underlying bitmap is reused. Compose therefore invalidates the canvas for
+ * underlying bitmaps are reused. Compose therefore invalidates the canvas for
  * every frame without allocating another full-size image.
  */
 internal data class SoftwareVideoFrame(
@@ -40,52 +40,51 @@ internal data class SoftwareVideoFrame(
  * old frame-sized direct-buffer -> BufferedImage copy and Compose's second,
  * per-pixel BufferedImage -> Skia conversion.
  *
- * Both native writes and Compose reads hold [monitor]. That keeps a single
- * bounded allocation safe: mpv cannot overwrite pixels while Skia is drawing
- * them, and a resize cannot close a bitmap which a draw still references.
+ * mpv renders into a back buffer while Compose reads the last completed front
+ * buffer. Only publishing and drawing hold [monitor]: the native render call
+ * can wait for a frame's presentation time and must never hold the UI's lock.
+ * [renderMonitor] serializes writers and close without blocking readers.
  */
 internal class SoftwareVideoSurface : AutoCloseable {
     private val monitor = Any()
-
-    private var bitmap: Bitmap? = null
-    private var image: ImageBitmap? = null
-    private var capacityWidth = 0
-    private var capacityHeight = 0
-    private var width = 0
-    private var height = 0
+    private val renderMonitor = Any()
+    private var front: Buffer? = null
+    private var back: Buffer? = null
     private var closed = false
 
     internal var allocationCount: Int = 0
         private set
 
     val contentSize: IntSize
-        get() = synchronized(monitor) { IntSize(width, height) }
+        get() = synchronized(monitor) { front?.size ?: IntSize.Zero }
 
     internal val capacitySize: IntSize
-        get() = synchronized(monitor) { IntSize(capacityWidth, capacityHeight) }
+        get() = synchronized(monitor) { front?.capacity ?: IntSize.Zero }
 
     /**
-     * Hands mpv a stable address and stride while holding the same lock used by
-     * [draw]. The block must finish its native write before returning.
+     * Hands mpv a stable back-buffer address and stride. The block must finish
+     * its native write before returning; only then is the frame published.
      */
     fun render(width: Int, height: Int, block: (Pointer, Int) -> Unit) {
         require(width > 0 && height > 0) { "Frame dimensions must be positive" }
-        synchronized(monitor) {
+        synchronized(renderMonitor) {
             check(!closed) { "Software video surface is closed" }
-            ensureCapacity(width, height)
+            val target = writableBuffer(width, height)
 
-            val target = checkNotNull(bitmap)
-            val pixels = checkNotNull(target.peekPixels()) {
+            val pixels = checkNotNull(target.bitmap.peekPixels()) {
                 "Skia did not expose the software frame pixels"
             }
             try {
-                this.width = width
-                this.height = height
                 block(Pointer(pixels.addr), pixels.rowBytes)
-                target.notifyPixelsChanged()
+                target.bitmap.notifyPixelsChanged()
+                target.size = IntSize(width, height)
             } finally {
                 pixels.close()
                 Reference.reachabilityFence(target)
+            }
+            synchronized(monitor) {
+                back = front
+                front = target
             }
         }
     }
@@ -93,13 +92,12 @@ internal class SoftwareVideoSurface : AutoCloseable {
     fun draw(scope: DrawScope, destination: IntSize) {
         if (destination.width <= 0 || destination.height <= 0) return
         synchronized(monitor) {
-            val current = image ?: return
-            if (closed || width <= 0 || height <= 0) return
+            val current = front ?: return
             with(scope) {
                 drawImage(
-                    image = current,
+                    image = current.image,
                     srcOffset = IntOffset.Zero,
-                    srcSize = IntSize(width, height),
+                    srcSize = current.size,
                     dstOffset = IntOffset.Zero,
                     dstSize = destination,
                 )
@@ -109,29 +107,32 @@ internal class SoftwareVideoSurface : AutoCloseable {
 
     /** Test-only pixel inspection without exposing the mutable bitmap. */
     internal fun colorAt(x: Int, y: Int): Int = synchronized(monitor) {
-        require(x in 0 until width && y in 0 until height)
-        checkNotNull(bitmap).getColor(x, y)
+        val current = checkNotNull(front)
+        require(x in 0 until current.size.width && y in 0 until current.size.height)
+        current.bitmap.getColor(x, y)
     }
 
     override fun close() {
-        synchronized(monitor) {
-            if (closed) return
-            closed = true
-            image = null
-            bitmap?.close()
-            bitmap = null
-            capacityWidth = 0
-            capacityHeight = 0
-            width = 0
-            height = 0
+        synchronized(renderMonitor) {
+            synchronized(monitor) {
+                if (closed) return
+                closed = true
+                front?.bitmap?.close()
+                back?.bitmap?.close()
+                front = null
+                back = null
+            }
         }
     }
 
-    private fun ensureCapacity(requiredWidth: Int, requiredHeight: Int) {
-        if (bitmap != null && requiredWidth <= capacityWidth && requiredHeight <= capacityHeight) return
+    private fun writableBuffer(requiredWidth: Int, requiredHeight: Int): Buffer {
+        val current = back
+        if (current != null && requiredWidth <= current.capacity.width && requiredHeight <= current.capacity.height) {
+            return current
+        }
 
-        val nextWidth = grownCapacity(capacityWidth, requiredWidth)
-        val nextHeight = grownCapacity(capacityHeight, requiredHeight)
+        val nextWidth = grownCapacity(current?.capacity?.width ?: 0, requiredWidth)
+        val nextHeight = grownCapacity(current?.capacity?.height ?: 0, requiredHeight)
         val next = Bitmap()
         val info = ImageInfo(
             nextWidth,
@@ -140,18 +141,24 @@ internal class SoftwareVideoSurface : AutoCloseable {
             ColorAlphaType.OPAQUE,
             ColorSpace.sRGB,
         )
-        check(next.allocPixels(info)) {
-            "Could not allocate ${nextWidth}x$nextHeight software video surface"
+        if (!next.allocPixels(info)) {
+            next.close()
+            error("Could not allocate ${nextWidth}x$nextHeight software video surface")
         }
 
-        val previous = bitmap
-        bitmap = next
-        image = next.asComposeImageBitmap()
-        capacityWidth = nextWidth
-        capacityHeight = nextHeight
+        val result = Buffer(next, next.asComposeImageBitmap(), IntSize(nextWidth, nextHeight))
+        back = result
         allocationCount++
-        previous?.close()
+        current?.bitmap?.close()
+        return result
     }
+
+    private class Buffer(
+        val bitmap: Bitmap,
+        val image: ImageBitmap,
+        val capacity: IntSize,
+        var size: IntSize = IntSize.Zero,
+    )
 }
 
 /** Grow geometrically so a dragged window does not allocate at every pixel. */

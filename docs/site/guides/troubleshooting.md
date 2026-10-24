@@ -52,6 +52,7 @@ For a torrent, record seeders, selected file, and whether buffering progresses. 
 - Compare a lower resolution or bitrate from the same provider.
 - Leave hardware decoding enabled unless it causes a repeatable decoder or rendering defect.
 - On desktop, press `I` during playback and record decoder and dropped-frame telemetry.
+- If the picture or controls stutter while those counters stay at zero, include that distinction in the report; the interface can miss frames after decoding succeeds.
 - Close other GPU- or CPU-heavy applications.
 - Use low-performance mode to reduce interface motion on constrained devices; it does not reduce the cost of software decoding.
 
