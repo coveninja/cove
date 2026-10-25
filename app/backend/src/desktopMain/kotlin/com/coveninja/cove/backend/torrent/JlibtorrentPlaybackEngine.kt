@@ -237,6 +237,20 @@ class JlibtorrentPlaybackEngine(
 
     override fun activeHashes(): Set<String> = lifecycle.activeHashes()
 
+    override suspend fun refreshDownloadPolicy() = withContext(Dispatchers.IO) {
+        for ((id, resource) in resources.toMap()) {
+            lifecycle.withUse(id.substringBefore(':')) {
+                // Old episode resources remain cached after another file in the pack is selected.
+                // Do not turn those unselected files back into background downloads.
+                if (resources[id] === resource &&
+                    (resource.torrent.prioritizedFile.get() == resource.file.index || resource.scheduler.hasActiveReaders)
+                ) {
+                    resource.scheduler.refreshDownloadPolicy()
+                }
+            }
+        }
+    }
+
     override fun release(hash: String): Boolean {
         val canonical = hash.lowercase()
         val torrent = torrents[canonical] ?: return true

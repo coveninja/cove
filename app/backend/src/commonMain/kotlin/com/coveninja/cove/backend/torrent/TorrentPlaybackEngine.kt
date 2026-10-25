@@ -47,6 +47,9 @@ interface TorrentPlaybackEngine : AutoCloseable {
 
     fun progress(hash: String): TorrentProgress?
 
+    /** Applies a changed download allowance to loaded torrents even while playback is paused. */
+    suspend fun refreshDownloadPolicy() {}
+
     /**
      * Info hashes the session currently holds open.
      *

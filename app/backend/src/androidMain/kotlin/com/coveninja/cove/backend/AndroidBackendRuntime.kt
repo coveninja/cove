@@ -327,6 +327,7 @@ class AndroidBackendRuntime private constructor(
                         ),
                         store = cachePolicyStore,
                         state = cachePolicy,
+                        onDownloadPolicyChanged = { engineRef.get()?.refreshDownloadPolicy() },
                     ).also { it.start(scope) }
                     val playback = AndroidPlaybackRepository(catalog, addonManager, media, nuvio)
                     val calendarService = CalendarService(

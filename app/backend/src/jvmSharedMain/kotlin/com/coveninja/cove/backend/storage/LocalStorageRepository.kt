@@ -34,6 +34,7 @@ class LocalStorageRepository(
     private val service: CacheStorageService,
     private val store: TorrentCachePolicyStore,
     state: MutableStateFlow<TorrentCachePolicy>,
+    private val onDownloadPolicyChanged: suspend () -> Unit = {},
 ) : StorageRepository {
     override val available: Boolean = true
 
@@ -71,10 +72,13 @@ class LocalStorageRepository(
     }
 
     override suspend fun setPolicy(policy: TorrentCachePolicy) {
-        mutation.withLock {
+        val downloadChanged = mutation.withLock {
+            val changed = _policy.value.downloadAheadBytes != policy.downloadAheadBytes
             withContext(Dispatchers.IO) { store.write(policy) }
             _policy.value = policy
+            changed
         }
+        if (downloadChanged) onDownloadPolicyChanged()
         // Immediately, so lowering the limit is visibly the thing that freed the space rather
         // than something that happens up to five minutes later for no apparent reason.
         enforce()
