@@ -53,6 +53,8 @@ On desktop, the torrent engine checks for changes to the system's public-interne
 
 When no provider addon can be reached, for example because the network is down or a provider refuses your VPN's exit address, Cove says so and names the addons instead of reporting that no sources exist. Nothing from that failed attempt is cached, so **Try again** asks the providers again. Home and Explore retry by themselves after a failed start.
 
+On desktop, a source whose host cannot be checked within five seconds is omitted from that listing. If DNS is still stalled, wait for the connection to recover and choose **Try again**.
+
 If one addon keeps failing only while a VPN is on, its service may block that exit. Try another exit location or test with the VPN off.
 
 ## Playback stutters or drops frames

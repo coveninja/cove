@@ -159,6 +159,12 @@ addresses the kernel currently routes internet traffic from, rechecked every few
 seconds: a VPN or Tailscale exit node changes routes without changing addresses,
 so libtorrent's own address watcher cannot follow it.
 
+Desktop addon URL validation waits at most five seconds for DNS. A dedicated
+pool permits at most eight native lookups and 64 queued requests; cancelling a
+request stops awaiting its answer even if the operating-system resolver cannot
+be interrupted. Failed, timed-out, or overloaded lookups reject the URL, and all
+returned addresses must still pass the public-address policy.
+
 Playback segments use four semantic kinds: intro, recap, credits, and preview.
 Recognized embedded media chapters win for their matching kind; compatible
 external timestamps fill only the kinds the media did not supply. The shared
