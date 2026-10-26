@@ -310,6 +310,12 @@ device. Addon sharing reads only the primary profile's `addonsFollowPrimary`
 flag and provider/catalog configuration. It must not be reused as a generic
 "share this profile" switch.
 
+Changing the download-ahead policy must notify loaded torrent schedulers; a
+paused player may not issue another read. Unlimited mode restores pieces parked
+by the previous window without selecting other files in the pack. Stall
+detection counts incoming payload, since the torrent library's default status
+query excludes partial blocks from its completed-byte counter.
+
 ### Add a catalog-backed addon row
 
 `AddonRepository` publishes both providers and their catalog descriptors.

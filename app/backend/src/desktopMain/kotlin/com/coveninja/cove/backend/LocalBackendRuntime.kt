@@ -256,6 +256,7 @@ class LocalBackendRuntime private constructor(
                     ),
                     store = deviceSettings,
                     state = cachePolicy,
+                    onDownloadPolicyChanged = torrentEngine::refreshDownloadPolicy,
                 ).also { it.start(scope) }
                 val media = MediaBoundary(
                     httpClient = untrustedClient,

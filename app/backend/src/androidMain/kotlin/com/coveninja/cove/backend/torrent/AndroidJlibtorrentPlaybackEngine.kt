@@ -194,6 +194,18 @@ internal class AndroidJlibtorrentPlaybackEngine(
 
     override fun activeHashes(): Set<String> = lifecycle.activeHashes()
 
+    override suspend fun refreshDownloadPolicy() = withContext(Dispatchers.IO) {
+        for ((id, resource) in resources.toMap()) {
+            lifecycle.withUse(id.substringBefore(':')) {
+                if (resources[id] === resource &&
+                    (resource.torrent.prioritizedFile.get() == resource.file.index || resource.scheduler.hasActiveReaders)
+                ) {
+                    resource.scheduler.refreshDownloadPolicy()
+                }
+            }
+        }
+    }
+
     override fun release(hash: String): Boolean {
         val canonical = hash.lowercase()
         val torrent = torrents[canonical] ?: return true

@@ -39,9 +39,17 @@ internal class TorrentPieceScheduler(
      * while the previous response is still being written, and both move the same window.
      */
     private var appliedWindow: PieceRange? = null
+    private var lastCursor = 0L
 
     /** How many ranges are being served from this file right now. */
     private val liveReaders = AtomicInteger(0)
+
+    val hasActiveReaders: Boolean get() = liveReaders.get() > 0
+
+    /** A storage change must work without waiting for another read from a paused player. */
+    fun refreshDownloadPolicy() {
+        synchronized(this) { moveDownloadWindow(lastCursor) }
+    }
 
     /**
      * Puts the file in a state a reader can start from.
@@ -202,7 +210,9 @@ internal class TorrentPieceScheduler(
         (chunk.first..chunk.last).count { !handle.havePiece(it) }
 
     private fun downloadedBytes(): Long =
-        runCatching { handle.status(false).totalDone() }.getOrDefault(0L)
+        // The wrapper's default status flags omit partial blocks from totalDone. A large piece
+        // can take longer than the stall threshold while payload is arriving continuously.
+        runCatching { handle.status(false).totalPayloadDownload() }.getOrDefault(0L)
 
     /**
      * Asks for the end of the file up front, alongside the beginning.
@@ -237,37 +247,37 @@ internal class TorrentPieceScheduler(
      * Moves the download window to sit ahead of [cursor], raising what it now covers and parking
      * what it has left behind.
      *
-     * A window of zero means the viewer asked for the whole file, and nothing is parked at all.
+     * Zero restores the entire selected file, including pieces parked by an earlier allowance.
      */
     private fun moveDownloadWindow(cursor: Long) {
-        val ahead = downloadAheadBytes()
-        if (ahead <= 0) return
-        val next = downloadWindow(
-            fileOffset = fileOffset,
-            fileSize = fileSize,
-            pieceLength = pieceLength,
-            cursor = cursor,
-            aheadBytes = ahead,
-            numPieces = numPieces,
-        )
-        val transition = synchronized(this) {
+        synchronized(this) {
+            lastCursor = cursor
+            val next = downloadWindow(
+                fileOffset = fileOffset,
+                fileSize = fileSize,
+                pieceLength = pieceLength,
+                cursor = cursor,
+                aheadBytes = downloadAheadBytes(),
+                numPieces = numPieces,
+            )
             val previous = appliedWindow
             if (previous == next) return
+            val transition = windowTransition(previous = previous, next = next, exempt = indexTailRange())
+            // Keep native updates in the same order as their recorded window when readers and
+            // settings changes overlap. Preserve urgency another reader already gave a piece.
+            for (piece in transition.raise) {
+                if (!handle.havePiece(piece) && handle.piecePriority(piece) == Priority.IGNORE) {
+                    handle.piecePriority(piece, Priority.NORMAL)
+                }
+            }
+            // A second reader may still need the old window. Retaining those pieces is safe;
+            // the new window is fully requested, so a later whole-file transition restores all.
+            if (liveReaders.get() <= 1) {
+                for (piece in transition.park) {
+                    if (!handle.havePiece(piece)) handle.piecePriority(piece, Priority.IGNORE)
+                }
+            }
             appliedWindow = next
-            windowTransition(previous = previous, next = next, exempt = indexTailRange())
-        }
-        for (piece in transition.raise) {
-            if (!handle.havePiece(piece)) handle.piecePriority(piece, Priority.NORMAL)
-        }
-        // Parking is skipped while two ranges are being served from this file at once, because
-        // then "behind the cursor" has no single meaning: the second reader is either the one
-        // the viewer just seeked to — in which case the abandoned one is about to end anyway —
-        // or genuinely another viewer over the LAN, and parking the pieces under them would
-        // stall somebody who is watching. Raising still happens, so the window grows and stops
-        // bounding the download for as long as that lasts, which is where it stood before.
-        if (liveReaders.get() > 1) return
-        for (piece in transition.park) {
-            if (!handle.havePiece(piece)) handle.piecePriority(piece, Priority.IGNORE)
         }
     }
 

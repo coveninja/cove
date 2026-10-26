@@ -69,6 +69,8 @@ The Storage page measures current caches and lets you clear compatible categorie
 
 Torrent retention controls include a maximum size, download-ahead window, maximum idle age, and optional deletion shortly after watching. These apply only to the current device. Cove removes eligible data according to the configured policy; it does not delete synced library history with the media files.
 
+Changing **Download ahead** to **Whole file** also releases the remaining pieces of downloads already in the session, including while the player is paused. It applies to the selected file, rather than every episode in a torrent pack.
+
 ## Advanced
 
 **Low-performance mode** reduces nonessential page, card, and hero motion on the current device. Cove may suggest it when Android reports limited working memory.
