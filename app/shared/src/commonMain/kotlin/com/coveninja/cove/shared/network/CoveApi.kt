@@ -227,7 +227,7 @@ class CoveApi(
             // Only ever sent when set, so a backend that predates the parameter sees
             // exactly the request it saw before.
             if (refresh) parameter("refresh", "1")
-        }.requireSuccess().body()
+        }.requireSuccessWithReason().body()
 
     // Pure URL builder — no HTTP. mpv / the player module opens this directly.
     //

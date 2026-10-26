@@ -43,6 +43,8 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.server.testing.testApplication
+import java.io.IOException
+import java.nio.channels.UnresolvedAddressException
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -57,6 +59,28 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.builtins.serializer
 
 class CoreRoutesTest {
+    @Test
+    fun networkFailuresReturnRetryableErrorsWithoutRequestDetails() {
+        for (error in listOf(
+            IOException("https://provider.test/private-token/video"),
+            UnresolvedAddressException(),
+        )) {
+            val catalog = object : com.coveninja.cove.backend.content.MediaCatalog by RecordingCatalog() {
+                override suspend fun searchMulti(query: String): SearchResultsDto = throw error
+            }
+            fixture(catalog) { services ->
+                testApplication {
+                    application { configureCoreRoutes(services) }
+                    val response = client.get("/api/v1/search/multi?q=film")
+                    assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+                    val body = response.bodyAsText()
+                    assertFalse(body.contains("private-token"))
+                    assertFalse(body.contains("provider.test"))
+                }
+            }
+        }
+    }
+
     @Test
     fun versionedAndLegacyRoutesShareServicesButOnlyLegacyIsDeprecated() {
         fixture { services ->

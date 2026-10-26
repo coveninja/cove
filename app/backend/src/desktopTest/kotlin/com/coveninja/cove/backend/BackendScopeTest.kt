@@ -7,9 +7,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 /**
@@ -59,25 +61,20 @@ class BackendScopeTest {
     // supervisor scope — which is what every backend scope was — does reach it.
     @Test
     fun `a plain supervisor scope is exactly what did not protect us`() {
-        withRecordedUncaughtExceptions { uncaught ->
-            runBlocking {
-                val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-                val finished = CompletableDeferred<Unit>()
-                scope.launch {
-                    try {
-                        throw IllegalStateException("network is not there yet")
-                    } finally {
-                        finished.complete(Unit)
-                    }
+        // runTest's process-wide exception collector must own this intentional failure.
+        // A bare runBlocking leaves it queued for whichever unrelated runTest runs next.
+        val error = assertFailsWith<IllegalStateException> {
+            runTest {
+                val supervisor = SupervisorJob()
+                try {
+                    val scope = CoroutineScope(supervisor + Dispatchers.IO)
+                    scope.launch { throw IllegalStateException("network is not there yet") }.join()
+                } finally {
+                    supervisor.cancel()
                 }
-                withTimeoutOrNull(5_000) { finished.await() }
-                Thread.sleep(200)
-                assertNotNull(
-                    synchronized(uncaught) { uncaught.firstOrNull() },
-                    "a bare supervisor scope should still reach the uncaught handler",
-                )
             }
         }
+        assertEquals("network is not there yet", error.message)
     }
 
     // A supervisor keeps siblings alive; the point here is that the *scope* is still usable

@@ -42,7 +42,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 
 class MediaBoundary(
     private val httpClient: HttpClient,
@@ -58,13 +60,27 @@ class MediaBoundary(
     private val prefetchInFlight = AtomicBoolean()
 
     override suspend fun registerStreams(candidates: List<AddonStream>): List<AddonStream> {
-        val accepted = candidates.filter { stream ->
-            if (stream.url.isBlank()) return@filter stream.infoHash.isNotBlank()
-            runCatching {
-                requireHttpUrl(stream.url)
-                if (!allowLanStreamSources()) publicUrlPolicy.validate(stream.url)
-            }.isSuccess
+        // Checked side by side rather than one after another: each check is a DNS lookup, and
+        // a list of debrid links on a slow resolver took long enough in sequence to time the
+        // whole listing out. A host that cannot be checked in time is dropped, as one that
+        // cannot be resolved always was.
+        val checks = Semaphore(URL_CHECK_CONCURRENCY)
+        val verdicts = coroutineScope {
+            candidates.map { stream ->
+                async {
+                    if (stream.url.isBlank()) return@async stream.infoHash.isNotBlank()
+                    checks.withPermit {
+                        withTimeoutOrNull(URL_CHECK_TIMEOUT_MILLIS) {
+                            runCatching {
+                                requireHttpUrl(stream.url)
+                                if (!allowLanStreamSources()) publicUrlPolicy.validate(stream.url)
+                            }.isSuccess
+                        } ?: false
+                    }
+                }
+            }.awaitAll()
         }
+        val accepted = candidates.filterIndexed { index, _ -> verdicts[index] }
         streams.remember(accepted)
         // Listing sources is the moment before one is played, so the peer session
         // comes up now rather than on the click: its DHT bootstrap is otherwise the
@@ -544,3 +560,6 @@ private fun imageContentType(file: String): ContentType = when (file.substringAf
     "webp" -> ContentType.parse("image/webp")
     else -> ContentType.Application.OctetStream
 }
+
+private const val URL_CHECK_CONCURRENCY = 8
+private const val URL_CHECK_TIMEOUT_MILLIS = 5_000L

@@ -16,6 +16,9 @@ package com.coveninja.cove.backend.content
  */
 internal fun describeContentFailure(error: Throwable, fallback: String): String {
     val text = buildString {
+        // The class name as well as the message: a failed DNS lookup on the desktop client is
+        // an UnresolvedAddressException with no message at all.
+        append(error::class.simpleName.orEmpty()).append(' ')
         append(error.message.orEmpty())
         var cause = error.cause
         var depth = 0
@@ -23,6 +26,7 @@ internal fun describeContentFailure(error: Throwable, fallback: String): String 
         // wrapping a chain failure wrapping the validity-interval complaint.
         while (cause != null && depth < CAUSE_DEPTH) {
             append(' ')
+            append(cause::class.simpleName.orEmpty()).append(' ')
             append(cause.message.orEmpty())
             cause = cause.cause
             depth++
@@ -66,6 +70,12 @@ private val OFFLINE_MARKERS = listOf(
     "enetunreach",
     "failed to connect",
     "no address associated",
+    "unresolvedaddress",
+    "unknownhost",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "no route to host",
+    "noroutetohost",
 )
 
 private val TIMEOUT_MARKERS = listOf("timeout", "timed out")

@@ -325,6 +325,7 @@ class PlaybackSession(
         episodeTitle: String? = null,
         forcePicker: Boolean = false,
         fromStart: Boolean = false,
+        refreshSources: Boolean = false,
     ) {
         val domainType = media.type.toDomainType()
         if (domainType == null) {
@@ -379,6 +380,7 @@ class PlaybackSession(
                     type = domainType,
                     season = resolved.season,
                     episode = resolved.episode,
+                    refresh = refreshSources,
                 )
             }.onFailure { error ->
                 if (token != generation) return@launch
@@ -459,8 +461,8 @@ class PlaybackSession(
                 val automaticCandidates = choices.filter { it.compatibility.automaticallyEligible }
                 when {
                     choices.isEmpty() -> phase = PlaybackPhase.Failed(
-                        "No sources found. A fresh profile has no provider addons — " +
-                            "add one in Settings before playing anything.",
+                        "No sources found for this title. If you have not added a provider " +
+                            "addon yet, add one in Settings.",
                     )
                     // An explicit "choose a source" always asks, even for one result:
                     // the point of that entry point is to see what is on offer.
@@ -639,7 +641,9 @@ class PlaybackSession(
     fun retry() {
         val current = request ?: return
         current.extra?.let { return openExtra(current.media, it) }
-        open(current.media, current.season, current.episode, current.episodeTitle)
+        // Asked to look again, so look again: the listing cache may be holding the answer
+        // that failed, written while the network was down.
+        open(current.media, current.season, current.episode, current.episodeTitle, refreshSources = true)
     }
 
     /** Back to the source list from an active or starting playback. */

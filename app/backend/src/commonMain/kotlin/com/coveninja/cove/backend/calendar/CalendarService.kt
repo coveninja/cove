@@ -62,7 +62,7 @@ class CalendarService(
         val entries = database.coveQueries.selectLibraryEntries(profileId).executeAsList()
             .filter { it.status == LibraryStatus.Watching.wireName || it.status == LibraryStatus.WatchLater.wireName }
         val concurrency = Semaphore(6)
-        entries.map { entry ->
+        val results = entries.map { entry ->
             async {
                 concurrency.withPermit {
                     runCatching {
@@ -71,10 +71,21 @@ class CalendarService(
                         } else {
                             tv(entry, today, cutoff, completedEpisodes[entry.tmdb_id.toInt()].orEmpty())
                         }
-                    }.getOrDefault(emptyList())
+                    }
                 }
             }
-        }.awaitAll().flatten().sortedWith(
+        }.awaitAll()
+        // One title that will not resolve is that title's problem; most of them failing is the
+        // network's, and a calendar built from that is mostly empty. It used to be saved as
+        // fresh for twelve hours all the same. Failing instead keeps the last good one.
+        val failures = results.count { it.isFailure }
+        if (failures > 0 && failures * 2 >= results.size) {
+            throw IllegalStateException(
+                "Could not reach the catalog for $failures of ${results.size} titles",
+                results.first { it.isFailure }.exceptionOrNull(),
+            )
+        }
+        results.flatMap { it.getOrDefault(emptyList()) }.sortedWith(
             compareBy<CalendarItem> { if (it.kind == "available") 0 else 1 }
                 .thenComparator { left, right ->
                     if (left.kind == "available" && right.kind == "available") {

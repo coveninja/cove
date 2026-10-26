@@ -17,6 +17,7 @@ import com.coveninja.cove.shared.model.TvEpisode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+
+private const val DISCOVER_RETRY_FIRST_MILLIS = 5_000L
+private const val DISCOVER_RETRY_MAX_MILLIS = 60_000L
 
 class LocalContentRepository(
     private val catalog: MediaCatalog,
@@ -54,24 +58,39 @@ class LocalContentRepository(
                 _home.value = HomeState.Loading
                 _explore.value = ExploreState.Loading
                 _searchResults.value = SearchState.Idle
-                refreshDiscover()
+                // Retried until it works rather than tried once: a launch that races a VPN or
+                // Wi-Fi coming up used to leave Home and Explore on an error page for the rest
+                // of the session. The failure stays on screen between attempts.
+                var wait = DISCOVER_RETRY_FIRST_MILLIS
+                while (!refreshDiscover()) {
+                    delay(wait)
+                    wait = (wait * 2).coerceAtMost(DISCOVER_RETRY_MAX_MILLIS)
+                }
             }
         }
     }
 
-    suspend fun refreshDiscover() = coroutineScope {
-        try {
+    /** Loads the discover feed; false when it failed and is worth trying again. */
+    suspend fun refreshDiscover(): Boolean = try {
+        coroutineScope {
             val movies = async { catalog.discover(com.coveninja.cove.shared.model.MediaType.Movie) }
             val tv = async { catalog.discover(com.coveninja.cove.shared.model.MediaType.Tv) }
             val movieItems = movies.await()
             val tvItems = tv.await()
             _home.value = HomeState.Ready(movieItems + tvItems)
             _explore.value = ExploreState.Ready(movieItems, tvItems)
-        } catch (error: Exception) {
-            val message = describeContentFailure(error, "Unknown error loading discover")
-            _home.value = HomeState.Failed(message)
-            _explore.value = ExploreState.Failed(message)
+            true
         }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        // A failed async child cancels its coroutineScope. Catch outside that scope so its
+        // failure cannot escape after the await and terminate the startup retry loop.
+        val message = describeContentFailure(error, "Unknown error loading discover") +
+            " Cove keeps trying."
+        _home.value = HomeState.Failed(message)
+        _explore.value = ExploreState.Failed(message)
+        false
     }
 
     override suspend fun search(query: String) {

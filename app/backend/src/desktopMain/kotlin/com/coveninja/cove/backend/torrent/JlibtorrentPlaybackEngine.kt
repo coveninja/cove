@@ -21,8 +21,15 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Mutex
@@ -58,8 +65,19 @@ class JlibtorrentPlaybackEngine(
     private val journal: TorrentCacheJournal? = null,
 ) : TorrentPlaybackEngine {
     private val startMutex = Mutex()
-    private val torrentMutex = Mutex()
+    /**
+     * One lock per torrent rather than one for all of them. A single lock held across the
+     * metadata wait meant one dead source — twenty seconds of finding nobody — stalled every
+     * other torrent behind it, including the one the viewer switched to.
+     */
+    private val torrentLocks = ConcurrentHashMap<String, Mutex>()
     private var manager: SessionManager? = null
+    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var routeMonitor: Job? = null
+
+    /** What the session's sockets are bound to, and when that last had to change. */
+    @Volatile private var appliedRoute: TorrentRoute? = null
+    @Volatile private var routeChangedAtMillis = 0L
     private val torrents = ConcurrentHashMap<String, ManagedTorrent>()
     private val resources = ConcurrentHashMap<String, ManagedResource>()
 
@@ -86,7 +104,7 @@ class JlibtorrentPlaybackEngine(
         // be told apart from one aimed at the wrong torrent without guessing from a
         // truncated player error.
         log("open $canonical season=$season episode=$episode fileIndex=$fileIndex")
-        val torrent = torrents[canonical] ?: torrentMutex.withLock {
+        val torrent = torrents[canonical] ?: torrentLocks.computeIfAbsent(canonical) { Mutex() }.withLock {
             torrents[canonical] ?: loadTorrent(canonical).also { torrents[canonical] = it }
         }
         val selected = selectTorrentFile(torrent.files, season, episode, fileIndex)
@@ -259,6 +277,11 @@ class JlibtorrentPlaybackEngine(
         // Before the maps are cleared, so the last read times of everything this session played
         // reach disk and the next sweep evicts by use rather than by file timestamp.
         journal?.flush()
+        engineScope.cancel()
+        // Cancellation alone does not finish an in-flight JNI call. The monitor must release
+        // the native session before stop() destroys it.
+        runBlocking { routeMonitor?.join() }
+        routeMonitor = null
         resources.clear()
         torrents.clear()
         manager?.stop()
@@ -316,9 +339,25 @@ class JlibtorrentPlaybackEngine(
             found
         }
         log("$hash: handle acquired, ${runCatching { handle.trackers().size }.getOrDefault(-1)} trackers")
+        // Torrents arrive auto-managed, and libtorrent's queue runs three downloads at a time:
+        // with a few earlier sources still in the session, the one being watched could be
+        // queued behind them with nothing to show for it. Cove decides what runs.
+        runCatching {
+            handle.unsetFlags(TorrentFlags.AUTO_MANAGED)
+            handle.resume()
+        }
         // The metadata now arrives on the handle that is already talking to peers,
         // rather than on a throwaway one.
-        val info = cached ?: awaitMetadata(handle, hash, cachedMetadata)
+        val info = cached ?: try {
+            awaitMetadata(handle, hash, cachedMetadata)
+        } catch (failure: Throwable) {
+            // A source that never produced metadata is not kept: left in the session it went
+            // on searching, and once metadata did turn up it downloaded the whole torrent with
+            // nobody watching and nothing set to stop it.
+            runCatching { session.remove(handle) }
+            log("$hash: removed from the session after failing to start")
+            throw failure
+        }
         val storage = info.files()
         val files = (0 until storage.numFiles()).map { index ->
             TorrentFile(index, storage.filePath(index), storage.fileSize(index))
@@ -355,6 +394,7 @@ class JlibtorrentPlaybackEngine(
                 "$dht, $trackers trackers"
             },
             pollMillis = PIECE_POLL_MILLIS,
+            swarmVerdictReady = ::swarmVerdictReady,
         )
         val fetched = handle.torrentFile()
         // Cached after it parses, so metadata that does not decode is never written
@@ -369,13 +409,87 @@ class JlibtorrentPlaybackEngine(
         // native library — the interposition only applies to objects loaded after it.
         NativePreloads.install()
         manager ?: run {
+            val route = currentTorrentRoute()
             SessionManager(false).also {
-                startTorrentSession(it, System.getProperty("os.name"))
-                it.applySettings(streamingSettings())
+                // Installed before the session starts, so its first sockets, DHT nodes and
+                // tracker announces already go out the right way rather than racing a rebind.
+                startTorrentSession(it, System.getProperty("os.name"), streamingSettings(route))
                 manager = it
-                log("session started, running=${it.isRunning}")
+                appliedRoute = route
+                routeChangedAtMillis = System.currentTimeMillis()
+                log("session started, running=${it.isRunning}, listening on ${route.listenInterfaces()}")
+                routeMonitor = engineScope.launch { followRoute(it) }
             }
         }
+    }
+
+    /**
+     * Keeps the session on whatever route the system is using now.
+     *
+     * Checked every few seconds because nothing announces a route change: switching a Tailscale
+     * exit node or a VPN on or off moves the default route without adding or removing a single
+     * address. When it moves, the sockets are rebound, connections made over the old route are
+     * dropped so the torrents reconnect over the new one instead of waiting minutes for those
+     * peers to time out, and every torrent announces again. A DHT that has lost every node —
+     * bootstrapped while the network was down — is restarted so it bootstraps again.
+     */
+    private suspend fun followRoute(session: SessionManager) {
+        var emptyDhtSince: Long? = null
+        var wasOffline = appliedRoute?.isOffline == true
+        while (engineScope.isActive) {
+            delay(ROUTE_CHECK_MILLIS)
+            val route = currentTorrentRoute()
+            if (!route.isOffline && (route != appliedRoute || wasOffline)) {
+                log("network route changed — listening on ${route.listenInterfaces()} (was ${appliedRoute?.listenInterfaces()})")
+                val rebound = runCatching {
+                    session.applySettings(listenSettings(route))
+                    // Refresh outgoing sockets too, including a reconnect with the same IP.
+                    session.reopenNetworkSockets()
+                }.onFailure { log("could not rebind to the new route (${it::class.simpleName})") }.isSuccess
+                if (rebound) {
+                    appliedRoute = route
+                    routeChangedAtMillis = System.currentTimeMillis()
+                    wasOffline = false
+                    reconnectTorrents()
+                }
+            }
+            if (route.isOffline) wasOffline = true
+            val nodes = runCatching { session.dhtNodes() }.getOrDefault(0L)
+            val now = System.currentTimeMillis()
+            if (nodes > 0 || route.isOffline) {
+                emptyDhtSince = null
+            } else if (emptyDhtSince == null) {
+                emptyDhtSince = now
+            } else if (now - emptyDhtSince >= DHT_RESTART_MILLIS) {
+                log("DHT has had no nodes for ${(now - emptyDhtSince) / 1_000}s — restarting it")
+                runCatching {
+                    session.stopDht()
+                    session.startDht()
+                }
+                emptyDhtSince = now
+            }
+        }
+    }
+
+    private fun reconnectTorrents() {
+        torrents.values.forEach { torrent ->
+            runCatching {
+                torrent.handle.pause()
+                torrent.handle.resume()
+                torrent.handle.forceReannounce()
+                torrent.handle.forceDHTAnnounce()
+            }
+        }
+    }
+
+    /**
+     * Zero peers is only evidence against a torrent once the network has been settled for a
+     * while and the DHT has somewhere to ask.
+     */
+    private fun swarmVerdictReady(): Boolean {
+        val settled = System.currentTimeMillis() - routeChangedAtMillis >= DEAD_SWARM_MILLIS
+        val dhtReady = runCatching { (manager?.dhtNodes() ?: 0L) > 0L }.getOrDefault(true)
+        return settled && dhtReady
     }
 
     /**
@@ -388,9 +502,12 @@ class JlibtorrentPlaybackEngine(
      * what a streaming client wants: the cost is four extra UDP announces, and the
      * saving is the cold-start wait.
      */
-    private fun streamingSettings(): SettingsPack = SettingsPack()
+    private fun streamingSettings(route: TorrentRoute): SettingsPack = listenSettings(route)
         .setBoolean(settings_pack.bool_types.announce_to_all_trackers.swigValue(), true)
         .setBoolean(settings_pack.bool_types.announce_to_all_tiers.swigValue(), true)
+
+    private fun listenSettings(route: TorrentRoute): SettingsPack = SettingsPack()
+        .setString(settings_pack.string_types.listen_interfaces.swigValue(), route.listenInterfaces())
 
     private data class ManagedTorrent(
         val info: TorrentInfo,
@@ -433,16 +550,20 @@ class JlibtorrentPlaybackEngine(
 internal fun startTorrentSession(
     manager: SessionManager,
     osName: String,
+    settings: SettingsPack? = null,
     paramsFactory: () -> SessionParams = ::SessionParams,
 ) {
-    if (needsPosixTorrentDiskIo(osName)) {
-        // libtorrent's mmap backend installs process-wide SIGSEGV/SIGBUS handlers.
-        // On macOS and Linux they displace HotSpot's handlers, so faults the JVM normally
-        // handles can terminate the process.
-        manager.start(paramsFactory().apply { setPosixDiskIO() })
-    } else {
+    if (settings == null && !needsPosixTorrentDiskIo(osName)) {
         manager.start()
+        return
     }
+    val params = paramsFactory()
+    settings?.let(params::setSettings)
+    // libtorrent's mmap backend installs process-wide SIGSEGV/SIGBUS handlers.
+    // On macOS and Linux they displace HotSpot's handlers, so faults the JVM normally
+    // handles can terminate the process.
+    if (needsPosixTorrentDiskIo(osName)) params.setPosixDiskIO()
+    manager.start(params)
 }
 
 internal fun needsPosixTorrentDiskIo(osName: String): Boolean =
@@ -450,6 +571,12 @@ internal fun needsPosixTorrentDiskIo(osName: String): Boolean =
         osName.startsWith("Linux", ignoreCase = true)
 
 private const val PIECE_POLL_MILLIS = 50L
+
+/** How often the route is checked; a switch is picked up within this. */
+private const val ROUTE_CHECK_MILLIS = 5_000L
+
+/** How long the DHT may sit with no nodes at all before it is restarted. */
+private const val DHT_RESTART_MILLIS = 30_000L
 
 // Matches LocalBackendHost: plain stderr, no logging framework, one "Cove" prefix
 // so a user's terminal shows where the line came from.

@@ -24,10 +24,28 @@ import kotlin.test.assertSame
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LocalContentRepositoryTest {
+    @Test
+    fun `discover recovers after one parallel request fails during startup`() = runTest {
+        val locale = MutableStateFlow("en")
+        val catalog = FakeCatalog(locale).apply { discoverFailures = 1 }
+        val repository = LocalContentRepository(catalog, backgroundScope)
+
+        runCurrent()
+        assertIs<HomeState.Failed>(repository.home.value)
+        advanceTimeBy(5_000)
+        runCurrent()
+
+        assertEquals(
+            listOf("en-movie", "en-tv"),
+            assertIs<HomeState.Ready>(repository.home.value).items.map(Media::displayTitle),
+        )
+    }
+
     @Test
     fun `locale changes replace discover presentation and are exposed to the UI`() = runTest {
         val locale = MutableStateFlow("tr")
@@ -119,6 +137,7 @@ class LocalContentRepositoryTest {
 }
 
 private class FakeCatalog(private val locale: MutableStateFlow<String>) : MediaCatalog {
+    var discoverFailures = 0
     var detailsResult = MediaDetails()
     var imagesResult = MediaImages()
     var detailCalls = 0
@@ -130,8 +149,13 @@ private class FakeCatalog(private val locale: MutableStateFlow<String>) : MediaC
     var similarCalls = 0
         private set
 
-    override suspend fun discover(type: MediaType, limit: Int): List<Media> =
-        listOf(item(type))
+    override suspend fun discover(type: MediaType, limit: Int): List<Media> {
+        if (discoverFailures > 0) {
+            discoverFailures--
+            throw java.net.UnknownHostException("catalog.test")
+        }
+        return listOf(item(type))
+    }
 
     override suspend fun searchMulti(query: String) = SearchResultsDto()
     override suspend fun media(id: Int, type: MediaType): Media = item(type).copy(id = id)

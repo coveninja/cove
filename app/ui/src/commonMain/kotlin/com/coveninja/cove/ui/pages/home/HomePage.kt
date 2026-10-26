@@ -134,7 +134,9 @@ fun HomePage(
             graph.calendar.refresh(force = false)
         }
     }
-    LaunchedEffect(initialContentReady, layout) {
+    // Keyed on the feed having *succeeded* too: rails attempted while the feed was failing
+    // are tried again the moment it recovers, rather than staying empty for the session.
+    LaunchedEffect(initialContentReady, homeState is HomeState.Ready, layout) {
         if (initialContentReady) {
             withFrameNanos { }
             withFrameNanos { }
